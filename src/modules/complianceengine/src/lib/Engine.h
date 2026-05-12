@@ -48,6 +48,8 @@ public:
     void SetMaxPayloadSize(unsigned int value) noexcept;
     unsigned int GetMaxPayloadSize() const noexcept;
     OsConfigLogHandle Log() const noexcept;
+    Telemetry& GetTelemetry() noexcept;
+    ContextInterface& GetContext() noexcept;
 
     Optional<Error> LoadDistributionInfo();
     const Optional<DistributionInfo>& GetDistributionInfo() const noexcept;

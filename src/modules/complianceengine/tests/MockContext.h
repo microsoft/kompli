@@ -34,6 +34,11 @@ struct MockContext : public ComplianceEngine::ContextInterface
         mRunningKernelRelease = std::move(release);
     }
 
+    ComplianceEngine::Telemetry& GetTelemetry() override
+    {
+        return mTelemetry;
+    }
+
     OsConfigLogHandle GetLogHandle() const override
     {
         return mLogHandle;
@@ -176,4 +181,5 @@ private:
     std::unique_ptr<ComplianceEngine::FilesystemScanner> mFsScannerp;
     ComplianceEngine::Result<std::string> mRunningKernelRelease{std::string("5.15.test")};
     OsConfigLogHandle mLogHandle{nullptr};
+    ComplianceEngine::Telemetry mTelemetry{-1};
 };

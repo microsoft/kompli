@@ -17,8 +17,8 @@ namespace ComplianceEngine
 class AssessorContext : public CommonContext
 {
 public:
-    AssessorContext(OsConfigLogHandle log)
-        : CommonContext(log, CreateTempDir())
+    AssessorContext(OsConfigLogHandle log, const int fd = -1)
+        : CommonContext(log, CreateTempDir(), fd)
     {
     }
     AssessorContext(const AssessorContext&) = delete;
