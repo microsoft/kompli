@@ -66,6 +66,8 @@ add_executable(complianceenginetests
     BindingsTest.cpp
     CommonContextTest.cpp
     ComplianceEngineTest.cpp
+    DirToolsTest.cpp
+    EngineTelemetryTest.cpp
     DistributionInfoTest.cpp
     EngineTest.cpp
     EvaluatorTest.cpp
