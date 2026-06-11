@@ -6,7 +6,6 @@
 #include <ProcedureMap.h>
 #include <Regex.h>
 #include <Result.h>
-#include <Telemetry.h>
 #include <dirent.h>
 #include <fstream>
 
@@ -195,7 +194,6 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
     {
         int status = errno;
         OsConfigLogError(context.GetLogHandle(), "Failed to read directory '%s': %s", params.path.c_str(), strerror(status));
-        OSConfigTelemetryStatusTrace("readdir", status);
         return Error("Failed to read directory '" + params.path + "': " + strerror(status), status);
     }
 

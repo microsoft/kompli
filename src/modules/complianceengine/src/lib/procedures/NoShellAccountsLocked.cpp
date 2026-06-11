@@ -6,7 +6,6 @@
 #include <NoShellAccountsLocked.h>
 #include <PasswordEntriesIterator.h>
 #include <Result.h>
-#include <Telemetry.h>
 #include <Users.h>
 #include <UsersIterator.h>
 #include <set>
@@ -30,7 +29,6 @@ Result<Status> AuditNoShellAccountsLocked(const NoShellAccountsLockedParams& par
     if (!validShells.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to get valid shells: %s", validShells.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("ListValidShells", validShells.Error().code);
         return validShells.Error();
     }
 

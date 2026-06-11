@@ -3,8 +3,6 @@
 
 #include "main.h"
 
-#include "Telemetry.h"
-
 #include <Logging.h>
 #include <Telemetry.hpp>
 #include <cassert>
