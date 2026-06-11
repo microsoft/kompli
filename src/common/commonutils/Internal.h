@@ -26,7 +26,6 @@
 #include <Logging.h>
 #include <Reasons.h>
 #include <CommonUtils.h>
-#include <Telemetry.h>
 #include <version.h>
 
 #if ((__GLIBC__ == 2) && (__GLIBC_MINOR__ < 30))
