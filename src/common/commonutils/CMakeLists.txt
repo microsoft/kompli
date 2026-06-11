@@ -19,7 +19,6 @@ target_include_directories(commonutils
 target_link_libraries(commonutils
     PUBLIC
         logging
-        telemetry
         parsonlib
     PRIVATE
         m

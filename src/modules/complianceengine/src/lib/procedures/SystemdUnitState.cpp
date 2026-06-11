@@ -5,7 +5,6 @@
 #include <Regex.h>
 #include <StringTools.h>
 #include <SystemdUnitState.h>
-#include <Telemetry.h>
 #include <algorithm>
 #include <iostream>
 #include <string>
@@ -67,7 +66,6 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
     if (!argFound)
     {
         OsConfigLogError(log, "Error: EnsureSystemdUnit: none of 'activeState loadState UnitFileState' parameters are present");
-        OSConfigTelemetryStatusTrace("argFound", EINVAL);
         return Error("None of 'activeState loadState UnitFileState' parameters are present");
     }
 
@@ -76,7 +74,6 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
     {
         OsConfigLogError(log, "Failed to execute systemctl command '%s': %s (code: %d)", systemCtlCmd.c_str(), systemCtlOutput.Error().message.c_str(),
             systemCtlOutput.Error().code);
-        OSConfigTelemetryStatusTrace("ExecuteCommand", systemCtlOutput.Error().code);
         return indicators.NonCompliant("Failed to execute systemctl command " + systemCtlOutput.Error().message);
     }
     std::string line;
@@ -88,7 +85,6 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
         if (eqSign == std::string::npos)
         {
             OsConfigLogError(log, "Error: EnsureSystemdUnit: invalid sysctl output, missing '=' sing in %s", line.c_str());
-            OSConfigTelemetryStatusTrace("find", EINVAL);
             return indicators.NonCompliant("invalid sysctl output, missing '='  in  output '" + line + "'");
         }
         auto name = line.substr(0, eqSign);
@@ -119,7 +115,6 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
         if (matched == false)
         {
             OsConfigLogError(log, "Error match systemctl unit name '%s' state '%s' not matched any arguments", params.unitName.c_str(), name.c_str());
-            OSConfigTelemetryStatusTrace("matched", EINVAL);
             return Status::NonCompliant;
         }
     }

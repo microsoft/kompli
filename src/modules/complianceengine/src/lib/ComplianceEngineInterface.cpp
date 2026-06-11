@@ -12,7 +12,7 @@
 #include "Logging.h"
 #include "Mmi.h"
 #include "Result.h"
-#include "Telemetry.h"
+#include "version.h"
 
 #include <cerrno>
 #include <cstddef>
@@ -78,7 +78,6 @@ MMI_HANDLE ComplianceEngineMmiOpen(const char* clientName, const unsigned int ma
     if (nullptr == context)
     {
         OsConfigLogError(g_log, "ComplianceEngineMmiOpen(%s, %u): failed to create context", clientName, maxPayloadSizeBytes);
-        OSConfigTelemetryStatusTrace("ComplianceEngineMmiOpen", ENOMEM);
         return nullptr;
     }
     std::unique_ptr<ComplianceEngine::PayloadFormatter> formatter;
@@ -103,7 +102,6 @@ MMI_HANDLE ComplianceEngineMmiOpen(const char* clientName, const unsigned int ma
     if (error)
     {
         OsConfigLogError(g_log, "ComplianceEngineMmiOpen(%s, %u): failed to load distribution info: %s", clientName, maxPayloadSizeBytes, error->message.c_str());
-        OSConfigTelemetryStatusTrace("ComplianceEngineMmiOpen", error->code);
         delete engine;
         return nullptr;
     }
@@ -123,7 +121,6 @@ int ComplianceEngineMmiGetInfo(const char* clientName, char** payload, int* payl
     if ((nullptr == payload) || (nullptr == payloadSizeBytes))
     {
         OsConfigLogError(g_log, "ComplianceEngineMmiGetInfo(%s, %p, %p) called with invalid arguments", clientName, payload, payloadSizeBytes);
-        OSConfigTelemetryStatusTrace("ComplianceEngineMmiGetInfo", EINVAL);
         return EINVAL;
     }
 
@@ -131,7 +128,6 @@ int ComplianceEngineMmiGetInfo(const char* clientName, char** payload, int* payl
     if (!*payload)
     {
         OsConfigLogError(g_log, "ComplianceEngineMmiGetInfo: failed to duplicate module info");
-        OSConfigTelemetryStatusTrace("ComplianceEngineMmiGetInfo", ENOMEM);
         return ENOMEM;
     }
 
@@ -144,21 +140,18 @@ int ComplianceEngineMmiGet(MMI_HANDLE clientSession, const char* componentName, 
     if ((nullptr == componentName) || (nullptr == objectName) || (nullptr == payload) || (nullptr == payloadSizeBytes))
     {
         OsConfigLogError(g_log, "ComplianceEngineMmiGet(%s, %s, %p, %p) called with invalid arguments", componentName, objectName, payload, payloadSizeBytes);
-        OSConfigTelemetryStatusTrace("ComplianceEngineMmiGet", EINVAL);
         return EINVAL;
     }
 
     if (nullptr == clientSession)
     {
         OsConfigLogError(g_log, "ComplianceEngineMmiGet(%s, %s) called outside of a valid session", componentName, objectName);
-        OSConfigTelemetryStatusTrace("ComplianceEngineMmiGet", EINVAL);
         return EINVAL;
     }
 
     if (0 != strcmp(componentName, "ComplianceEngine"))
     {
         OsConfigLogError(g_log, "ComplianceEngineMmiGet called for an unsupported component name (%s)", componentName);
-        OSConfigTelemetryStatusTrace("ComplianceEngineMmiGet", EINVAL);
         return EINVAL;
     }
     auto& engine = *reinterpret_cast<Engine*>(clientSession);

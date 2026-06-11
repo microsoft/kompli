@@ -6,7 +6,6 @@
 #include <Logging.h>
 #include <LuaEvaluator.h>
 #include <Optional.h>
-#include <Telemetry.h>
 #include <cassert>
 #include <fstream>
 #include <getopt.h>
@@ -170,7 +169,6 @@ int main(int argc, char* argv[])
         if (!file.is_open())
         {
             OsConfigLogError(logHandle, "Failed to open input file: %s", options.input->c_str());
-            OSConfigTelemetryStatusTrace("fopen", errno);
             return 1;
         }
     }
@@ -184,7 +182,6 @@ int main(int argc, char* argv[])
     if (!result.HasValue())
     {
         OsConfigLogError(logHandle, "Failed to evaluate script: %s", result.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("Evaluate", result.Error().code);
         std::cerr << "Error: " << result.Error().message << std::endl;
         return 1;
     }
@@ -195,7 +192,6 @@ int main(int argc, char* argv[])
     if (!formattingResult.HasValue())
     {
         OsConfigLogError(logHandle, "Failed to format indicators: %s", formattingResult.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("Format", formattingResult.Error().code);
         std::cerr << "Error: " << formattingResult.Error().message << std::endl;
         return 1;
     }
