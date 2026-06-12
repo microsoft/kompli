@@ -50,7 +50,7 @@ jobs:
           name: ${{ inputs.target }}
           path: package
 
-      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5
+      - uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43
         with:
           auth-type: IDENTITY
           tenant-id: ${{ secrets.tenant_id }}
