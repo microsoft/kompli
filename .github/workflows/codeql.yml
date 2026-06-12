@@ -53,7 +53,7 @@ jobs:
 
       - name: Setup dotnet
         if: matrix.language == 'csharp'
-        uses: actions/setup-dotnet@871f041373faaad213a635d9afb62905ec029bbb
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2
         with:
           dotnet-version: 6.0.x
 
