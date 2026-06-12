@@ -3,6 +3,9 @@ name: CodeQL
 on:
   push:
     branches: [dev, main, release/*]
+  pull_request:
+    paths:
+      - .github/workflows/codeql.yml
   schedule:
     - cron: 30 1 1,15 * * # At 01:30 UTC on the 1st and 15th of every month
 
