@@ -13,8 +13,6 @@ jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/microsoft/kompli/ubuntu-22.04-amd64@sha256:98cd5889fffd4d86eeeeb6bd730525365e05c228a64bef2070f777abbcc59373
     permissions:
       actions: read
       contents: read
