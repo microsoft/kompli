@@ -1,5 +1,5 @@
 # TODO: Add mcr.io retagged images
-FROM amazonlinux:2
+FROM amazonlinux:2023
 
 ARG CMAKE_VERSION=v3.30.1
 
