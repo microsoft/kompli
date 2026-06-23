@@ -1,5 +1,5 @@
 # TODO: Add mcr.io retagged images
-FROM oraclelinux:8
+FROM oraclelinux:10
 
 ARG CMAKE_VERSION=v3.30.1
 
