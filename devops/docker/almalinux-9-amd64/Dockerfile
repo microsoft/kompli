@@ -1,5 +1,5 @@
 # TODO: Add mcr.io retagged images
-FROM almalinux:9
+FROM almalinux:10
 
 ARG CMAKE_VERSION=v3.30.1
 
