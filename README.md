@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
 
-Kompli is a Linux security compliance engine for evaluating and remediating system configuration against industry benchmarks (CIS, STIG, etc.). It is derived from the [Azure OSConfig](https://github.com/Azure/azure-osconfig) project, retaining only the ComplianceEngine module and its direct dependencies.
+Kompli is a Linux security compliance engine for evaluating and remediating system configuration against industry benchmarks (CIS, STIG, etc.) on a Linux native manner. It is derived from the [Azure OSConfig](https://github.com/Azure/azure-osconfig) project, retaining only the ComplianceEngine module and its direct dependencies.
 
 ## History
 
