@@ -63,7 +63,7 @@ struct Context
         tempdir = path;
 #ifdef BUILD_TELEMETRY
         telemetryCache = tempdir + "/telemetry_cache_db";
-        telemetryManager.reset(new Telemetry::TelemetryManager(telemetryCache, false, std::chrono::seconds{1}));
+        telemetryManager.reset(new Telemetry::TelemetryManager(telemetryCache, false, std::chrono::seconds{1}, true, nullptr));
 #endif
     }
 

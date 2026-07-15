@@ -117,6 +117,7 @@ TEST_F(TelemetryBinTest, PositionalArgumentAcceptsFilePath)
     EXPECT_TRUE(result);
     EXPECT_EQ(jsonFile, args.filepath);
     EXPECT_FALSE(args.verbose);
+    EXPECT_FALSE(args.no_validation);
     EXPECT_EQ(std::chrono::seconds{5}, args.teardown_time); // Default teardown time
 }
 
@@ -247,6 +248,36 @@ TEST_F(TelemetryBinTest, CombinedOptionsWork)
     EXPECT_EQ(jsonFile, args.filepath);
 }
 
+TEST_F(TelemetryBinTest, NoValidationShortFlagWorks)
+{
+    std::string jsonFile = CreateTestJsonFile(R"({"EventName":"TestEvent"})");
+    std::vector<std::string> argList = {"telemetrybin", "-n", jsonFile};
+    char** argv = CreateArgv(argList);
+    ScopeGuard sg([&]() { FreeArgv(argv, argList.size()); });
+
+    CommandLineArgs args;
+    bool result = ParseCommandLineArgs(argList.size(), argv, args, nullptr);
+
+    EXPECT_TRUE(result);
+    EXPECT_TRUE(args.no_validation);
+    EXPECT_EQ(jsonFile, args.filepath);
+}
+
+TEST_F(TelemetryBinTest, NoValidationLongFlagWorks)
+{
+    std::string jsonFile = CreateTestJsonFile(R"({"EventName":"TestEvent"})");
+    std::vector<std::string> argList = {"telemetrybin", "--no-validation", jsonFile};
+    char** argv = CreateArgv(argList);
+    ScopeGuard sg([&]() { FreeArgv(argv, argList.size()); });
+
+    CommandLineArgs args;
+    bool result = ParseCommandLineArgs(argList.size(), argv, args, nullptr);
+
+    EXPECT_TRUE(result);
+    EXPECT_TRUE(args.no_validation);
+    EXPECT_EQ(jsonFile, args.filepath);
+}
+
 TEST_F(TelemetryBinTest, MixedLongAndShortOptionsWork)
 {
     std::string jsonFile = CreateTestJsonFile(R"({"EventName":"TestEvent"})");
@@ -295,7 +326,7 @@ TEST_F(TelemetryBinTest, ProcessesValidSingleLineJson)
     std::string jsonFile = CreateTestJsonFile(R"({"EventName":"TestEvent","TestKey":"TestValue"})");
     try
     {
-        Telemetry::TelemetryManager telemetryManager(m_telemetryCache, false, std::chrono::seconds{1});
+        Telemetry::TelemetryManager telemetryManager(m_telemetryCache, false, std::chrono::seconds{1}, true, nullptr);
         EXPECT_FALSE(telemetryManager.ProcessJsonFile(jsonFile));
     }
     catch (const std::exception& e)
