@@ -48,7 +48,7 @@ OsConfigLogHandle g_log = nullptr;
 static const std::set<int> g_criticalErrors = {ENOMEM};
 static constexpr const char* g_configurationFile = "/etc/osconfig/osconfig.json";
 #ifdef BUILD_TELEMETRY
-static constexpr const char* telemetry_log_dir = "/var/lib/osconfig/";
+static constexpr const char* telemetry_log_dir = "/var/lib/osconfig/telemetry/";
 static constexpr const char* telemetry_log_file = "complianceengine.telemetry";
 static constexpr const char* telemetry_binary = "OSConfigTelemetry";
 static constexpr int telemetry_teardown_time = 10;
