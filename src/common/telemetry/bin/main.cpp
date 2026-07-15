@@ -38,15 +38,13 @@ int main(int argc, char* argv[])
         }
 
         std::string init_message = "Initializing telemetry with verbose=" + std::string(args.verbose ? "true" : "false");
-        if (args.teardown_time.count() != TELEMETRY_TEARDOWN_TIMEOUT_SECONDS) // Default teardown time
-        {
-            init_message += " and teardown_time=" + std::to_string(args.teardown_time.count()) + "s";
-        }
+        init_message += " and validation=" + std::string(args.no_validation ? "false" : "true");
+        init_message += " and teardown_time=" + std::to_string(args.teardown_time.count()) + "s";
         OsConfigLogInfo(g_log, "%s", init_message.c_str());
 
         OsConfigLogInfo(g_log, "Telemetry initializing...");
         std::string cacheFilePath(Telemetry::TelemetryManager::TELEMETRY_CACHE_FILE_NAME);
-        Telemetry::TelemetryManager telemetryManager(cacheFilePath, args.verbose, args.teardown_time, g_log);
+        Telemetry::TelemetryManager telemetryManager(cacheFilePath, args.verbose, args.teardown_time, !args.no_validation, g_log);
 
         (void)(telemetryManager.ProcessJsonFile(args.filepath));
         OsConfigLogInfo(g_log, "Processed telemetry JSON file: %s", args.filepath.c_str());

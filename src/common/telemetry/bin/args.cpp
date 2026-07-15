@@ -18,6 +18,7 @@ void PrintUsage(const char* program_name)
     std::cout << "  -f, --file <path>        Specify JSON file path (alternative to positional arg)" << std::endl;
     std::cout << "  -v, --verbose            Enable verbose/debug output" << std::endl;
     std::cout << "  -t, --teardown <seconds> Set teardown time in seconds (default: 5)" << std::endl;
+    std::cout << "  -n, --no-validation      Disable event parameter validation" << std::endl;
     std::cout << std::endl;
     std::cout << "Examples:" << std::endl;
     std::cout << "  " << program_name << " /path/to/events.json" << std::endl;
@@ -29,11 +30,12 @@ void PrintUsage(const char* program_name)
 bool ParseCommandLineArgs(int argc, char* argv[], CommandLineArgs& args, OsConfigLogHandle log)
 {
     args.verbose = false;
+    args.no_validation = false;
     args.teardown_time = std::chrono::seconds{5}; // CONFIG_DEFAULT_TEARDOWN_TIME
     args.filepath.clear();
 
-    static struct option long_options[] = {
-        {"file", required_argument, 0, 'f'}, {"verbose", no_argument, 0, 'v'}, {"teardown", required_argument, 0, 't'}, {0, 0, 0, 0}};
+    static struct option long_options[] = {{"file", required_argument, 0, 'f'}, {"verbose", no_argument, 0, 'v'},
+        {"teardown", required_argument, 0, 't'}, {"no-validation", no_argument, 0, 'n'}, {0, 0, 0, 0}};
 
     // Parse options
     // Reset getopt state for multiple calls in the same process (important for tests)
@@ -43,7 +45,7 @@ bool ParseCommandLineArgs(int argc, char* argv[], CommandLineArgs& args, OsConfi
     optopt = 0; // Reset last parsed option
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "f:vt:", long_options, nullptr)) != -1)
+    while ((opt = getopt_long(argc, argv, "f:vt:n", long_options, nullptr)) != -1)
     {
         switch (opt)
         {
@@ -74,6 +76,9 @@ bool ParseCommandLineArgs(int argc, char* argv[], CommandLineArgs& args, OsConfi
                         return false;
                     }
                 }
+                break;
+            case 'n':
+                args.no_validation = true;
                 break;
             case '?':
                 OsConfigLogError(log, "Error: Unknown option or missing argument.");

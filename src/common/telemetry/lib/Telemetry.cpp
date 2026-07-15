@@ -30,7 +30,7 @@ namespace Telemetry
 class TelemetryManagerImpl
 {
 public:
-    TelemetryManagerImpl(std::string cacheFilePath, bool enableDebug, std::chrono::seconds teardownTime, OsConfigLogHandle logHandle);
+    TelemetryManagerImpl(std::string cacheFilePath, bool enableDebug, std::chrono::seconds teardownTime, bool validateEvents, OsConfigLogHandle logHandle);
     ~TelemetryManagerImpl() noexcept;
 
     bool ProcessJsonFile(const std::string& filePath);
@@ -46,11 +46,11 @@ private:
     bool ProcessJsonLine(const std::string& jsonLine);
 };
 
-TelemetryManagerImpl::TelemetryManagerImpl(std::string cacheFilePath, bool enableDebug, std::chrono::seconds teardownTime, OsConfigLogHandle logHandle)
+TelemetryManagerImpl::TelemetryManagerImpl(std::string cacheFilePath, bool enableDebug, std::chrono::seconds teardownTime, bool validateEvents, OsConfigLogHandle logHandle)
     : m_log(logHandle),
       m_logManager(nullptr),
       m_logger(nullptr),
-      m_validateEvents(true)
+      m_validateEvents(validateEvents)
 {
     {
         FILE* testWrite = fopen(cacheFilePath.c_str(), "a");
@@ -152,6 +152,12 @@ bool TelemetryManagerImpl::ProcessJsonFile(const std::string& filePath)
 
 bool TelemetryManagerImpl::ValidateEventParameters(const std::string& eventName, const std::set<std::string>& jsonKeys)
 {
+    if (!m_validateEvents)
+    {
+        OsConfigLogDebug(m_log, "Validation skipped of event type: %s", eventName.c_str());
+        return true;
+    }
+
     auto it = EVENT_PARAMETER_SETS.find(eventName);
     if (it == EVENT_PARAMETER_SETS.end())
     {
@@ -236,8 +242,7 @@ bool TelemetryManagerImpl::ProcessJsonLine(const std::string& jsonLine)
         jsonKeys.insert(it.key());
     }
 
-    // Validate parameters against the event's parameter set
-    if (m_validateEvents && !ValidateEventParameters(eventName, jsonKeys))
+    if (!ValidateEventParameters(eventName, jsonKeys))
     {
         OsConfigLogError(m_log, "Parameter validation failed for event '%s': %s", eventName.c_str(), jsonLine.c_str());
         return false;
@@ -305,8 +310,8 @@ bool TelemetryManagerImpl::ProcessJsonLine(const std::string& jsonLine)
     return true;
 }
 
-TelemetryManager::TelemetryManager(std::string cacheFilePath, bool enableDebug, std::chrono::seconds teardownTime, OsConfigLogHandle logHandle)
-    : m_impl(new TelemetryManagerImpl(std::move(cacheFilePath), enableDebug, teardownTime, logHandle))
+TelemetryManager::TelemetryManager(std::string cacheFilePath, bool enableDebug, std::chrono::seconds teardownTime, bool validateEvents, OsConfigLogHandle logHandle)
+    : m_impl(new TelemetryManagerImpl(std::move(cacheFilePath), enableDebug, teardownTime, validateEvents, logHandle))
 {
 }
 
