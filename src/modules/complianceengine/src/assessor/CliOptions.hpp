@@ -34,6 +34,7 @@ struct Options
 {
     bool verbose = false;
     bool debug = false;
+    bool telemetryEnabled = false;
     bool continueOnError = false;
     Optional<std::string> logFile;
     Optional<Format> format;

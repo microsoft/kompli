@@ -24,10 +24,13 @@ void PrintHelp(const std::string& programName)
     std::cout << "\t-V, --version\tShow software version and exit.\n";
     std::cout << "\t-v, --verbose\tRun in verbose mode.\n";
     std::cout << "\t-d, --debug\tRun in debug mode.\n";
+    std::cout << "\t-l, --log-file\tSpecify a log file. Default: print log entries to standard output.\n";
+#ifdef BUILD_TELEMETRY
+    std::cout << "\t-t, --telemetry\tEnable telemetry event logging. Default: disabled.\n";
+#endif // BUILD_TELEMETRY
     std::cout << "\n";
     std::cout << "audit / remediate options:\n";
     std::cout << "\t-e, --continue-on-error\tSkip rules that fail due to engine errors and continue processing. Returns 1 if any error occurred.\n";
-    std::cout << "\t-l, --log-file\tSpecify a log file. Default: print log entries to standard output.\n";
     std::cout << "\t-s, --section\tProcess only specific sections. Default: process all available rules.\n";
     std::cout << "\tfilename\tProcess the specified MOF file. Optional: if skipped or the value is '-', the program reads standard input.\n";
     std::cout << "\n";
@@ -57,10 +60,13 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
     optind = 1;
 #endif
 
-    const auto* short_opts = "hVvdel:s:f:";
+    const auto* short_opts = "hVvdetl:s:f:";
     const option long_opts[] = {{"help", no_argument, nullptr, 'h'}, {"version", no_argument, nullptr, 'V'}, {"verbose", no_argument, nullptr, 'v'},
         {"debug", no_argument, nullptr, 'd'}, {"continue-on-error", no_argument, nullptr, 'e'}, {"log-file", required_argument, nullptr, 'l'},
         {"section", required_argument, nullptr, 's'}, {"format", required_argument, nullptr, 'f'},
+#ifdef BUILD_TELEMETRY
+        {"telemetry", no_argument, nullptr, 't'},
+#endif // BUILD_TELEMETRY
         {"suite-name", required_argument, nullptr, kSuiteNameOpt}, {nullptr, 0, nullptr, 0}};
 
     auto result = Options{};
@@ -81,6 +87,11 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
             case 'd':
                 result.debug = true;
                 break;
+#ifdef BUILD_TELEMETRY
+            case 't':
+                result.telemetryEnabled = true;
+                break;
+#endif // BUILD_TELEMETRY
             case 'e':
                 result.continueOnError = true;
                 break;
