@@ -1,10 +1,11 @@
 name: Scorecard supply-chain security
 on:
+  pull_request:
   branch_protection_rule:
   schedule:
     - cron: '20 7 * * 1' # 07:20 UTC
   push:
-    branches: [ "main" ]
+    branches: [ "main", "kkans/ossf-v2" ]
 
 permissions: read-all
 
