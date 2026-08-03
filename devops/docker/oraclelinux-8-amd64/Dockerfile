@@ -1,5 +1,5 @@
 # TODO: Add mcr.io retagged images
-FROM oraclelinux:8@sha256:7d6dbcc5c9153482a09d7d1086bacef35bfad490da9d5fe7e04c4157f09b4d2d
+FROM oraclelinux:8@sha256:7a78aef4f27221bd4290ac5209e764c3c9ec659fa8b048c968cf184ff2f9e207
 
 ARG CMAKE_VERSION=v3.30.1
 
