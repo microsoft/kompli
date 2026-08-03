@@ -14,7 +14,7 @@ jobs:
       image: ghcr.io/microsoft/kompli/ubuntu-22.04-amd64@sha256:006b8545d00520c1cfc83f0ac465d7aedeb876a32435c57bbe3dc94c23fdc465
 
     steps:
-    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         submodules: recursive
         clean: true
