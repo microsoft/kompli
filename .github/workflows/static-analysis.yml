@@ -14,34 +14,34 @@ jobs:
       image: ghcr.io/microsoft/kompli/ubuntu-22.04-amd64@sha256:006b8545d00520c1cfc83f0ac465d7aedeb876a32435c57bbe3dc94c23fdc465
 
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        submodules: recursive
-        clean: true
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+          clean: true
 
-    - name: Prepare compile command database
-      run: |
-        mkdir -p build
-        cd build
-        cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=Debug ../src
+      - name: Prepare compile command database
+        run: |
+          mkdir -p build
+          cd build
+          cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=Debug ../src
 
-    - name: "Temporary: install clang-tools"
-      run: |
-        apt-get update
-        apt-get install -y clang-tools
+      - name: "Temporary: install clang-tools"
+        run: |
+          apt-get update
+          apt-get install -y clang-tools
 
-    - name: Run clang static analyzer
-      run: |
-        mkdir -p output
-        analyze-build-14 --verbose \
-          --status-bugs \
-          --exclude src/common/parson \
-          --cdb build/compile_commands.json \
-          --output output/scan-build
+      - name: Run clang static analyzer
+        run: |
+          mkdir -p output
+          analyze-build-14 --verbose \
+            --status-bugs \
+            --exclude src/common/parson \
+            --cdb build/compile_commands.json \
+            --output output/scan-build
 
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      if: success() || failure()
-      with:
-        name: scan-build
-        path: |
-          output/scan-build
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: success() || failure()
+        with:
+          name: scan-build
+          path: |
+            output/scan-build
