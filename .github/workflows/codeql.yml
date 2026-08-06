@@ -31,7 +31,7 @@ jobs:
         language: [cpp]
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           submodules: recursive
           clean: true
@@ -40,7 +40,7 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9
+        uses: github/codeql-action/init@f205ea1c3313d32999d8d6a48b4f6530d4437b38
         with:
           languages: ${{ matrix.language }}
 
@@ -51,7 +51,7 @@ jobs:
         run: cmake --build build --config Release --parallel
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9
+        uses: github/codeql-action/analyze@f205ea1c3313d32999d8d6a48b4f6530d4437b38
         with:
           category: '/language:${{matrix.language}}'
 
