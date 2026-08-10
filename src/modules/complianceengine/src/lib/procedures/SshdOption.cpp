@@ -194,8 +194,10 @@ Result<std::map<std::string, std::string>> GetSshdOptions(ContextInterface& cont
 }
 
 // Helper for evaluating delimited numeric limits such as MaxStartups style values.
+// The ctx string qualifies indicator messages with the Match context (empty when not in all_matches mode),
+// mirroring EvaluateSshdOption() so results from different Match contexts stay distinguishable.
 static Result<Status> EvaluateDelimitedNumericLimits(const std::string& option, const std::string& value, const std::string& realValue,
-    const char delimiter, size_t numFields, IndicatorsTree& indicators)
+    const char delimiter, size_t numFields, const std::string& ctx, IndicatorsTree& indicators)
 {
     // Parse realValue using provided delimiter, value always uses ':' per specification.
     std::vector<long long> realParts(numFields, 0);
@@ -243,10 +245,10 @@ static Result<Status> EvaluateDelimitedNumericLimits(const std::string& option, 
     {
         if (realParts[i] > limitParts[i])
         {
-            return indicators.NonCompliant("Option '" + option + "' has value '" + realValue + "' which exceeds limits '" + value + "'");
+            return indicators.NonCompliant("Option '" + option + "' has value '" + realValue + "' which exceeds limits '" + value + "'" + ctx);
         }
     }
-    return indicators.Compliant("Option '" + option + "' has a value '" + realValue + "' compliant with limits '" + value + "'");
+    return indicators.Compliant("Option '" + option + "' has a value '" + realValue + "' compliant with limits '" + value + "'" + ctx);
 }
 
 // Helper that evaluates a single sshd option against the provided operation/value.
@@ -273,12 +275,12 @@ static Result<Status> EvaluateSshdOption(const std::map<std::string, std::string
 
     if (("maxstartups" == option) && ("match" == op))
     {
-        return EvaluateDelimitedNumericLimits(option, value, realValue, ':', 3, indicators);
+        return EvaluateDelimitedNumericLimits(option, value, realValue, ':', 3, ctx, indicators);
     }
 
     if (("rekeylimit" == option) && ("match" == op))
     {
-        return EvaluateDelimitedNumericLimits(option, value, realValue, ' ', 2, indicators);
+        return EvaluateDelimitedNumericLimits(option, value, realValue, ' ', 2, ctx, indicators);
     }
 
     if (op == "match" || op == "regex") // The only difference is in the valueRegexes preparation
