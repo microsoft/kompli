@@ -92,13 +92,30 @@ Result<std::vector<std::string>> GetAllMatches(ContextInterface& context)
                 lineStream >> type >> value;
                 std::transform(type.begin(), type.end(), type.begin(), ::tolower);
                 std::transform(value.begin(), value.end(), value.begin(), ::tolower);
-                if ((type == "address") || (type == "localaddress"))
-                {
-                    value = value.substr(0, value.find_first_of('/'));
-                }
                 if ((type == "user") || (type == "group") || (type == "host") || (type == "port") || (type == "address") || (type == "localaddress"))
                 {
-                    allMatches.push_back(type + "=" + value);
+                    // The Match criteria value may be a comma-separated pattern list, e.g.
+                    // "Match User *@*,<uuid>" (as appended by the aadsshlogin installer). In
+                    // sshd_config a comma is an OR separator between patterns, but `sshd -T -C`
+                    // treats commas as separators between distinct connection-spec items. Feeding
+                    // the raw comma list into `-C user=...` makes sshd misparse the trailing
+                    // patterns as bogus spec keys and abort with "Invalid test mode specification".
+                    // Emit one match context per pattern so each Match block a pattern could
+                    // activate is simulated independently.
+                    std::istringstream valueStream(value);
+                    std::string pattern;
+                    while (std::getline(valueStream, pattern, ','))
+                    {
+                        if (pattern.empty())
+                        {
+                            continue;
+                        }
+                        if ((type == "address") || (type == "localaddress"))
+                        {
+                            pattern = pattern.substr(0, pattern.find_first_of('/'));
+                        }
+                        allMatches.push_back(type + "=" + pattern);
+                    }
                 }
             }
         }
@@ -177,8 +194,10 @@ Result<std::map<std::string, std::string>> GetSshdOptions(ContextInterface& cont
 }
 
 // Helper for evaluating delimited numeric limits such as MaxStartups style values.
+// The ctx string qualifies indicator messages with the Match context (empty when not in all_matches mode),
+// mirroring EvaluateSshdOption() so results from different Match contexts stay distinguishable.
 static Result<Status> EvaluateDelimitedNumericLimits(const std::string& option, const std::string& value, const std::string& realValue,
-    const char delimiter, size_t numFields, IndicatorsTree& indicators)
+    const char delimiter, size_t numFields, const std::string& ctx, IndicatorsTree& indicators)
 {
     // Parse realValue using provided delimiter, value always uses ':' per specification.
     std::vector<long long> realParts(numFields, 0);
@@ -226,38 +245,42 @@ static Result<Status> EvaluateDelimitedNumericLimits(const std::string& option, 
     {
         if (realParts[i] > limitParts[i])
         {
-            return indicators.NonCompliant("Option '" + option + "' has value '" + realValue + "' which exceeds limits '" + value + "'");
+            return indicators.NonCompliant("Option '" + option + "' has value '" + realValue + "' which exceeds limits '" + value + "'" + ctx);
         }
     }
-    return indicators.Compliant("Option '" + option + "' has a value '" + realValue + "' compliant with limits '" + value + "'");
+    return indicators.Compliant("Option '" + option + "' has a value '" + realValue + "' compliant with limits '" + value + "'" + ctx);
 }
 
 // Helper that evaluates a single sshd option against the provided operation/value.
 // valueRegexes are only used (and must be valid) when op is regex, match, or not_match.
 static Result<Status> EvaluateSshdOption(const std::map<std::string, std::string>& sshdConfig, const std::string& option, const std::string& value,
-    const std::string& op, const std::vector<regex>& valueRegexes, IndicatorsTree& indicators)
+    const std::string& op, const std::vector<regex>& valueRegexes, const Optional<std::string>& matchContext, IndicatorsTree& indicators)
 {
+    // When evaluating a specific Match block (all_matches mode), qualify every message with the
+    // connection context (e.g. "user=*@*") so results from different Match contexts are
+    // distinguishable in the indicator tree.
+    const std::string ctx = matchContext.HasValue() ? " (Match context '" + matchContext.Value() + "')" : "";
     auto itOptions = sshdConfig.find(option);
     if (itOptions == sshdConfig.end())
     {
         // For not_match semantics, absence means the forbidden pattern is not present -> compliant
         if (op == "not_match")
         {
-            return indicators.Compliant("Option '" + option + "' not found.");
+            return indicators.Compliant("Option '" + option + "' not found." + ctx);
         }
-        return indicators.NonCompliant("Option '" + option + "' not found in SSH daemon configuration");
+        return indicators.NonCompliant("Option '" + option + "' not found in SSH daemon configuration" + ctx);
     }
 
     auto realValue = itOptions->second;
 
     if (("maxstartups" == option) && ("match" == op))
     {
-        return EvaluateDelimitedNumericLimits(option, value, realValue, ':', 3, indicators);
+        return EvaluateDelimitedNumericLimits(option, value, realValue, ':', 3, ctx, indicators);
     }
 
     if (("rekeylimit" == option) && ("match" == op))
     {
-        return EvaluateDelimitedNumericLimits(option, value, realValue, ' ', 2, indicators);
+        return EvaluateDelimitedNumericLimits(option, value, realValue, ' ', 2, ctx, indicators);
     }
 
     if (op == "match" || op == "regex") // The only difference is in the valueRegexes preparation
@@ -270,10 +293,10 @@ static Result<Status> EvaluateSshdOption(const std::map<std::string, std::string
         {
             if (regex_search(realValue, valueRegex))
             {
-                return indicators.Compliant("Option '" + option + "' has a compliant value '" + realValue + "'");
+                return indicators.Compliant("Option '" + option + "' has a compliant value '" + realValue + "'" + ctx);
             }
         }
-        return indicators.NonCompliant("Option '" + option + "' has value '" + realValue + "' which does not match required pattern '" + value + "'");
+        return indicators.NonCompliant("Option '" + option + "' has value '" + realValue + "' which does not match required pattern '" + value + "'" + ctx);
     }
     else if (op == "not_match")
     {
@@ -285,10 +308,10 @@ static Result<Status> EvaluateSshdOption(const std::map<std::string, std::string
         {
             if (regex_search(realValue, valueRegex))
             {
-                return indicators.NonCompliant("Option '" + option + "' has value '" + realValue + "' which matches forbidden pattern '" + value + "'");
+                return indicators.NonCompliant("Option '" + option + "' has value '" + realValue + "' which matches forbidden pattern '" + value + "'" + ctx);
             }
         }
-        return indicators.Compliant("Option '" + option + "' has a compliant value '" + realValue + "'");
+        return indicators.Compliant("Option '" + option + "' has a compliant value '" + realValue + "'" + ctx);
     }
     else if (op == "lt" || op == "le" || op == "gt" || op == "ge")
     {
@@ -297,7 +320,7 @@ static Result<Status> EvaluateSshdOption(const std::map<std::string, std::string
         if (!realIntRes.HasValue() || !wantedIntRes.HasValue())
         {
             return indicators.NonCompliant("Option '" + option + "' has non-numeric value '" + realValue + "' or comparison target '" + value +
-                                           "' (cannot apply numeric operation '" + op + "')");
+                                           "' (cannot apply numeric operation '" + op + "')" + ctx);
         }
         long long realInt = realIntRes.Value();
         long long wantedInt = wantedIntRes.Value();
@@ -328,9 +351,9 @@ static Result<Status> EvaluateSshdOption(const std::map<std::string, std::string
         if (pass)
         {
             return indicators.Compliant("Option '" + option + "' has a compliant numeric value '" + realValue + "' (" + expectation + " '" + value +
-                                        "')");
+                                        "')" + ctx);
         }
-        return indicators.NonCompliant("Option '" + option + "' has numeric value '" + realValue + "' which is not " + expectation + " '" + value + "'");
+        return indicators.NonCompliant("Option '" + option + "' has numeric value '" + realValue + "' which is not " + expectation + " '" + value + "'" + ctx);
     }
     else
     {
@@ -392,7 +415,7 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
         }
     }
 
-    std::vector<std::string> matchModes;
+    std::vector<Optional<std::string>> matchModes;
     auto mode = params.mode.Value();
     if (mode == SshdOptionMode::AllMatches)
     {
@@ -405,11 +428,14 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
         {
             return indicators.Compliant("No Match blocks in SSH daemon configuration, skipping Match evaluation");
         }
-        matchModes = allMatches.Value();
+        for (auto& match : allMatches.Value())
+        {
+            matchModes.emplace_back(std::move(match));
+        }
     }
     else
     {
-        matchModes.push_back(""); // regular
+        matchModes.emplace_back(); // regular (no Match context)
     }
 
     std::string extraConfig;
@@ -429,16 +455,21 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
 
     for (auto const& matchMode : matchModes)
     {
-        auto sshdConfig = GetSshdOptions(context, extraConfig, matchMode);
+        auto sshdConfig = GetSshdOptions(context, extraConfig, matchMode.ValueOr(""));
         if (!sshdConfig.HasValue())
         {
-            return indicators.NonCompliant("Failed to get sshd options: " + sshdConfig.Error().message);
+            // A failure to *evaluate* the sshd configuration (e.g. sshd -T could not run, or a
+            // Match context could not be simulated) is an engine error, not evidence that the
+            // system is non-compliant. Reporting it as NonCompliant produces a false negative;
+            // propagate it as an Error so it is surfaced as "could not evaluate" and honored by
+            // the assessor's --continue-on-error handling.
+            return Error("Failed to get sshd options: " + sshdConfig.Error().message, sshdConfig.Error().code);
         }
         for (auto const& option : options)
         {
             OsConfigLogInfo(log, "Evaluating SSH daemon option '%s' in mode '%s' with op '%s' against value '%s'", option.c_str(),
-                matchMode.empty() ? "regular" : matchMode.c_str(), std::to_string(op).c_str(), params.value.c_str());
-            auto result = EvaluateSshdOption(sshdConfig.Value(), option, params.value, std::to_string(op), valueRegexes, indicators);
+                matchMode.HasValue() ? matchMode.Value().c_str() : "regular", std::to_string(op).c_str(), params.value.c_str());
+            auto result = EvaluateSshdOption(sshdConfig.Value(), option, params.value, std::to_string(op), valueRegexes, matchMode, indicators);
             if (!result.HasValue())
             {
                 return result.Error();
