@@ -3,7 +3,6 @@
 
 #include <Logging.h>
 #include <PasswordEntriesIterator.h>
-#include <Telemetry.h>
 #include <cerrno>
 #include <stdexcept>
 
@@ -106,7 +105,6 @@ void PasswordEntryIterator::next() // NOLINT(*-identifier-naming)
         }
 
         OsConfigLogError(mRange->GetLogHandle(), "Failed to read /etc/shadow entry: %s (%d)", strerror(status), status);
-        OSConfigTelemetryStatusTrace("fgetspent_r", status);
         throw std::runtime_error("Failed to read /etc/shadow entry: " + string(strerror(status)) + ", errno: " + std::to_string(status));
     }
 }

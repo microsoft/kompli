@@ -11,17 +11,4 @@ if(BUILD_EXTERNAL)
         add_subdirectory(bin)
     endif()
 else()
-    add_library(telemetry
-        STATIC
-            Telemetry.c)
-
-    target_include_directories(telemetry
-        PUBLIC
-            ${CMAKE_CURRENT_SOURCE_DIR})
-
-    target_link_libraries(telemetry
-        PRIVATE
-            commonutils
-        PUBLIC
-            dl)
 endif()

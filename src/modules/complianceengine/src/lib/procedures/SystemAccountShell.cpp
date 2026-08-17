@@ -5,7 +5,6 @@
 #include <ListValidShells.h>
 #include <Result.h>
 #include <StringTools.h>
-#include <Telemetry.h>
 #include <UsersIterator.h>
 #include <fstream>
 #include <set>
@@ -48,7 +47,6 @@ Result<uid_t> LoadMinUID(ContextInterface& context)
     if (!file.is_open())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to read %s", filename.c_str());
-        OSConfigTelemetryStatusTrace("fopen", EINVAL);
         return Error(string("Failed to read ") + filename, EINVAL);
     }
 
@@ -78,14 +76,12 @@ Result<uid_t> LoadMinUID(ContextInterface& context)
         if (!uid.HasValue())
         {
             OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN value: %s", uid.Error().message.c_str());
-            OSConfigTelemetryStatusTrace("TryStringToInt", uid.Error().code);
             return uid.Error();
         }
 
         if (uid.Value() < 0)
         {
             OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN value: must not be negative");
-            OSConfigTelemetryStatusTrace("UID_MIN", EINVAL);
             return Error("Failed to parse UID_MIN value: must not be negative", EINVAL);
         }
 
@@ -103,7 +99,6 @@ Result<Status> AuditSystemAccountShell(IndicatorsTree& indicators, ContextInterf
     if (!validShells.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to get valid shells: %s", validShells.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("ListValidShells", validShells.Error().code);
         return validShells.Error();
     }
 
@@ -111,7 +106,6 @@ Result<Status> AuditSystemAccountShell(IndicatorsTree& indicators, ContextInterf
     if (!minUID.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to get minimum user UID: %s", minUID.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("LoadMinUID", minUID.Error().code);
         return minUID.Error();
     }
 

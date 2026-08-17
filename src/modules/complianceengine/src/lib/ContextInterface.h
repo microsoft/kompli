@@ -7,6 +7,7 @@
 #include "FilesystemScanner.h"
 #include "Logging.h"
 #include "Result.h"
+#include "Telemetry.h"
 
 #include <string>
 #include <vector>
@@ -27,6 +28,7 @@ public:
     virtual ~ContextInterface() = 0;
     virtual Result<std::string> ExecuteCommand(const std::string& cmd) const = 0;
     virtual Result<std::string> GetFileContents(const std::string& filePath) const = 0;
+    virtual Telemetry& GetTelemetry() = 0;
 
     // Enumerates the host's network interfaces with their IFF_* flags. On success returns
     // the list (possibly empty when the system genuinely has no interfaces); on failure
