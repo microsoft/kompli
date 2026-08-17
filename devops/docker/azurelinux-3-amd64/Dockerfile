@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/azurelinux/base/core:3.0@sha256:4d0522bb656cfe2bc567c254bb87c2b086a002db6cba51f71870eb5c6630195c
+FROM mcr.microsoft.com/azurelinux/base/core:3.0@sha256:8bb51342bd5eba915990ab608f91060d502bb7891a2d3d909e0419b932533029
 
 RUN tdnf install -y azurelinux-repos-extended
 RUN tdnf install -y \
