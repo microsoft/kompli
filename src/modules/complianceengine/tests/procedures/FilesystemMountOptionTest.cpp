@@ -106,6 +106,44 @@ TEST_F(EnsureFilesystemOptionTest, AuditEnsureFilesystemOptionForbidden)
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
 
+TEST_F(EnsureFilesystemOptionTest, AuditUsesLiveMountOptions)
+{
+    CreateTabs();
+    std::ofstream mtab(mtabFile);
+    mtab << "/dev/sda1 / ext4 rw,nodev,noatime 0 0\n";
+    mtab << "/dev/sda2 /home ext4 rw,nosuid,relatime,data=ordered 0 0\n";
+    mtab.close();
+
+    FilesystemMountOptionParams params;
+    params.mountpoint = "/home";
+    mContext.SetSpecialFilePath("/etc/fstab", fstabFile);
+    mContext.SetSpecialFilePath("/etc/mtab", mtabFile);
+    params.optionsSet = {{"nosuid"}};
+
+    auto result = AuditFilesystemMountOption(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureFilesystemOptionTest, AuditRejectsNoncompliantLiveMountOptions)
+{
+    CreateTabs();
+    std::ofstream fstab(fstabFile);
+    fstab << "/dev/sda1 / ext4 defaults,nodev,noatime 0 0\n";
+    fstab << "/dev/sda2 /home ext4 defaults,nosuid,relatime 0 0\n";
+    fstab.close();
+
+    FilesystemMountOptionParams params;
+    params.mountpoint = "/home";
+    mContext.SetSpecialFilePath("/etc/fstab", fstabFile);
+    mContext.SetSpecialFilePath("/etc/mtab", mtabFile);
+    params.optionsSet = {{"nosuid"}};
+
+    auto result = AuditFilesystemMountOption(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::NonCompliant);
+}
+
 TEST_F(EnsureFilesystemOptionTest, RemediateFilesystemMountOption)
 {
     CreateTabs();
