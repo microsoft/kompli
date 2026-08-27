@@ -6,7 +6,6 @@
 #include <ProcedureMap.h> // Adds std::to_string() for enum classes
 #include <Regex.h>
 #include <SshdOption.h>
-#include <Telemetry.h>
 #include <fnmatch.h>
 #include <fts.h>
 #include <sstream>
@@ -392,7 +391,6 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
         catch (const regex_error& e)
         {
             OsConfigLogError(log, "Regex error: %s", e.what());
-            OSConfigTelemetryStatusTrace("regex", EINVAL);
             return Error("Failed to compile regex error: " + std::string(e.what()), EINVAL);
         }
     }
@@ -409,7 +407,6 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
             catch (const regex_error& e)
             {
                 OsConfigLogError(log, "Regex error: %s", e.what());
-                OSConfigTelemetryStatusTrace("regex", EINVAL);
                 return Error("Failed to compile regex '" + valuePart + "' error: " + e.what(), EINVAL);
             }
         }
