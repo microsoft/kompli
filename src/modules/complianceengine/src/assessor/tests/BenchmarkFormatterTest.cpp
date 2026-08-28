@@ -5,8 +5,8 @@
 #include <BenchmarkInfo.h>
 #include <DistributionInfo.h>
 #include <Evaluator.h>
-#include <Mof.hpp>
 #include <Regex.h>
+#include <Resource.hpp>
 #include <gtest/gtest.h>
 #include <map>
 #include <parson.h>
@@ -17,8 +17,8 @@ using ComplianceEngine::Architecture;
 using ComplianceEngine::DistributionInfo;
 using ComplianceEngine::LinuxDistribution;
 using ComplianceEngine::Status;
+using ComplianceEngine::Assessor::Resource;
 using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
-using ComplianceEngine::MOF::Resource;
 
 namespace
 {

@@ -52,11 +52,11 @@ TEST(CliOptionsSmokeTest, HelpIsRecognised)
 
 TEST(CliOptionsSmokeTest, AuditWithInputFilename)
 {
-    ArgvHelper a{"prog", "audit", "/tmp/x.mof"};
+    ArgvHelper a{"prog", "audit", "/tmp/x.json"};
     auto result = ParseCommandLine(a.Argc(), a.Argv());
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(result.Value().command, Command::Audit);
-    EXPECT_EQ(result.Value().input, "/tmp/x.mof");
+    EXPECT_EQ(result.Value().input, "/tmp/x.json");
 }
 
 TEST(CliOptionsSmokeTest, FormatOnAuditIsRejected)
@@ -158,7 +158,7 @@ TEST(CliOptionsSmokeTest, InvalidCommandIsError)
 
 TEST(CliOptionsSmokeTest, TooManyArgumentsIsError)
 {
-    ArgvHelper a{"prog", "audit", "a.mof", "extra"};
+    ArgvHelper a{"prog", "audit", "a.json", "extra"};
     EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
 }
 

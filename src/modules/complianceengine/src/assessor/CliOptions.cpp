@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 #include <CliOptions.hpp>
 #include <algorithm>
 #include <getopt.h>
@@ -29,7 +32,8 @@ void PrintHelp(const std::string& programName)
     std::cout << "\t-e, --continue-on-error\tSkip rules that fail due to engine errors and continue processing. Returns 1 if any error occurred.\n";
     std::cout << "\t-l, --log-file\tSpecify a log file. Default: print log entries to standard output.\n";
     std::cout << "\t-s, --section\tProcess only specific sections. Default: process all available rules.\n";
-    std::cout << "\tfilename\tProcess the specified MOF file. Optional: if skipped or the value is '-', the program reads standard input.\n";
+    std::cout << "\tfilename\tProcess the specified benchmark-definition JSON file. Optional: if skipped or the value is '-', the program reads "
+                 "standard input.\n";
     std::cout << "\n";
     std::cout << "render options:\n";
     std::cout << "\t-f, --format\tPresentation format. Allowed values: {junit, nested-list, compact-list, debug}. Default: junit.\n";

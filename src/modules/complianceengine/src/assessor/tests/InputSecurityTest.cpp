@@ -84,7 +84,7 @@ class RefuseUnsafeLogFileTest : public InputSecurityFixture
 
 TEST(RefusePathTraversalTest, PlainPathIsAccepted)
 {
-    EXPECT_FALSE(RefusePathTraversal("/etc/foo/bar.mof", nullptr));
+    EXPECT_FALSE(RefusePathTraversal("/etc/foo/bar.json", nullptr));
 }
 
 TEST(RefusePathTraversalTest, BareDotDotIsRefused)
@@ -110,7 +110,7 @@ TEST(RefusePathTraversalTest, DotDotSuffixIsRefused)
 TEST(RefusePathTraversalTest, SingleDotIsAccepted)
 {
     // "." is not a traversal component
-    EXPECT_FALSE(RefusePathTraversal("./foo.mof", nullptr));
+    EXPECT_FALSE(RefusePathTraversal("./foo.json", nullptr));
 }
 
 TEST(RefusePathTraversalTest, EmptyPathIsAccepted)
@@ -121,7 +121,7 @@ TEST(RefusePathTraversalTest, EmptyPathIsAccepted)
 TEST(RefusePathTraversalTest, RelativeEmbeddedDotDotIsRefused)
 {
     // A traversal component is rejected even without a leading slash.
-    EXPECT_TRUE(RefusePathTraversal("foo/../bar.mof", nullptr));
+    EXPECT_TRUE(RefusePathTraversal("foo/../bar.json", nullptr));
 }
 
 TEST(RefusePathTraversalTest, FilenamesContainingDotsAreAccepted)
@@ -130,11 +130,11 @@ TEST(RefusePathTraversalTest, FilenamesContainingDotsAreAccepted)
     // component (bounded by slashes or string ends). Filenames that merely
     // contain dot characters are legitimate and must not be over-rejected;
     // a naive substring search for ".." would wrongly refuse all of these.
-    EXPECT_FALSE(RefusePathTraversal("/etc/foo..bar.mof", nullptr)); // embedded dots
-    EXPECT_FALSE(RefusePathTraversal("/etc/...mof", nullptr));       // leading triple-dot name
-    EXPECT_FALSE(RefusePathTraversal("/etc/..foo", nullptr));        // name starting with ".."
-    EXPECT_FALSE(RefusePathTraversal("/etc/foo..", nullptr));        // name ending with ".."
-    EXPECT_FALSE(RefusePathTraversal("...", nullptr));               // bare triple-dot
+    EXPECT_FALSE(RefusePathTraversal("/etc/foo..bar.json", nullptr)); // embedded dots
+    EXPECT_FALSE(RefusePathTraversal("/etc/...json", nullptr));       // leading triple-dot name
+    EXPECT_FALSE(RefusePathTraversal("/etc/..foo", nullptr));         // name starting with ".."
+    EXPECT_FALSE(RefusePathTraversal("/etc/foo..", nullptr));         // name ending with ".."
+    EXPECT_FALSE(RefusePathTraversal("...", nullptr));                // bare triple-dot
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +149,7 @@ TEST_F(RefuseWritableParentDirTest, ParentRootOwnedNotWritableIsAccepted)
     }
     const std::string dir = MakeSubdir("safe_parent", 0755);
     ASSERT_EQ(0, ::chown(dir.c_str(), 0, 0)) << std::strerror(errno);
-    const std::string file = dir + "/test.mof";
+    const std::string file = dir + "/test.json";
     ASSERT_TRUE(CreateFile(file, 0600)) << std::strerror(errno);
     ASSERT_EQ(0, ::chown(file.c_str(), 0, 0)) << std::strerror(errno);
 
@@ -165,7 +165,7 @@ TEST_F(RefuseWritableParentDirTest, WorldWritableParentIsRefused)
     const std::string dir = MakeSubdir("writable_parent", 0755);
     ASSERT_EQ(0, ::chown(dir.c_str(), 0, 0)) << std::strerror(errno);
     ASSERT_EQ(0, ::chmod(dir.c_str(), 0777)) << std::strerror(errno); // world-writable; set after creation to bypass umask
-    const std::string file = dir + "/test.mof";
+    const std::string file = dir + "/test.json";
     ASSERT_TRUE(CreateFile(file, 0600)) << std::strerror(errno);
     ASSERT_EQ(0, ::chown(file.c_str(), 0, 0)) << std::strerror(errno);
 
@@ -180,7 +180,7 @@ TEST_F(RefuseWritableParentDirTest, NonRootOwnedParentIsRefused)
     }
     const std::string dir = MakeSubdir("nonroot_parent", 0755);
     ASSERT_EQ(0, ::chown(dir.c_str(), 1000, 1000)) << std::strerror(errno); // non-root owner
-    const std::string file = dir + "/test.mof";
+    const std::string file = dir + "/test.json";
     ASSERT_TRUE(CreateFile(file, 0600)) << std::strerror(errno);
 
     EXPECT_TRUE(RefuseWritableParentDir(file, nullptr));
@@ -198,7 +198,7 @@ TEST_F(RefuseWritableParentDirTest, GroupWritableOnlyParentIsRefused)
     const std::string dir = MakeSubdir("grpwrite_parent", 0755);
     ASSERT_EQ(0, ::chown(dir.c_str(), 0, 0)) << std::strerror(errno);
     ASSERT_EQ(0, ::chmod(dir.c_str(), 0775)) << std::strerror(errno); // group-writable; set after creation to bypass umask
-    const std::string file = dir + "/test.mof";
+    const std::string file = dir + "/test.json";
     ASSERT_TRUE(CreateFile(file, 0600)) << std::strerror(errno);
     ASSERT_EQ(0, ::chown(file.c_str(), 0, 0)) << std::strerror(errno);
 
@@ -209,7 +209,7 @@ TEST_F(RefuseWritableParentDirTest, NonExistentParentIsRefused)
 {
     // The parent directory does not exist, so stat() fails. The function must
     // fail closed (refuse) rather than silently accept. No root required.
-    const std::string file = TempPath("no_such_dir/test.mof");
+    const std::string file = TempPath("no_such_dir/test.json");
     EXPECT_TRUE(RefuseWritableParentDir(file, nullptr));
 }
 
@@ -217,7 +217,7 @@ TEST_F(RefuseWritableParentDirTest, RootDirectoryIsAccepted)
 {
     // "/" is root-owned and not world-writable on any sane system.
     // No file is created; the function only stats the parent directory.
-    EXPECT_FALSE(RefuseWritableParentDir("/foo.mof", nullptr));
+    EXPECT_FALSE(RefuseWritableParentDir("/foo.json", nullptr));
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +230,7 @@ TEST_F(OpenVerifiedInputTest, SafeFileIsOpened)
     {
         GTEST_SKIP() << "chown requires root";
     }
-    const std::string path = TempPath("safe_file.mof");
+    const std::string path = TempPath("safe_file.json");
     ASSERT_TRUE(CreateFile(path, 0600)) << std::strerror(errno);
     // Write known content so we can confirm the returned fd is readable and
     // positioned at the start of the file.
@@ -267,7 +267,7 @@ TEST_F(OpenVerifiedInputTest, NonExistentPathIsRefused)
     // The generic open()-failure branch (distinct from the ELOOP symlink
     // branch) must surface an error; the errno is propagated as the error
     // code. No root required.
-    const std::string path = TempPath("does_not_exist.mof");
+    const std::string path = TempPath("does_not_exist.json");
     const auto result = OpenVerifiedInput(path, nullptr);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(ENOENT, result.Error().code);
@@ -292,8 +292,8 @@ TEST_F(OpenVerifiedInputTest, DirectoryIsRefused)
 
 TEST_F(OpenVerifiedInputTest, SymlinkIsRefused)
 {
-    const std::string target = TempPath("target.mof");
-    const std::string link = TempPath("link.mof");
+    const std::string target = TempPath("target.json");
+    const std::string link = TempPath("link.json");
     ASSERT_TRUE(CreateFile(target, 0600)) << std::strerror(errno);
     ASSERT_EQ(0, ::symlink(target.c_str(), link.c_str())) << std::strerror(errno);
 
@@ -317,7 +317,7 @@ TEST_F(OpenVerifiedInputTest, GroupWritableFileIsRefused)
     {
         GTEST_SKIP() << "chown requires root";
     }
-    const std::string path = TempPath("grpwrite.mof");
+    const std::string path = TempPath("grpwrite.json");
     ASSERT_TRUE(CreateFile(path, 0600)) << std::strerror(errno);
     ASSERT_EQ(0, ::chmod(path.c_str(), 0660)) << std::strerror(errno); // group-writable; set after creation to bypass umask
     ASSERT_EQ(0, ::chown(path.c_str(), 0, 0)) << std::strerror(errno);
@@ -340,7 +340,7 @@ TEST_F(OpenVerifiedInputTest, WorldWritableFileIsRefused)
     {
         GTEST_SKIP() << "chown requires root";
     }
-    const std::string path = TempPath("worldwrite.mof");
+    const std::string path = TempPath("worldwrite.json");
     ASSERT_TRUE(CreateFile(path, 0600)) << std::strerror(errno);
     ASSERT_EQ(0, ::chmod(path.c_str(), 0666)) << std::strerror(errno); // world-writable; set after creation to bypass umask
     ASSERT_EQ(0, ::chown(path.c_str(), 0, 0)) << std::strerror(errno);
@@ -359,7 +359,7 @@ TEST_F(OpenVerifiedInputTest, WorldWritableFileIsRefused)
 
 TEST_F(OpenVerifiedInputTest, NonRootOwnedFileIsRefused)
 {
-    const std::string path = TempPath("nonroot.mof");
+    const std::string path = TempPath("nonroot.json");
     ASSERT_TRUE(CreateFile(path, 0600)) << std::strerror(errno);
     // When running as root, explicitly chown to a non-root uid.
     // When running as non-root, the file is already owned by the current user.

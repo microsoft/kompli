@@ -8,15 +8,15 @@
 // ------------
 // This tool is intended to run as root on Linux endpoints to perform CIS
 // benchmark audit and remediation. The trust boundary is the invoking
-// operator: the input MOF file, the log-file path, and command-line arguments
-// are treated as operator-supplied (trusted to be benign in intent, but not
-// to be free of bugs or accidental hostile content).
+// operator: the input benchmark-definition file, the log-file path, and
+// command-line arguments are treated as operator-supplied (trusted to be benign
+// in intent, but not to be free of bugs or accidental hostile content).
 //
-//  - The input MOF parser is strict and streaming (see MofResourceRange): it
-//    validates the fixed field set the augmentation engine emits, rejects
-//    unknown fields, and bounds line length, total size, and entry count. It
-//    owns the input file and encapsulates the integrity checks below. A fuzzer
-//    target exercises it; extend the corpus when changing the format.
+//  - The input parser is strict (see BenchmarkDefinition): it validates the
+//    resource envelope and the per-rule field set the augmentation engine
+//    emits and bounds the total input size. It owns the input file and
+//    encapsulates the integrity checks below. A fuzzer target exercises it;
+//    extend the corpus when changing the format.
 //
 //  - Input file integrity (when --input is used; stdin bypasses all checks):
 //
@@ -46,10 +46,10 @@
 //       streaming parser to keep memory use bounded.
 //
 //  - stdin (--input not supplied): all file integrity checks are bypassed.
-//    Streaming inputs (pipes, process substitution) must use stdin. The bytes
-//    consumed, per-line length, and total entry count are still bounded inside
-//    the streaming MOF parser. Callers in automated pipelines should always use
-//    --input with a root-owned, non-world-writable file.
+//    Streaming inputs (pipes, process substitution) must use stdin. The total
+//    input size is still bounded inside the definition parser. Callers in
+//    automated pipelines should always use --input with a root-owned,
+//    non-world-writable file.
 //
 //  - umask is tightened to at least S_IRWXG|S_IRWXO (preserving any stricter
 //    inherited mask). The log file when --log-file is supplied is the primary
@@ -81,11 +81,11 @@
 //    engine spawns. Sanitizing the environment is the engine's
 //    responsibility, not the assessor's.
 
+#include "BenchmarkDefinition.hpp"
 #include "BenchmarkFormatter.hpp"
 #include "CliOptions.hpp"
 #include "InputSecurity.hpp"
 #include "JUnitRenderer.hpp"
-#include "Mof.hpp"
 #include "TextRenderers.hpp"
 
 #include <AssessorContext.h>
@@ -124,8 +124,9 @@ using ComplianceEngine::Assessor::RefuseUnsafeLogFile;
 using ComplianceEngine::Assessor::RenderJUnit;
 using ComplianceEngine::Assessor::RenderText;
 using ComplianceEngine::Assessor::TextStyle;
+using ComplianceEngine::BenchmarkDefinition::ParseFile;
+using ComplianceEngine::BenchmarkDefinition::ParseStream;
 using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
-using ComplianceEngine::MOF::MofResourceRange;
 using std::string;
 
 namespace
@@ -156,7 +157,7 @@ Result<string> ReadAllBounded(std::istream& stream, std::size_t cap)
 
 // Renders a canonical result JSON (read from stdin or a file) into the format
 // selected on the `render` subcommand. Runs without root and touches no system
-// state, so it needs none of the MOF input hardening `audit`/`remediate` apply.
+// state, so it needs none of the definition input hardening `audit`/`remediate` apply.
 int RunRender(const Options& options)
 {
     Result<string> jsonResult = Error("uninitialized");
@@ -238,7 +239,7 @@ int main(int argc, char* argv[])
     }
 
     // `render` is a pure, root-free transformation of a canonical result JSON;
-    // it needs neither the engine nor the MOF input path, so dispatch it early.
+    // it needs neither the engine nor the definition input path, so dispatch it early.
     if (Command::Render == options.command)
     {
         return RunRender(options);
@@ -313,47 +314,39 @@ int main(int argc, char* argv[])
     }
     auto& benchmarkFormatter = formatterResult.Value();
 
-    // Open the input as a strictly-validated, streaming MOF range. For --input
-    // the range encapsulates the full input-hardening posture (path-traversal
-    // rejection, root-owned non-writable parent directory, O_NOFOLLOW open, and
-    // regular-file/ownership/mode checks) and owns the file; for stdin it
-    // streams without those on-disk checks. Size, line, and entry caps are
-    // enforced inside the range.
-    auto rangeResult = options.input.empty() ? MofResourceRange::Make(std::cin, logHandle.get()) : MofResourceRange::Make(options.input, logHandle.get());
-    if (!rangeResult.HasValue())
+    // Parse the input as a benchmark-definition document. For --input the parser
+    // encapsulates the full input-hardening posture (path-traversal rejection,
+    // root-owned non-writable parent directory, O_NOFOLLOW open, and regular-file/
+    // ownership/mode checks) and owns the file; for stdin it reads without those
+    // on-disk checks. The total input size is bounded in either case.
+    auto resourcesResult = options.input.empty() ? ParseStream(std::cin, logHandle.get()) : ParseFile(options.input, logHandle.get());
+    if (!resourcesResult.HasValue())
     {
-        OsConfigLogError(logHandle.get(), "Failed to open MOF input: %s", rangeResult.Error().message.c_str());
+        OsConfigLogError(logHandle.get(), "Failed to parse benchmark definition input: %s", resourcesResult.Error().message.c_str());
         return 1;
     }
-    auto& mofRange = rangeResult.Value();
+    const auto& resources = resourcesResult.Value();
 
     auto status = Status::Compliant;
     bool hasError = false;
-    for (const auto& entryResult : mofRange)
+    for (const auto& entry : resources)
     {
-        if (!entryResult.HasValue())
-        {
-            OsConfigLogError(logHandle.get(), "Failed to parse MOF entry: %s", entryResult.Error().message.c_str());
-            return 1;
-        }
-
-        const auto& mofEntry = entryResult.Value();
-
         // Abort as soon as we encounter a rule that does not target the detected
         // distribution/version. This mirrors ComplianceEngineCheckApplicability
         // in the module interface: the benchmark's distribution must match and
         // its version glob must match the running system's VERSION_ID. Every
-        // entry in a MOF belongs to the same benchmark, so a single mismatch
-        // means the whole MOF targets another system (or this system was
-        // misdetected); running any of its rules would report spurious results.
+        // rule in a definition belongs to the same benchmark, so a single
+        // mismatch means the whole definition targets another system (or this
+        // system was misdetected); running any of its rules would report
+        // spurious results.
         const auto& distributionInfo = engine.GetDistributionInfo().Value();
-        if (!mofEntry.benchmarkInfo.Match(distributionInfo))
+        if (!entry.benchmarkInfo.Match(distributionInfo))
         {
-            OsConfigLogError(logHandle.get(), "Aborting on entry %s: benchmark is not applicable for the current distribution", mofEntry.resourceID.c_str());
+            OsConfigLogError(logHandle.get(), "Aborting on entry %s: benchmark is not applicable for the current distribution", entry.resourceID.c_str());
             OsConfigLogError(logHandle.get(), "Current system identification: %s", std::to_string(distributionInfo).c_str());
             auto overridden = distributionInfo;
-            overridden.distribution = mofEntry.benchmarkInfo.distribution;
-            overridden.version = mofEntry.benchmarkInfo.SanitizedVersion();
+            overridden.distribution = entry.benchmarkInfo.distribution;
+            overridden.version = entry.benchmarkInfo.SanitizedVersion();
             OsConfigLogError(logHandle.get(), "To override this detection, place the following line inside the '%s' file: %s",
                 DistributionInfo::cDefaultOverrideFilePath, std::to_string(overridden).c_str());
             return 1;
@@ -361,15 +354,14 @@ int main(int argc, char* argv[])
 
         if (options.section.HasValue())
         {
-            if (mofEntry.benchmarkInfo.section.find(options.section.Value()) != 0)
+            if (entry.benchmarkInfo.section.find(options.section.Value()) != 0)
             {
-                OsConfigLogDebug(logHandle.get(), "Skipping entry %s as it does not match section %s", mofEntry.resourceID.c_str(),
-                    options.section.Value().c_str());
+                OsConfigLogDebug(logHandle.get(), "Skipping entry %s as it does not match section %s", entry.resourceID.c_str(), options.section.Value().c_str());
                 continue;
             }
         }
 
-        auto procedureResult = engine.MmiSet((string("procedure") + mofEntry.ruleName).c_str(), mofEntry.procedure);
+        auto procedureResult = engine.MmiSet((string("procedure") + entry.ruleName).c_str(), entry.procedure);
         if (!procedureResult.HasValue())
         {
             OsConfigLogError(logHandle.get(), "Failed to set procedure: %s", procedureResult.Error().message.c_str());
@@ -384,13 +376,13 @@ int main(int argc, char* argv[])
         switch (options.command)
         {
             case Command::Audit: {
-                if (mofEntry.hasInitAudit)
+                if (entry.hasInitAudit)
                 {
                     // If the producer flagged InitObject support but supplied no
-                    // DesiredObjectValue, fall back to an empty JSON object so
-                    // we don't deref an empty Optional.
-                    const string initPayload = mofEntry.payload.HasValue() ? mofEntry.payload.Value() : string("{}");
-                    auto result = engine.MmiSet((string("init") + mofEntry.ruleName).c_str(), initPayload);
+                    // desired value, fall back to an empty JSON object so we
+                    // don't deref an empty Optional.
+                    const string initPayload = entry.payload.HasValue() ? entry.payload.Value() : string("{}");
+                    auto result = engine.MmiSet((string("init") + entry.ruleName).c_str(), initPayload);
                     if (!result.HasValue())
                     {
                         OsConfigLogError(logHandle.get(), "Failed to init audit: %s", result.Error().message.c_str());
@@ -403,7 +395,7 @@ int main(int argc, char* argv[])
                     }
                 }
 
-                auto ruleName = string("audit") + mofEntry.ruleName;
+                auto ruleName = string("audit") + entry.ruleName;
                 auto result = engine.MmiGet(ruleName.c_str());
                 if (!result.HasValue())
                 {
@@ -416,7 +408,7 @@ int main(int argc, char* argv[])
                     continue;
                 }
 
-                auto error = benchmarkFormatter.AddEntry(mofEntry, result.Value().status, result.Value().payload, engine.GetParameters(mofEntry.ruleName));
+                auto error = benchmarkFormatter.AddEntry(entry, result.Value().status, result.Value().payload, engine.GetParameters(entry.ruleName));
                 if (error)
                 {
                     OsConfigLogError(logHandle.get(), "Failed to add entry to JSON formatter: %s", error.Value().message.c_str());
@@ -437,12 +429,11 @@ int main(int argc, char* argv[])
             }
 
             case Command::Remediate: {
-                // The augmentation engine emits an empty DesiredObjectValue for
-                // every rule (modelled here as an absent payload); fall back to
-                // an empty JSON object so remediation can still run, mirroring
-                // the audit-init path above.
-                const string remediatePayload = mofEntry.payload.HasValue() ? mofEntry.payload.Value() : string("{}");
-                auto ruleName = string("remediate") + mofEntry.ruleName;
+                // Benchmark definitions carry no desired value (modelled here as
+                // an absent payload); fall back to an empty JSON object so
+                // remediation can still run, mirroring the audit-init path above.
+                const string remediatePayload = entry.payload.HasValue() ? entry.payload.Value() : string("{}");
+                auto ruleName = string("remediate") + entry.ruleName;
                 auto result = engine.MmiSet(ruleName.c_str(), remediatePayload);
                 if (!result.HasValue())
                 {
@@ -455,7 +446,7 @@ int main(int argc, char* argv[])
                     continue;
                 }
 
-                auto error = benchmarkFormatter.AddEntry(mofEntry, result.Value(), "[]", engine.GetParameters(mofEntry.ruleName));
+                auto error = benchmarkFormatter.AddEntry(entry, result.Value(), "[]", engine.GetParameters(entry.ruleName));
                 if (error)
                 {
                     OsConfigLogError(logHandle.get(), "Failed to add entry to JSON formatter: %s", error.Value().message.c_str());
