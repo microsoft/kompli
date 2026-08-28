@@ -65,6 +65,9 @@ class Procedure:
     # It may be None if the procedure has no parameters.
     params_name: str
 
+    # True when the procedure receives the complete map of string arguments.
+    raw_parameters: bool = False
+
 # Represents the whole model extracted from the header files
 @dataclass
 class Model:
@@ -216,7 +219,7 @@ def process_enum_block(file, lineno: int) -> tuple:
 
     raise ValueError("Missing enum closing")
 
-def set_procedure_declaration(procedure_type: str, name: str, params_name, lineno: int, filepath: str, model: Model):
+def set_procedure_declaration(procedure_type: str, name: str, params_name, lineno: int, filepath: str, model: Model, raw_parameters: bool = False):
     procedure = None
     filename = basename(filepath)
     if procedure_type not in ("Audit", "Remediate"):
@@ -226,12 +229,12 @@ def set_procedure_declaration(procedure_type: str, name: str, params_name, linen
     if procedure_type == "Audit":
         if name in model.audits:
             raise ValueError(f"Duplicate declaration of {procedure_type}{name} in {filepath}:{lineno}: previous declaration found in {model.audits[name].filename}:{model.audits[name].line}")
-        model.audits[name] = Procedure(filename=filename, line=lineno, params_name=params_name)
+        model.audits[name] = Procedure(filename=filename, line=lineno, params_name=params_name, raw_parameters=raw_parameters)
         procedure = model.audits[name]
     elif procedure_type == "Remediate":
         if name in model.remediations:
             raise ValueError(f"Duplicate declaration of {procedure_type}{name} in {filepath}:{lineno}: previous declaration found in {model.remediations[name].filename}:{model.remediations[name].line}")
-        model.remediations[name] = Procedure(filename=filename, line=lineno, params_name=params_name)
+        model.remediations[name] = Procedure(filename=filename, line=lineno, params_name=params_name, raw_parameters=raw_parameters)
         procedure = model.remediations[name]
     if not procedure:
         raise ValueError(f"Internal error: procedure is None for {procedure_type}{name} in {filepath}:{lineno}")
@@ -272,6 +275,7 @@ def process_header_file(filepath: str, model: Model):
             if match:
                 procedure_type = match[1]
                 name = match[2]
+                raw_parameters = "const std::map<std::string, std::string>&" in line
                 pat = r".*\(\s*const\s*(\w+)\s*&\s*\w+\s*,\s*IndicatorsTree"
                 match = re.search(pat, line)
                 params_name = None
@@ -279,7 +283,7 @@ def process_header_file(filepath: str, model: Model):
                     params_name = match[1]
                     if params_name not in model.parameters:
                         raise ValueError(f"Parameters struct {params_name} not found for {procedure_type}{name} in {filepath}:{lineno}\nAll Generated arguments bindings need to have suffixx 'Params' to be considered as part of Audit/Remediate Interface")
-                set_procedure_declaration(procedure_type, name, params_name, lineno, filepath, model)
+                set_procedure_declaration(procedure_type, name, params_name, lineno, filepath, model, raw_parameters)
 
 def create_procedure_schema(name: str, procedure: Procedure, model: Model) -> OrderedDict:
     """Create a schema for a single procedure"""
@@ -290,7 +294,7 @@ def create_procedure_schema(name: str, procedure: Procedure, model: Model) -> Or
     props = dict()
     props["type"] = "object"
     props["required"] = []
-    props["additionalProperties"] = False
+    props["additionalProperties"] = {"type": "string"} if procedure.raw_parameters else False
     props["properties"] = OrderedDict()
     if procedure.params_name:
         params = model.parameters[procedure.params_name]
