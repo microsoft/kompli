@@ -20,7 +20,7 @@ Reviewed at kompli commits `834acde1` ("Support the new definitions format") and
 | 4 | Embedded NUL byte silently truncated the parse | Low | Fixed — fail-closed on NUL |
 | 5 | `apiVersion` value never validated | Low | **Deferred** — follow-up PR |
 | 6 | `fnmatch` version-glob hardening | Low | **Deferred** — shared-lib change |
-| 7 | Memory / recursion bounds | Low | Verified adequate (no change) |
+| 7 | Memory / recursion bounds | Low | Adjusted — input cap lowered to 8 MiB |
 | 8 | TOCTOU: parent-dir stat vs. open | Low | Pre-existing, documented, mitigated |
 
 ## Fixed in this work
@@ -40,6 +40,16 @@ silently truncate the document and hide everything after it. Because
 `ParseStream`, and the fuzzer. Covered by unit tests (`RejectsEmbeddedNulByte`,
 `RejectsLeadingNulByte`) and attested crash-free by the libFuzzer target.
 
+### 7. Input memory cap lowered
+JSON parsing is not streaming: the whole document is buffered and parsed at once
+(buffer plus the parson DOM built on top), so peak memory is a multiple of the
+input size. The input cap (`kMaxInputBytes`) was lowered from 64 MiB to 8 MiB
+(the largest committed definition is ~1 MiB) to bound that worst-case footprint
+while keeping ample headroom. Rule count is separately capped (`kMaxRules`, with
+`reserve` performed only after the cap check), and the vendored parson bounds
+nesting at `MAX_NESTING == 2048`, so deeply nested input cannot overflow the
+stack.
+
 ## Documented (no code change)
 
 ### 1. Input integrity is security-critical
@@ -48,12 +58,6 @@ and **executes it as root**. The parser does not sandbox or semantically
 validate the payload, so the file-integrity checks are the sole barrier between
 a tampered definition file and arbitrary root code execution. Any regression in
 those checks is a security regression. Captured in THREAT_MODEL.md.
-
-### 7. Memory and recursion are bounded
-Input is capped (`kMaxInputBytes`) and rule count is capped (`kMaxRules`, with
-`reserve` performed only after the cap check). The vendored parson bounds
-nesting at `MAX_NESTING == 2048`, so deeply nested input cannot overflow the
-stack. No change required.
 
 ### 8. Parent-directory TOCTOU
 `RefuseWritableParentDir` stats by path while `OpenVerifiedInput` verifies via

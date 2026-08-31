@@ -13,7 +13,7 @@
   "properties": {
     "apiVersion": {
       "type": "string",
-      "description": "Versioned resource API group, e.g. 'v1'. Versions the file format, independently of the benchmark's own version."
+      "description": "API version string, e.g. 'v1'. Versions the file format, independently of the benchmark's own version."
     },
     "kind": {
       "type": "string",
@@ -150,8 +150,8 @@
             ],
             "properties": {
               "type": {
-                "type": "string",
-                "description": "Parameter value type (e.g. 'string')."
+                "const": "string",
+                "description": "Parameter value type (currently only 'string' is supported)."
               },
               "default": {
                 "type": "string",
