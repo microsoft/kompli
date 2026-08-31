@@ -4,82 +4,10 @@
 //
 // compliance-engine-assessor
 //
-// Threat model
-// ------------
-// This tool is intended to run as root on Linux endpoints to perform CIS
-// benchmark audit and remediation. The trust boundary is the invoking
-// operator: the input benchmark-definition file, the log-file path, and
-// command-line arguments are treated as operator-supplied (trusted to be benign
-// in intent, but not to be free of bugs or accidental hostile content).
-//
-//  - The input parser is strict (see BenchmarkDefinition): it validates the
-//    resource envelope and the per-rule field set the augmentation engine
-//    emits and bounds the total input size. It owns the input file and
-//    encapsulates the integrity checks below. A fuzzer target exercises it;
-//    extend the corpus when changing the format.
-//
-//  - Input file integrity (when --input is used; stdin bypasses all checks):
-//
-//    1. Parent directory (stat): must be root-owned and not writable by
-//       group or others. A writable directory enables a rename-swap attack:
-//       an attacker can unlink the validated file and place a hostile one
-//       before the process reads it.
-//
-//    2. open(O_RDONLY|O_NOFOLLOW|O_CLOEXEC): the kernel refuses symlinks in
-//       the final path component atomically (ELOOP), eliminating the
-//       lstat-then-open TOCTOU window. Symlinks are intentionally rejected
-//       rather than accepted-with-a-warning; callers that stage input via a
-//       symlink must resolve the link before passing the path. Note: symlinks
-//       in intermediate path components are not checked; the operator is
-//       trusted to supply a straightforward path.
-//
-//    3. fstat on the open fd: ownership and mode are verified against the
-//       inode we actually hold, not a potentially-swapped path entry. The
-//       file must be a regular file (FIFOs, devices, sockets are refused so
-//       they cannot block the read or stream unbounded data), root-owned, and
-//       not group/world-writable.
-//
-//    4. The verified fd is wrapped in a stream and read incrementally (never
-//       slurped whole). The fd keeps the inode reachable across the read even
-//       if the directory entry is concurrently renamed or unlinked. The total
-//       bytes read, per-line length, and entry count are all bounded inside the
-//       streaming parser to keep memory use bounded.
-//
-//  - stdin (--input not supplied): all file integrity checks are bypassed.
-//    Streaming inputs (pipes, process substitution) must use stdin. The total
-//    input size is still bounded inside the definition parser. Callers in
-//    automated pipelines should always use --input with a root-owned,
-//    non-world-writable file.
-//
-//  - umask is tightened to at least S_IRWXG|S_IRWXO (preserving any stricter
-//    inherited mask). The log file when --log-file is supplied is the primary
-//    case.
-//
-//  - The --log-file path is validated before opening (RefuseUnsafeLogFile):
-//    the shared logging code opens it with a symlink-following append and
-//    chmod's it while we run as root, so a symlink, non-root-owned target, or
-//    writable parent directory is refused to prevent redirecting root's writes
-//    onto a sensitive file.
-//
-//    Residual TOCTOU (known limitation): unlike --input, the log file is NOT
-//    verified via fstat() on a held fd. The shared OpenLog() API is path-only
-//    (no fd-accepting entry point) and TrimLog() re-opens the path with
-//    fopen() on every log rotation, so a pinned, pre-verified fd cannot be
-//    handed to the logging layer; both the initial open and each rotation
-//    re-resolve the path with symlink-following fopen(). RefuseUnsafeLogFile()
-//    therefore checks the path with lstat() shortly before OpenLog() resolves
-//    it again, leaving a small check-to-use window. That window is closed in
-//    practice by the parent-directory check: requiring the parent to be
-//    root-owned and not group/world-writable prevents an attacker from
-//    creating, renaming, or swapping the entry at all, so the path cannot be
-//    pointed at a new target between the check and any (re-)open. Fully
-//    eliminating the window (fd-based open with O_NOFOLLOW handed to the
-//    logger) would require changing the shared logging library, which is
-//    out of scope here as it affects every azure-osconfig binary.
-//
-//  - The PATH/IFS environment is inherited and used by procedure scripts the
-//    engine spawns. Sanitizing the environment is the engine's
-//    responsibility, not the assessor's.
+// This tool runs as root on Linux endpoints to perform CIS benchmark audit and
+// remediation. Its trust boundary, input-hardening posture, and known
+// limitations are documented in THREAT_MODEL.md (in this directory). Keep that
+// document in sync when the input format or the hardening changes.
 
 #include "BenchmarkDefinition.hpp"
 #include "BenchmarkFormatter.hpp"
@@ -125,7 +53,6 @@ using ComplianceEngine::Assessor::RenderJUnit;
 using ComplianceEngine::Assessor::RenderText;
 using ComplianceEngine::Assessor::TextStyle;
 using ComplianceEngine::BenchmarkDefinition::ParseFile;
-using ComplianceEngine::BenchmarkDefinition::ParseStream;
 using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
 using std::string;
 
@@ -314,12 +241,14 @@ int main(int argc, char* argv[])
     }
     auto& benchmarkFormatter = formatterResult.Value();
 
-    // Parse the input as a benchmark-definition document. For --input the parser
-    // encapsulates the full input-hardening posture (path-traversal rejection,
-    // root-owned non-writable parent directory, O_NOFOLLOW open, and regular-file/
-    // ownership/mode checks) and owns the file; for stdin it reads without those
-    // on-disk checks. The total input size is bounded in either case.
-    auto resourcesResult = options.input.empty() ? ParseStream(std::cin, logHandle.get()) : ParseFile(options.input, logHandle.get());
+    // Parse the input as a benchmark-definition document. Definition input is a
+    // required positional file argument (enforced in ParseCommandLine); the
+    // parser encapsulates the full input-hardening posture (path-traversal
+    // rejection, root-owned non-writable parent directory, O_NOFOLLOW open, and
+    // regular-file/ownership/mode checks) and owns the file. stdin is
+    // deliberately unsupported for definitions so those integrity checks can
+    // never be bypassed by piping data in.
+    auto resourcesResult = ParseFile(options.input, logHandle.get());
     if (!resourcesResult.HasValue())
     {
         OsConfigLogError(logHandle.get(), "Failed to parse benchmark definition input: %s", resourcesResult.Error().message.c_str());

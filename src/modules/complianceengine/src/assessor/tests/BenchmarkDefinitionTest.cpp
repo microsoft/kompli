@@ -237,3 +237,19 @@ TEST(BenchmarkDefinitionParserTest, RejectsInvalidPayloadKey)
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
 }
+
+TEST(BenchmarkDefinitionParserTest, RejectsEmbeddedNulByte)
+{
+    // A NUL would otherwise truncate the NUL-terminated JSON parse and hide
+    // everything after it; the parser must fail closed instead of parsing a
+    // prefix. Splice a NUL into the middle of an otherwise-valid document.
+    std::string doc = OneRuleDoc();
+    doc.insert(doc.size() / 2, std::string(1, '\0'));
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsLeadingNulByte)
+{
+    std::string doc = std::string(1, '\0') + OneRuleDoc();
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}

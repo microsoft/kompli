@@ -24,10 +24,11 @@ using std::string;
 namespace
 {
 // Upper bound on the total number of input bytes read from a definition file or
-// stream. The largest committed definition is a little over 1 MiB; this bounds
-// memory use for a malformed or hostile input while running as root, with ample
-// headroom for the verbose per-rule descriptions and future growth.
-constexpr size_t kMaxInputBytes = static_cast<size_t>(64) * 1024 * 1024;
+// stream. The largest committed definition is a little over 1 MiB; an 8 MiB cap
+// leaves ample headroom for the verbose per-rule descriptions and future growth
+// while bounding the worst-case memory use (buffer plus the parson DOM built on
+// top) for a malformed or hostile input while running as root.
+constexpr size_t kMaxInputBytes = static_cast<size_t>(8) * 1024 * 1024;
 
 // Upper bound on the number of rules parsed from a single definition.
 constexpr size_t kMaxRules = 100000;
@@ -146,19 +147,27 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
 
 Result<std::vector<Resource>> ParseString(const string& json, OsConfigLogHandle logHandle)
 {
+    // Fail closed on an embedded NUL. The underlying JSON parser is NUL-terminated
+    // (parses via c_str()), so a NUL would silently truncate the document and hide
+    // everything after it; reject such input outright rather than parse a prefix.
+    if (json.find('\0') != string::npos)
+    {
+        return Error("Benchmark definition contains a NUL byte", EINVAL);
+    }
+
     auto document = JsonWrapper::FromString(json);
     if (!document.HasValue())
     {
         return Error("Failed to parse benchmark definition JSON: " + document.Error().message, EINVAL);
     }
 
-    JSON_Object* root = json_value_get_object(document.Value().get());
+    auto* root = json_value_get_object(document.Value().get());
     if (nullptr == root)
     {
         return Error("Benchmark definition is not a JSON object", EINVAL);
     }
 
-    const char* kind = json_object_get_string(root, "kind");
+    const auto* kind = json_object_get_string(root, "kind");
     if (nullptr == kind || string(kind) != "BenchmarkDefinition")
     {
         return Error("Benchmark definition has an unexpected or missing 'kind' (expected 'BenchmarkDefinition')", EINVAL);
@@ -175,13 +184,13 @@ Result<std::vector<Resource>> ParseString(const string& json, OsConfigLogHandle 
         return Error("Benchmark definition is missing the 'metadata' object", EINVAL);
     }
 
-    JSON_Object* spec = json_object_get_object(root, "spec");
+    auto* spec = json_object_get_object(root, "spec");
     if (nullptr == spec)
     {
         return Error("Benchmark definition is missing the 'spec' object", EINVAL);
     }
 
-    JSON_Array* rules = json_object_get_array(spec, "rules");
+    auto* rules = json_object_get_array(spec, "rules");
     if (nullptr == rules)
     {
         return Error("Benchmark definition is missing the 'spec.rules' array", EINVAL);

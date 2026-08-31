@@ -59,6 +59,22 @@ TEST(CliOptionsSmokeTest, AuditWithInputFilename)
     EXPECT_EQ(result.Value().input, "/tmp/x.json");
 }
 
+TEST(CliOptionsSmokeTest, AuditWithoutFilenameIsRejected)
+{
+    // The definition file is a required positional argument for audit/remediate.
+    ArgvHelper a{"prog", "audit"};
+    auto result = ParseCommandLine(a.Argc(), a.Argv());
+    EXPECT_FALSE(result.HasValue());
+}
+
+TEST(CliOptionsSmokeTest, RemediateWithDashFilenameIsRejected)
+{
+    // stdin ('-') is not accepted for definitions.
+    ArgvHelper a{"prog", "remediate", "-"};
+    auto result = ParseCommandLine(a.Argc(), a.Argv());
+    EXPECT_FALSE(result.HasValue());
+}
+
 TEST(CliOptionsSmokeTest, FormatOnAuditIsRejected)
 {
     // audit/remediate always emit the canonical JSON; --format is render-only.
@@ -126,7 +142,7 @@ TEST(CliOptionsSmokeTest, TextFormatsAreParsed)
 
 TEST(CliOptionsSmokeTest, ContinueOnErrorIsParsed)
 {
-    ArgvHelper a{"prog", "-e", "audit"};
+    ArgvHelper a{"prog", "-e", "audit", "/tmp/x.json"};
     auto result = ParseCommandLine(a.Argc(), a.Argv());
     ASSERT_TRUE(result.HasValue());
     EXPECT_TRUE(result.Value().continueOnError);

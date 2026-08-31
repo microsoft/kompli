@@ -148,7 +148,7 @@ bool RefuseUnsafeLogFile(const std::string& path, OsConfigLogHandle logHandle)
 {
     // The log file is opened (and chmod'd) by the shared logging code while we
     // run as root, and that open follows symlinks. Apply the same posture as
-    // --input so an attacker cannot redirect root's writes:
+    // the definition-file input so an attacker cannot redirect root's writes:
     //   - reject path traversal,
     //   - require a root-owned, non-group/world-writable parent directory
     //     (prevents a rename-swap onto a hostile target),

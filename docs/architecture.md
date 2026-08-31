@@ -51,7 +51,7 @@ src/
 Kompli supports two integration scenarios that share the same ComplianceEngine module:
 
 - **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The augmentation engine generates MOF files that drive audit and remediation per rule.
-- **Assessor** — a standalone CLI tool (`src/modules/complianceengine/src/assessor/`) that reads a MOF file (from a file path or stdin) and directly executes audits or remediations without any platform or daemon involvement.
+- **Assessor** — a standalone CLI tool (`src/modules/complianceengine/src/assessor/`) that reads a benchmark-definition JSON file (supplied on disk via `--input`; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
 
 # 3. kompli Agent
 
