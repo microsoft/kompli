@@ -66,8 +66,8 @@ bool RefusePathTraversal(const std::string& path, OsConfigLogHandle logHandle);
 // the path shortly before OpenLog() (and each later rotation) re-resolves it
 // with symlink-following fopen(), leaving a small check-to-use window. The
 // required root-owned, non-writable parent directory closes that window in
-// practice by preventing any swap of the entry. See the threat-model comment
-// in Main.cpp for details.
+// practice by preventing any swap of the entry. See THREAT_MODEL.md in this
+// directory for details.
 bool RefuseUnsafeLogFile(const std::string& path, OsConfigLogHandle logHandle);
 
 } // namespace Assessor

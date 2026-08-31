@@ -1,0 +1,1 @@
+{"apiVersion":"v1","kind":"BenchmarkDefinition","metadata":{"name":"t"},"spec":{"rules":[{"section":"1.1.1","ruleName":"Truncated","payloadKey":"/cis/ubuntu/22.04/v2.0.0/1

@@ -97,7 +97,7 @@ Result<BenchmarkFormatter> BenchmarkFormatter::Begin(DistributionInfo distributi
     return formatter;
 }
 
-Optional<Error> BenchmarkFormatter::AddEntry(const MOF::Resource& entry, const Status status, const string& payload,
+Optional<Error> BenchmarkFormatter::AddEntry(const Assessor::Resource& entry, const Status status, const string& payload,
     const std::map<std::string, std::string>& parameters) &
 {
     auto resultWrapper = JsonWrapper::MakeObject();

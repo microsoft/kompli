@@ -1,0 +1,19 @@
+{
+  "apiVersion": "v1",
+  "kind": "BenchmarkDefinition",
+  "metadata": { "name": "esc" },
+  "spec": {
+    "rules": [
+      {
+        "section": "9.9.9",
+        "ruleId": "00000000-0000-0000-0000-000000000000",
+        "ruleName": "EscapeStress",
+        "title": "9.9.9 Escape \"Stress\" A\\B\nC\tD \u00e9\u0041",
+        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/9/9/9",
+        "tags": [],
+        "metadata": { "description": "A\\B\"C\\\\D\nE\\\"F", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x" },
+        "payload": { "audit": { "Regex": { "pattern": "a\\.b\"c\\\\d" } }, "parameters": {} }
+      }
+    ]
+  }
+}

@@ -18,9 +18,9 @@ set(lib_name compliance-engine-assessor-lib)
 # unit tests can link the same object code as the shipping tool without
 # rebuilding it or duplicating sources.
 set(LIB_SOURCES
+    BenchmarkDefinition.cpp
     CliOptions.cpp
     InputSecurity.cpp
-    Mof.cpp
     BenchmarkFormatter.cpp
     JUnitRenderer.cpp
     TextRenderers.cpp

@@ -7,8 +7,8 @@
 #include <DistributionInfo.h>
 #include <Evaluator.h>
 #include <JsonWrapper.h>
-#include <Mof.hpp>
 #include <Optional.h>
+#include <Resource.hpp>
 #include <Result.h>
 #include <chrono>
 #include <map>
@@ -33,7 +33,7 @@ public:
     BenchmarkFormatter(BenchmarkFormatter&&) = default;
     BenchmarkFormatter& operator=(BenchmarkFormatter&&) = default;
 
-    Optional<Error> AddEntry(const MOF::Resource& entry, Status status, const std::string& payload, const std::map<std::string, std::string>& parameters) &;
+    Optional<Error> AddEntry(const Assessor::Resource& entry, Status status, const std::string& payload, const std::map<std::string, std::string>& parameters) &;
     Result<std::string> Finish(Status status) &&;
 
 private:

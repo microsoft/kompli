@@ -12,7 +12,7 @@
 #include <BenchmarkFormatter.hpp>
 #include <BenchmarkInfo.h>
 #include <Evaluator.h>
-#include <Mof.hpp>
+#include <Resource.hpp>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <map>
@@ -28,8 +28,8 @@ using ComplianceEngine::Action;
 using ComplianceEngine::Architecture;
 using ComplianceEngine::LinuxDistribution;
 using ComplianceEngine::Status;
+using ComplianceEngine::Assessor::Resource;
 using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
-using ComplianceEngine::MOF::Resource;
 
 namespace
 {

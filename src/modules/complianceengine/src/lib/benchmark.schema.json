@@ -13,11 +13,11 @@
   "properties": {
     "apiVersion": {
       "type": "string",
-      "description": "Versioned resource API group, e.g. 'compliance.osconfig.azure.com/v1'. Versions the file format, independently of the benchmark's own version."
+      "description": "API version string, e.g. 'v1'. Versions the file format, independently of the benchmark's own version."
     },
     "kind": {
       "type": "string",
-      "const": "NativeBenchmark",
+      "const": "BenchmarkDefinition",
       "description": "Resource kind."
     },
     "metadata": {
@@ -137,6 +137,44 @@
         },
         "payload": {
           "$ref": "payload.schema.json"
+        },
+        "parameterMetadata": {
+          "type": "object",
+          "description": "Per-parameter UI/validation contract for the rule's tunable parameters, keyed by parameter name (mirrors the keys of payload.parameters). Additive to the runtime payload.parameters map, which stays {name: default}.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "default"
+            ],
+            "properties": {
+              "type": {
+                "const": "string",
+                "description": "Parameter value type (currently only 'string' is supported)."
+              },
+              "default": {
+                "type": "string",
+                "description": "Default value applied when the parameter is not overridden."
+              },
+              "displayName": {
+                "type": "string",
+                "description": "Human-readable parameter name for UI presentation."
+              },
+              "validationRegex": {
+                "type": "string",
+                "description": "Regular expression the parameter value must match."
+              },
+              "validationFailedMessage": {
+                "type": "string",
+                "description": "Message shown when validationRegex does not match."
+              },
+              "mandatory": {
+                "type": "boolean",
+                "description": "True when the parameter must be explicitly set."
+              }
+            }
+          }
         }
       }
     }

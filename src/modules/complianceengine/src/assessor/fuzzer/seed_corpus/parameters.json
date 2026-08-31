@@ -1,0 +1,25 @@
+{
+  "apiVersion": "v1",
+  "kind": "BenchmarkDefinition",
+  "metadata": { "name": "cis_ubuntu_22.04_2.0.0" },
+  "spec": {
+    "rules": [
+      {
+        "section": "2.1.1",
+        "ruleId": "00000000-0000-0000-0000-000000000000",
+        "ruleName": "WithParameters",
+        "title": "2.1.1 Sample With Parameters",
+        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/2/1/1",
+        "tags": [],
+        "metadata": { "description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x" },
+        "payload": {
+          "audit": { "FilePermissions": { "filename": "/etc/shadow", "mask": "$mask" } },
+          "parameters": { "mask": "0600" }
+        },
+        "parameterMetadata": {
+          "mask": { "type": "string", "default": "0600", "displayName": "Permission mask" }
+        }
+      }
+    ]
+  }
+}

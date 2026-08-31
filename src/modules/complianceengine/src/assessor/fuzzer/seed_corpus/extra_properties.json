@@ -1,0 +1,25 @@
+{
+  "apiVersion": "v1",
+  "kind": "BenchmarkDefinition",
+  "metadata": {
+    "name": "cis_ubuntu_22.04_2.0.0",
+    "labels": { "distribution": "ubuntu", "distributionVersion": "22.04", "framework": "cis", "os": "ubuntu22.04" },
+    "annotations": { "benchmarkVersion": "2.0.0", "displayName": "CIS Ubuntu Linux 22.04 LTS Benchmark v2.0.0" }
+  },
+  "extra": "definitions may carry additional properties the parser ignores",
+  "spec": {
+    "generatedBy": "compliance-augmentation-engine",
+    "rules": [
+      {
+        "section": "1.1.1",
+        "ruleId": "00000000-0000-0000-0000-000000000000",
+        "ruleName": "RuleA",
+        "title": "1.1.1 Rule A",
+        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1",
+        "tags": ["level:l1"],
+        "metadata": { "description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x" },
+        "payload": { "audit": {}, "parameters": {} }
+      }
+    ]
+  }
+}
