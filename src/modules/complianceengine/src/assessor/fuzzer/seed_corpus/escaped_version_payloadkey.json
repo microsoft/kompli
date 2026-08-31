@@ -1,0 +1,19 @@
+{
+  "apiVersion": "v1",
+  "kind": "BenchmarkDefinition",
+  "metadata": { "name": "cis_azurelinux_3_1.0.0" },
+  "spec": {
+    "rules": [
+      {
+        "section": "3.1.2.4",
+        "ruleId": "00000000-0000-0000-0000-000000000000",
+        "ruleName": "EscapedGlob",
+        "title": "3.1.2 Escaped Glob Version",
+        "payloadKey": "/cis/azurelinux/3\\.?/v1.0.0/3/1/2/4",
+        "tags": [],
+        "metadata": { "description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x" },
+        "payload": { "audit": {}, "parameters": {} }
+      }
+    ]
+  }
+}
