@@ -258,6 +258,11 @@ int main(int argc, char* argv[])
 
     auto status = Status::Compliant;
     bool hasError = false;
+    // Rules that passed the section filter and were evaluated. The Compliant seed
+    // is the CombineAllOf identity; when nothing runs it would misreport a
+    // benchmark that checked nothing, so a terminal override maps that case to
+    // NotApplicable below.
+    size_t evaluatedRules = 0;
     for (const auto& entry : resources)
     {
         // Abort as soon as we encounter a rule that does not target the detected
@@ -289,6 +294,9 @@ int main(int argc, char* argv[])
                 continue;
             }
         }
+
+        // The rule is selected for evaluation (past the section filter).
+        ++evaluatedRules;
 
         auto procedureResult = engine.MmiSet((string("procedure") + entry.ruleName).c_str(), entry.procedure);
         if (!procedureResult.HasValue())
@@ -396,6 +404,16 @@ int main(int argc, char* argv[])
             default:
                 break;
         }
+    }
+
+    // A benchmark that evaluated no rules (an empty definition, or a section
+    // filter that matched nothing) checked nothing; report NotApplicable rather
+    // than a misleading Compliant. This is a terminal override, deliberately not
+    // folded through CombineAllOf, whose NotApplicable is absorbing and would
+    // otherwise poison any non-empty run if used as the seed.
+    if (0 == evaluatedRules)
+    {
+        status = Status::NotApplicable;
     }
 
     auto result = std::move(benchmarkFormatter).Finish(status);

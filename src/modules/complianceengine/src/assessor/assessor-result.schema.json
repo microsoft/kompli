@@ -49,7 +49,7 @@
     "status": {
       "type": "string",
       "enum": ["Compliant", "NonCompliant", "NotApplicable"],
-      "description": "Overall status, aggregated across rules with the engine's allOf three-valued logic: NonCompliant if any rule is NonCompliant; otherwise NotApplicable if any rule is NotApplicable; otherwise Compliant."
+      "description": "Overall status, aggregated across rules with the engine's allOf three-valued logic: NonCompliant if any rule is NonCompliant; otherwise NotApplicable if any rule is NotApplicable, or if no rules were evaluated (empty benchmark or a section filter that matched nothing); otherwise Compliant."
     },
     "rules": {
       "type": "array",
