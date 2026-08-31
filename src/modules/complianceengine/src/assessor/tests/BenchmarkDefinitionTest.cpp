@@ -172,6 +172,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRulesNotAnArray)
 TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingTitle)
 {
     const char* const rule = R"({
+        "section": "1.1.1.1",
         "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
         "ruleName": "R",
         "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
@@ -183,6 +184,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingTitle)
 TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingRuleName)
 {
     const char* const rule = R"({
+        "section": "1.1.1.1",
         "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
         "title": "t",
         "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
@@ -194,6 +196,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingRuleName)
 TEST(BenchmarkDefinitionParserTest, RejectsRuleWithEmptyStringField)
 {
     const char* const rule = R"({
+        "section": "1.1.1.1",
         "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
         "ruleName": "",
         "title": "t",
@@ -206,6 +209,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleWithEmptyStringField)
 TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingPayload)
 {
     const char* const rule = R"({
+        "section": "1.1.1.1",
         "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
         "ruleName": "R",
         "title": "t",
@@ -217,6 +221,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingPayload)
 TEST(BenchmarkDefinitionParserTest, RejectsRulePayloadNotAnObject)
 {
     const char* const rule = R"({
+        "section": "1.1.1.1",
         "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
         "ruleName": "R",
         "title": "t",
@@ -229,10 +234,39 @@ TEST(BenchmarkDefinitionParserTest, RejectsRulePayloadNotAnObject)
 TEST(BenchmarkDefinitionParserTest, RejectsInvalidPayloadKey)
 {
     const char* const rule = R"({
+        "section": "1.1.1",
         "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
         "ruleName": "R",
         "title": "t",
         "payloadKey": "not-a-valid-key",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingSection)
+{
+    const char* const rule = R"({
+        "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
+        "ruleName": "R",
+        "title": "t",
+        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsSectionPayloadKeyMismatch)
+{
+    // The explicit `section` ("9.9.9") disagrees with the section encoded in the
+    // payloadKey ("1.1.1.1"); a corrupt or hand-edited definition must be
+    // rejected rather than silently resolved to the payloadKey value.
+    const char* const rule = R"({
+        "section": "9.9.9",
+        "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
+        "ruleName": "R",
+        "title": "t",
+        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());

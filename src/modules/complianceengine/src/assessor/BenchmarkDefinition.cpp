@@ -115,6 +115,11 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
     {
         return payloadKey.Error();
     }
+    auto section = RequiredString(ruleObject, "section", context);
+    if (!section.HasValue())
+    {
+        return section.Error();
+    }
     auto procedure = SerializeProcedure(ruleObject, context);
     if (!procedure.HasValue())
     {
@@ -134,6 +139,16 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
     // The section in the payload key is '/'-separated (e.g. "1/1/1/1"); the rest
     // of the assessor expects dotted notation (e.g. "1.1.1.1").
     std::replace(resource.benchmarkInfo.section.begin(), resource.benchmarkInfo.section.end(), '/', '.');
+    // The rule's explicit `section` must agree with the section encoded in the
+    // payload key (the generator derives one from the other); a mismatch is a
+    // corrupt or hand-edited definition and is rejected rather than silently
+    // resolved to the payload-key value.
+    if (section.Value() != resource.benchmarkInfo.section)
+    {
+        return Error("Benchmark definition " + context + " has a 'section' ('" + section.Value() + "') that disagrees with its payloadKey section ('" +
+                         resource.benchmarkInfo.section + "')",
+            EINVAL);
+    }
     resource.procedure = std::move(procedure.Value());
     resource.ruleName = std::move(ruleName.Value());
     // Every rule carries an init object.
