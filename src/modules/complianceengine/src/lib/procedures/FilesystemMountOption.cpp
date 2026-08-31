@@ -112,12 +112,6 @@ static Status CheckOptions(const std::vector<std::string>& options, const std::s
 
 Result<Status> AuditFilesystemMountOption(const FilesystemMountOptionParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
-    auto fstabEntries = ParseFstab(context.GetSpecialFilePath("/etc/fstab"));
-    if (!fstabEntries.HasValue())
-    {
-        return fstabEntries.Error();
-    }
-
     auto mtabEntries = ParseFstab(context.GetSpecialFilePath("/etc/mtab"));
     if (!mtabEntries.HasValue())
     {
@@ -134,18 +128,6 @@ Result<Status> AuditFilesystemMountOption(const FilesystemMountOptionParams& par
         std::copy(params.optionsNotSet->items.cbegin(), params.optionsNotSet->items.cend(), std::inserter(optionsNotSet, optionsNotSet.begin()));
     }
 
-    if (fstabEntries->find(params.mountpoint) != fstabEntries->end())
-    {
-        if (Status::NonCompliant == CheckOptions(fstabEntries.Value()[params.mountpoint].options, optionsSet, optionsNotSet, indicators))
-        {
-            return Status::NonCompliant;
-        }
-    }
-    else
-    {
-        indicators.Compliant("Mountpoint " + params.mountpoint + " not found in /etc/fstab");
-    }
-
     if (mtabEntries->find(params.mountpoint) != mtabEntries->end())
     {
         if (Status::NonCompliant == CheckOptions(mtabEntries.Value()[params.mountpoint].options, optionsSet, optionsNotSet, indicators))
@@ -158,7 +140,7 @@ Result<Status> AuditFilesystemMountOption(const FilesystemMountOptionParams& par
         indicators.Compliant("Mountpoint " + params.mountpoint + " not found in /etc/mtab");
     }
 
-    return indicators.Compliant("All /etc/fstab and /etc/mtab options are verified");
+    return indicators.Compliant("All /etc/mtab options are verified");
 }
 
 Result<Status> RemediateFilesystemMountOption(const FilesystemMountOptionParams& params, IndicatorsTree& indicators, ContextInterface& context)
