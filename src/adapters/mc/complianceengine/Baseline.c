@@ -5,7 +5,9 @@
 #include "ComplianceEngineInterface.h"
 
 static MMI_HANDLE gComplianceEngine = NULL;
+static MMI_HANDLE gLoadHandle = NULL;
 static const char gComponentName[] = "ComplianceEngine";
+
 
 int BaselineIsValidResourceIdRuleId(const char* resourceId, const char* ruleId, const char* payloadKey, OsConfigLogHandle log)
 {
@@ -22,6 +24,7 @@ int BaselineIsCorrectDistribution(const char* payloadKey, OsConfigLogHandle log)
 }
 
 // This function is called in library constructor in OsConfigResource.c
+// once per Baseline lifetime
 void BaselineInitialize(OsConfigLogHandle log)
 {
     ComplianceEngineInitialize(log);
@@ -29,6 +32,7 @@ void BaselineInitialize(OsConfigLogHandle log)
 }
 
 // This function is called in library destructor in OsConfigResource.c
+// once per Baseline lifetime
 void BaselineShutdown(OsConfigLogHandle log)
 {
     UNUSED(log);
@@ -40,6 +44,29 @@ void BaselineShutdown(OsConfigLogHandle log)
     ComplianceEngineMmiClose(gComplianceEngine);
     ComplianceEngineShutdown();
     gComplianceEngine = NULL;
+}
+
+// This function is called after BaselineInitialize and before BaselineMmiUnload
+// may be called many per Baseline lifetime
+void BaselineMmiLoad(void)
+{
+    if (NULL == gComplianceEngine)
+    {
+        return;
+    }
+    ComplianceEngineLoad(gComplianceEngine, gComponentName);
+    gLoadHandle = gComplianceEngine;
+}
+// This function is called in after BaselineMmiLoad and before BaselineShutdown
+// may be called many per Baseline lifetime
+void BaselineMmiUnload(void)
+{
+    if (NULL == gComplianceEngine || NULL == gLoadHandle)
+    {
+        return;
+    }
+    ComplianceEngineUnload(gComplianceEngine, gComponentName);
+    gLoadHandle = NULL;
 }
 
 int BaselineMmiGet(const char* componentName, const char* objectName, char** payload, int* payloadSizeBytes, unsigned int maxPayloadSizeBytes, OsConfigLogHandle log)
