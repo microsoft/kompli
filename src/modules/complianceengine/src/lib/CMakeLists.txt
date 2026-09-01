@@ -166,6 +166,7 @@ add_library(complianceenginelib STATIC
     ContextInterface.cpp
     DirTools.cpp
     DistributionInfo.cpp
+    DlTools.cpp
     Engine.cpp
     Evaluator.cpp
     FileTreeWalk.cpp

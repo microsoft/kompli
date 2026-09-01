@@ -154,7 +154,7 @@ bool TelemetryManagerImpl::ValidateEventParameters(const std::string& eventName,
 {
     if (!m_validateEvents)
     {
-        OsConfigLogDebug(m_log, "Validation skipped of event type: %s", eventName.c_str());
+        OsConfigLogDebug(m_log, "Skipped validation of event type: %s", eventName.c_str());
         return true;
     }
 
