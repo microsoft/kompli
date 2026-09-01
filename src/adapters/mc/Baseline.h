@@ -12,8 +12,14 @@ extern "C"
 int BaselineIsValidResourceIdRuleId(const char* resourceId, const char* ruleId, const char* payloadKey, OsConfigLogHandle log);
 int BaselineIsCorrectDistribution(const char* payloadKey, OsConfigLogHandle log);
 
+// Caled Once Per Baseline Lifetime used for early initalization
 void BaselineInitialize(OsConfigLogHandle log);
 void BaselineShutdown(OsConfigLogHandle log);
+
+
+// After early initializetion, can be caled  Load  & Unload in paris
+void BaselineMmiLoad(void);
+void BaselineMmiUnload(void);
 
 int BaselineMmiGet(const char* componentName, const char* objectName, char** payload, int* payloadSizeBytes, unsigned int maxPayloadSizeBytes, OsConfigLogHandle log);
 int BaselineMmiSet(const char* componentName, const char* objectName, const char* payload, const int payloadSizeBytes, OsConfigLogHandle log);

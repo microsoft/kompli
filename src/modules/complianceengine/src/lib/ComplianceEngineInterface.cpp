@@ -102,6 +102,38 @@ void ComplianceEngineInitialize(OsConfigLogHandle log)
     RestrictFileAccessToCurrentAccountOnly(g_configurationFile);
 }
 
+void ComplianceEngineLoad(MMI_HANDLE clientSession, const char* componentName)
+{
+    if ((nullptr == componentName) || (nullptr == clientSession))
+    {
+        OsConfigLogError(g_log, "ComplianceEngineLoad(%s, %p) called with invalid arguments", componentName, clientSession);
+        return;
+    }
+
+    if (0 != strcmp(componentName, "ComplianceEngine"))
+    {
+        OsConfigLogError(g_log, "ComplianceEngineLoad called for an unsupported component name (%s)", componentName);
+        return;
+    }
+    // auto& engine = *reinterpret_cast<Engine*>(clientSession);
+    //
+}
+void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
+{
+    if ((nullptr == componentName) || (nullptr == clientSession))
+    {
+        OsConfigLogError(g_log, "ComplianceEngineLoad(%s, %p) called with invalid arguments", componentName, clientSession);
+        return;
+    }
+
+    if (0 != strcmp(componentName, "ComplianceEngine"))
+    {
+        OsConfigLogError(g_log, "ComplianceEngineLoad called for an unsupported component name (%s)", componentName);
+        return;
+    }
+    // auto& engine = *reinterpret_cast<Engine*>(clientSession);
+    //
+}
 // This function is called in library destructor by BaselineInitialize
 void ComplianceEngineShutdown(void)
 {
