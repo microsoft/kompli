@@ -8,6 +8,7 @@
 #include "CommonUtils.h"
 #include "DirTools.h"
 #include "DistributionInfo.h"
+#include "DlTools.h"
 #include "Engine.h"
 #include "GuestConfigurationContext.h"
 #include "JsonWrapper.h"
@@ -34,6 +35,7 @@
 using ComplianceEngine::CISBenchmarkInfo;
 using ComplianceEngine::DistributionInfo;
 using ComplianceEngine::Engine;
+using ComplianceEngine::GetCompilanceEngineDirectory;
 using ComplianceEngine::JsonWrapper;
 using ComplianceEngine::Status;
 
@@ -47,8 +49,28 @@ static constexpr const char* g_configurationFile = "/etc/osconfig/osconfig.json"
 #ifdef BUILD_TELEMETRY
 static constexpr const char* telemetry_log_dir = "/var/lib/osconfig/telemetry/";
 static constexpr const char* telemetry_log_file = "complianceengine.telemetry";
+static constexpr const char* telemetry_binary = "OSConfigTelemetry";
+static constexpr int telemetry_teardown_time = 10;
 static std::chrono::system_clock::time_point g_benchmarkRunCreatedAt;
 static std::chrono::steady_clock::time_point g_benchmarkRunBeginAt;
+
+std::string QuoteForShell(const std::string& value)
+{
+    std::string quoted = "'";
+    for (const auto character : value)
+    {
+        if ('\'' == character)
+        {
+            quoted += "'\\''";
+        }
+        else
+        {
+            quoted += character;
+        }
+    }
+    quoted += "'";
+    return quoted;
+}
 #endif // BUILD_TELEMETRY
 
 } // namespace
@@ -78,6 +100,80 @@ void ComplianceEngineInitialize(OsConfigLogHandle log)
     RestrictFileAccessToCurrentAccountOnly(g_configurationFile);
 }
 
+void ComplianceEngineLoad(MMI_HANDLE clientSession, const char* componentName)
+{
+    if ((nullptr == componentName) || (nullptr == clientSession))
+    {
+        OsConfigLogError(g_log, "ComplianceEngineLoad(%s, %p) called with invalid arguments", componentName, clientSession);
+        return;
+    }
+
+    if (0 != strcmp(componentName, "ComplianceEngine"))
+    {
+        OsConfigLogError(g_log, "ComplianceEngineLoad called for an unsupported component name (%s)", componentName);
+        return;
+    }
+
+#ifdef BUILD_TELEMETRY
+    g_benchmarkRunCreatedAt = std::chrono::system_clock::now();
+    g_benchmarkRunBeginAt = std::chrono::steady_clock::now();
+#endif
+}
+void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
+{
+    if ((nullptr == componentName) || (nullptr == clientSession))
+    {
+        OsConfigLogError(g_log, "ComplianceEngineLoad(%s, %p) called with invalid arguments", componentName, clientSession);
+        return;
+    }
+
+    if (0 != strcmp(componentName, "ComplianceEngine"))
+    {
+        OsConfigLogError(g_log, "ComplianceEngineLoad called for an unsupported component name (%s)", componentName);
+        return;
+    }
+#ifdef BUILD_TELEMETRY
+    auto* engine = reinterpret_cast<Engine*>(clientSession);
+    auto benchmarkRunCompletedAt = std::chrono::steady_clock::now();
+    auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(benchmarkRunCompletedAt - g_benchmarkRunBeginAt).count();
+    auto event = ComplianceEngine::TelemetryEvent(ComplianceEngine::TelemetryEventType::BenchmarkRun, "ComplianceEngineSession");
+    const auto& distributionInfo = engine->GetDistributionInfo();
+    if (!distributionInfo.HasValue())
+    {
+        event.Add("Distribution", "Invalid distribution information");
+    }
+    else
+    {
+        event.Add("OsType", std::to_string(distributionInfo.Value().osType));
+        event.Add("architecture", std::to_string(distributionInfo.Value().architecture));
+        event.Add("Distribution", std::to_string(distributionInfo.Value().distribution));
+        event.Add("DistributionVersion", distributionInfo.Value().version);
+    }
+
+    event.Add("ComplianceEngineVersion", KOMPLI_VERSION);
+    ComplianceEngine::LogCreatedTelemetryEvent(event, engine->GetTelemetry(), g_log, durationUs, g_benchmarkRunCreatedAt);
+    auto moduleDirectory = GetCompilanceEngineDirectory();
+    if (moduleDirectory.HasValue())
+    {
+        const std::string telemetryBinaryPath = moduleDirectory.Value() + "/" + telemetry_binary;
+        const std::string telemetryFilePath = std::string(telemetry_log_dir) + telemetry_log_file;
+        std::string telemetryCmd = QuoteForShell(telemetryBinaryPath) + " -f " + QuoteForShell(telemetryFilePath) + " -t " +
+                                   std::to_string(telemetry_teardown_time) + " -n --verbose ";
+        OsConfigLogDebug(g_log, "Exeuciting TelemetryBin %s", telemetryCmd.c_str());
+
+        auto result = engine->GetContext().ExecuteCommand(telemetryCmd);
+        if (!result.HasValue())
+        {
+            OsConfigLogError(g_log, "Failed to execute telemetry %s command: error code %d message %s", telemetryCmd.c_str(), result.Error().code,
+                result.Error().message.c_str());
+        }
+    }
+    else
+    {
+        OsConfigLogError(g_log, "ComplianceEngineMmiClose: failed to GetCompilanceEngineDirectory() telemetry not run");
+    }
+#endif // BUILD_TELEMETRY
+}
 // This function is called in library destructor by BaselineInitialize
 void ComplianceEngineShutdown(void)
 {
@@ -97,7 +193,7 @@ MMI_HANDLE ComplianceEngineMmiOpen(const char* clientName, const unsigned int ma
     else
     {
         auto telemetry_file = telemetry_log_path + std::string(telemetry_log_file);
-        telemetry_fd = open(telemetry_file.c_str(), O_CREAT | O_APPEND | O_WRONLY, 0600);
+        telemetry_fd = open(telemetry_file.c_str(), O_CREAT | O_APPEND | O_NOFOLLOW | O_WRONLY, 0600);
         OsConfigLogError(g_log, "Opening Telemetry  file %s", telemetry_file.c_str());
         if (0 > telemetry_fd)
         {
@@ -145,13 +241,7 @@ MMI_HANDLE ComplianceEngineMmiOpen(const char* clientName, const unsigned int ma
 
 void ComplianceEngineMmiClose(MMI_HANDLE clientSession)
 {
-    auto* engine = reinterpret_cast<Engine*>(clientSession);
-    if (nullptr != engine)
-    {
-        return;
-    }
-
-    delete engine;
+    delete reinterpret_cast<Engine*>(clientSession);
 }
 
 int ComplianceEngineMmiGetInfo(const char* clientName, char** payload, int* payloadSizeBytes)
