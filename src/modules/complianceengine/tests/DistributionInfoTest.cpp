@@ -4,10 +4,21 @@
 #include <DistributionInfo.h>
 #include <MockContext.h>
 #include <gtest/gtest.h>
+#include <sys/utsname.h>
 
 using ComplianceEngine::DistributionInfo;
 using ComplianceEngine::Error;
 using ComplianceEngine::Result;
+
+namespace
+{
+// uname().machine for the running host (e.g. "x86_64", "aarch64"), or "" on error.
+std::string HostMachine()
+{
+    utsname unameData = {};
+    return (0 == uname(&unameData)) ? std::string(unameData.machine) : std::string();
+}
+} // namespace
 
 class DistributionInfoTest : public ::testing::Test
 {
@@ -34,34 +45,54 @@ TEST_F(DistributionInfoTest, EmptyFile)
 
 TEST_F(DistributionInfoTest, ValidEtcOsReleaseFile)
 {
+    // ParseEtcOsRelease reads the architecture from live uname(), so assert against
+    // the host; skip on an arch kompli doesn't support (a future/unknown platform).
+    const std::string hostArch = HostMachine();
+    if (hostArch != "x86_64" && hostArch != "aarch64")
+    {
+        GTEST_SKIP() << "Unsupported host architecture '" << hostArch << "'; skipping arch-dependent assertions";
+    }
+
     std::string content = "NAME=\"Ubuntu\"\nVERSION=\"20.04 LTS (Focal Fossa)\"\nID=ubuntu# comment 1\nVERSION_ID=\"20.04\"\n# comment2\n";
     auto filePath = mContext.MakeTempfile(content);
 
     auto result = DistributionInfo::ParseEtcOsRelease(filePath);
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(result.Value().osType, ComplianceEngine::OSType::Linux);
-    EXPECT_EQ(result.Value().architecture, ComplianceEngine::Architecture::x86_64);
+    EXPECT_EQ(std::to_string(result.Value().architecture), hostArch);
     EXPECT_EQ(result.Value().distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
     EXPECT_EQ(result.Value().version, "20.04");
-    EXPECT_EQ(std::to_string(result.Value()), R"(OS="Linux" ARCH="x86_64" DISTRO="ubuntu" VERSION="20.04")");
+    EXPECT_EQ(std::to_string(result.Value()), std::string(R"(OS="Linux" ARCH=")") + hostArch + R"(" DISTRO="ubuntu" VERSION="20.04")");
 }
 
 TEST_F(DistributionInfoTest, ValidEtcOsReleaseFile_WithComments)
 {
+    const std::string hostArch = HostMachine();
+    if (hostArch != "x86_64" && hostArch != "aarch64")
+    {
+        GTEST_SKIP() << "Unsupported host architecture '" << hostArch << "'; skipping arch-dependent assertions";
+    }
+
     std::string content = "NAME=\"Ubuntu\"#comment 1\n\nID=ubuntu# comment 2\nVERSION_ID=\"20.04\"\n# comment3\n";
     auto filePath = mContext.MakeTempfile(content);
 
     auto result = DistributionInfo::ParseEtcOsRelease(filePath);
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(result.Value().osType, ComplianceEngine::OSType::Linux);
-    EXPECT_EQ(result.Value().architecture, ComplianceEngine::Architecture::x86_64);
+    EXPECT_EQ(std::to_string(result.Value().architecture), hostArch);
     EXPECT_EQ(result.Value().distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
     EXPECT_EQ(result.Value().version, "20.04");
-    EXPECT_EQ(std::to_string(result.Value()), R"(OS="Linux" ARCH="x86_64" DISTRO="ubuntu" VERSION="20.04")");
+    EXPECT_EQ(std::to_string(result.Value()), std::string(R"(OS="Linux" ARCH=")") + hostArch + R"(" DISTRO="ubuntu" VERSION="20.04")");
 }
 
 TEST_F(DistributionInfoTest, ValidEtcOsReleaseFile_AzureContainerLinux)
 {
+    const std::string hostArch = HostMachine();
+    if (hostArch != "x86_64" && hostArch != "aarch64")
+    {
+        GTEST_SKIP() << "Unsupported host architecture '" << hostArch << "'; skipping arch-dependent assertions";
+    }
+
     // Mirrors the os-release Azure Container Linux emits (RPM/ACL mode): ID is
     // azurelinux, with extra ID_LIKE/VARIANT_ID/BUILD_ID fields and a date-based
     // patch in VERSION_ID that must be preserved for the `4.*` benchmark glob.
@@ -80,10 +111,10 @@ TEST_F(DistributionInfoTest, ValidEtcOsReleaseFile_AzureContainerLinux)
     auto result = DistributionInfo::ParseEtcOsRelease(filePath);
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(result.Value().osType, ComplianceEngine::OSType::Linux);
-    EXPECT_EQ(result.Value().architecture, ComplianceEngine::Architecture::x86_64);
+    EXPECT_EQ(std::to_string(result.Value().architecture), hostArch);
     EXPECT_EQ(result.Value().distribution, ComplianceEngine::LinuxDistribution::AzureLinux);
     EXPECT_EQ(result.Value().version, "4.0.20260709");
-    EXPECT_EQ(std::to_string(result.Value()), R"(OS="Linux" ARCH="x86_64" DISTRO="azurelinux" VERSION="4.0.20260709")");
+    EXPECT_EQ(std::to_string(result.Value()), std::string(R"(OS="Linux" ARCH=")") + hostArch + R"(" DISTRO="azurelinux" VERSION="4.0.20260709")");
 }
 
 TEST_F(DistributionInfoTest, InvalidKey_1)

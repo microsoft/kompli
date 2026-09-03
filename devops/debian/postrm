@@ -1,0 +1,15 @@
+#!/bin/sh
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+#
+# Debian postrm scriptlet.
+#
+# Deliberately does NOT remove the `kompli` system user/group or
+# /etc/kompli/ on purge - standard practice for system service accounts, see
+# devops/rpm/postun for the rationale.
+
+set -e
+
+systemctl daemon-reload >/dev/null 2>&1 || true
+
+exit 0

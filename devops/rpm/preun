@@ -1,0 +1,16 @@
+#!/bin/sh
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+#
+# RPM %preun scriptlet. $1: 0 = full removal, >=1 = upgrade (leave the
+# socket running across an upgrade so the incoming version's %post restarts
+# it, rather than causing an availability blip).
+
+set -e
+
+if [ "$1" = 0 ]; then
+    systemctl stop komplid.socket >/dev/null 2>&1 || true
+    systemctl disable komplid.socket >/dev/null 2>&1 || true
+fi
+
+exit 0

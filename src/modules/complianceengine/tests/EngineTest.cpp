@@ -191,7 +191,7 @@ TEST_F(EngineTest, GetParametersForUnknownRuleIsEmpty)
     EXPECT_TRUE(mEngine.GetParameters("NeverSet").empty());
 }
 
-// The allOf status algebra shared by the engine's Evaluator and the assessor's
+// The allOf status algebra shared by the engine's Evaluator and kompli's
 // overall aggregation: NonCompliant dominates, NotApplicable is sticky over
 // Compliant, and the operation is commutative.
 TEST(CombineAllOfTest, ThreeValuedTruthTable)
