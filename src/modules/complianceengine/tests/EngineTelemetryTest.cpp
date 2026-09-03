@@ -74,7 +74,7 @@ TEST_F(TelemetryTest, TelemetryEvent_RunWithTelemetry)
 {
     MockTelemetry mockTelemetry;
     auto mockEvent = TelemetryEvent(TelemetryEventType::Audit, "FooBar");
-    auto result = RunWithTelemetry(mockEvent, mockTelemetry, [&]() { return Result<AuditResult>(Error("System is wrong", 42)); });
+    auto result = RunWithTelemetry(mockEvent, mockTelemetry, nullptr, [&]() { return Result<AuditResult>(Error("System is wrong", 42)); });
     EXPECT_EQ(result.HasValue(), false);
     EXPECT_EQ(result.Error().message, std::string("System is wrong"));
     EXPECT_EQ(result.Error().code, 42);
@@ -91,7 +91,7 @@ TEST_F(TelemetryTest, TelemetryEvent_RunWithTelemetryDefautlErrorCode)
 {
     MockTelemetry mockTelemetry;
     auto mockEvent = TelemetryEvent(TelemetryEventType::Audit, "FooBar");
-    auto result = RunWithTelemetry(mockEvent, mockTelemetry, [&]() { return Result<AuditResult>(Error("System is wrong")); });
+    auto result = RunWithTelemetry(mockEvent, mockTelemetry, nullptr, [&]() { return Result<AuditResult>(Error("System is wrong")); });
     EXPECT_EQ(result.HasValue(), false);
     EXPECT_EQ(result.Error().message, std::string("System is wrong"));
     // Error defaults to -1 when no code is given on Error Constructor
@@ -103,15 +103,17 @@ TEST_F(TelemetryTest, TelemetryEvent_RunWithTelemetryDefautlErrorCode)
     ASSERT_TRUE(resultCodeField.HasValue());
     ASSERT_EQ(resultCodeField.Value().numVal, -1);
 }
-TEST_F(TelemetryTest, TelemetryEvent_RunWithTelemetryNoEvents)
+TEST_F(TelemetryTest, TelemetryEvent_RunWithTelemetryLogsSuccessfulEvent)
 {
     MockTelemetry mockTelemetry;
     auto mockEvent = TelemetryEvent(TelemetryEventType::Audit, "FooBar");
-    auto result = RunWithTelemetry(mockEvent, mockTelemetry, [&]() { return Result<AuditResult>(AuditResult{Status::Compliant, "Horay"}); });
+    auto result = RunWithTelemetry(mockEvent, mockTelemetry, nullptr, [&]() { return Result<AuditResult>(AuditResult{Status::Compliant, "Horay"}); });
     EXPECT_EQ(result.HasValue(), true);
     EXPECT_EQ(result.Value().payload, std::string("Horay"));
     EXPECT_EQ(result.Value().status, Status::Compliant);
-    EXPECT_EQ(mockTelemetry.mCapturedEvents.size(), 0);
+    ASSERT_EQ(mockTelemetry.mCapturedEvents.size(), 1);
+    EXPECT_EQ(mockTelemetry.mCapturedEvents[0].first.Type(), TelemetryEventType::Audit);
+    EXPECT_EQ(mockTelemetry.mCapturedEvents[0].first.Name(), std::string("FooBar"));
 }
 
 TEST_F(TelemetryTest, TelemetryEvent_RunWithTelemetry_StdExceptionIsRethrown)
@@ -121,7 +123,7 @@ TEST_F(TelemetryTest, TelemetryEvent_RunWithTelemetry_StdExceptionIsRethrown)
     bool threw = false;
     try
     {
-        RunWithTelemetry(mockEvent, mockTelemetry, [&]() -> Result<AuditResult> { throw std::runtime_error("something went wrong"); });
+        RunWithTelemetry(mockEvent, mockTelemetry, nullptr, [&]() -> Result<AuditResult> { throw std::runtime_error("something went wrong"); });
     }
     catch (const std::exception&)
     {
@@ -142,7 +144,7 @@ TEST_F(TelemetryTest, TelemetryEvent_RunWithTelemetry_NonStdExceptionIsRethrown)
     bool threw = false;
     try
     {
-        RunWithTelemetry(mockEvent, mockTelemetry, [&]() -> Result<AuditResult> { throw std::string("non-std exception payload"); });
+        RunWithTelemetry(mockEvent, mockTelemetry, nullptr, [&]() -> Result<AuditResult> { throw std::string("non-std exception payload"); });
     }
     catch (const std::string&)
     {
@@ -166,7 +168,7 @@ TEST_F(TelemetryTest, TelemetryEvent_WhenBuildNoTelemetryNoLogEventIsCalled)
     EXPECT_EQ(mockTelemetry.mCapturedEvents.size(), 0);
     mockTelemetry.mCapturedEvents.push_back(std::make_pair(mockEvent, CapturedEvent{0, mockCreatedAt}));
     EXPECT_EQ(mockTelemetry.mCapturedEvents.size(), 1);
-    auto result = RunWithTelemetry(mockEvent, mockTelemetry, [&]() { return Result<AuditResult>(Error("System is wrong", 42)); });
+    auto result = RunWithTelemetry(mockEvent, mockTelemetry, nullptr, [&]() { return Result<AuditResult>(Error("System is wrong", 42)); });
     EXPECT_EQ(result.HasValue(), false);
     EXPECT_EQ(result.Error().message, std::string("System is wrong"));
     EXPECT_EQ(result.Error().code, 42);

@@ -3,6 +3,8 @@
 
 #include "Telemetry.h"
 
+#include <sstream>
+
 #ifdef BUILD_TELEMETRY
 #include <fcntl.h>
 #include <stdio.h>
@@ -29,9 +31,6 @@ std::string to_string(const ComplianceEngine::TelemetryEventType type)
 } // namespace std
 namespace ComplianceEngine
 {
-TelemetryInterface::~TelemetryInterface() = default;
-#ifdef BUILD_TELEMETRY
-
 namespace
 {
 static int64_t ToEpochMicroseconds(const std::chrono::system_clock::time_point& timestamp) noexcept
@@ -71,7 +70,48 @@ static std::string JsonEscape(const std::string& s)
     return out;
 }
 
+static std::string SerializeTelemetryEvent(const TelemetryEvent& event, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt)
+{
+    std::ostringstream output;
+    output << "{\"EventName\":\"" << std::to_string(event.Type()) << "\"";
+    if (!event.Name().empty())
+    {
+        output << ",\"name\":\"" << JsonEscape(event.Name()) << "\"";
+    }
+    output << ",\"createdAtUs\":" << ToEpochMicroseconds(createdAt) << ",\"completedAtUs\":" << ToEpochMicroseconds(std::chrono::system_clock::now())
+           << ",\"durationUs\":" << durationUs;
+
+    for (const auto& field : event.Context())
+    {
+        output << ",\"" << JsonEscape(field.key) << "\":";
+        switch (field.kind)
+        {
+            case TelemetryField::Str:
+                output << "\"" << JsonEscape(field.strVal) << "\"";
+                break;
+            case TelemetryField::Int:
+            case TelemetryField::Int64:
+                output << field.numVal;
+                break;
+        }
+    }
+    output << "}";
+    return output.str();
+}
+
 } // namespace
+
+TelemetryInterface::~TelemetryInterface() = default;
+
+void LogCreatedTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& telemetry, OsConfigLogHandle log, int64_t durationUs,
+    const std::chrono::system_clock::time_point& createdAt) noexcept
+{
+    telemetry.LogEvent(event, durationUs, createdAt);
+    const auto serializedEvent = SerializeTelemetryEvent(event, durationUs, createdAt);
+    OsConfigLogCritical(log, "%s", serializedEvent.c_str());
+}
+
+#ifdef BUILD_TELEMETRY
 
 Telemetry::Telemetry(const int fd) noexcept
     : fd(fd)
@@ -93,34 +133,8 @@ void Telemetry::LogEvent(const TelemetryEvent& event, int64_t durationUs, const 
         return;
     }
 
-    const int64_t createdAtUs = ToEpochMicroseconds(createdAt);
-    const int64_t completedAtUs = ToEpochMicroseconds(std::chrono::system_clock::now());
-
-    dprintf(fd, "{\"EventName\":\"%s\"", std::to_string(event.Type()).c_str());
-
-    if (!event.Name().empty())
-    {
-        dprintf(fd, ",\"name\":\"%s\"", JsonEscape(event.Name()).c_str());
-    }
-
-    dprintf(fd, ",\"createdAtUs\":%lld,\"completedAtUs\":%lld,\"durationUs\":%lld", static_cast<long long>(createdAtUs),
-        static_cast<long long>(completedAtUs), static_cast<long long>(durationUs));
-
-    for (const auto& field : event.Context())
-    {
-        switch (field.kind)
-        {
-            case TelemetryField::Str:
-                dprintf(fd, ",\"%s\":\"%s\"", JsonEscape(field.key).c_str(), JsonEscape(field.strVal).c_str());
-                break;
-            case TelemetryField::Int:
-            case TelemetryField::Int64:
-                dprintf(fd, ",\"%s\":%lld", JsonEscape(field.key).c_str(), static_cast<long long>(field.numVal));
-                break;
-        }
-    }
-
-    dprintf(fd, "}\n");
+    const auto serializedEvent = SerializeTelemetryEvent(event, durationUs, createdAt);
+    dprintf(fd, "%s\n", serializedEvent.c_str());
 }
 
 #endif // BUILD_TELEMETRY

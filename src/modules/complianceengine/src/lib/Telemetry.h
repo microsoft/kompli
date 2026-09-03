@@ -4,6 +4,7 @@
 #ifndef COMPLIANCEENGINE_CETELEMETRY_H
 #define COMPLIANCEENGINE_CETELEMETRY_H
 
+#include "Logging.h"
 #include "Optional.h"
 #include "Result.h"
 
@@ -103,10 +104,16 @@ public:
 private:
     virtual void LogEvent(const TelemetryEvent& event, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt) noexcept = 0;
     template <typename F>
-    friend auto RunWithTelemetry(const TelemetryEvent& event, TelemetryInterface& telemetry, F&& function) -> decltype(std::forward<F>(function)());
+    friend auto RunWithTelemetry(const TelemetryEvent& event, TelemetryInterface& telemetry, OsConfigLogHandle log, F&& function)
+        -> decltype(std::forward<F>(function)());
     friend void LogTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& telemetry, int64_t durationUs,
         const std::chrono::system_clock::time_point& createdAt) noexcept;
+    friend void LogCreatedTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& telemetry, OsConfigLogHandle log, int64_t durationUs,
+        const std::chrono::system_clock::time_point& createdAt) noexcept;
 };
+
+void LogCreatedTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& telemetry, OsConfigLogHandle log, int64_t durationUs,
+    const std::chrono::system_clock::time_point& createdAt) noexcept;
 
 #ifdef BUILD_TELEMETRY
 
@@ -127,7 +134,8 @@ private:
 };
 
 template <typename F>
-auto RunWithTelemetry(const TelemetryEvent& event, TelemetryInterface& telemetry, F&& function) -> decltype(std::forward<F>(function)())
+auto RunWithTelemetry(const TelemetryEvent& event, TelemetryInterface& telemetry, OsConfigLogHandle log, F&& function)
+    -> decltype(std::forward<F>(function)())
 {
     const auto createdAt = std::chrono::system_clock::now();
     const auto begin = std::chrono::steady_clock::now();
@@ -146,7 +154,7 @@ auto RunWithTelemetry(const TelemetryEvent& event, TelemetryInterface& telemetry
         const auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
         TelemetryEvent logged = event;
         logged.Add("exception", std::string(e.what()));
-        telemetry.LogEvent(logged, durationUs, createdAt);
+        LogCreatedTelemetryEvent(logged, telemetry, log, durationUs, createdAt);
         throw;
     }
     catch (...)
@@ -155,32 +163,29 @@ auto RunWithTelemetry(const TelemetryEvent& event, TelemetryInterface& telemetry
         const auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
         TelemetryEvent logged = event;
         logged.Add("exception", std::string("unknown non-std exception"));
-        telemetry.LogEvent(logged, durationUs, createdAt);
+        LogCreatedTelemetryEvent(logged, telemetry, log, durationUs, createdAt);
         throw;
     }
 
     auto result = tmp_result.Value();
+    end = std::chrono::steady_clock::now();
+    const auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
     if (result.HasValue())
     {
+        LogCreatedTelemetryEvent(event, telemetry, log, durationUs, createdAt);
         return std::forward<decltype(result)>(result);
     }
 
-    end = std::chrono::steady_clock::now();
-    const auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
     TelemetryEvent logged = event;
     logged.Add("resultCode", result.Error().code);
     if (!result.Error().message.empty())
     {
         logged.Add("errorMessage", result.Error().message);
     }
-    telemetry.LogEvent(logged, durationUs, createdAt);
+    LogCreatedTelemetryEvent(logged, telemetry, log, durationUs, createdAt);
     return std::forward<decltype(result)>(result);
 }
 
-inline void LogTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& telemetry, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt) noexcept
-{
-    telemetry.LogEvent(event, durationUs, createdAt);
-}
 #else  // BUILD_TELEMETRY
 
 class Telemetry : public TelemetryInterface
@@ -208,10 +213,12 @@ private:
 };
 
 template <typename F>
-auto RunWithTelemetry(const TelemetryEvent& event, TelemetryInterface& telemetry, F&& function) -> decltype(std::forward<F>(function)())
+auto RunWithTelemetry(const TelemetryEvent& event, TelemetryInterface& telemetry, OsConfigLogHandle log, F&& function)
+    -> decltype(std::forward<F>(function)())
 {
     (void)event;
     (void)telemetry;
+    (void)log;
     return std::forward<F>(function)();
 }
 

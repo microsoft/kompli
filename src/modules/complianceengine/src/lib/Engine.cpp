@@ -159,7 +159,7 @@ Result<AuditResult> Engine::MmiGet(const char* objectName)
     }
 
     Evaluator evaluator(ruleName, procedure.Audit(), procedure.Parameters(), *mContext);
-    Result<AuditResult> result = RunWithTelemetry(TelemetryEvent(TelemetryEventType::Audit, ruleName), mContext->GetTelemetry(),
+    Result<AuditResult> result = RunWithTelemetry(TelemetryEvent(TelemetryEventType::Audit, ruleName), mContext->GetTelemetry(), Log(),
         [&]() { return evaluator.ExecuteAudit(*mFormatter); });
     return result;
 }
@@ -315,7 +315,7 @@ Result<Status> Engine::ExecuteRemediation(const std::string& ruleName, const std
     }
 
     Evaluator evaluator(ruleName, remediation, procedure.Parameters(), *mContext);
-    Result<Status> result = RunWithTelemetry(TelemetryEvent(TelemetryEventType::Remediation, ruleName), mContext->GetTelemetry(),
+    Result<Status> result = RunWithTelemetry(TelemetryEvent(TelemetryEventType::Remediation, ruleName), mContext->GetTelemetry(), Log(),
         [&]() { return evaluator.ExecuteRemediation(); });
     return result;
 }

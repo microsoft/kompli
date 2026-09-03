@@ -534,7 +534,8 @@ int main(int argc, char* argv[])
             event.Add("DistributionVersion", distributionInfo.Value().version);
         }
         event.Add("ComplianceEngineVersion", KOMPLI_VERSION);
-        ComplianceEngine::LogTelemetryEvent(event, engine.GetTelemetry(), durationUs, benchmarkRunCreatedAt);
+        // ComplianceEngine::LogTelemetryEvent(event, engine.GetTelemetry(), durationUs, benchmarkRunCreatedAt);
+        LogCreatedTelemetryEvent(event, engine.GetTelemetry(), logHandle.get(), durationUs, benchmarkRunCreatedAt);
     }
 #endif // BUILD_TELEMETRY
 

@@ -60,13 +60,13 @@ Optional<std::string> GetCompilanceEngineDirectory()
 {
     Dl_info dlInfo;
     memset(&dlInfo, 0, sizeof(dlInfo));
-    if ((0 == dladdr(reinterpret_cast<void*>(ComplianceEngineMmiOpen), &dlInfo)) && (nullptr != dlInfo.dli_fname))
+    if ((0 == dladdr(reinterpret_cast<void*>(ComplianceEngineMmiOpen), &dlInfo)) || (nullptr == dlInfo.dli_fname))
     {
         return Optional<std::string>();
     }
     const std::string modulePath = dlInfo.dli_fname;
     const size_t separator = modulePath.find_last_of('/');
-    if (std::string::npos != separator)
+    if (std::string::npos == separator)
     {
         return Optional<std::string>();
     }
@@ -115,8 +115,12 @@ void ComplianceEngineLoad(MMI_HANDLE clientSession, const char* componentName)
         OsConfigLogError(g_log, "ComplianceEngineLoad called for an unsupported component name (%s)", componentName);
         return;
     }
-    // auto& engine = *reinterpret_cast<Engine*>(clientSession);
-    //
+
+#ifdef BUILD_TELEMETRY
+    g_benchmarkRunCreatedAt = std::chrono::system_clock::now();
+    g_benchmarkRunBeginAt = std::chrono::steady_clock::now();
+#endif
+    OsConfigLogError(g_log, "ComplianceEngineLoad(%p, %s)", clientSession, componentName);
 }
 void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
 {
@@ -131,13 +135,62 @@ void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
         OsConfigLogError(g_log, "ComplianceEngineLoad called for an unsupported component name (%s)", componentName);
         return;
     }
-    // auto& engine = *reinterpret_cast<Engine*>(clientSession);
-    //
+    OsConfigLogError(g_log, "ComplianceEngineUnload(%p, %s)", clientSession, componentName);
+#ifdef BUILD_TELEMETRY
+    auto* engine = reinterpret_cast<Engine*>(clientSession);
+    auto benchmarkRunCompletedAt = std::chrono::steady_clock::now();
+    auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(benchmarkRunCompletedAt - g_benchmarkRunBeginAt).count();
+    auto event = ComplianceEngine::TelemetryEvent(ComplianceEngine::TelemetryEventType::BenchmarkRun, "ComplianceEngineSession");
+    const auto& distributionInfo = engine->GetDistributionInfo();
+    if (!distributionInfo.HasValue())
+    {
+        event.Add("Distribution", "Invalid distribution information");
+    }
+    else
+    {
+        event.Add("OsType", std::to_string(distributionInfo.Value().osType));
+        event.Add("architecture", std::to_string(distributionInfo.Value().architecture));
+        event.Add("Distribution", std::to_string(distributionInfo.Value().distribution));
+        event.Add("DistributionVersion", distributionInfo.Value().version);
+    }
+
+    event.Add("ComplianceEngineVersion", KOMPLI_VERSION);
+    // ComplianceEngine::LogTelemetryEvent(event, engine->GetTelemetry(), durationUs, g_benchmarkRunCreatedAt);
+    ComplianceEngine::LogCreatedTelemetryEvent(event, engine->GetTelemetry(), g_log, durationUs, g_benchmarkRunCreatedAt);
+    auto moduleDirectory = GetCompilanceEngineDirectory();
+    if (moduleDirectory.HasValue())
+    {
+        OsConfigLogError(g_log, "ComplianceEngineUnload KK 1");
+        const std::string telemetryBinaryPath = moduleDirectory.Value() + "/" + telemetry_binary;
+        OsConfigLogError(g_log, "ComplianceEngineUnload KK 2");
+        const std::string telemetryFilePath = std::string(telemetry_log_dir) + telemetry_log_file;
+        OsConfigLogError(g_log, "ComplianceEngineUnload KK 3");
+        std::string telemetryCmd = telemetryBinaryPath + "  -f " + telemetryFilePath + "  -t " + std::to_string(telemetry_teardown_time) + " -n ";
+        OsConfigLogError(g_log, "ComplianceEngineUnload KK 4");
+        telemetryCmd += " --verbose ";
+        OsConfigLogError(g_log, "ComplianceEngineUnload KK 5");
+        OsConfigLogError(g_log, "Exeuciting TelemetryBin %s", telemetryCmd.c_str());
+        OsConfigLogError(g_log, "ComplianceEngineUnload KK 6");
+
+        auto result = engine->GetContext().ExecuteCommand(telemetryCmd);
+        OsConfigLogError(g_log, "ComplianceEngineUnload KK 7");
+        if (!result.HasValue())
+        {
+            OsConfigLogError(g_log, "Failed to execute telemetry %s command: error code %d message %s", telemetryCmd.c_str(), result.Error().code,
+                result.Error().message.c_str());
+        }
+        OsConfigLogError(g_log, "ComplianceEngineUnload KK 8");
+    }
+    else
+    {
+        OsConfigLogError(g_log, "ComplianceEngineMmiClose: failed to GetCompilanceEngineDirectory() telemetry not run");
+    }
+    OsConfigLogError(g_log, "ComplianceEngineUnload KK 9");
+#endif // BUILD_TELEMETRY
 }
 // This function is called in library destructor by BaselineInitialize
 void ComplianceEngineShutdown(void)
 {
-    // TelemetryCleanup(g_log);
 }
 
 MMI_HANDLE ComplianceEngineMmiOpen(const char* clientName, const unsigned int maxPayloadSizeBytes)
@@ -145,9 +198,6 @@ MMI_HANDLE ComplianceEngineMmiOpen(const char* clientName, const unsigned int ma
     int telemetry_fd = -1;
 
 #ifdef BUILD_TELEMETRY
-    g_benchmarkRunCreatedAt = std::chrono::system_clock::now();
-    g_benchmarkRunBeginAt = std::chrono::steady_clock::now();
-
     std::string telemetry_log_path(telemetry_log_dir);
 
     if (!ComplianceEngine::MkdirRecursive(telemetry_log_path, 0755))
@@ -158,6 +208,7 @@ MMI_HANDLE ComplianceEngineMmiOpen(const char* clientName, const unsigned int ma
     {
         auto telemetry_file = telemetry_log_path + std::string(telemetry_log_file);
         telemetry_fd = open(telemetry_file.c_str(), O_CREAT | O_APPEND | O_WRONLY, 0600);
+        OsConfigLogError(g_log, "Opening Telemetry  file %s", telemetry_file.c_str());
         if (0 > telemetry_fd)
         {
             OsConfigLogError(g_log, "Failed to open telemetry file  %s: %d", telemetry_file.c_str(), errno);
@@ -207,47 +258,7 @@ void ComplianceEngineMmiClose(MMI_HANDLE clientSession)
     auto* engine = reinterpret_cast<Engine*>(clientSession);
     if (nullptr != engine)
     {
-#ifdef BUILD_TELEMETRY
-        auto benchmarkRunCompletedAt = std::chrono::steady_clock::now();
-        auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(benchmarkRunCompletedAt - g_benchmarkRunBeginAt).count();
-        auto event = ComplianceEngine::TelemetryEvent(ComplianceEngine::TelemetryEventType::BenchmarkRun, "ComplianceEngineSession");
-        const auto& distributionInfo = engine->GetDistributionInfo();
-        if (!distributionInfo.HasValue())
-        {
-            event.Add("Distribution", "Invalid distribution information");
-        }
-        event.Add("OsType", std::to_string(distributionInfo.Value().osType));
-        event.Add("architecture", std::to_string(distributionInfo.Value().architecture));
-        event.Add("Distribution", std::to_string(distributionInfo.Value().distribution));
-        event.Add("DistributionVersion", distributionInfo.Value().version);
-
-        event.Add("ComplianceEngineVersion", KOMPLI_VERSION);
-        ComplianceEngine::LogTelemetryEvent(event, engine->GetTelemetry(), durationUs, g_benchmarkRunCreatedAt);
-
-        auto moduleDirectory = GetCompilanceEngineDirectory();
-        if (!moduleDirectory.HasValue())
-        {
-
-            const std::string telemetryBinaryPath = std::string(moduleDirectory.Value()) + "/" + telemetry_binary;
-            const std::string telemetryFilePath = std::string(telemetry_log_dir) + telemetry_log_file;
-            std::string telemetryCmd = telemetryBinaryPath + " -f " + telemetryFilePath + " -t " + std::to_string(telemetry_teardown_time) + " -n";
-
-#if defined(DEBUG) || defined(_DEBUG) || !defined(NDEBUG)
-            telemetryCmd += " --verbose";
-#endif
-            auto result = engine->GetContext().ExecuteCommand(telemetryCmd);
-            if (!result.HasValue())
-            {
-                OsConfigLogError(g_log, "Failed to execute telemetry %s command: error code %d message %s", telemetryCmd.c_str(), result.Error().code,
-                    result.Error().message.c_str());
-            }
-        }
-        else
-        {
-            OsConfigLogError(g_log, "ComplianceEngineMmiClose: failed to GetCompilanceEngineDirectory() telemetry not run");
-        }
-
-#endif // BUILD_TELEMETRY
+        return;
     }
 
     delete engine;
