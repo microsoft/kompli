@@ -2,8 +2,8 @@
 # Licensed under the MIT License.
 
 # The kompli daemon (komplid). Currently a placeholder implementation - see
-# README.md. Gated by -DBUILD_KOMPLID=ON (default OFF) so it does not affect
-# default builds until real scaffolding lands.
+# README.md. Gated by -DBUILD_KOMPLID (default ON) so it can be turned off
+# for builds that don't want it.
 project(komplid)
 
 add_executable(komplid Main.cpp)

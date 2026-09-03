@@ -35,6 +35,7 @@ enum class LinuxDistribution
 enum class Architecture
 {
     x86_64,
+    aarch64,
 };
 
 struct DistributionInfo

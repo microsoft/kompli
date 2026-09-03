@@ -1,0 +1,18 @@
+#!/bin/sh
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+#
+# Debian prerm scriptlet. Leaves the socket running across an upgrade so the
+# incoming version's postinst restarts it, rather than causing an
+# availability blip - only stops/disables it on an actual removal.
+
+set -e
+
+case "$1" in
+    remove)
+        systemctl stop komplid.socket >/dev/null 2>&1 || true
+        systemctl disable komplid.socket >/dev/null 2>&1 || true
+        ;;
+esac
+
+exit 0

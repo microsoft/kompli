@@ -7,8 +7,8 @@ below) — real request handling is a separate, follow-up piece of work.
 ## Status
 
 - Build target exists and produces a real (if placeholder) binary + systemd
-  units. Gated behind `-DBUILD_KOMPLID=ON` (default `OFF`) so it never affects
-  default builds.
+  units. Built by default (`-DBUILD_KOMPLID=ON` is now the default; pass
+  `-DBUILD_KOMPLID=OFF` to exclude it).
 - Current implementation: reads JSONL from its socket-activated connection and
   echoes back a pretty-printed copy of each line. It does **not** interpret,
   validate, or act on the input in any way yet — no engine, no benchmark
@@ -69,11 +69,9 @@ root itself, in exchange for talking to something that already does:
   grant read access. Membership is what lets the `kompli` CLI read benchmark
   definitions (`list`/`plan`, see [docs/CLI.md](../../docs/CLI.md)) and
   connect to `komplid`'s socket without being root.
-  **Packaging**: creating this user/group is a `.deb`/`.rpm` packaging
-  concern (a `postinst`/`%pre` scriptlet, standard practice for a system
-  daemon) — no packaging exists yet in this repo; both package formats and
-  the user/group creation they need to perform are in scope for that future
-  work, not solved here.
+  **Packaging**: creating this user/group happens via `.deb`/`.rpm`
+  packaging scriptlets - see the "Packaging" section below for what's
+  implemented and what's still open.
 - **Socket permissions**: `komplid.socket` sets `SocketMode=0660` +
   `SocketGroup=kompli` — connecting requires `kompli` group membership (or
   root), not world access.
@@ -130,6 +128,52 @@ constraint no longer applies: reworking the logging library to a
 descriptor-based interface (caller opens/verifies the fd, hands it to the
 logger) is in scope and should happen, just not as part of this
 design pass — tracked here so it isn't lost.
+
+## Packaging
+
+CPack is already configured for both formats in `src/CMakeLists.txt`
+(package metadata, `CPACK_RPM_*`/`CPACK_DEBIAN_*` variables) and references
+six scriptlet files plus an RPM changelog under `devops/rpm/` and
+`devops/debian/` - until now, those files didn't exist, so building either
+package would have failed outright.
+
+- **Implemented**: `devops/rpm/{postinst,preun,postun,changelog}` and
+  `devops/debian/{postinst,prerm,postrm}` now exist and cover what's already
+  decided: create the `kompli` system group/user (idempotent, no login shell
+  or home directory - nothing ever authenticates as this identity, it only
+  exists to own files and gate socket access), create `/etc/kompli/definitions/`
+  owned `root:kompli` with group-read-only permissions (§ "Privilege model"
+  above), enable/start `komplid.socket` on install, stop/disable it only on
+  an actual removal (not an upgrade, to avoid an availability blip), and
+  deliberately *not* remove the user/group/directory on uninstall (standard
+  practice for system service accounts - matches e.g. postgres/nginx-style
+  packaging).
+- **Not yet covered, deferred until the relevant design settles**:
+  - The rest of `/etc/kompli/`'s layout (the main config file, the
+    provisional `/var/lib/komplid/komplid.db` task/cache database's
+    ownership) isn't finalized yet, so the scriptlets don't touch it.
+  - **Cross-repo delivery of benchmark content, decided direction:** this
+    repo's package ships `komplid`/`kompli` and an *empty*
+    `/etc/kompli/definitions/` directory only - it deliberately does not
+    ship any `*.benchmark.json` content, because that content (CIS/STIG
+    benchmark text) is externally-sourced, third-party material and
+    shouldn't be coupled to this repo's release cadence or licensing.
+    Definitions are produced by a separate pipeline (the Compliance
+    Augmentation Engine), which today only publishes them as NuGet packages
+    (the GC/Azure Policy delivery path). **Planned**: that pipeline gains the
+    ability to also build native `.deb`/`.rpm` packages straight from the
+    same generated `*.benchmark.json` content - separate from, and installed
+    on top of, this repo's `kompli`/`komplid` package - dropping files into
+    `/etc/kompli/definitions/` with the ownership/permissions this repo's
+    package already established. Preferably signed and upstreamed to PMC
+    (Microsoft's `packages.microsoft.com` Linux package repository), the
+    same trusted-distribution channel other Microsoft Linux tooling uses.
+    This is augmentation-engine-side pipeline work, not implemented in this
+    repo - tracked here as the resolution to what was an open question, not
+    yet built.
+  - Per-distro verification: `devops/docker/` already has build images for
+    12 distributions (Debian/Ubuntu and RHEL-family/SUSE), but none of the
+    scriptlets above have been exercised against any of them yet.
 
 ## State directory: intentionally not yet shared
 

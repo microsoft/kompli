@@ -1,0 +1,31 @@
+#!/bin/sh
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+#
+# RPM %post scriptlet. $1: 1 = fresh install, >=2 = upgrade.
+# See src/komplid/README.md "Packaging" for what this covers and what's
+# still deferred (main /etc/kompli config layout, benchmark-definition
+# content delivery).
+
+set -e
+
+# Create the kompli system group/user if not already present (idempotent -
+# safe on upgrade too). No login shell, no home directory: nothing ever logs
+# in as this identity, it only exists to own /etc/kompli/ and gate socket
+# access (see src/komplid/README.md "Privilege model").
+getent group kompli >/dev/null || groupadd --system kompli
+getent passwd kompli >/dev/null || useradd --system --no-create-home --shell /sbin/nologin --gid kompli --comment "kompli daemon" kompli
+
+# Only the directory ownership/mode that's actually decided today
+# (definitions/ read-only for the group) - the rest of /etc/kompli/'s
+# layout (main config file, etc.) is still being designed.
+mkdir -p /etc/kompli/definitions
+chown -R root:kompli /etc/kompli
+chmod 0750 /etc/kompli /etc/kompli/definitions
+
+systemctl daemon-reload >/dev/null 2>&1 || true
+# komplid is socket-activated, never started directly.
+systemctl enable komplid.socket >/dev/null 2>&1 || true
+systemctl start komplid.socket >/dev/null 2>&1 || true
+
+exit 0

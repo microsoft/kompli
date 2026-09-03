@@ -138,7 +138,7 @@ option(BUILD_SAMPLES "Build samples" OFF)
 option(COVERAGE "Enable code coverage" OFF)
 option(BUILD_FUZZER "Build fuzzer" OFF)
 option(BUILD_KOMPLI_CLI "Build the kompli CLI tool" ON)
-option(BUILD_KOMPLID "Build the kompli daemon (komplid) - reserved, not yet implemented" OFF)
+option(BUILD_KOMPLID "Build the kompli daemon (komplid)" ON)
 
 add_compile_options("-Wno-psabi;-fPIC")
 add_compile_options("-Wall;-Wextra;-Wunused;-Werror;-Wformat;-Wformat-security;-Wno-unused-result")

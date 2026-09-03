@@ -1,0 +1,18 @@
+#!/bin/sh
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+#
+# RPM %postun scriptlet. $1: 0 = full removal, >=1 = upgrade.
+#
+# Deliberately does NOT remove the `kompli` system user/group or /etc/kompli/
+# on full removal - standard practice for system service accounts (matches
+# e.g. postgres/nginx-style packaging): logs and configuration may still
+# exist and reference that ownership, and recreating the exact same uid/gid
+# on a later reinstall isn't guaranteed. Left for an administrator to remove
+# explicitly if truly wanted.
+
+set -e
+
+systemctl daemon-reload >/dev/null 2>&1 || true
+
+exit 0
