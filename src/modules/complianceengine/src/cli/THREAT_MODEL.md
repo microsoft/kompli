@@ -94,18 +94,22 @@ a result JSON and performs none of these checks, still accepts stdin.)
   as root, so a symlink, non-root-owned target, or writable parent directory is
   refused to prevent redirecting root's writes onto a sensitive file.
 
-  *Residual TOCTOU (known limitation):* unlike the definition-file input, the log
-  file is not verified via `fstat()` on a held fd. The shared `OpenLog()` API is path-only
-  (no fd-accepting entry point) and `TrimLog()` re-opens the path with `fopen()`
-  on every rotation, so a pinned, pre-verified fd cannot be handed to the logging
-  layer. `RefuseUnsafeLogFile()` checks the path with `lstat()` shortly before
-  `OpenLog()` resolves it again, leaving a small check-to-use window. That window
-  is closed in practice by the parent-directory check: requiring the parent to be
-  root-owned and not group/world-writable prevents an attacker from creating,
-  renaming, or swapping the entry at all. Fully eliminating the window (an
-  fd-based open with `O_NOFOLLOW` handed to the logger) would require changing the
-  shared logging library, which affects every azure-osconfig binary and is out of
-  scope here.
+  *Residual TOCTOU (known limitation, now tracked as a roadmap item):* unlike
+  the definition-file input, the log file is not verified via `fstat()` on a
+  held fd. The shared `OpenLog()` API is path-only (no fd-accepting entry
+  point) and `TrimLog()` re-opens the path with `fopen()` on every rotation,
+  so a pinned, pre-verified fd cannot be handed to the logging layer.
+  `RefuseUnsafeLogFile()` checks the path with `lstat()` shortly before
+  `OpenLog()` resolves it again, leaving a small check-to-use window. That
+  window is closed in practice by the parent-directory check: requiring the
+  parent to be root-owned and not group/world-writable prevents an attacker
+  from creating, renaming, or swapping the entry at all. Fully eliminating
+  the window (an fd-based open with `O_NOFOLLOW` handed to the logger) would
+  require reworking the shared logging library. Previously out of scope
+  because it's shared with every azure-osconfig binary upstream — now that
+  this is a fork, that constraint no longer applies, and it's tracked as a
+  roadmap item (see the "Logging" section in
+  `src/komplid/README.md`) rather than a permanent limitation.
 
 - **`PATH` / `IFS`** are inherited and used by the procedure scripts the engine
   spawns. Sanitizing the environment is the engine's responsibility, not

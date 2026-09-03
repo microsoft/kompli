@@ -33,6 +33,13 @@ struct Resource
     // `.version` drive the applicability check in the main loop (Match against
     // the detected system); `.section` drives section filtering (main loop and
     // JSON formatter).
+    //
+    // TODO(komplid wire protocol, see docs/CLI.md and src/komplid/README.md):
+    // the raw payloadKey string this is parsed from is currently discarded
+    // once parsed (see BenchmarkDefinition.cpp). The planned per-rule wire
+    // protocol identifies a rule by payloadKey, not ruleId (ruleId is a
+    // checksum of it, kept only for external conformance) - this struct will
+    // need to retain the raw payloadKey verbatim before that can be built.
     CISBenchmarkInfo benchmarkInfo;
 
     // The rule payload serialized as JSON. Passed to the ComplianceEngine as the
@@ -49,6 +56,16 @@ struct Resource
 
     // True when the rule carries an init object (always true for definitions).
     bool hasInitAudit = false;
+
+    // TODO(kompli parametrization design, see docs/CLI.md): not yet parsed or
+    // retained. The rule's `parameterMetadata` (name -> {default,
+    // validationRegex, mandatory, displayName}) is a plain top-level sibling
+    // of `payload` in the benchmark-definition schema - NOT buried inside the
+    // opaque procedure payload - so `kompli plan` can read it straight out of
+    // this parser (no need to reuse Engine/Procedure's own parameter
+    // handling) to pre-populate a plan's parameters with defaults and to
+    // validate user-supplied overrides (name exists, value matches
+    // validationRegex) before dispatch.
 };
 } // namespace BenchmarkIO
 } // namespace ComplianceEngine

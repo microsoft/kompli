@@ -96,6 +96,10 @@ Kompli will be able to run as a standalone daemon that can evaluate policy given
 > — exact message field names are still open). Slow rules can respond with a
 > task ID instead of blocking, backed by a SQLite task registry/audit-result
 > cache (see [src/komplid/README.md](../src/komplid/README.md#long-running-rules-background-tasks)).
+> `komplid` always runs as root; passthrough clients only need membership in
+> a new `kompli` system group, with no fallback to standalone (root-required)
+> execution if the daemon is unreachable (see
+> [src/komplid/README.md](../src/komplid/README.md#privilege-model)).
 > Neither `komplid` nor the `kompli` CLI
 > use a shared persistent state directory yet (each `kompli`/`komplid`
 > invocation gets its own ephemeral temp directory) — intentionally deferred
@@ -129,12 +133,12 @@ sequenceDiagram
     participant komplid as komplid (one process, one connection)
     participant Worker as forked worker
     participant DB as SQLite task/cache registry
-    Client->>komplid: { benchmark, ruleId, mode: audit } (rule 1)
+    Client->>komplid: { benchmark, payloadKey, mode: audit } (rule 1)
     komplid-->>Client: result (fast rule)
-    Client->>komplid: { benchmark, ruleId, mode: audit } (rule 2, slow)
+    Client->>komplid: { benchmark, payloadKey, mode: audit } (rule 2, slow)
     komplid->>Worker: fork() (BackgroundScan-style)
     komplid-->>Client: { taskId }
-    Client->>komplid: { benchmark, ruleId, mode: audit } (rule 3)
+    Client->>komplid: { benchmark, payloadKey, mode: audit } (rule 3)
     komplid-->>Client: result (fast rule)
     Worker->>DB: write result (atomic)
     DB-->>komplid: completion detected (select()/SIGCHLD, not polling)

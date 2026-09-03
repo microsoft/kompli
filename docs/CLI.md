@@ -40,22 +40,32 @@ section addresses.
 
 ### Why
 
-The wire protocol `komplid` will speak is per-rule (`{benchmark, ruleId,
+The wire protocol `komplid` will speak is per-rule (`{benchmark, payloadKey,
 mode}` → one canonical result), because different rules may need different
-modes (`audit` vs `remediate` vs the reserved future `enforce`) in the same
-run. The CLI needs an input model that can express that, without forcing a
-user to hand-enumerate every rule for the common "audit/remediate everything"
-case.
+modes (`audit` vs `remediate` vs the reserved, not-yet-working `enforce` —
+kept in this contract regardless, see below) in the same run. The CLI needs
+an input model that can express that, without forcing a user to
+hand-enumerate every rule for the common "audit/remediate everything" case.
 
 ### `kompli list <file>` — Planned
 
-Enumerates rules in a benchmark-definition file: `section`, `ruleId`
-(payload key), `title`. Prerequisite for building a plan — a user or script
-needs to know what to reference before they can toggle its mode. Rules are
-referenced by `section` everywhere in this CLI (the dotted CIS/STIG
-identifier), not the internal `ruleId` UUID — `section` is documented as the
-"externally-quoted per-rule identifier" in `benchmark.schema.json` and is
-meant to be human-typeable.
+Enumerates rules in a benchmark-definition file: `section`, `payloadKey`,
+`title`. Prerequisite for building a plan — a user or script needs to know
+what to reference before they can toggle its mode. A detail view for one rule
+(`kompli list <file> --rule=<section>`, exact flag not finalized) additionally
+shows its parameters and their defaults — needed so a user knows what's
+available to override in a plan (see "Parametrization" under `plan` below).
+Rules are referenced by
+`section` everywhere in this CLI (the dotted CIS/STIG identifier) — `section`
+is documented as the "externally-quoted per-rule identifier" in
+`benchmark.schema.json` and is meant to be human-typeable. `run` resolves
+each plan entry's `section` to a `payloadKey` via the benchmark file before
+dispatching (locally or to `komplid`) — `payloadKey`, not `ruleId`, is what
+actually identifies a rule internally (wire requests, the plan file's
+resolved form, the task registry, the audit cache). `ruleId` is a checksum
+*of* the payload key, retained in the canonical result purely for external
+conformance (some consumers already key off it) — it carries no information
+`payloadKey` doesn't already have, so nothing internal needs it.
 
 **Rule-identity caveat (important, not yet enforced by the parser — see §5):**
 `payloadKey`/`section` is only guaranteed unique *within one benchmark-definition
@@ -69,9 +79,19 @@ implicitly scoped to one file — there is no cross-file rule identity.
 
 Generates a plan: **every** rule in `<file>` is seeded at `mode: audit`
 (never a mutating default). Toggle specific rules with repeatable
-`--audit=<section>` / `--remediate=<section>` flags. Output goes to a file
+`--audit=<section>` / `--remediate=<section>` / `--enforce=<section>` flags
+(`--enforce` is accepted and recorded like the others, consistent with
+keeping `enforce` in every contract even though `run`/`komplid` can't
+actually execute it yet — see §2's `enforce` note). Output goes to a file
 (exact default path/flag: **not yet decided** — candidates: write next to the
 input file, or require an explicit `-o/--output`).
+
+**Toggle semantics, decided**: applying `--audit=X` when `X` is already
+`audit` in the plan is a no-op; it only modifies `X` if the plan currently
+has it in a different mode. Same for `--remediate=`/`--enforce=`. Flags are
+applied in argument order, so `--audit=X --remediate=X` in one invocation
+resolves to `remediate` (the later flag is the one still in effect once both
+have been applied) — not an error, just ordinary last-applied-wins toggling.
 
 **Plan file format** (JSON — kept lean, no new parser dependency; the
 codebase already leans on `parson` everywhere and this keeps it that way):
@@ -84,11 +104,15 @@ codebase already leans on `parson` everywhere and this keeps it that way):
     "sha256": "<hash of the file at plan-generation time>"
   },
   "rules": {
-    "1.1.1.1": "audit",
-    "1.1.2": "remediate"
+    "1.1.1.1": { "mode": "audit", "parameters": { "PKG_NAME": "cramfs" } },
+    "1.1.2": { "mode": "remediate", "parameters": {} }
   }
 }
 ```
+
+Each rule's value is an object, not a bare mode string, so parameters travel
+alongside mode (see "Parametrization" below) rather than needing a second,
+key-synchronized map.
 
 - `sha256` lets `run` detect that the benchmark file changed since the plan
   was generated (same integrity-verification spirit as the existing
@@ -96,8 +120,43 @@ codebase already leans on `parson` everywhere and this keeps it that way):
   a different threat: drift between planning and execution, not tampering).
 - Plans are meant to be hand-editable afterward. A rule manually **removed**
   from the `rules` map is not an error — it's how a user narrows a plan down.
-- `plan` validates every `--audit=`/`--remediate=` rule reference against the
-  benchmark file eagerly (fail fast) — see §4 for why `run` re-validates too.
+- `plan` validates every `--audit=`/`--remediate=`/`--enforce=` rule
+  reference against the benchmark file eagerly (fail fast) — see §4 for why
+  `run` re-validates too.
+
+### Parametrization
+
+Procedures can be parametrized (e.g. a package name, a file mode/mask); the
+unified definitions already carry default values for every parameter today
+(only the GC/NRP scenario currently supports overriding them — this folds
+that capability into `kompli`/`komplid` too, not just GC).
+
+- **Plan generation pre-fills every rule's parameters with their defaults.**
+  A rule's `parameterMetadata` (name → `{default, validationRegex, mandatory,
+  displayName}`) is a plain, top-level sibling of `payload` in the
+  benchmark-definition schema — not buried inside the opaque procedure
+  payload — so `plan` reads it directly (no need to involve the engine at
+  all for this). Since defaults are always present, initial plan generation
+  never has a rule with missing/unknown parameter values.
+- **Overriding a value**: primarily by hand-editing the generated plan
+  (change a value under a rule's `parameters`) — the plan already has every
+  parameter pre-filled, so most users only need to touch the handful they
+  actually want to change. `plan` also gets a repeatable
+  `--param=<section>.<name>=<value>` flag as a scripting convenience for the
+  same edit, applied like the mode-toggle flags (only at `plan`
+  generation/editing time, not at `run` — `run` executes the plan file's
+  exact contents, it doesn't accept its own overrides).
+- **Validation extends to parameters, same eager-plus-re-validate pattern as
+  rule references (§4)**: a `--param=` name must exist in the rule's
+  `parameterMetadata`, and its value must match `validationRegex` when the
+  rule declares one — checked at `plan` time (fail fast) and again at `run`
+  (TOCTOU safety net, same reasoning as §4).
+- **Result reporting needs no schema change.** `kompli-result.schema.json`'s
+  per-rule object already has a required `parameters` field — this only
+  needs the actually-used values (defaults or overrides) threaded through
+  into it, not a new field.
+- **Code prerequisite, not yet implemented**: `BenchmarkIO::Resource` doesn't
+  parse or retain `parameterMetadata` yet — see the `TODO` in `Resource.hpp`.
 
 ### `kompli run <plan-file>` — Planned
 
@@ -120,7 +179,7 @@ document covering the whole plan.
   aggregate status (doesn't drag it to `NonCompliant`) but stays visible in
   the per-rule detail.
 - Should behave identically whether execution happens in-process (today) or
-  is forwarded to `komplid` (once daemon-awareness, §6, lands) — the plan/run
+  is forwarded to `komplid` (once daemon-awareness, §7, lands) — the plan/run
   input model and the execution backend are meant to be orthogonal, so that
   landing daemon support doesn't force another CLI rework.
 
@@ -169,11 +228,52 @@ one file" until the parser actually enforces it. Today,
 see the `TODO` left in that header. This needs to land before `list`/`plan`/
 `run` can trust rule-reference uniqueness.
 
-## 6. Daemon-awareness (Phase 3, not yet designed in detail)
+Also not yet implemented: `BenchmarkIO::Resource` currently discards the raw
+`payloadKey` string once it's parsed into `benchmarkInfo` (see the `TODO` in
+`Resource.hpp`) — it needs to retain it verbatim, since `payloadKey` (not
+`ruleId`) is the identifier the rest of this design uses internally.
+
+## 6. TODO items deferred to future planning sessions
+
+Tracked here so they aren't lost, not solved in this document:
+
+- **Plan file JSON schema.** Deferred until the plan format itself finishes
+  settling — premature to write a schema for a format still in flux.
+- **Response envelope's exact `error` code taxonomy** and its formal JSON
+  schema (see the envelope draft in
+  [src/komplid/README.md](../src/komplid/README.md#wire-protocol)) — a clean
+  prose shape first, a JSON schema once that settles.
+- **Duplicate-request/parametrized-rule interaction** for task
+  deduplication — see the "attach to the existing task" note in
+  [src/komplid/README.md](../src/komplid/README.md#long-running-rules-background-tasks).
+
+## 7. Daemon-awareness (Phase 3, not yet designed in detail)
 
 `run` will eventually gain the ability to forward its per-rule requests to
-`komplid` instead of executing them in-process, behind some CLI flag (name
-not yet decided — candidates discussed: `--with-daemon`, `--passthrough`).
-See [src/komplid/README.md](../src/komplid/README.md) for the wire protocol
-this would speak. The design principle from §2 applies: this should be an
+`komplid` instead of executing them in-process, behind an explicit
+**`--passthrough` flag (decided name)**. Without it, `kompli` always runs
+standalone (today's only mode) — there is no auto-detection of `komplid`'s
+socket; the daemon is deliberately opt-in while it's still new, so standalone
+stays solid as the default. See
+[src/komplid/README.md](../src/komplid/README.md) for the wire protocol this
+would speak. The design principle from §2 applies: this should be an
 alternate backend for `run`, not a different input model.
+
+### Privilege requirement, decided
+
+- **Standalone mode** (the default — no daemon involved): always requires
+  root, no lower-privilege path. Unchanged from the original assessor's
+  posture.
+- **Passthrough mode** (`--passthrough`, once implemented): requires
+  membership in the `kompli` system group (or root) to connect to
+  `komplid`'s socket and to read `/etc/kompli/`. See
+  [src/komplid/README.md](../src/komplid/README.md#privilege-model)
+  for the full policy (socket permissions, `SO_PEERCRED`, no role separation
+  between `audit`/`remediate`/`enforce`, `/etc/kompli/definitions/` being
+  read-only for the group, and the `.deb`/`.rpm` packaging this all depends
+  on to create the `kompli` user/group).
+- **No fallback between the two.** If `--passthrough` is given but `komplid`
+  is unreachable, or the caller has neither root nor `kompli` group
+  membership, that's a clear, explicit failure — never a silent attempt to
+  run standalone instead (which would just fail confusingly if the caller
+  isn't root anyway).
