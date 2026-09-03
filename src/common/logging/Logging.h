@@ -60,7 +60,9 @@ bool IsDaemon(void);
 
 #define __PREFIX_TEMPLATE__ "[%s][%s][%s:%d] "
 #define __SHORT_FILE__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
-#define __LOG__(log, label, format, ...) printf(__PREFIX_TEMPLATE__ format "\n", GetFormattedTime(), label, __SHORT_FILE__, __LINE__, ## __VA_ARGS__)
+// Console logging goes to stderr so it never clobbers a command's stdout payload
+// (e.g. the CLI's canonical result JSON).
+#define __LOG__(log, label, format, ...) fprintf(stderr, __PREFIX_TEMPLATE__ format "\n", GetFormattedTime(), label, __SHORT_FILE__, __LINE__, ## __VA_ARGS__)
 #define __LOG_TO_FILE__(log, label, format, ...) {\
     TrimLog(log);\
     fprintf(GetLogFile(log), __PREFIX_TEMPLATE__ format "\n", GetFormattedTime(), label, __SHORT_FILE__, __LINE__, ## __VA_ARGS__);\
