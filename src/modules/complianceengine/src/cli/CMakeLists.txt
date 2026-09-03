@@ -1,0 +1,57 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+add_compile_options("-Wall;-Wextra;-Wunused;-Werror;-Wformat;-Wformat-security;-Wno-unused-result")
+set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_MODULE_PATH};${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+
+if (CMAKE_COMPILER_IS_GNUCC AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4.4.7)
+    message(FATAL_ERROR "gcc-4.4.7 or newer is needed")
+endif()
+
+SET(CMAKE_CONFIGURATION_TYPES ${CMAKE_BUILD_TYPE} CACHE STRING "" FORCE)
+
+project(kompli)
+set(target_name kompli)
+set(lib_name kompli-cli-lib)
+
+# Library: CLI options + presentation (text/JUnit formatters). Split out from
+# the binary so unit tests can link the same object code as the shipping tool
+# without rebuilding it or duplicating sources. Benchmark-definition parsing
+# and input-file security checks live in the sibling `benchmarkio` lib so they
+# can be reused by komplid (the planned daemon) without pulling in CLI-only
+# presentation code.
+set(LIB_SOURCES
+    CliOptions.cpp
+    BenchmarkFormatter.cpp
+    JUnitRenderer.cpp
+    TextRenderers.cpp
+)
+
+add_library(${lib_name} STATIC ${LIB_SOURCES})
+
+target_include_directories(${lib_name} PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${MODULES_INC_DIR}
+    )
+
+target_link_libraries(${lib_name} PUBLIC
+    logging
+    commonutils
+    parsonlib
+    complianceenginelib
+    benchmarkio
+    )
+
+add_executable(${target_name} Main.cpp)
+
+target_link_libraries(${target_name}
+    ${CMAKE_DL_LIBS}
+    ${lib_name}
+    )
+
+include(GNUInstallDirs)
+install(TARGETS ${target_name} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+if (BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

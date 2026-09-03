@@ -82,7 +82,8 @@ Key directories:
 src/modules/complianceengine/
   src/lib/              Core engine, evaluator, procedures, and Lua integration
   src/so/               Module shared-object entry point
-  src/assessor/         CLI assessor tool
+  src/benchmarkio/      Benchmark-definition parsing + input-file security (shared by kompli and komplid)
+  src/cli/              kompli CLI tool
   src/lua-evaluator/    Lua evaluator tool
   tests/                Unit tests
 ```
