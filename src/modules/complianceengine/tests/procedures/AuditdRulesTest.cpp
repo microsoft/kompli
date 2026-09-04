@@ -213,6 +213,31 @@ TEST_F(AuditdRulesCheckTest, SuppressingSyscallRuleOverridesCompliantRule)
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
 
+TEST_F(AuditdRulesCheckTest, MalformedSyscallRuleOverridesCompliantRule)
+{
+    const std::string rules = "-a always,exit -F arch=b64 -S init_module -F auid>=1000 -F auid!=unset\n"
+                              "-a always,exit -F arch=b64 -S execve,init_module -F auid!=unset\n";
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(rules)));
+
+    std::string dir = MakeTempDir();
+    ASSERT_FALSE(dir.empty());
+    std::string file = dir + "/kernel.rules";
+    WriteFile(file, rules);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", dir);
+
+    AuditdRulesParams params;
+    params.searchItem = "init_module";
+    params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-F auid>=123", "-F auid!=(unset|-1|4294967295)"};
+
+    auto result = AuditAuditdRules(params, indicators, mContext);
+
+    RemoveFile(file);
+    RemoveDir(dir);
+
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::NonCompliant);
+}
+
 // Test: syscall search non-compliant when files missing required rule
 TEST_F(AuditdRulesCheckTest, SyscallSearchFilesMissingIsNonCompliant)
 {

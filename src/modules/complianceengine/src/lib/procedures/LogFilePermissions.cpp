@@ -50,7 +50,7 @@ const std::map<std::string, std::map<std::string, std::string>> g_logfilePattern
 };
 
 // Default arguments for files that don't match any pattern.
-const std::map<std::string, std::string> g_defaultLogfileArgs = {{"owner", "root|syslog"}, {"group", "root|adm"}, {"mask", "0137"}};
+const std::map<std::string, std::string> g_defaultLogfileArgs = {{"owner", "root|syslog"}, {"group", "root|adm"}, {"mask", "0133"}};
 
 using DaemonUidSet = std::set<uid_t>;
 
@@ -104,7 +104,7 @@ FilePermissionsParams GetDefaultFilePermissionArgs(const std::string& fullPath, 
 {
     if (!remediate && daemonUids.find(statInfo.st_uid) != daemonUids.end())
     {
-        return GetFilePermissionsParams(fullPath, {{"mask", "0137"}});
+        return GetFilePermissionsParams(fullPath, {{"mask", "0133"}});
     }
 
     return GetFilePermissionsParams(fullPath, g_defaultLogfileArgs);

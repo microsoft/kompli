@@ -439,8 +439,8 @@ TEST_F(EnsureLogfileAccessTest, AuditDaemonOwnedFileWithNonDefaultOwnershipIsCom
     // Constrain the set of valid login shells so that /usr/sbin/nologin is not one of them.
     mContext.SetSpecialFilePath("/etc/shells", mContext.MakeTempfile("/bin/sh\n/bin/bash\n"));
 
-    // Default-pattern file owned by a daemon account with a mask-compliant mode (0640 & 0137 == 0).
-    CreateLogFile("customservice.log", "logdaemon", "logdaemon", 0640);
+    // Default-pattern files may be world-readable but not world-writable (0644 & 0133 == 0).
+    CreateLogFile("customservice.log", "logdaemon", "logdaemon", 0644);
 
     LogFilePermissionsParams params;
     params.path = testDir;
@@ -477,8 +477,8 @@ TEST_F(EnsureLogfileAccessTest, AuditDaemonOwnedFileWithBadMaskIsNonCompliant)
 
     mContext.SetSpecialFilePath("/etc/shells", mContext.MakeTempfile("/bin/sh\n/bin/bash\n"));
 
-    // 0644 & 0137 != 0 (world-readable), so the mask check fails even though the owner is a daemon.
-    CreateLogFile("customservice.log", "logdaemon", "logdaemon", 0644);
+    // 0664 & 0133 != 0 (group-writable), so the mask check fails even though the owner is a daemon.
+    CreateLogFile("customservice.log", "logdaemon", "logdaemon", 0664);
 
     LogFilePermissionsParams params;
     params.path = testDir;

@@ -186,6 +186,7 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
         return indicators.NonCompliant("Invalid searchItem regex: " + std::string(e.what()));
     }
     bool validRuleFound = false;
+    bool invalidRuleFound = false;
     for (const auto& rule : rules)
     {
         if (!regex_search(rule, searchItemRegex))
@@ -207,6 +208,7 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
             {
                 indicators.NonCompliant("Rule '" + rule + "' matching '" + searchItem + "' is missing required option " + req.second);
                 optionMissing = true;
+                invalidRuleFound = true;
                 break;
             }
         }
@@ -216,7 +218,7 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
             validRuleFound = true;
         }
     }
-    if (validRuleFound)
+    if (validRuleFound && !invalidRuleFound)
     {
         return Status::Compliant;
     }
