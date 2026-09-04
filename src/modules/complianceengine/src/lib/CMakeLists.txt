@@ -12,6 +12,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(PROCEDURES
     procedures/AideAttributes.cpp
+    procedures/AksCommand.cpp
     procedures/NoShellAccountsLocked.cpp
     procedures/AuditdRules.cpp
     procedures/PasswdGroupsExist.cpp
@@ -60,6 +61,7 @@ set(PROCEDURES
 )
 set(SCHEMAS
     procedures/AideAttributes.schema.json
+    procedures/AksCommand.schema.json
     procedures/NoShellAccountsLocked.schema.json
     procedures/AuditdRules.schema.json
     procedures/PasswdGroupsExist.schema.json
