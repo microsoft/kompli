@@ -5,6 +5,7 @@
 #ifndef COMPLIANCEENGINE_PROCEDURE_MAP_H
 #define COMPLIANCEENGINE_PROCEDURE_MAP_H
 
+#include <AksCommand.h>
 #include <ApparmorProfileState.h>
 #include <AuditdRules.h>
 #include <CommandOutputMatch.h>
@@ -59,6 +60,22 @@ struct Bindings;
 // Forward declaration, defined in Bindings.h
 template <typename Enum>
 const std::map<std::string, Enum>& MapEnum();
+
+// Maps the AksCommandOperation enum labels to the enum values.
+template <>
+inline const std::map<std::string, AksCommandOperation>& MapEnum<AksCommandOperation>()
+{
+    static const std::map<std::string, AksCommandOperation> map = {
+        {"CniPlugin", AksCommandOperation::CniPlugin},
+        {"ControlPlaneEndpoint", AksCommandOperation::ControlPlaneEndpoint},
+        {"PublicPrivateEndpointAccess", AksCommandOperation::PublicPrivateEndpointAccess},
+        {"NetworkPolicy", AksCommandOperation::NetworkPolicy},
+        {"GeneralPolicies", AksCommandOperation::GeneralPolicies},
+        {"PodSecurityStandards", AksCommandOperation::PodSecurityStandards},
+        {"Kubelet", AksCommandOperation::Kubelet},
+    };
+    return map;
+}
 
 // Maps the Behavior enum labels to the enum values.
 template <>
@@ -269,6 +286,16 @@ inline const std::map<std::string, SystemdConfigValueOperator>& MapEnum<SystemdC
     };
     return map;
 }
+
+// Defines the bindings for the AksCommandParams structure.
+template <>
+struct Bindings<AksCommandParams>
+{
+    using T = AksCommandParams;
+    static constexpr size_t size = 6;
+    static const char* names[];
+    static constexpr auto members = std::make_tuple(&T::operation, &T::clusterName, &T::resourceGroup, &T::nodeName, &T::pattern, &T::matchMeansCompliant);
+};
 
 // Defines the bindings for the ApparmorProfileStateParams structure.
 template <>
@@ -584,6 +611,9 @@ struct Bindings<UniqueUserIdParams>
 
 namespace std
 {
+// Returns a string representation of the AksCommandOperation enum value.
+string to_string(ComplianceEngine::AksCommandOperation value) noexcept(false); // NOLINT(*-identifier-naming)
+
 // Returns a string representation of the Behavior enum value.
 string to_string(ComplianceEngine::Behavior value) noexcept(false); // NOLINT(*-identifier-naming)
 

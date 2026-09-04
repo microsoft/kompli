@@ -9,6 +9,7 @@ include(GoogleTest)
 find_package(GTest CONFIG REQUIRED)
 
 set(PROCEDURES
+    procedures/AksCommandTest.cpp
     procedures/AuditdRulesTest.cpp
     procedures/NoShellAccountsLockedTest.cpp
     procedures/ApparmorProfileStateTest.cpp

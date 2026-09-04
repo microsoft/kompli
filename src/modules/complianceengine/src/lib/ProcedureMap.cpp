@@ -8,6 +8,9 @@
 
 namespace ComplianceEngine
 {
+// AksCommand.h:30
+const char* Bindings<AksCommandParams>::names[] = {"operation", "clusterName", "resourceGroup", "nodeName", "pattern", "matchMeansCompliant"};
+
 // ApparmorProfileState.h:15
 const char* Bindings<ApparmorProfileStateParams>::names[] = {"enforce"};
 
@@ -102,6 +105,7 @@ const char* Bindings<UniqueGroupIdParams>::names[] = {"groupName", "gid"};
 const char* Bindings<UniqueUserIdParams>::names[] = {"username", "uid", "gid"};
 
 const ProcedureMap Evaluator::mProcedureMap = {
+    {"AksCommand", {MakeHandler(AuditAksCommand), nullptr}},
     {"ApparmorProfileState", {MakeHandler(AuditApparmorProfileState), nullptr}},
     {"AuditFailure", {MakeHandler(AuditAuditFailure), nullptr}},
     {"AuditGetParamValues", {MakeHandler(AuditAuditGetParamValues), nullptr}},
@@ -161,6 +165,18 @@ const ProcedureMap Evaluator::mProcedureMap = {
 
 namespace std
 {
+string to_string(const ComplianceEngine::AksCommandOperation value) noexcept(false)
+{
+    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::AksCommandOperation>();
+    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto it = revmap.find(value);
+    if (revmap.end() == it)
+    {
+        throw std::out_of_range("Invalid enum value");
+    }
+    return it->second;
+}
+
 string to_string(const ComplianceEngine::Behavior value) noexcept(false)
 {
     const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::Behavior>();
