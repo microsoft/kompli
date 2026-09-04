@@ -139,7 +139,7 @@ using ComplianceEngine::MOF::MofResourceRange;
 using std::string;
 
 #ifdef BUILD_TELEMETRY
-static constexpr const char* telemetry_log_dir = "/var/lib/osconfig/";
+static constexpr const char* telemetry_log_dir = "/var/lib/osconfig/telemetry/";
 static constexpr const char* telemetry_log_file = "complianceengine.telemetry";
 #endif
 namespace
