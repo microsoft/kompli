@@ -4,6 +4,7 @@
 #include <CommonUtils.h>
 #include <Evaluator.h>
 #include <FilePermissions.h>
+#include <Regex.h>
 #include <Telemetry.h>
 #include <fcntl.h>
 #include <fnmatch.h>
@@ -46,6 +47,16 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
     }
     auto ftspDeleter = std::unique_ptr<FTS, int (*)(FTS*)>(ftsp, fts_close);
 
+    Optional<regex> fileRegex;
+    try
+    {
+        fileRegex = regex(params.filePattern);
+    }
+    catch (const regex_error&)
+    {
+        // Shell globs such as "*.conf" are not valid regular expressions.
+    }
+
     FTSENT* entry = nullptr;
     int numberOfCompliantFiles = 0;
     int numberOfNonCompliantFiles = 0;
@@ -53,7 +64,8 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
     {
         if (FTS_F == entry->fts_info && (recurse || entry->fts_level == 1))
         {
-            if (0 == fnmatch(params.filePattern.c_str(), entry->fts_name, 0))
+            if ((0 == fnmatch(params.filePattern.c_str(), entry->fts_name, 0)) ||
+                (fileRegex.HasValue() && regex_match(entry->fts_name, fileRegex.Value())))
             {
                 const char* fileName = entry->fts_path;
 

@@ -583,6 +583,22 @@ TEST_F(EnsureFilePermissionsTest, AuditCollectionQuestionMark)
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(EnsureFilePermissionsTest, AuditCollectionRegexPattern)
+{
+    CreateFileInDir("auditd.conf", 0, 0, 0640);
+    CreateFileInDir("audit.rules", 0, 0, 0600);
+    CreateFileInDir("ignored.txt", 0, 0, 0666);
+
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = R"(^.*\.(conf|rules)$)";
+    params.mask = 0137;
+
+    auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
 TEST_F(EnsureFilePermissionsTest, AuditCollectionNonCompliantFile)
 {
     CreateFileInDir("file1.txt", 0, 0, 0644);

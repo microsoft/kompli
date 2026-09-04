@@ -186,6 +186,33 @@ TEST_F(AuditdRulesCheckTest, SyscallSearchCompliantWithOverridePath)
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(AuditdRulesCheckTest, SuppressingSyscallRuleOverridesCompliantRule)
+{
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l"))
+        .WillOnce(Return(Result<std::string>(std::string("-a always,exit -F arch=b64 -S execve -C uid!=euid -F auid!=unset\n"
+                                                         "-a never,exit -F arch=b64 -S execve -F exe=/usr/bin/ls\n"))));
+
+    std::string dir = MakeTempDir();
+    ASSERT_FALSE(dir.empty());
+    std::string file = dir + "/execve.rules";
+    WriteFile(file, "-a always,exit -F arch=b64 -S execve -C uid!=euid -F auid!=unset\n"
+                    "-a never,exit -F arch=b64 -S execve -F exe=/usr/bin/ls\n");
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", dir);
+
+    AuditdRulesParams params;
+    params.searchItem = "-S execve";
+    params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-C (euid!=uid|uid!=euid)",
+        "-F auid!=(unset|-1|4294967295)"};
+
+    auto result = AuditAuditdRules(params, indicators, mContext);
+
+    RemoveFile(file);
+    RemoveDir(dir);
+
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::NonCompliant);
+}
+
 // Test: syscall search non-compliant when files missing required rule
 TEST_F(AuditdRulesCheckTest, SyscallSearchFilesMissingIsNonCompliant)
 {

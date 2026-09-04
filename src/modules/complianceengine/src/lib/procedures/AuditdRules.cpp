@@ -173,6 +173,8 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
     const std::vector<std::pair<regex, std::string>>& requiredRegexes, ContextInterface& context, IndicatorsTree& indicators)
 {
     regex searchItemRegex;
+    regex suppressingActionRegex(
+        R"(-a[[:space:]]+(never,exit|exit,never)([[:space:]]|$))", std::regex_constants::icase | std::regex_constants::extended);
     try
     {
         searchItemRegex = regex(searchItem);
@@ -183,6 +185,7 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
         OSConfigTelemetryStatusTrace("regex", EINVAL);
         return indicators.NonCompliant("Invalid searchItem regex: " + std::string(e.what()));
     }
+    bool validRuleFound = false;
     for (const auto& rule : rules)
     {
         if (!regex_search(rule, searchItemRegex))
@@ -192,6 +195,10 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
         if (excludeRegex.HasValue() && regex_search(rule, excludeRegex.Value()))
         {
             continue;
+        }
+        if (regex_search(rule, suppressingActionRegex))
+        {
+            return indicators.NonCompliant("Rule '" + rule + "' suppresses auditing for '" + searchItem + "'");
         }
         bool optionMissing = false;
         for (const auto& req : requiredRegexes)
@@ -205,8 +212,13 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
         }
         if (!optionMissing)
         {
-            return indicators.Compliant("Rule '" + rule + "' matching '" + searchItem + "' found  and is properly configured");
+            indicators.Compliant("Rule '" + rule + "' matching '" + searchItem + "' found  and is properly configured");
+            validRuleFound = true;
         }
+    }
+    if (validRuleFound)
+    {
+        return Status::Compliant;
     }
     return indicators.NonCompliant("Rule not found " + searchItem);
 }
