@@ -152,17 +152,17 @@ bool TelemetryManagerImpl::ProcessJsonFile(const std::string& filePath)
 
 bool TelemetryManagerImpl::ValidateEventParameters(const std::string& eventName, const std::set<std::string>& jsonKeys)
 {
+    if (!m_validateEvents)
+    {
+        OsConfigLogDebug(m_log, "Validation skipped of event type: %s", eventName.c_str());
+        return true;
+    }
+
     auto it = EVENT_PARAMETER_SETS.find(eventName);
     if (it == EVENT_PARAMETER_SETS.end())
     {
         OsConfigLogError(m_log, "Unknown event type: %s", eventName.c_str());
         return false;
-    }
-
-    if (!m_validateEvents)
-    {
-        OsConfigLogDebug(m_log, "Validation skipped of event type: %s", eventName.c_str());
-        return true;
     }
 
     const auto& requiredParams = it->second.first;
