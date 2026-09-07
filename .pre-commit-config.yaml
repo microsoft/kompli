@@ -48,9 +48,8 @@ repos:
         files: |
           (?x)(
           ^src/modules/complianceengine/src/.*\.h$|
+          ^src/modules/complianceengine/src/.*\.hpp$|
           ^src/modules/complianceengine/src/.*\.cpp$|
-          ^src/compliance-engine-assessor/.*\.hpp$|
-          ^src/compliance-engine-assessor/.*\.cpp$|
           ^src/common/telemetry/.*\.h$|
           ^src/common/telemetry/.*\.hpp$|
           ^src/common/telemetry/.*\.c$
@@ -76,9 +75,8 @@ repos:
       files: |
          (?x)(
           ^src/modules/complianceengine/.*\.h$|
+          ^src/modules/complianceengine/.*\.hpp$|
           ^src/modules/complianceengine/.*\.cpp$|
-          ^src/compliance-engine-assessor/.*\.hpp$|
-          ^src/compliance-engine-assessor/.*\.cpp$|
           ^src/common/telemetry/.*\.h$|
           ^src/common/telemetry/.*\.hpp$|
           ^src/common/telemetry/.*\.c$

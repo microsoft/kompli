@@ -1,0 +1,26 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+#
+# PLACEHOLDER: komplid is not yet a real daemon (see src/komplid/README.md).
+# Accept=yes: systemd accepts each connection itself and spawns one fresh
+# komplid@.service instance per connection - a new process per connection,
+# not a persistent worker pool. Chosen for initial simplicity; revisit for
+# Accept=no if a persistent warm process becomes worth the added complexity.
+#
+# SocketMode/SocketGroup: passthrough clients only need membership in the
+# `kompli` system group, not root - see README.md's "Privilege model" section
+# for the full policy (no role separation, SO_PEERCRED verification, no
+# fallback between standalone and passthrough modes).
+
+[Unit]
+Description=kompli daemon socket
+
+[Socket]
+ListenStream=/run/komplid.sock
+SocketMode=0660
+SocketGroup=kompli
+Accept=yes
+MaxConnections=64
+
+[Install]
+WantedBy=sockets.target

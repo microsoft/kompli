@@ -30,7 +30,7 @@ const map<string, OSType>& GetOSTypeMap()
 const map<string, Architecture>& GetArchitectureMap()
 {
     static const map<string, Architecture> sArchitectureMap = {
-        {"x86_64", Architecture::x86_64},
+        {"x86_64", Architecture::x86_64}, {"aarch64", Architecture::aarch64},
         // Add more architectures as needed
     };
     return sArchitectureMap;
