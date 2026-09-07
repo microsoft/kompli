@@ -18,15 +18,21 @@ but intentionally not scheduled yet).
 | `kompli audit <file>` | Implemented | Evaluate every rule in a benchmark-definition file, emit the canonical result JSON. |
 | `kompli remediate <file>` | Implemented | Remediate every rule in a benchmark-definition file, emit the canonical result JSON. |
 | `kompli render [file]` | Implemented | Render a canonical result JSON (from `audit`/`remediate`) into a presentation format. |
+| `kompli plan <file>` | Implemented (v1) | Generate a plan file selecting a mode (audit/remediate/enforce) per rule. See §2. |
+| `kompli run <plan-file>` | Implemented (v1) | Execute a plan file, emit the canonical result JSON. See §2. |
 
 Common flags: `-h/--help`, `-V/--version`, `-v/--verbose`, `-d/--debug`.
-`audit`/`remediate`-only: `-e/--continue-on-error`, `-l/--log-file`,
-`-s/--section` (prefix filter on a rule's dotted section). `render`-only:
-`-f/--format {junit,nested-list,compact-list,debug}` (default `junit`),
-`--suite-name`.
+`audit`/`remediate`/`run`-only: `-e/--continue-on-error`, `-l/--log-file`
+(`run` does re-check `--section` is *not* accepted - the plan already selects
+rules). `audit`/`remediate`-only: `-s/--section` (prefix filter on a rule's
+dotted section). `plan`-only: repeatable `--audit=<section>` /
+`--remediate=<section>` / `--enforce=<section>` toggles, `-o/--output`.
+`render`-only: `-f/--format {junit,nested-list,compact-list,debug}` (default
+`junit`), `--suite-name`.
 
-`audit`/`remediate` require the benchmark-definition file as a positional
-argument; a missing path or `-` is a hard error — stdin is deliberately
+`audit`/`remediate`/`plan`/`run` all require a file as a positional argument
+(the benchmark-definition file for the first three, the plan file for `run`);
+a missing path or `-` is a hard error — stdin is deliberately
 unsupported for definitions (see the input-hardening posture in
 `src/modules/complianceengine/src/cli/THREAT_MODEL.md`). `render` is a
 root-free, pure transformation and does accept stdin.
@@ -67,7 +73,7 @@ resolved form, the task registry, the audit cache). `ruleId` is a checksum
 conformance (some consumers already key off it) — it carries no information
 `payloadKey` doesn't already have, so nothing internal needs it.
 
-**Rule-identity caveat (important, not yet enforced by the parser — see §5):**
+**Rule-identity caveat (now enforced by the parser — see §5):**
 `payloadKey`/`section` is only guaranteed unique *within one benchmark-definition
 file*, not globally. Augmentation-engine-generated CIS/STIG definitions won't
 collide in practice, but kompli intends to support user-authored custom rule
@@ -75,16 +81,16 @@ sets too, which can't be guaranteed unique against anything else on the
 system. Every rule reference in a plan or a `komplid` request is therefore
 implicitly scoped to one file — there is no cross-file rule identity.
 
-### `kompli plan <file>` — Planned
+### `kompli plan <file>` — Implemented (v1)
 
 Generates a plan: **every** rule in `<file>` is seeded at `mode: audit`
 (never a mutating default). Toggle specific rules with repeatable
 `--audit=<section>` / `--remediate=<section>` / `--enforce=<section>` flags
 (`--enforce` is accepted and recorded like the others, consistent with
 keeping `enforce` in every contract even though `run`/`komplid` can't
-actually execute it yet — see §2's `enforce` note). Output goes to a file
-(exact default path/flag: **not yet decided** — candidates: write next to the
-input file, or require an explicit `-o/--output`).
+actually execute it yet — see §2's `enforce` note). **Output default,
+decided:** standard output, same as `audit`/`remediate`/`render`; `-o/--output
+<path>` writes to a file instead.
 
 **Toggle semantics, decided**: applying `--audit=X` when `X` is already
 `audit` in the plan is a no-op; it only modifies `X` if the plan currently
@@ -92,6 +98,8 @@ has it in a different mode. Same for `--remediate=`/`--enforce=`. Flags are
 applied in argument order, so `--audit=X --remediate=X` in one invocation
 resolves to `remediate` (the later flag is the one still in effect once both
 have been applied) — not an error, just ordinary last-applied-wins toggling.
+An unrecognised `--audit=`/`--remediate=`/`--enforce=` section is a hard
+error (fail fast), matching the eager-validation principle in §4.
 
 **Plan file format** (JSON — kept lean, no new parser dependency; the
 codebase already leans on `parson` everywhere and this keeps it that way):
@@ -112,7 +120,9 @@ codebase already leans on `parson` everywhere and this keeps it that way):
 
 Each rule's value is an object, not a bare mode string, so parameters travel
 alongside mode (see "Parametrization" below) rather than needing a second,
-key-synchronized map.
+key-synchronized map. **v1 limitation:** every rule's `parameters` is
+currently always an empty object — see "Parametrization" below, unchanged
+from the original design (still blocked on the same prerequisite).
 
 - `sha256` lets `run` detect that the benchmark file changed since the plan
   was generated (same integrity-verification spirit as the existing
@@ -157,40 +167,58 @@ that capability into `kompli`/`komplid` too, not just GC).
   into it, not a new field.
 - **Code prerequisite, not yet implemented**: `BenchmarkIO::Resource` doesn't
   parse or retain `parameterMetadata` yet — see the `TODO` in `Resource.hpp`.
+  **v1 status: not implemented.** `plan`/`run` (v1) only handle mode
+  selection; every rule's `parameters` is emitted/read as an empty object
+  regardless of the payload's actual parameters. Everything else in this
+  subsection remains the design for when the `Resource` prerequisite lands.
 
-### `kompli run <plan-file>` — Planned
+### `kompli run <plan-file>` — Implemented (v1)
 
 Executes a plan: for each rule present in `rules`, run it in the specified
 mode against the referenced benchmark file; emit one canonical result
 document covering the whole plan.
 
 - Re-resolves `benchmark.file` and re-checks its `sha256` against the plan's
-  recorded hash before running anything; a mismatch is at least a warning
-  (exact severity — hard error vs. warn-and-continue — **not yet decided**).
+  recorded hash before running anything. **Severity, decided: hard error.**
+  A mismatch aborts the run rather than warning and continuing — the plan's
+  rule references were only validated against the file as it existed at
+  generation time, so proceeding on a changed file would run against
+  unvalidated content.
 - Re-validates every rule reference against the (re-loaded) benchmark file —
   belt-and-suspenders with `plan`'s eager validation, since the file could
   have changed between the two commands (TOCTOU). This is drift *reduction*,
   not a hard guarantee — accepted tradeoff, not a gap to close later.
 - A rule that exists in the benchmark file but is **absent** from the plan's
-  `rules` map is not silently omitted from the result: it appears with a new
-  `Skipped` status (see §3) rather than being indistinguishable from
-  `NotApplicable` (which already means something different — "doesn't apply
-  to this OS/version"). `Skipped` rolls up like `NotApplicable` in the overall
-  aggregate status (doesn't drag it to `NonCompliant`) but stays visible in
-  the per-rule detail.
+  `rules` map is not evaluated. **v1 simplification:** it is also omitted
+  from the result entirely, rather than appearing with the designed
+  `Skipped` status (see §3) — that needs the per-rule `action` field and
+  `Skipped` status this section originally called for, which is deferred
+  (tracked in §6) since it also touches `kompli-result.schema.json`,
+  `JUnitRenderer`, and `TextRenderers`. Not implemented yet: distinguishing
+  "skipped by the plan" from "just not present in the output" in the JSON.
+- A rule set to `enforce` fails that rule with a logged error (honoring
+  `--continue-on-error`) rather than producing a result for it — `enforce`
+  has no execution backend yet (see §2's note on the reserved value).
+- Executes in-process today; forwarding to `komplid` (daemon-awareness, §7)
+  is unimplemented, so the orthogonality goal below still needs verifying
+  against a real second backend.
 - Should behave identically whether execution happens in-process (today) or
   is forwarded to `komplid` (once daemon-awareness, §7, lands) — the plan/run
   input model and the execution backend are meant to be orthogonal, so that
   landing daemon support doesn't force another CLI rework.
 
-### `kompli audit <file>` / `kompli remediate <file>` — become shorthands
+### `kompli audit <file>` / `kompli remediate <file>` — still their own execution path (v1)
 
-Once `plan`/`run` exist, these two stop being their own execution path and
-become sugar: generate a full-coverage temporary plan (every rule at the
-invoked mode) in `CliContext`'s existing per-invocation ephemeral directory
-(`/tmp/kompli-cli.XXXXXX`, already created and cleaned up today — no new
-mechanism needed), then run it. Existing invocations/scripts keep working
-unchanged; there is exactly one real execution path (`run`) underneath both.
+The original design called for `audit`/`remediate` to become sugar over
+`plan`+`run` (generate a full-coverage temporary plan, then run it). **Not
+done in v1**: `audit`/`remediate` remain a separate, direct code path in
+`Main.cpp` that applies one mode to every rule without ever materializing a
+plan file. `run`'s per-rule dispatch shares the same audit/remediate/enforce
+switch logic internally (keyed on a per-rule mode rather than the invoked
+subcommand), but `audit`/`remediate` do not go through `GeneratePlan`/
+`ParsePlanFile` at all. Existing invocations/scripts are unaffected either
+way. Revisit collapsing these into one path once the schema changes in §3
+land and make it worth the refactor.
 
 ### `kompli plan --interactive` — Deferred
 
@@ -208,7 +236,11 @@ invocation can mix modes across rules, that has to move to per-rule (each
 rule's own action), the same conclusion reached independently for `komplid`'s
 wire protocol — the CLI's own output and the daemon's output should converge
 on the same per-rule shape rather than diverging again. A new `Skipped`
-status value (§2) is also needed. Neither has been implemented yet.
+status value (§2) is also needed. **Neither has been implemented yet** —
+`run` (v1) instead derives a best-effort top-level `action`
+(`Remediation` if the plan remediates any rule, `Audit` otherwise) and
+silently omits plan-absent rules from the result rather than marking them
+`Skipped` (see §2's `run` section for both v1 simplifications). Tracked in §6.
 
 ## 4. Validation timing
 
@@ -218,25 +250,42 @@ against the benchmark file. This is intentionally redundant — good UX
 commands) — not a substitute for a real locking/transaction guarantee, which
 is out of scope here.
 
-## 5. Prerequisite not yet implemented: payload-key uniqueness
+## 5. Rule-reference uniqueness — implemented
 
-None of the above can safely rely on "a rule reference is unambiguous within
-one file" until the parser actually enforces it. Today,
+A rule reference (`section`, which plan/run key on) must be unambiguous
+within one file for any of the above to safely rely on it.
 `BenchmarkDefinition::ParseString`/`ParseFile`
-(`src/modules/complianceengine/src/benchmarkio/BenchmarkDefinition.hpp`) do
-**not** reject a document with a duplicate `payloadKey` across its rules —
-see the `TODO` left in that header. This needs to land before `list`/`plan`/
-`run` can trust rule-reference uniqueness.
+(`src/modules/complianceengine/src/benchmarkio/BenchmarkDefinition.hpp`) now
+**reject** a document with a duplicate `section`/payloadKey across its rules
+(checked as each rule is parsed; `section` is cross-validated 1:1 against the
+payloadKey it's derived from, so this also enforces payloadKey uniqueness
+without needing to retain the raw payloadKey string — see
+`BenchmarkDefinitionTest.cpp`'s `RejectsDuplicateSectionPayloadKey`).
 
-Also not yet implemented: `BenchmarkIO::Resource` currently discards the raw
+Still not implemented: `BenchmarkIO::Resource` currently discards the raw
 `payloadKey` string once it's parsed into `benchmarkInfo` (see the `TODO` in
-`Resource.hpp`) — it needs to retain it verbatim, since `payloadKey` (not
-`ruleId`) is the identifier the rest of this design uses internally.
+`Resource.hpp`) — it needs to retain it verbatim before `komplid`'s wire
+protocol (which identifies a rule by payloadKey, not section) can be built;
+plan/run (v1, in-process only) don't need it and key on `section` instead.
 
 ## 6. TODO items deferred to future planning sessions
 
 Tracked here so they aren't lost, not solved in this document:
 
+- **Per-rule `action` field + `Skipped` status** (§3) — `run` (v1) uses a
+  best-effort top-level `action` and omits plan-absent rules from the result
+  instead. Needs a `kompli-result.schema.json` change plus `JUnitRenderer`/
+  `TextRenderers` updates.
+- **`kompli list <file>`** (§2) — not implemented; `plan`/`run` (v1) assume
+  the caller already knows a benchmark's sections (e.g. from the definition
+  source or a schema-validated `data/definitions/*.benchmark.json`).
+- **Parametrization** (§2) — not implemented; blocked on `BenchmarkIO::
+  Resource` parsing/retaining `parameterMetadata` (see its `TODO`). Every
+  plan rule's `parameters` is an empty object in v1.
+- **`kompli audit`/`remediate` as literal `plan`+`run` shorthands** (§2) —
+  not implemented; they remain a separate direct code path in `Main.cpp`
+  today, sharing only the per-rule audit/remediate/enforce dispatch logic
+  with `run`.
 - **Plan file JSON schema.** Deferred until the plan format itself finishes
   settling — premature to write a schema for a format still in flux.
 - **Response envelope's exact `error` code taxonomy** and its formal JSON

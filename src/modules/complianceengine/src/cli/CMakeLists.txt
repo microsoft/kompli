@@ -25,6 +25,7 @@ set(LIB_SOURCES
     BenchmarkFormatter.cpp
     JUnitRenderer.cpp
     TextRenderers.cpp
+    Plan.cpp
 )
 
 add_library(${lib_name} STATIC ${LIB_SOURCES})
@@ -34,12 +35,18 @@ target_include_directories(${lib_name} PUBLIC
     ${MODULES_INC_DIR}
     )
 
+# Plan.cpp hashes benchmark-definition files (SHA-256, for plan/run's drift
+# check) via OpenSSL's EVP digest API.
+set(VCPKG_PACKAGES_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+find_package(OpenSSL REQUIRED NO_DEFAULT_PATH PATHS ${VCPKG_PACKAGES_DIR})
+
 target_link_libraries(${lib_name} PUBLIC
     logging
     commonutils
     parsonlib
     complianceenginelib
     benchmarkio
+    OpenSSL::Crypto
     )
 
 add_executable(${target_name} Main.cpp)

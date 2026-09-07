@@ -12,6 +12,7 @@ using ComplianceEngine::Cli::Command;
 using ComplianceEngine::Cli::Format;
 using ComplianceEngine::Cli::ParseCommandLine;
 using ComplianceEngine::Cli::PrintHelp;
+using ComplianceEngine::Cli::ToggleMode;
 
 namespace
 {
@@ -164,6 +165,8 @@ TEST(CliOptionsSmokeTest, PrintHelpListsSubcommands)
     EXPECT_NE(out.find("audit"), std::string::npos);
     EXPECT_NE(out.find("remediate"), std::string::npos);
     EXPECT_NE(out.find("render"), std::string::npos);
+    EXPECT_NE(out.find("plan"), std::string::npos);
+    EXPECT_NE(out.find("run"), std::string::npos);
 }
 
 TEST(CliOptionsSmokeTest, InvalidCommandIsError)
@@ -187,5 +190,123 @@ TEST(CliOptionsSmokeTest, EmptySectionIsError)
 TEST(CliOptionsSmokeTest, UnknownOptionIsError)
 {
     ArgvHelper a{"prog", "-z", "audit"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, PlanWithToggles)
+{
+    ArgvHelper a{"prog", "--audit=1.1", "--remediate=1.2", "--enforce=1.3", "plan", "bench.json"};
+    auto result = ParseCommandLine(a.Argc(), a.Argv());
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value().command, Command::Plan);
+    EXPECT_EQ(result.Value().input, "bench.json");
+    ASSERT_EQ(result.Value().toggles.size(), 3u);
+    EXPECT_EQ(result.Value().toggles[0].section, "1.1");
+    EXPECT_EQ(result.Value().toggles[0].mode, ToggleMode::Audit);
+    EXPECT_EQ(result.Value().toggles[1].section, "1.2");
+    EXPECT_EQ(result.Value().toggles[1].mode, ToggleMode::Remediate);
+    EXPECT_EQ(result.Value().toggles[2].section, "1.3");
+    EXPECT_EQ(result.Value().toggles[2].mode, ToggleMode::Enforce);
+}
+
+TEST(CliOptionsSmokeTest, PlanWithOutput)
+{
+    ArgvHelper a{"prog", "-o", "plan.json", "plan", "bench.json"};
+    auto result = ParseCommandLine(a.Argc(), a.Argv());
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_TRUE(result.Value().output.HasValue());
+    EXPECT_EQ(result.Value().output.Value(), "plan.json");
+}
+
+TEST(CliOptionsSmokeTest, PlanWithoutFilenameIsRejected)
+{
+    ArgvHelper a{"prog", "plan"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, PlanWithSectionIsRejected)
+{
+    ArgvHelper a{"prog", "-s", "1.1", "plan", "bench.json"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, PlanWithLogFileIsRejected)
+{
+    ArgvHelper a{"prog", "-l", "/tmp/x.log", "plan", "bench.json"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, PlanWithContinueOnErrorIsRejected)
+{
+    ArgvHelper a{"prog", "-e", "plan", "bench.json"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, FormatOnPlanIsRejected)
+{
+    ArgvHelper a{"prog", "-f", "junit", "plan", "bench.json"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, FormatOnRunIsRejected)
+{
+    ArgvHelper a{"prog", "-f", "junit", "run", "plan.json"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, RunWithPlanFilename)
+{
+    ArgvHelper a{"prog", "run", "plan.json"};
+    auto result = ParseCommandLine(a.Argc(), a.Argv());
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value().command, Command::Run);
+    EXPECT_EQ(result.Value().input, "plan.json");
+}
+
+TEST(CliOptionsSmokeTest, RunWithToggleIsRejected)
+{
+    ArgvHelper a{"prog", "--audit=1.1", "run", "plan.json"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, RunWithOutputIsRejected)
+{
+    ArgvHelper a{"prog", "-o", "x.json", "run", "plan.json"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, RunWithSectionIsRejected)
+{
+    ArgvHelper a{"prog", "-s", "1.1", "run", "plan.json"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, RunWithoutFilenameIsRejected)
+{
+    ArgvHelper a{"prog", "run"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, RunWithDashFilenameIsRejected)
+{
+    ArgvHelper a{"prog", "run", "-"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, AuditWithToggleIsRejected)
+{
+    ArgvHelper a{"prog", "--remediate=1.1", "audit", "bench.json"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, AuditWithOutputIsRejected)
+{
+    ArgvHelper a{"prog", "-o", "x.json", "audit", "bench.json"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, EmptyToggleSectionIsError)
+{
+    ArgvHelper a{"prog", "--audit=", "plan", "bench.json"};
     EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
 }

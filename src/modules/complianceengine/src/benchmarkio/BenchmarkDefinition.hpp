@@ -62,6 +62,12 @@ Result<std::vector<Resource>> ParseStream(std::istream& stream, OsConfigLogHandl
 // read, then parses it.
 Result<std::vector<Resource>> ParseFile(const std::string& path, OsConfigLogHandle logHandle);
 
+// Reads just a definition's `metadata.name` (its stable identifier, e.g.
+// "cis_ubuntu24.04") without parsing the full rule list. Applies the same
+// input-hardening posture as ParseFile. Used by `kompli plan` to stamp a
+// plan's `benchmark.name`.
+Result<std::string> ParseName(const std::string& path, OsConfigLogHandle logHandle);
+
 } // namespace BenchmarkDefinition
 } // namespace ComplianceEngine
 #endif // COMPLIANCE_ENGINE_BENCHMARKIO_BENCHMARK_DEFINITION_HPP

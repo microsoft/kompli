@@ -12,6 +12,7 @@
 #include <ext/stdio_filebuf.h>
 #include <memory>
 #include <parson.h>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -51,6 +52,32 @@ Result<string> ReadAllBounded(std::istream& stream)
         return Error("I/O error reading benchmark definition", EIO);
     }
     return content;
+}
+
+// Applies the full input-hardening posture (path-traversal rejection,
+// root-owned non-writable parent directory, O_NOFOLLOW open, regular-file/
+// ownership/mode checks) and reads the whole file into a string. Shared by
+// ParseFile and ParseName so both apply identical hardening.
+Result<string> ReadVerifiedFile(const string& path, OsConfigLogHandle logHandle)
+{
+    if (BenchmarkIO::RefusePathTraversal(path, logHandle))
+    {
+        return Error("Refusing to open benchmark definition with an unsafe path: '" + path + "'", EACCES);
+    }
+    if (BenchmarkIO::RefuseWritableParentDir(path, logHandle))
+    {
+        return Error("Refusing to open benchmark definition in a writable parent directory: '" + path + "'", EACCES);
+    }
+    auto fdResult = BenchmarkIO::OpenVerifiedInput(path, logHandle);
+    if (!fdResult.HasValue())
+    {
+        return fdResult.Error();
+    }
+
+    // stdio_filebuf takes ownership of the verified fd and closes it on destruction.
+    __gnu_cxx::stdio_filebuf<char> buffer(fdResult.Value(), std::ios_base::in);
+    std::istream stream(&buffer);
+    return ReadAllBounded(stream);
 }
 
 // Reads a required, non-empty string field from a JSON object. `context`
@@ -219,6 +246,12 @@ Result<std::vector<Resource>> ParseString(const string& json, OsConfigLogHandle 
 
     std::vector<Resource> resources;
     resources.reserve(ruleCount);
+    // Rules already seen, keyed by section (cross-validated 1:1 against the
+    // payloadKey each rule was parsed from - see ParseRule). Detects a
+    // duplicate payloadKey without needing to retain the raw string (see the
+    // TODO in Resource.hpp): the plan/run rule-reference model (docs/CLI.md)
+    // requires a rule reference to be unambiguous within one file.
+    std::set<string> seenSections;
     for (size_t i = 0; i < ruleCount; ++i)
     {
         const JSON_Object* ruleObject = json_array_get_object(rules, i);
@@ -232,6 +265,12 @@ Result<std::vector<Resource>> ParseString(const string& json, OsConfigLogHandle 
         {
             OsConfigLogError(logHandle, "Failed to parse benchmark definition rule #%zu: %s", i, resource.Error().message.c_str());
             return resource.Error();
+        }
+        if (!seenSections.insert(resource.Value().benchmarkInfo.section).second)
+        {
+            return Error("Benchmark definition rule #" + std::to_string(i) + " has a duplicate section/payloadKey: '" +
+                             resource.Value().benchmarkInfo.section + "'",
+                EINVAL);
         }
         resources.push_back(std::move(resource.Value()));
     }
@@ -251,27 +290,41 @@ Result<std::vector<Resource>> ParseStream(std::istream& stream, OsConfigLogHandl
 
 Result<std::vector<Resource>> ParseFile(const string& path, OsConfigLogHandle logHandle)
 {
-    // Apply the full input-hardening posture before reading: reject path
-    // traversal, require a root-owned non-writable parent directory, and open
-    // with O_NOFOLLOW plus regular-file/ownership/mode checks on the resulting fd.
-    if (BenchmarkIO::RefusePathTraversal(path, logHandle))
+    auto content = ReadVerifiedFile(path, logHandle);
+    if (!content.HasValue())
     {
-        return Error("Refusing to open benchmark definition with an unsafe path: '" + path + "'", EACCES);
+        return content.Error();
     }
-    if (BenchmarkIO::RefuseWritableParentDir(path, logHandle))
+    return ParseString(content.Value(), logHandle);
+}
+
+Result<string> ParseName(const string& path, OsConfigLogHandle logHandle)
+{
+    auto content = ReadVerifiedFile(path, logHandle);
+    if (!content.HasValue())
     {
-        return Error("Refusing to open benchmark definition in a writable parent directory: '" + path + "'", EACCES);
-    }
-    auto fdResult = BenchmarkIO::OpenVerifiedInput(path, logHandle);
-    if (!fdResult.HasValue())
-    {
-        return fdResult.Error();
+        return content.Error();
     }
 
-    // stdio_filebuf takes ownership of the verified fd and closes it on destruction.
-    __gnu_cxx::stdio_filebuf<char> buffer(fdResult.Value(), std::ios_base::in);
-    std::istream stream(&buffer);
-    return ParseStream(stream, logHandle);
+    auto document = JsonWrapper::FromString(content.Value());
+    if (!document.HasValue())
+    {
+        return Error("Failed to parse benchmark definition JSON: " + document.Error().message, EINVAL);
+    }
+
+    auto* root = json_value_get_object(document.Value().get());
+    if (nullptr == root)
+    {
+        return Error("Benchmark definition is not a JSON object", EINVAL);
+    }
+
+    auto* metadata = json_object_get_object(root, "metadata");
+    if (nullptr == metadata)
+    {
+        return Error("Benchmark definition is missing the 'metadata' object", EINVAL);
+    }
+
+    return RequiredString(metadata, "name", "metadata");
 }
 
 } // namespace BenchmarkDefinition

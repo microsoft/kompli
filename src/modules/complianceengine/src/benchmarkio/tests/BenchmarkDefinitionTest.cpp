@@ -41,6 +41,28 @@ const char* const kValidRule = R"({
     }
 })";
 
+// A second, distinct valid rule (different section/payloadKey/ruleId) for tests
+// that need more than one rule without tripping the duplicate-section check.
+const char* const kValidRule2 = R"({
+    "section": "1.1.1.2",
+    "ruleId": "a3e15c7a-2b3d-4e1f-9c8b-6d5a4f3e2d1c",
+    "ruleName": "EnsureFreevxfsKernelModuleIsNotAvailable",
+    "title": "1.1.1.2 Ensure freevxfs kernel module is not available",
+    "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/2",
+    "tags": ["level:l1"],
+    "metadata": {
+        "description": "d",
+        "rationale": "r",
+        "fixtext": "f",
+        "severity": "Warning",
+        "references": "x"
+    },
+    "payload": {
+        "audit": {"KernelModuleUnavailable": {"moduleName": "freevxfs"}},
+        "parameters": {}
+    }
+})";
+
 // Wraps a `spec.rules` array body into a complete benchmark-definition document.
 std::string MakeDoc(const std::string& rulesArray)
 {
@@ -81,10 +103,12 @@ TEST(BenchmarkDefinitionParserTest, ParsesValidDocument)
 
 TEST(BenchmarkDefinitionParserTest, ParsesMultipleRulesInOrder)
 {
-    const std::string rules = std::string("[") + kValidRule + "," + kValidRule + "]";
+    const std::string rules = std::string("[") + kValidRule + "," + kValidRule2 + "]";
     auto result = ParseString(MakeDoc(rules), nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    EXPECT_EQ(result.Value().size(), 2u);
+    ASSERT_EQ(result.Value().size(), 2u);
+    EXPECT_EQ(result.Value()[0].benchmarkInfo.section, "1.1.1.1");
+    EXPECT_EQ(result.Value()[1].benchmarkInfo.section, "1.1.1.2");
 }
 
 TEST(BenchmarkDefinitionParserTest, EmptyRulesArrayYieldsNoResources)
@@ -270,6 +294,31 @@ TEST(BenchmarkDefinitionParserTest, RejectsSectionPayloadKeyMismatch)
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsDuplicateSectionPayloadKey)
+{
+    // kompli's plan/run rule-reference model (docs/CLI.md) requires a rule
+    // reference to be unambiguous within one file; two rules parsed from the
+    // same payloadKey/section must be rejected rather than silently kept as
+    // separate entries with an ambiguous reference.
+    const char* const ruleA = R"({
+        "section": "1.1.1.1",
+        "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
+        "ruleName": "RuleA",
+        "title": "Rule A",
+        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    const char* const ruleB = R"({
+        "section": "1.1.1.1",
+        "ruleId": "6f5902ac-237024bd-d823-d6626c5f5d20",
+        "ruleName": "RuleB",
+        "title": "Rule B, accidental duplicate section",
+        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + ruleA + "," + ruleB + "]"), nullptr).HasValue());
 }
 
 TEST(BenchmarkDefinitionParserTest, RejectsEmbeddedNulByte)

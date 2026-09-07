@@ -14,6 +14,7 @@
 #include "CliOptions.hpp"
 #include "InputSecurity.hpp"
 #include "JUnitRenderer.hpp"
+#include "Plan.hpp"
 #include "TextRenderers.hpp"
 
 #include <CliContext.h>
@@ -48,12 +49,16 @@ using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
 using ComplianceEngine::BenchmarkIO::RefuseUnsafeLogFile;
 using ComplianceEngine::Cli::Command;
 using ComplianceEngine::Cli::Format;
+using ComplianceEngine::Cli::GeneratePlan;
 using ComplianceEngine::Cli::Options;
 using ComplianceEngine::Cli::ParseCommandLine;
+using ComplianceEngine::Cli::ParsePlanFile;
+using ComplianceEngine::Cli::Plan;
 using ComplianceEngine::Cli::PrintHelp;
 using ComplianceEngine::Cli::RenderJUnit;
 using ComplianceEngine::Cli::RenderText;
 using ComplianceEngine::Cli::TextStyle;
+using ComplianceEngine::Cli::ToggleMode;
 using std::string;
 
 namespace
@@ -136,6 +141,40 @@ int RunRender(const Options& options)
     std::cout << rendered.Value();
     return 0;
 }
+
+// Generates a plan (see docs/CLI.md) for `options.input` (the benchmark file)
+// and writes it to `options.output` or stdout. Runs without root: it only
+// reads the benchmark file and hashes it, it evaluates nothing.
+int RunPlan(const Options& options)
+{
+    auto planResult = GeneratePlan(options.input, options.toggles, nullptr);
+    if (!planResult.HasValue())
+    {
+        std::cerr << "Error: " << planResult.Error().message << std::endl;
+        return 1;
+    }
+
+    if (options.output.HasValue())
+    {
+        std::ofstream file(options.output.Value(), std::ios::binary | std::ios::trunc);
+        if (!file.is_open())
+        {
+            std::cerr << "Error: failed to open output file '" << options.output.Value() << "'." << std::endl;
+            return 1;
+        }
+        file << planResult.Value();
+        if (!file)
+        {
+            std::cerr << "Error: failed to write output file '" << options.output.Value() << "'." << std::endl;
+            return 1;
+        }
+    }
+    else
+    {
+        std::cout << planResult.Value();
+    }
+    return 0;
+}
 } // anonymous namespace
 
 int main(int argc, char* argv[])
@@ -170,6 +209,29 @@ int main(int argc, char* argv[])
     if (Command::Render == options.command)
     {
         return RunRender(options);
+    }
+
+    // `plan` is a pure, root-free transformation of a benchmark-definition file
+    // (read + hash only); it needs neither the engine nor a log file, so
+    // dispatch it early, same as `render`.
+    if (Command::Plan == options.command)
+    {
+        return RunPlan(options);
+    }
+
+    // `run` resolves and validates its plan file before anything else needs a
+    // log handle or the engine, so do that first and carry the parsed plan
+    // (and the benchmark file path it points at) forward.
+    Optional<Plan> plan;
+    if (Command::Run == options.command)
+    {
+        auto planResult = ParsePlanFile(options.input, nullptr);
+        if (!planResult.HasValue())
+        {
+            std::cerr << "Error: failed to parse plan file: " << planResult.Error().message << std::endl;
+            return 1;
+        }
+        plan = std::move(planResult.Value());
     }
 
     // Validate the log-file path before opening it. The shared logging code
@@ -228,18 +290,65 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // `audit` / `remediate` always emit the canonical JSON. The benchmark
+    // `audit` / `remediate` / `run` always emit the canonical JSON. The benchmark
     // formatter builds the result envelope; the engine is separately given a
     // JSON payload formatter (at its construction, above) to render each rule's
     // indicators. Presentation is the `render` subcommand's job.
+    //
+    // `run` can mix audit/remediate per rule; the result schema doesn't have a
+    // per-rule action field yet (tracked in docs/CLI.md), so the top-level
+    // action is a best-effort summary: Remediation if the plan remediates any
+    // rule, Audit otherwise.
+    Action topLevelAction = Action::Audit;
+    if (Command::Remediate == options.command)
+    {
+        topLevelAction = Action::Remediate;
+    }
+    else if (Command::Run == options.command)
+    {
+        for (const auto& rule : plan.Value().rules)
+        {
+            if (ToggleMode::Remediate == rule.second.mode)
+            {
+                topLevelAction = Action::Remediate;
+                break;
+            }
+        }
+    }
     const auto& distributionInfo = engine.GetDistributionInfo().Value();
-    auto formatterResult = BenchmarkFormatter::Begin(distributionInfo, options.command == Command::Audit ? Action::Audit : Action::Remediate);
+    auto formatterResult = BenchmarkFormatter::Begin(distributionInfo, topLevelAction);
     if (!formatterResult.HasValue())
     {
         OsConfigLogError(logHandle.get(), "Failed to begin formatted output: %s", formatterResult.Error().message.c_str());
         return 1;
     }
     auto& benchmarkFormatter = formatterResult.Value();
+
+    // `run` evaluates the benchmark file the plan points at, not the plan file
+    // itself; `audit`/`remediate` evaluate the file given directly on the
+    // command line.
+    const string& benchmarkFile = (Command::Run == options.command) ? plan.Value().benchmarkFile : options.input;
+
+    // `run` re-checks the benchmark file's hash against the one recorded when
+    // the plan was generated - belt-and-suspenders against drift between plan
+    // generation and execution (see docs/CLI.md §2's TOCTOU note). A mismatch
+    // is a hard error: the plan's rule references were only validated against
+    // the file as it existed at generation time.
+    if (Command::Run == options.command)
+    {
+        auto hashResult = ComplianceEngine::Cli::HashFile(benchmarkFile, logHandle.get());
+        if (!hashResult.HasValue())
+        {
+            OsConfigLogError(logHandle.get(), "Failed to hash benchmark file '%s': %s", benchmarkFile.c_str(), hashResult.Error().message.c_str());
+            return 1;
+        }
+        if (hashResult.Value() != plan.Value().benchmarkSha256)
+        {
+            OsConfigLogError(logHandle.get(), "Refusing to run plan: benchmark file '%s' has changed since the plan was generated (sha256 mismatch).",
+                benchmarkFile.c_str());
+            return 1;
+        }
+    }
 
     // Parse the input as a benchmark-definition document. Definition input is a
     // required positional file argument (enforced in ParseCommandLine); the
@@ -248,7 +357,7 @@ int main(int argc, char* argv[])
     // regular-file/ownership/mode checks) and owns the file. stdin is
     // deliberately unsupported for definitions so those integrity checks can
     // never be bypassed by piping data in.
-    auto resourcesResult = ParseFile(options.input, logHandle.get());
+    auto resourcesResult = ParseFile(benchmarkFile, logHandle.get());
     if (!resourcesResult.HasValue())
     {
         OsConfigLogError(logHandle.get(), "Failed to parse benchmark definition input: %s", resourcesResult.Error().message.c_str());
@@ -295,7 +404,24 @@ int main(int argc, char* argv[])
             }
         }
 
-        // The rule is selected for evaluation (past the section filter).
+        // `audit`/`remediate` apply the same mode to every rule. `run` looks the
+        // mode up per rule in the plan; a rule the plan doesn't mention is one
+        // the plan author deliberately left out (see docs/CLI.md §2) - skip it
+        // entirely rather than guessing a mode.
+        ToggleMode mode = (Command::Remediate == options.command) ? ToggleMode::Remediate : ToggleMode::Audit;
+        if (Command::Run == options.command)
+        {
+            const auto& rules = plan.Value().rules;
+            const auto it = rules.find(entry.benchmarkInfo.section);
+            if (it == rules.end())
+            {
+                OsConfigLogDebug(logHandle.get(), "Skipping entry %s: not present in the plan", entry.resourceID.c_str());
+                continue;
+            }
+            mode = it->second.mode;
+        }
+
+        // The rule is selected for evaluation (past the section filter / plan lookup).
         ++evaluatedRules;
 
         auto procedureResult = engine.MmiSet((string("procedure") + entry.ruleName).c_str(), entry.procedure);
@@ -310,9 +436,9 @@ int main(int argc, char* argv[])
             continue;
         }
 
-        switch (options.command)
+        switch (mode)
         {
-            case Command::Audit: {
+            case ToggleMode::Audit: {
                 if (entry.hasInitAudit)
                 {
                     // If the producer flagged InitObject support but supplied no
@@ -365,7 +491,7 @@ int main(int argc, char* argv[])
                 break;
             }
 
-            case Command::Remediate: {
+            case ToggleMode::Remediate: {
                 // Benchmark definitions carry no desired value (modelled here as
                 // an absent payload); fall back to an empty JSON object so
                 // remediation can still run, mirroring the audit-init path above.
@@ -401,8 +527,21 @@ int main(int argc, char* argv[])
                 break;
             }
 
-            default:
+            case ToggleMode::Enforce: {
+                // Reserved: `enforce` is accepted and recorded by `plan` (see
+                // docs/CLI.md) but nothing can execute it yet - active,
+                // kernel-level enforcement is a separate, not-yet-designed
+                // mechanism. Fail the rule rather than silently skipping or
+                // misreporting it as audited/remediated.
+                OsConfigLogError(logHandle.get(), "Rule %s is set to 'enforce', which is not implemented yet; no result was produced for it.",
+                    entry.resourceID.c_str());
+                if (!options.continueOnError)
+                {
+                    return 1;
+                }
+                hasError = true;
                 break;
+            }
         }
     }
 
