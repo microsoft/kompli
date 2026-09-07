@@ -177,14 +177,20 @@ TEST_F(GeneratePlanTest, SeedsEveryRuleAtAudit)
 
     auto result = GeneratePlan(path, {}, nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    const std::string& plan = result.Value();
 
-    EXPECT_NE(plan.find("\"1.1.1.1\""), std::string::npos);
-    EXPECT_NE(plan.find("\"1.1.1.2\""), std::string::npos);
-    EXPECT_NE(plan.find("\"mode\": \"audit\""), std::string::npos);
-    EXPECT_EQ(plan.find("\"mode\": \"remediate\""), std::string::npos);
-    EXPECT_NE(plan.find("\"name\": \"test_benchmark\""), std::string::npos);
-    EXPECT_NE(plan.find("\"file\": \"" + path + "\""), std::string::npos);
+    // Parse the generated plan back rather than string-matching its raw JSON:
+    // parson escapes '/' as '\/' when serializing (see parson_escape_slashes),
+    // so a literal substring search for a '/'-containing path would never match.
+    const std::string planPath = MakeVerifiedFile("plan_seed_out_dir", "plan.json", result.Value());
+    auto planResult = ParsePlanFile(planPath, nullptr);
+    ASSERT_TRUE(planResult.HasValue()) << planResult.Error().message;
+    const auto& plan = planResult.Value();
+
+    EXPECT_EQ(plan.benchmarkFile, path);
+    EXPECT_EQ(plan.benchmarkName, "test_benchmark");
+    ASSERT_EQ(plan.rules.size(), 2u);
+    EXPECT_EQ(plan.rules.at("1.1.1.1").mode, ToggleMode::Audit);
+    EXPECT_EQ(plan.rules.at("1.1.1.2").mode, ToggleMode::Audit);
 }
 
 TEST_F(GeneratePlanTest, TogglesOverrideDefaultAndLastWriteWins)
