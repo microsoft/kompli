@@ -33,14 +33,43 @@
         },
         "labels": {
           "type": "object",
-          "description": "Selectable identity axes (framework, os, distribution, distributionVersion, ...). Architecture-agnostic; the scanned host's arch is recorded in the kompli result, not here.",
+          "description": "Selectable identity axes. framework/distribution/distributionVersion are the file-level payload-key prefix, hoisted once here rather than repeated per rule (see docs/payload-key-format.md) - required, shared by every rule in this file. Architecture-agnostic; the scanned host's arch is recorded in the kompli result, not here.",
+          "required": [
+            "framework",
+            "distribution",
+            "distributionVersion"
+          ],
+          "properties": {
+            "framework": {
+              "type": "string",
+              "description": "Benchmark framework, e.g. 'cis', 'stig'."
+            },
+            "distribution": {
+              "type": "string",
+              "description": "Target Linux distribution, e.g. 'ubuntu'."
+            },
+            "distributionVersion": {
+              "type": "string",
+              "description": "Target distribution version, glob-matched against the host's VERSION_ID (e.g. '22.04', '3.*')."
+            }
+          },
           "additionalProperties": {
             "type": "string"
           }
         },
         "annotations": {
           "type": "object",
-          "description": "Non-selectable descriptive fields (e.g. displayName, benchmarkVersion).",
+          "description": "Non-selectable descriptive fields. benchmarkVersion is part of the file-level payload-key prefix (see docs/payload-key-format.md) - required, must start with 'v' (e.g. 'v2.0.0').",
+          "required": [
+            "benchmarkVersion"
+          ],
+          "properties": {
+            "benchmarkVersion": {
+              "type": "string",
+              "pattern": "^v.+",
+              "description": "Benchmark version, 'v'-prefixed (e.g. 'v2.0.0')."
+            }
+          },
           "additionalProperties": {
             "type": "string"
           }
@@ -97,7 +126,7 @@
         },
         "payloadKey": {
           "type": "string",
-          "description": "The rule's payload key, e.g. '/cis/ubuntu/22.04/v2.0.0/1/1/1/1'."
+          "description": "The rule's payload key remainder (opaque, framework-defined shape - e.g. '1/1/1/1' for CIS, 'SV-260469' for STIG). The file-level framework/distribution/distributionVersion/benchmarkVersion prefix lives once in metadata.labels/annotations (see docs/payload-key-format.md), not repeated here. Unique within a benchmark; not parsed or transformed by kompli."
         },
         "tags": {
           "type": "array",

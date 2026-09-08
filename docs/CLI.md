@@ -18,8 +18,8 @@ but intentionally not scheduled yet).
 | `kompli audit <file>` | Implemented | Evaluate every rule in a benchmark-definition file, emit the canonical result JSON. |
 | `kompli remediate <file>` | Implemented | Remediate every rule in a benchmark-definition file, emit the canonical result JSON. |
 | `kompli render [file]` | Implemented | Render a canonical result JSON (from `audit`/`remediate`) into a presentation format. |
-| `kompli plan <file>` | Implemented (v1) | Generate a plan file selecting a mode (audit/remediate/enforce) per rule. See §2. |
-| `kompli run <plan-file>` | Implemented (v1) | Execute a plan file, emit the canonical result JSON. See §2. |
+| `kompli plan <file>` | Implemented | Generate a plan file selecting a mode (audit/remediate/enforce) per rule. See §2. |
+| `kompli run <plan-file>` | Implemented | Execute a plan file (one or more benchmark files), emit one combined canonical result JSON. See §2. |
 
 Common flags: `-h/--help`, `-V/--version`, `-v/--verbose`, `-d/--debug`.
 `audit`/`remediate`/`run`-only: `-e/--continue-on-error`, `-l/--log-file`
@@ -42,7 +42,12 @@ invoked) — there is no way to mix modes, or to run a subset by anything other
 than `--section`'s prefix match. That's the gap this document's "Planned"
 section addresses.
 
-## 2. Planned: `plan` / `run`, per-rule granularity
+## 2. `plan` / `run`, per-rule granularity (implemented)
+
+> **Payload key format, keying, and the hoisted-prefix definition-file schema
+> change are specified in [payload-key-format.md](payload-key-format.md)** —
+> this section covers the CLI-facing plan/run contract only; that document is
+> the canonical source for anything about the `payloadKey` string itself.
 
 ### Why
 
@@ -61,27 +66,29 @@ what to reference before they can toggle its mode. A detail view for one rule
 (`kompli list <file> --rule=<section>`, exact flag not finalized) additionally
 shows its parameters and their defaults — needed so a user knows what's
 available to override in a plan (see "Parametrization" under `plan` below).
-Rules are referenced by
-`section` everywhere in this CLI (the dotted CIS/STIG identifier) — `section`
-is documented as the "externally-quoted per-rule identifier" in
-`benchmark.schema.json` and is meant to be human-typeable. `run` resolves
-each plan entry's `section` to a `payloadKey` via the benchmark file before
-dispatching (locally or to `komplid`) — `payloadKey`, not `ruleId`, is what
-actually identifies a rule internally (wire requests, the plan file's
-resolved form, the task registry, the audit cache). `ruleId` is a checksum
-*of* the payload key, retained in the canonical result purely for external
-conformance (some consumers already key off it) — it carries no information
-`payloadKey` doesn't already have, so nothing internal needs it.
+Rules are referenced by `section` in **CLI-facing arguments**
+(`--audit=<section>`, `-s/--section`) — `section` is documented as the
+"externally-quoted per-rule identifier" in `benchmark.schema.json` and is
+meant to be human-typeable. **The plan file itself keys rules by the full
+`payloadKey`, not `section`** (see
+[payload-key-format.md §6](payload-key-format.md#6-planrun-key-by-payload-key-not-section--decided-implemented)
+for the rationale): `payloadKey` is the field actually guaranteed unique
+within a file, and unlike `ruleId` (a checksum, opaque) it needs no lossy
+transformation to serve as a lookup key. `plan` resolves a `--audit=<section>`
+argument to its rule's `payloadKey` at generation time (`BenchmarkIO::Resource`
+retains both fields verbatim); `run` never sees `section` at all.
 
-**Rule-identity caveat (now enforced by the parser — see §5):**
-`payloadKey`/`section` is only guaranteed unique *within one benchmark-definition
-file*, not globally. Augmentation-engine-generated CIS/STIG definitions won't
-collide in practice, but kompli intends to support user-authored custom rule
-sets too, which can't be guaranteed unique against anything else on the
-system. Every rule reference in a plan or a `komplid` request is therefore
-implicitly scoped to one file — there is no cross-file rule identity.
+**Rule-identity caveat (enforced by the parser — see §5):** `payloadKey` is
+only guaranteed unique *within one benchmark-definition file*, not globally.
+Augmentation-engine-generated CIS/STIG definitions won't collide in
+practice, but kompli intends to support user-authored custom rule sets too,
+which can't be guaranteed unique against anything else on the system.
+[payload-key-format.md §7](payload-key-format.md#7-plan-format-mixing-rules-from-multiple-benchmark-files--decided-implemented)
+documents the implemented plan format that lets one plan reference *multiple*
+files' rules — each block is still independently scoped to its own file;
+there is no cross-file rule identity.
 
-### `kompli plan <file>` — Implemented (v1)
+### `kompli plan <file>` — Implemented
 
 Generates a plan: **every** rule in `<file>` is seeded at `mode: audit`
 (never a mutating default). Toggle specific rules with repeatable
@@ -102,34 +109,52 @@ An unrecognised `--audit=`/`--remediate=`/`--enforce=` section is a hard
 error (fail fast), matching the eager-validation principle in §4.
 
 **Plan file format** (JSON — kept lean, no new parser dependency; the
-codebase already leans on `parson` everywhere and this keeps it that way):
+codebase already leans on `parson` everywhere and this keeps it that way).
+One plan can span **multiple** benchmark files (see
+[payload-key-format.md §7](payload-key-format.md#7-plan-format-mixing-rules-from-multiple-benchmark-files--decided-implemented)) —
+`kompli plan <file>` (single positional argument) always generates a
+single-entry `benchmarks` array; combining plans from multiple files today is
+a manual JSON edit (concatenating `benchmarks` arrays), not yet a dedicated
+CLI feature (tracked in §6):
 
 ```jsonc
 {
-  "benchmark": {
-    "file": "cis_ubuntu24.04.benchmark.json",
-    "name": "cis_ubuntu24.04",     // from the definition's metadata.name
-    "sha256": "<hash of the file at plan-generation time>"
-  },
-  "rules": {
-    "1.1.1.1": { "mode": "audit", "parameters": { "PKG_NAME": "cramfs" } },
-    "1.1.2": { "mode": "remediate", "parameters": {} }
-  }
+  "benchmarks": [
+    {
+      "file": "cis_ubuntu24.04.benchmark.json",
+      "name": "cis_ubuntu24.04",     // from the definition's metadata.name
+      "sha256": "<hash of the file at plan-generation time>",
+      "rules": {
+        "1/1/1/1": { "mode": "audit", "parameters": { "PKG_NAME": "cramfs" } },
+        "1/1/2": { "mode": "remediate", "parameters": {} }
+      }
+    }
+  ]
 }
 ```
 
+Each `rules` map is keyed by `payloadKey` — now just the opaque remainder
+(segment 5+ of the full payload key, see
+[payload-key-format.md §1](payload-key-format.md#1-structure--decided)),
+not the full `/cis/.../...` path, since the file-level prefix
+(framework/distribution/distributionVersion/benchmarkVersion) is hoisted into
+each `benchmarks[]` entry's referenced file metadata rather than repeated per
+rule.
+
 Each rule's value is an object, not a bare mode string, so parameters travel
 alongside mode (see "Parametrization" below) rather than needing a second,
-key-synchronized map. **v1 limitation:** every rule's `parameters` is
-currently always an empty object — see "Parametrization" below, unchanged
-from the original design (still blocked on the same prerequisite).
+key-synchronized map. **Current limitation:** every rule's `parameters` is
+currently always an empty object — see "Parametrization" below (still
+blocked on the same prerequisite).
 
-- `sha256` lets `run` detect that the benchmark file changed since the plan
-  was generated (same integrity-verification spirit as the existing
-  `InputSecurity` file-hardening checks elsewhere in this codebase, applied to
-  a different threat: drift between planning and execution, not tampering).
+- Each block's `sha256` lets `run` detect that its benchmark file changed
+  since the plan was generated (same integrity-verification spirit as the
+  existing `InputSecurity` file-hardening checks elsewhere in this codebase,
+  applied to a different threat: drift between planning and execution, not
+  tampering).
 - Plans are meant to be hand-editable afterward. A rule manually **removed**
-  from the `rules` map is not an error — it's how a user narrows a plan down.
+  from a block's `rules` map is not an error — it's how a user narrows a plan
+  down. A whole `benchmarks[]` entry can be removed the same way.
 - `plan` validates every `--audit=`/`--remediate=`/`--enforce=` rule
   reference against the benchmark file eagerly (fail fast) — see §4 for why
   `run` re-validates too.
@@ -167,30 +192,41 @@ that capability into `kompli`/`komplid` too, not just GC).
   into it, not a new field.
 - **Code prerequisite, not yet implemented**: `BenchmarkIO::Resource` doesn't
   parse or retain `parameterMetadata` yet — see the `TODO` in `Resource.hpp`.
-  **v1 status: not implemented.** `plan`/`run` (v1) only handle mode
-  selection; every rule's `parameters` is emitted/read as an empty object
-  regardless of the payload's actual parameters. Everything else in this
-  subsection remains the design for when the `Resource` prerequisite lands.
+  **Status: not implemented.** `plan`/`run` only handle mode selection; every
+  rule's `parameters` is emitted/read as an empty object regardless of the
+  payload's actual parameters. Everything else in this subsection remains
+  the design for when the `Resource` prerequisite lands.
 
-### `kompli run <plan-file>` — Implemented (v1)
+### `kompli run <plan-file>` — Implemented
 
-Executes a plan: for each rule present in `rules`, run it in the specified
-mode against the referenced benchmark file; emit one canonical result
+Executes a plan: for each `benchmarks[]` entry, re-resolves its `file` and
+re-checks its `sha256` against the plan's recorded hash, re-validates
+applicability **once for that file** against the current host (see
+[payload-key-format.md §5](payload-key-format.md#5-applicability-checking-splits-by-scenario--decided-implemented)),
+then for each rule present in that block's `rules`, runs it in the specified
+mode. All blocks' results are combined into **one** canonical result
 document covering the whole plan.
 
-- Re-resolves `benchmark.file` and re-checks its `sha256` against the plan's
-  recorded hash before running anything. **Severity, decided: hard error.**
-  A mismatch aborts the run rather than warning and continuing — the plan's
-  rule references were only validated against the file as it existed at
-  generation time, so proceeding on a changed file would run against
-  unvalidated content.
-- Re-validates every rule reference against the (re-loaded) benchmark file —
-  belt-and-suspenders with `plan`'s eager validation, since the file could
+- **Severity, decided: hard error**, per block. A `sha256` mismatch aborts
+  the run rather than warning and continuing — the plan's rule references
+  were only validated against the file as it existed at generation time, so
+  proceeding on a changed file would run against unvalidated content.
+- **Cross-distro/version mismatch, decided: hard error, whole run aborts.**
+  If any block's file doesn't match the current host's distribution/version,
+  `run` fails immediately — it does **not** skip that block and continue with
+  the rest. Rationale: partial results from a plan that silently dropped a
+  mismatched benchmark would be misleading ("let's not mix too much,
+  otherwise we'd have to work with partial reports" — the deciding
+  rationale). This resolves
+  [payload-key-format.md §7](payload-key-format.md#7-plan-format-mixing-rules-from-multiple-benchmark-files--decided-implemented)'s
+  previously-open cross-distro-mixing question.
+- Re-validates every rule reference against each (re-loaded) benchmark file
+  — belt-and-suspenders with `plan`'s eager validation, since a file could
   have changed between the two commands (TOCTOU). This is drift *reduction*,
   not a hard guarantee — accepted tradeoff, not a gap to close later.
-- A rule that exists in the benchmark file but is **absent** from the plan's
-  `rules` map is not evaluated. **v1 simplification:** it is also omitted
-  from the result entirely, rather than appearing with the designed
+- A rule that exists in a benchmark file but is **absent** from that block's
+  `rules` map is not evaluated. **Current simplification:** it is also
+  omitted from the result entirely, rather than appearing with the designed
   `Skipped` status (see §3) — that needs the per-rule `action` field and
   `Skipped` status this section originally called for, which is deferred
   (tracked in §6) since it also touches `kompli-result.schema.json`,
@@ -207,11 +243,11 @@ document covering the whole plan.
   input model and the execution backend are meant to be orthogonal, so that
   landing daemon support doesn't force another CLI rework.
 
-### `kompli audit <file>` / `kompli remediate <file>` — still their own execution path (v1)
+### `kompli audit <file>` / `kompli remediate <file>` — still their own execution path
 
 The original design called for `audit`/`remediate` to become sugar over
 `plan`+`run` (generate a full-coverage temporary plan, then run it). **Not
-done in v1**: `audit`/`remediate` remain a separate, direct code path in
+done yet**: `audit`/`remediate` remain a separate, direct code path in
 `Main.cpp` that applies one mode to every rule without ever materializing a
 plan file. `run`'s per-rule dispatch shares the same audit/remediate/enforce
 switch logic internally (keyed on a per-rule mode rather than the invoked
@@ -237,10 +273,10 @@ rule's own action), the same conclusion reached independently for `komplid`'s
 wire protocol — the CLI's own output and the daemon's output should converge
 on the same per-rule shape rather than diverging again. A new `Skipped`
 status value (§2) is also needed. **Neither has been implemented yet** —
-`run` (v1) instead derives a best-effort top-level `action`
-(`Remediation` if the plan remediates any rule, `Audit` otherwise) and
-silently omits plan-absent rules from the result rather than marking them
-`Skipped` (see §2's `run` section for both v1 simplifications). Tracked in §6.
+`run` instead derives a best-effort top-level `action` (`Remediation` if any
+block remediates any rule, `Audit` otherwise) and silently omits plan-absent
+rules from the result rather than marking them `Skipped` (see §2's `run`
+section for both simplifications). Tracked in §6.
 
 ## 4. Validation timing
 
@@ -252,42 +288,58 @@ is out of scope here.
 
 ## 5. Rule-reference uniqueness — implemented
 
-A rule reference (`section`, which plan/run key on) must be unambiguous
+A rule reference (`payloadKey`, which plan/run key on) must be unambiguous
 within one file for any of the above to safely rely on it.
 `BenchmarkDefinition::ParseString`/`ParseFile`
 (`src/modules/complianceengine/src/benchmarkio/BenchmarkDefinition.hpp`) now
-**reject** a document with a duplicate `section`/payloadKey across its rules
-(checked as each rule is parsed; `section` is cross-validated 1:1 against the
-payloadKey it's derived from, so this also enforces payloadKey uniqueness
-without needing to retain the raw payloadKey string — see
-`BenchmarkDefinitionTest.cpp`'s `RejectsDuplicateSectionPayloadKey`).
+**reject** a document with a duplicate `payloadKey` across its rules (checked
+as each rule is parsed — see `BenchmarkDefinitionTest.cpp`'s
+`RejectsDuplicatePayloadKey`). `section` uniqueness is **not** separately
+enforced (see [payload-key-format.md §2](payload-key-format.md#2-the-remainder-is-opaque--decided-implemented) —
+`section` and `payloadKey` are independent fields with no required
+relationship since the remainder-derivation cross-check was removed); a plan
+author referencing a rule by a non-unique `--audit=<section>` gets whichever
+rule `GeneratePlan`'s internal `section`→`payloadKey` resolution map happens
+to have retained last for that `section` — a known, accepted sharp edge, not
+guarded against today.
 
-Still not implemented: `BenchmarkIO::Resource` currently discards the raw
-`payloadKey` string once it's parsed into `benchmarkInfo` (see the `TODO` in
-`Resource.hpp`) — it needs to retain it verbatim before `komplid`'s wire
-protocol (which identifies a rule by payloadKey, not section) can be built;
-plan/run (v1, in-process only) don't need it and key on `section` instead.
+`BenchmarkIO::Resource` retains both `section` and `payloadKey` verbatim
+(implemented — the `Resource.hpp` TODO this used to block on is resolved),
+so `komplid`'s wire protocol (which will identify a rule by `payloadKey`) has
+what it needs once that work starts.
 
 ## 6. TODO items deferred to future planning sessions
 
 Tracked here so they aren't lost, not solved in this document:
 
-- **Per-rule `action` field + `Skipped` status** (§3) — `run` (v1) uses a
+- **Per-rule `action` field + `Skipped` status** (§3) — `run` uses a
   best-effort top-level `action` and omits plan-absent rules from the result
   instead. Needs a `kompli-result.schema.json` change plus `JUnitRenderer`/
   `TextRenderers` updates.
-- **`kompli list <file>`** (§2) — not implemented; `plan`/`run` (v1) assume
-  the caller already knows a benchmark's sections (e.g. from the definition
+- **`kompli list <file>`** (§2) — not implemented; `plan`/`run` assume the
+  caller already knows a benchmark's sections (e.g. from the definition
   source or a schema-validated `data/definitions/*.benchmark.json`).
 - **Parametrization** (§2) — not implemented; blocked on `BenchmarkIO::
   Resource` parsing/retaining `parameterMetadata` (see its `TODO`). Every
-  plan rule's `parameters` is an empty object in v1.
+  plan rule's `parameters` is an empty object today.
 - **`kompli audit`/`remediate` as literal `plan`+`run` shorthands** (§2) —
   not implemented; they remain a separate direct code path in `Main.cpp`
   today, sharing only the per-rule audit/remediate/enforce dispatch logic
   with `run`.
+- **A dedicated `kompli plan --merge`-style flag** (§2) to combine multiple
+  files' plans into one, instead of the current manual-JSON-edit workaround.
 - **Plan file JSON schema.** Deferred until the plan format itself finishes
   settling — premature to write a schema for a format still in flux.
+- **`section` non-uniqueness sharp edge** (§5) — a plan author referencing a
+  non-unique `section` via `--audit=<section>` silently resolves to whichever
+  rule the internal lookup map retained; not guarded against.
+- **augmentation-engine side of the payload-key-format work has not started**
+  (see [payload-key-format.md §10](payload-key-format.md#10-augmentation-engine-side-work-not-started--blocking-gap)) —
+  every currently-committed `data/definitions/*.benchmark.json` file fails to
+  parse under the schema/validation changes above until the generator is
+  updated and the 28 files are regenerated. This blocks using real committed
+  definitions with the current kompli build, not just a hypothetical future
+  concern.
 - **Response envelope's exact `error` code taxonomy** and its formal JSON
   schema (see the envelope draft in
   [src/komplid/README.md](../src/komplid/README.md#wire-protocol)) — a clean

@@ -324,21 +324,25 @@ Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns 
 
 `kompli` (`src/modules/complianceengine/src/cli/`) is a standalone CLI tool that reads a benchmark-definition JSON file and drives the engine directly — no platform daemon, MPI, or RC/DC files are involved. Benchmark-definition parsing and the root-safe input-file checks live in the sibling `src/modules/complianceengine/src/benchmarkio/` library so `komplid` can reuse them later without depending on CLI-only presentation code.
 
-See [CLI.md](CLI.md) for the canonical, code-synced CLI contract (subcommands, flags, planned `plan`/`run` per-rule model, plan file format) — this section only summarizes what's shipped today.
+See [CLI.md](CLI.md) for the canonical, code-synced CLI contract (subcommands, flags, the `plan`/`run` per-rule model, plan file format) — this section only summarizes what's shipped today.
 
 ### Commands
 
-`kompli` has three subcommands:
+`kompli` has five subcommands:
 
 | Command | Description |
 |---|---|
 | `audit <file>` | Evaluate a benchmark-definition file and emit the canonical result JSON. |
 | `remediate <file>` | Remediate a benchmark-definition file and emit the canonical result JSON. |
 | `render [file]` | Render a canonical result JSON (from `audit`/`remediate`) into a presentation format. |
+| `plan <file>` | Generate a plan file selecting a mode (audit/remediate/enforce) per rule. |
+| `run <plan-file>` | Execute a plan file (one or more benchmark files), emit one combined canonical result JSON. |
+
+See [CLI.md §2](CLI.md#2-plan--run-per-rule-granularity-implemented) for `plan`/`run`'s full contract (plan file format, per-rule mode selection, multi-benchmark plans).
 
 ### Input
 
-`audit` / `remediate` require the benchmark-definition JSON file as a positional filename argument; a missing path or `-` is a hard error — stdin is deliberately unsupported for definitions so the file-integrity checks (root-owned non-writable parent directory, `O_NOFOLLOW` open, regular-file/ownership/mode checks) can never be bypassed by piping data into the root process. `render` is a root-free, pure transformation and does accept stdin.
+`audit` / `remediate` / `plan` / `run` require a file as a positional filename argument (the benchmark-definition file for the first three, the plan file for `run`); a missing path or `-` is a hard error — stdin is deliberately unsupported for definitions so the file-integrity checks (root-owned non-writable parent directory, `O_NOFOLLOW` open, regular-file/ownership/mode checks) can never be bypassed by piping data into the root process. `render` is a root-free, pure transformation and does accept stdin.
 
 ### Per-rule execution
 

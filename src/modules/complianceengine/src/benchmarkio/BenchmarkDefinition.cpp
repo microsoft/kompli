@@ -7,7 +7,6 @@
 
 #include <BenchmarkInfo.h>
 #include <JsonWrapper.h>
-#include <algorithm>
 #include <cerrno>
 #include <ext/stdio_filebuf.h>
 #include <memory>
@@ -56,8 +55,8 @@ Result<string> ReadAllBounded(std::istream& stream)
 
 // Applies the full input-hardening posture (path-traversal rejection,
 // root-owned non-writable parent directory, O_NOFOLLOW open, regular-file/
-// ownership/mode checks) and reads the whole file into a string. Shared by
-// ParseFile and ParseName so both apply identical hardening.
+// ownership/mode checks) and reads the whole file into a string. Used by
+// ParseFile.
 Result<string> ReadVerifiedFile(const string& path, OsConfigLogHandle logHandle)
 {
     if (BenchmarkIO::RefusePathTraversal(path, logHandle))
@@ -153,29 +152,15 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
         return procedure.Error();
     }
 
-    auto benchmarkInfo = CISBenchmarkInfo::Parse(payloadKey.Value());
-    if (!benchmarkInfo.HasValue())
-    {
-        return Error("Failed to parse payloadKey of benchmark definition " + context + ": " + benchmarkInfo.Error().message, benchmarkInfo.Error().code);
-    }
-
     Resource resource;
     resource.resourceID = std::move(title.Value());
     resource.ruleId = std::move(ruleId.Value());
-    resource.benchmarkInfo = std::move(benchmarkInfo.Value());
-    // The section in the payload key is '/'-separated (e.g. "1/1/1/1"); the rest
-    // of the caller expects dotted notation (e.g. "1.1.1.1").
-    std::replace(resource.benchmarkInfo.section.begin(), resource.benchmarkInfo.section.end(), '/', '.');
-    // The rule's explicit `section` must agree with the section encoded in the
-    // payload key (the generator derives one from the other); a mismatch is a
-    // corrupt or hand-edited definition and is rejected rather than silently
-    // resolved to the payload-key value.
-    if (section.Value() != resource.benchmarkInfo.section)
-    {
-        return Error("Benchmark definition " + context + " has a 'section' ('" + section.Value() + "') that disagrees with its payloadKey section ('" +
-                         resource.benchmarkInfo.section + "')",
-            EINVAL);
-    }
+    resource.section = std::move(section.Value());
+    // payloadKey is opaque here (see docs/payload-key-format.md §2): the
+    // file-level prefix now lives once on BenchmarkDocument::benchmarkInfo,
+    // so this is just the rule's remainder, stored verbatim - no parsing, no
+    // slash-to-dot conversion, no cross-validation against `section`.
+    resource.payloadKey = std::move(payloadKey.Value());
     resource.procedure = std::move(procedure.Value());
     resource.ruleName = std::move(ruleName.Value());
     // Every rule carries an init object.
@@ -187,7 +172,7 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
 }
 } // anonymous namespace
 
-Result<std::vector<Resource>> ParseString(const string& json, OsConfigLogHandle logHandle)
+Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logHandle)
 {
     // Fail closed on an embedded NUL. The underlying JSON parser is NUL-terminated
     // (parses via c_str()), so a NUL would silently truncate the document and hide
@@ -221,9 +206,54 @@ Result<std::vector<Resource>> ParseString(const string& json, OsConfigLogHandle 
         return apiVersion.Error();
     }
 
-    if (nullptr == json_object_get_object(root, "metadata"))
+    auto* metadata = json_object_get_object(root, "metadata");
+    if (nullptr == metadata)
     {
         return Error("Benchmark definition is missing the 'metadata' object", EINVAL);
+    }
+    auto name = RequiredString(metadata, "name", "metadata");
+    if (!name.HasValue())
+    {
+        return name.Error();
+    }
+
+    // The file-level prefix (framework/distribution/distributionVersion/
+    // benchmarkVersion) is hoisted once here rather than repeated per rule -
+    // see docs/payload-key-format.md §3.
+    auto* labels = json_object_get_object(metadata, "labels");
+    if (nullptr == labels)
+    {
+        return Error("Benchmark definition is missing the 'metadata.labels' object", EINVAL);
+    }
+    auto framework = RequiredString(labels, "framework", "metadata.labels");
+    if (!framework.HasValue())
+    {
+        return framework.Error();
+    }
+    auto distribution = RequiredString(labels, "distribution", "metadata.labels");
+    if (!distribution.HasValue())
+    {
+        return distribution.Error();
+    }
+    auto distributionVersion = RequiredString(labels, "distributionVersion", "metadata.labels");
+    if (!distributionVersion.HasValue())
+    {
+        return distributionVersion.Error();
+    }
+    auto* annotations = json_object_get_object(metadata, "annotations");
+    if (nullptr == annotations)
+    {
+        return Error("Benchmark definition is missing the 'metadata.annotations' object", EINVAL);
+    }
+    auto benchmarkVersion = RequiredString(annotations, "benchmarkVersion", "metadata.annotations");
+    if (!benchmarkVersion.HasValue())
+    {
+        return benchmarkVersion.Error();
+    }
+    auto benchmarkInfo = CISBenchmarkInfo::FromMetadata(framework.Value(), distribution.Value(), distributionVersion.Value(), benchmarkVersion.Value());
+    if (!benchmarkInfo.HasValue())
+    {
+        return Error("Benchmark definition has an invalid file-level prefix: " + benchmarkInfo.Error().message, benchmarkInfo.Error().code);
     }
 
     auto* spec = json_object_get_object(root, "spec");
@@ -244,14 +274,15 @@ Result<std::vector<Resource>> ParseString(const string& json, OsConfigLogHandle 
         return Error("Benchmark definition has more than the maximum of " + std::to_string(kMaxRules) + " rules", E2BIG);
     }
 
-    std::vector<Resource> resources;
-    resources.reserve(ruleCount);
-    // Rules already seen, keyed by section (cross-validated 1:1 against the
-    // payloadKey each rule was parsed from - see ParseRule). Detects a
-    // duplicate payloadKey without needing to retain the raw string (see the
-    // TODO in Resource.hpp): the plan/run rule-reference model (docs/CLI.md)
-    // requires a rule reference to be unambiguous within one file.
-    std::set<string> seenSections;
+    BenchmarkDocument doc;
+    doc.name = std::move(name.Value());
+    doc.benchmarkInfo = std::move(benchmarkInfo.Value());
+    doc.resources.reserve(ruleCount);
+    // Rules already seen, keyed by payloadKey - the identifier guaranteed
+    // unique within one file (docs/payload-key-format.md §1/§6); plan/run key
+    // on it directly, so a duplicate here would make a rule reference
+    // ambiguous.
+    std::set<string> seenPayloadKeys;
     for (size_t i = 0; i < ruleCount; ++i)
     {
         const JSON_Object* ruleObject = json_array_get_object(rules, i);
@@ -266,19 +297,17 @@ Result<std::vector<Resource>> ParseString(const string& json, OsConfigLogHandle 
             OsConfigLogError(logHandle, "Failed to parse benchmark definition rule #%zu: %s", i, resource.Error().message.c_str());
             return resource.Error();
         }
-        if (!seenSections.insert(resource.Value().benchmarkInfo.section).second)
+        if (!seenPayloadKeys.insert(resource.Value().payloadKey).second)
         {
-            return Error("Benchmark definition rule #" + std::to_string(i) + " has a duplicate section/payloadKey: '" +
-                             resource.Value().benchmarkInfo.section + "'",
-                EINVAL);
+            return Error("Benchmark definition rule #" + std::to_string(i) + " has a duplicate payloadKey: '" + resource.Value().payloadKey + "'", EINVAL);
         }
-        resources.push_back(std::move(resource.Value()));
+        doc.resources.push_back(std::move(resource.Value()));
     }
 
-    return resources;
+    return doc;
 }
 
-Result<std::vector<Resource>> ParseStream(std::istream& stream, OsConfigLogHandle logHandle)
+Result<BenchmarkDocument> ParseStream(std::istream& stream, OsConfigLogHandle logHandle)
 {
     auto content = ReadAllBounded(stream);
     if (!content.HasValue())
@@ -288,7 +317,7 @@ Result<std::vector<Resource>> ParseStream(std::istream& stream, OsConfigLogHandl
     return ParseString(content.Value(), logHandle);
 }
 
-Result<std::vector<Resource>> ParseFile(const string& path, OsConfigLogHandle logHandle)
+Result<BenchmarkDocument> ParseFile(const string& path, OsConfigLogHandle logHandle)
 {
     auto content = ReadVerifiedFile(path, logHandle);
     if (!content.HasValue())
@@ -296,35 +325,6 @@ Result<std::vector<Resource>> ParseFile(const string& path, OsConfigLogHandle lo
         return content.Error();
     }
     return ParseString(content.Value(), logHandle);
-}
-
-Result<string> ParseName(const string& path, OsConfigLogHandle logHandle)
-{
-    auto content = ReadVerifiedFile(path, logHandle);
-    if (!content.HasValue())
-    {
-        return content.Error();
-    }
-
-    auto document = JsonWrapper::FromString(content.Value());
-    if (!document.HasValue())
-    {
-        return Error("Failed to parse benchmark definition JSON: " + document.Error().message, EINVAL);
-    }
-
-    auto* root = json_value_get_object(document.Value().get());
-    if (nullptr == root)
-    {
-        return Error("Benchmark definition is not a JSON object", EINVAL);
-    }
-
-    auto* metadata = json_object_get_object(root, "metadata");
-    if (nullptr == metadata)
-    {
-        return Error("Benchmark definition is missing the 'metadata' object", EINVAL);
-    }
-
-    return RequiredString(metadata, "name", "metadata");
 }
 
 } // namespace BenchmarkDefinition

@@ -297,8 +297,8 @@ int main(int argc, char* argv[])
     //
     // `run` can mix audit/remediate per rule; the result schema doesn't have a
     // per-rule action field yet (tracked in docs/CLI.md), so the top-level
-    // action is a best-effort summary: Remediation if the plan remediates any
-    // rule, Audit otherwise.
+    // action is a best-effort summary: Remediation if any benchmark entry
+    // remediates any rule, Audit otherwise.
     Action topLevelAction = Action::Audit;
     if (Command::Remediate == options.command)
     {
@@ -306,12 +306,14 @@ int main(int argc, char* argv[])
     }
     else if (Command::Run == options.command)
     {
-        for (const auto& rule : plan.Value().rules)
+        for (const auto& benchmark : plan.Value().benchmarks)
         {
-            if (ToggleMode::Remediate == rule.second.mode)
+            for (const auto& rule : benchmark.rules)
             {
-                topLevelAction = Action::Remediate;
-                break;
+                if (ToggleMode::Remediate == rule.second.mode)
+                {
+                    topLevelAction = Action::Remediate;
+                }
             }
         }
     }
@@ -324,47 +326,6 @@ int main(int argc, char* argv[])
     }
     auto& benchmarkFormatter = formatterResult.Value();
 
-    // `run` evaluates the benchmark file the plan points at, not the plan file
-    // itself; `audit`/`remediate` evaluate the file given directly on the
-    // command line.
-    const string& benchmarkFile = (Command::Run == options.command) ? plan.Value().benchmarkFile : options.input;
-
-    // `run` re-checks the benchmark file's hash against the one recorded when
-    // the plan was generated - belt-and-suspenders against drift between plan
-    // generation and execution (see docs/CLI.md §2's TOCTOU note). A mismatch
-    // is a hard error: the plan's rule references were only validated against
-    // the file as it existed at generation time.
-    if (Command::Run == options.command)
-    {
-        auto hashResult = ComplianceEngine::Cli::HashFile(benchmarkFile, logHandle.get());
-        if (!hashResult.HasValue())
-        {
-            OsConfigLogError(logHandle.get(), "Failed to hash benchmark file '%s': %s", benchmarkFile.c_str(), hashResult.Error().message.c_str());
-            return 1;
-        }
-        if (hashResult.Value() != plan.Value().benchmarkSha256)
-        {
-            OsConfigLogError(logHandle.get(), "Refusing to run plan: benchmark file '%s' has changed since the plan was generated (sha256 mismatch).",
-                benchmarkFile.c_str());
-            return 1;
-        }
-    }
-
-    // Parse the input as a benchmark-definition document. Definition input is a
-    // required positional file argument (enforced in ParseCommandLine); the
-    // parser encapsulates the full input-hardening posture (path-traversal
-    // rejection, root-owned non-writable parent directory, O_NOFOLLOW open, and
-    // regular-file/ownership/mode checks) and owns the file. stdin is
-    // deliberately unsupported for definitions so those integrity checks can
-    // never be bypassed by piping data in.
-    auto resourcesResult = ParseFile(benchmarkFile, logHandle.get());
-    if (!resourcesResult.HasValue())
-    {
-        OsConfigLogError(logHandle.get(), "Failed to parse benchmark definition input: %s", resourcesResult.Error().message.c_str());
-        return 1;
-    }
-    const auto& resources = resourcesResult.Value();
-
     auto status = Status::Compliant;
     bool hasError = false;
     // Rules that passed the section filter and were evaluated. The Compliant seed
@@ -372,83 +333,144 @@ int main(int argc, char* argv[])
     // benchmark that checked nothing, so a terminal override maps that case to
     // NotApplicable below.
     size_t evaluatedRules = 0;
-    for (const auto& entry : resources)
+
+    // `audit`/`remediate` process exactly one file (options.input, the same
+    // mode for every rule); `run` processes every benchmark entry in the plan
+    // (docs/payload-key-format.md \u00a77 - a plan can mix rules from multiple
+    // files, e.g. CIS + STIG), each independently hash-checked and
+    // applicability-checked, accumulating into one combined result.
+    const size_t benchmarkCount = (Command::Run == options.command) ? plan.Value().benchmarks.size() : 1;
+    for (size_t b = 0; b < benchmarkCount; ++b)
     {
-        // Abort as soon as we encounter a rule that does not target the detected
-        // distribution/version. This mirrors ComplianceEngineCheckApplicability
-        // in the module interface: the benchmark's distribution must match and
-        // its version glob must match the running system's VERSION_ID. Every
-        // rule in a definition belongs to the same benchmark, so a single
-        // mismatch means the whole definition targets another system (or this
-        // system was misdetected); running any of its rules would report
-        // spurious results.
-        const auto& distributionInfo = engine.GetDistributionInfo().Value();
-        if (!entry.benchmarkInfo.Match(distributionInfo))
+        const string& benchmarkFile = (Command::Run == options.command) ? plan.Value().benchmarks[b].file : options.input;
+
+        // `run` re-checks each benchmark file's hash against the one recorded
+        // when the plan was generated - belt-and-suspenders against drift
+        // between plan generation and execution (see docs/CLI.md \u00a72's TOCTOU
+        // note). A mismatch is a hard error: the plan's rule references were
+        // only validated against the file as it existed at generation time.
+        if (Command::Run == options.command)
         {
-            OsConfigLogError(logHandle.get(), "Aborting on entry %s: benchmark is not applicable for the current distribution", entry.resourceID.c_str());
+            auto hashResult = ComplianceEngine::Cli::HashFile(benchmarkFile, logHandle.get());
+            if (!hashResult.HasValue())
+            {
+                OsConfigLogError(logHandle.get(), "Failed to hash benchmark file '%s': %s", benchmarkFile.c_str(), hashResult.Error().message.c_str());
+                return 1;
+            }
+            if (hashResult.Value() != plan.Value().benchmarks[b].sha256)
+            {
+                OsConfigLogError(logHandle.get(),
+                    "Refusing to run plan: benchmark file '%s' has changed since the plan was generated (sha256 mismatch).", benchmarkFile.c_str());
+                return 1;
+            }
+        }
+
+        // Parse the input as a benchmark-definition document. Definition input is a
+        // required positional file argument (enforced in ParseCommandLine); the
+        // parser encapsulates the full input-hardening posture (path-traversal
+        // rejection, root-owned non-writable parent directory, O_NOFOLLOW open, and
+        // regular-file/ownership/mode checks) and owns the file. stdin is
+        // deliberately unsupported for definitions so those integrity checks can
+        // never be bypassed by piping data in.
+        auto docResult = ParseFile(benchmarkFile, logHandle.get());
+        if (!docResult.HasValue())
+        {
+            OsConfigLogError(logHandle.get(), "Failed to parse benchmark definition input: %s", docResult.Error().message.c_str());
+            return 1;
+        }
+        const auto& doc = docResult.Value();
+
+        // Validate applicability once per file (docs/payload-key-format.md \u00a75) -
+        // every rule in one file shares the same distro/version prefix, so this
+        // is the only check possible now that rules no longer carry their own
+        // (see BenchmarkIO::Resource). A mismatch hard-fails the whole run: for
+        // `run`, mixing a mismatched benchmark entry into an otherwise-valid
+        // plan is treated as an authoring mistake, not something to silently
+        // skip and report a partial result for.
+        if (!doc.benchmarkInfo.Match(distributionInfo))
+        {
+            OsConfigLogError(logHandle.get(), "Aborting on benchmark '%s': not applicable for the current distribution", benchmarkFile.c_str());
             OsConfigLogError(logHandle.get(), "Current system identification: %s", std::to_string(distributionInfo).c_str());
             auto overridden = distributionInfo;
-            overridden.distribution = entry.benchmarkInfo.distribution;
-            overridden.version = entry.benchmarkInfo.SanitizedVersion();
+            overridden.distribution = doc.benchmarkInfo.distribution;
+            overridden.version = doc.benchmarkInfo.SanitizedVersion();
             OsConfigLogError(logHandle.get(), "To override this detection, place the following line inside the '%s' file: %s",
                 DistributionInfo::cDefaultOverrideFilePath, std::to_string(overridden).c_str());
             return 1;
         }
 
-        if (options.section.HasValue())
+        for (const auto& entry : doc.resources)
         {
-            if (entry.benchmarkInfo.section.find(options.section.Value()) != 0)
+            if (options.section.HasValue())
             {
-                OsConfigLogDebug(logHandle.get(), "Skipping entry %s as it does not match section %s", entry.resourceID.c_str(), options.section.Value().c_str());
-                continue;
-            }
-        }
-
-        // `audit`/`remediate` apply the same mode to every rule. `run` looks the
-        // mode up per rule in the plan; a rule the plan doesn't mention is one
-        // the plan author deliberately left out (see docs/CLI.md §2) - skip it
-        // entirely rather than guessing a mode.
-        ToggleMode mode = (Command::Remediate == options.command) ? ToggleMode::Remediate : ToggleMode::Audit;
-        if (Command::Run == options.command)
-        {
-            const auto& rules = plan.Value().rules;
-            const auto it = rules.find(entry.benchmarkInfo.section);
-            if (it == rules.end())
-            {
-                OsConfigLogDebug(logHandle.get(), "Skipping entry %s: not present in the plan", entry.resourceID.c_str());
-                continue;
-            }
-            mode = it->second.mode;
-        }
-
-        // The rule is selected for evaluation (past the section filter / plan lookup).
-        ++evaluatedRules;
-
-        auto procedureResult = engine.MmiSet((string("procedure") + entry.ruleName).c_str(), entry.procedure);
-        if (!procedureResult.HasValue())
-        {
-            OsConfigLogError(logHandle.get(), "Failed to set procedure: %s", procedureResult.Error().message.c_str());
-            if (!options.continueOnError)
-            {
-                return 1;
-            }
-            hasError = true;
-            continue;
-        }
-
-        switch (mode)
-        {
-            case ToggleMode::Audit: {
-                if (entry.hasInitAudit)
+                if (entry.section.find(options.section.Value()) != 0)
                 {
-                    // If the producer flagged InitObject support but supplied no
-                    // desired value, fall back to an empty JSON object so we
-                    // don't deref an empty Optional.
-                    const string initPayload = entry.payload.HasValue() ? entry.payload.Value() : string("{}");
-                    auto result = engine.MmiSet((string("init") + entry.ruleName).c_str(), initPayload);
+                    OsConfigLogDebug(logHandle.get(), "Skipping entry %s as it does not match section %s", entry.resourceID.c_str(),
+                        options.section.Value().c_str());
+                    continue;
+                }
+            }
+
+            // `audit`/`remediate` apply the same mode to every rule. `run`
+            // looks the mode up per rule in this benchmark entry, keyed by
+            // payloadKey (docs/payload-key-format.md \u00a76) - a rule the plan
+            // doesn't mention is one the plan author deliberately left out,
+            // skip it entirely rather than guessing a mode.
+            ToggleMode mode = (Command::Remediate == options.command) ? ToggleMode::Remediate : ToggleMode::Audit;
+            if (Command::Run == options.command)
+            {
+                const auto& rules = plan.Value().benchmarks[b].rules;
+                const auto it = rules.find(entry.payloadKey);
+                if (it == rules.end())
+                {
+                    OsConfigLogDebug(logHandle.get(), "Skipping entry %s: not present in the plan", entry.resourceID.c_str());
+                    continue;
+                }
+                mode = it->second.mode;
+            }
+
+            // The rule is selected for evaluation (past the section filter / plan lookup).
+            ++evaluatedRules;
+
+            auto procedureResult = engine.MmiSet((string("procedure") + entry.ruleName).c_str(), entry.procedure);
+            if (!procedureResult.HasValue())
+            {
+                OsConfigLogError(logHandle.get(), "Failed to set procedure: %s", procedureResult.Error().message.c_str());
+                if (!options.continueOnError)
+                {
+                    return 1;
+                }
+                hasError = true;
+                continue;
+            }
+
+            switch (mode)
+            {
+                case ToggleMode::Audit: {
+                    if (entry.hasInitAudit)
+                    {
+                        // If the producer flagged InitObject support but supplied no
+                        // desired value, fall back to an empty JSON object so we
+                        // don't deref an empty Optional.
+                        const string initPayload = entry.payload.HasValue() ? entry.payload.Value() : string("{}");
+                        auto result = engine.MmiSet((string("init") + entry.ruleName).c_str(), initPayload);
+                        if (!result.HasValue())
+                        {
+                            OsConfigLogError(logHandle.get(), "Failed to init audit: %s", result.Error().message.c_str());
+                            if (!options.continueOnError)
+                            {
+                                return 1;
+                            }
+                            hasError = true;
+                            continue;
+                        }
+                    }
+
+                    auto ruleName = string("audit") + entry.ruleName;
+                    auto result = engine.MmiGet(ruleName.c_str());
                     if (!result.HasValue())
                     {
-                        OsConfigLogError(logHandle.get(), "Failed to init audit: %s", result.Error().message.c_str());
+                        OsConfigLogError(logHandle.get(), "Failed to perform audit: %s", result.Error().message.c_str());
                         if (!options.continueOnError)
                         {
                             return 1;
@@ -456,91 +478,78 @@ int main(int argc, char* argv[])
                         hasError = true;
                         continue;
                     }
+
+                    auto error = benchmarkFormatter.AddEntry(entry, result.Value().status, result.Value().payload, engine.GetParameters(entry.ruleName));
+                    if (error)
+                    {
+                        OsConfigLogError(logHandle.get(), "Failed to add entry to JSON formatter: %s", error.Value().message.c_str());
+                        if (!options.continueOnError)
+                        {
+                            return 1;
+                        }
+                        hasError = true;
+                        continue;
+                    }
+
+                    // Aggregate the overall benchmark status the same way the engine
+                    // aggregates an allOf (CombineAllOf): NonCompliant dominates,
+                    // NotApplicable is sticky, otherwise Compliant.
+                    status = CombineAllOf(status, result.Value().status);
+
+                    break;
                 }
 
-                auto ruleName = string("audit") + entry.ruleName;
-                auto result = engine.MmiGet(ruleName.c_str());
-                if (!result.HasValue())
-                {
-                    OsConfigLogError(logHandle.get(), "Failed to perform audit: %s", result.Error().message.c_str());
+                case ToggleMode::Remediate: {
+                    // Benchmark definitions carry no desired value (modelled here as
+                    // an absent payload); fall back to an empty JSON object so
+                    // remediation can still run, mirroring the audit-init path above.
+                    const string remediatePayload = entry.payload.HasValue() ? entry.payload.Value() : string("{}");
+                    auto ruleName = string("remediate") + entry.ruleName;
+                    auto result = engine.MmiSet(ruleName.c_str(), remediatePayload);
+                    if (!result.HasValue())
+                    {
+                        OsConfigLogError(logHandle.get(), "Failed to remediate: %s", result.Error().message.c_str());
+                        if (!options.continueOnError)
+                        {
+                            return 1;
+                        }
+                        hasError = true;
+                        continue;
+                    }
+
+                    auto error = benchmarkFormatter.AddEntry(entry, result.Value(), "[]", engine.GetParameters(entry.ruleName));
+                    if (error)
+                    {
+                        OsConfigLogError(logHandle.get(), "Failed to add entry to JSON formatter: %s", error.Value().message.c_str());
+                        if (!options.continueOnError)
+                        {
+                            return 1;
+                        }
+                        hasError = true;
+                        continue;
+                    }
+
+                    // Same allOf aggregation as the audit path.
+                    status = CombineAllOf(status, result.Value());
+
+                    break;
+                }
+
+                case ToggleMode::Enforce: {
+                    // Reserved: `enforce` is accepted and recorded by `plan` (see
+                    // docs/CLI.md) but nothing can execute it yet - active,
+                    // kernel-level enforcement is a separate, not-yet-designed
+                    // mechanism. Fail the rule rather than silently skipping or
+                    // misreporting it as audited/remediated.
+                    OsConfigLogError(logHandle.get(), "Rule %s is set to 'enforce', which is not implemented yet; no result was produced for it.",
+                        entry.resourceID.c_str());
                     if (!options.continueOnError)
                     {
                         return 1;
                     }
                     hasError = true;
-                    continue;
+                    break;
                 }
-
-                auto error = benchmarkFormatter.AddEntry(entry, result.Value().status, result.Value().payload, engine.GetParameters(entry.ruleName));
-                if (error)
-                {
-                    OsConfigLogError(logHandle.get(), "Failed to add entry to JSON formatter: %s", error.Value().message.c_str());
-                    if (!options.continueOnError)
-                    {
-                        return 1;
-                    }
-                    hasError = true;
-                    continue;
-                }
-
-                // Aggregate the overall benchmark status the same way the engine
-                // aggregates an allOf (CombineAllOf): NonCompliant dominates,
-                // NotApplicable is sticky, otherwise Compliant.
-                status = CombineAllOf(status, result.Value().status);
-
-                break;
-            }
-
-            case ToggleMode::Remediate: {
-                // Benchmark definitions carry no desired value (modelled here as
-                // an absent payload); fall back to an empty JSON object so
-                // remediation can still run, mirroring the audit-init path above.
-                const string remediatePayload = entry.payload.HasValue() ? entry.payload.Value() : string("{}");
-                auto ruleName = string("remediate") + entry.ruleName;
-                auto result = engine.MmiSet(ruleName.c_str(), remediatePayload);
-                if (!result.HasValue())
-                {
-                    OsConfigLogError(logHandle.get(), "Failed to remediate: %s", result.Error().message.c_str());
-                    if (!options.continueOnError)
-                    {
-                        return 1;
-                    }
-                    hasError = true;
-                    continue;
-                }
-
-                auto error = benchmarkFormatter.AddEntry(entry, result.Value(), "[]", engine.GetParameters(entry.ruleName));
-                if (error)
-                {
-                    OsConfigLogError(logHandle.get(), "Failed to add entry to JSON formatter: %s", error.Value().message.c_str());
-                    if (!options.continueOnError)
-                    {
-                        return 1;
-                    }
-                    hasError = true;
-                    continue;
-                }
-
-                // Same allOf aggregation as the audit path.
-                status = CombineAllOf(status, result.Value());
-
-                break;
-            }
-
-            case ToggleMode::Enforce: {
-                // Reserved: `enforce` is accepted and recorded by `plan` (see
-                // docs/CLI.md) but nothing can execute it yet - active,
-                // kernel-level enforcement is a separate, not-yet-designed
-                // mechanism. Fail the rule rather than silently skipping or
-                // misreporting it as audited/remediated.
-                OsConfigLogError(logHandle.get(), "Rule %s is set to 'enforce', which is not implemented yet; no result was produced for it.",
-                    entry.resourceID.c_str());
-                if (!options.continueOnError)
-                {
-                    return 1;
-                }
-                hasError = true;
-                break;
             }
         }
     }

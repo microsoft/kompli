@@ -232,9 +232,11 @@ or write it directly.
     doesn't already have, so nothing internal (wire requests, the plan file,
     the task registry, the audit cache) needs to reference it. Only
     `payloadKey` is used internally. **Code note**: `BenchmarkIO::Resource`
-    currently discards the raw `payloadKey` after parsing it into
-    `benchmarkInfo` (see `Resource.hpp`) — it needs to retain it verbatim
-    before any of this can be implemented.
+    now retains `payloadKey` verbatim (see `Resource.hpp`), and it's the
+    opaque remainder only (the hoisted file-level prefix lives on
+    `BenchmarkDocument::benchmarkInfo` instead — see
+    [docs/payload-key-format.md §3](../../docs/payload-key-format.md#3-unified-definition-file-hoisted-prefix--decided-implemented-kompli-side-only--see-10)) —
+    this prerequisite is done.
 - **Connection scope: one connection per session, many sequential
   requests.** Decided. `Accept=yes` spawns one process per *connection*, not
   per request — so a whole benchmark run is one connection carrying many

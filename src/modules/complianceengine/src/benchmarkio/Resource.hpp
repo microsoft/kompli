@@ -4,7 +4,6 @@
 #ifndef COMPLIANCE_ENGINE_BENCHMARKIO_RESOURCE_HPP
 #define COMPLIANCE_ENGINE_BENCHMARKIO_RESOURCE_HPP
 
-#include <BenchmarkInfo.h>
 #include <Optional.h>
 #include <string>
 
@@ -29,18 +28,21 @@ struct Resource
     // reliably rather than matching on ruleName/section.
     std::string ruleId;
 
-    // Benchmark identity parsed from the rule's payload key. `.distribution` and
-    // `.version` drive the applicability check in the main loop (Match against
-    // the detected system); `.section` drives section filtering (main loop and
-    // JSON formatter).
-    //
-    // TODO(komplid wire protocol, see docs/CLI.md and src/komplid/README.md):
-    // the raw payloadKey string this is parsed from is currently discarded
-    // once parsed (see BenchmarkDefinition.cpp). The planned per-rule wire
-    // protocol identifies a rule by payloadKey, not ruleId (ruleId is a
-    // checksum of it, kept only for external conformance) - this struct will
-    // need to retain the raw payloadKey verbatim before that can be built.
-    CISBenchmarkInfo benchmarkInfo;
+    // Externally-quoted per-rule identifier (dotted CIS section, STIG
+    // SV-XXXXX id, etc. - see docs/payload-key-format.md). Display/CLI-facing
+    // only (section filtering, --audit=<section> toggle resolution); verbatim
+    // copy of the rule's explicit `section` field, no longer required to be
+    // re-derivable from payloadKey (see BenchmarkDefinition.cpp).
+    std::string section;
+
+    // The rule's payload key, opaque beyond being unique within one file (see
+    // docs/payload-key-format.md \u00a72) - the identifier plan/run/the wire
+    // protocol/the task registry/the audit cache key on internally. Verbatim
+    // copy of the rule's `payloadKey` field; kompli never parses or transforms
+    // its contents (no distro/version live here anymore - see
+    // BenchmarkDefinition::BenchmarkDocument for the file-level prefix that
+    // used to be repeated per rule).
+    std::string payloadKey;
 
     // The rule payload serialized as JSON. Passed to the ComplianceEngine as the
     // procedure; the engine parses plain JSON directly (Engine::SetProcedure).

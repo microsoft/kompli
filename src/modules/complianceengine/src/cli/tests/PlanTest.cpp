@@ -31,14 +31,14 @@ using ComplianceEngine::Cli::ToggleMode;
 namespace
 {
 // A minimal, schema-valid benchmark definition with two rules
-// (section "1.1.1.1" and "1.1.1.2").
+// (section "1.1.1.1" and "1.1.1.2", payloadKey "1/1/1/1" and "1/1/1/2").
 const char* const kBenchmarkJson = R"({
   "apiVersion": "v1",
   "kind": "BenchmarkDefinition",
   "metadata": {
     "name": "test_benchmark",
-    "labels": {},
-    "annotations": {}
+    "labels": {"framework": "cis", "distribution": "ubuntu", "distributionVersion": "22.04"},
+    "annotations": {"benchmarkVersion": "v1.0.0"}
   },
   "spec": {
     "rules": [
@@ -47,7 +47,7 @@ const char* const kBenchmarkJson = R"({
         "ruleId": "00000000-0000-0000-0000-000000000001",
         "ruleName": "TestingProceduresPass",
         "title": "Rule one",
-        "payloadKey": "/cis/ubuntu/22.04/v1.0.0/1/1/1/1",
+        "payloadKey": "1/1/1/1",
         "tags": [],
         "metadata": {"description": "", "rationale": "", "fixtext": "", "references": "", "severity": "Low"},
         "payload": {"audit": {}, "remediate": {}, "parameters": {}}
@@ -57,7 +57,7 @@ const char* const kBenchmarkJson = R"({
         "ruleId": "00000000-0000-0000-0000-000000000002",
         "ruleName": "TestingProceduresPass",
         "title": "Rule two",
-        "payloadKey": "/cis/ubuntu/22.04/v1.0.0/1/1/1/2",
+        "payloadKey": "1/1/1/2",
         "tags": [],
         "metadata": {"description": "", "rationale": "", "fixtext": "", "references": "", "severity": "Low"},
         "payload": {"audit": {}, "remediate": {}, "parameters": {}}
@@ -186,11 +186,13 @@ TEST_F(GeneratePlanTest, SeedsEveryRuleAtAudit)
     ASSERT_TRUE(planResult.HasValue()) << planResult.Error().message;
     const auto& plan = planResult.Value();
 
-    EXPECT_EQ(plan.benchmarkFile, path);
-    EXPECT_EQ(plan.benchmarkName, "test_benchmark");
-    ASSERT_EQ(plan.rules.size(), 2u);
-    EXPECT_EQ(plan.rules.at("1.1.1.1").mode, ToggleMode::Audit);
-    EXPECT_EQ(plan.rules.at("1.1.1.2").mode, ToggleMode::Audit);
+    ASSERT_EQ(plan.benchmarks.size(), 1u);
+    const auto& benchmark = plan.benchmarks[0];
+    EXPECT_EQ(benchmark.file, path);
+    EXPECT_EQ(benchmark.name, "test_benchmark");
+    ASSERT_EQ(benchmark.rules.size(), 2u);
+    EXPECT_EQ(benchmark.rules.at("1/1/1/1").mode, ToggleMode::Audit);
+    EXPECT_EQ(benchmark.rules.at("1/1/1/2").mode, ToggleMode::Audit);
 }
 
 TEST_F(GeneratePlanTest, TogglesOverrideDefaultAndLastWriteWins)
@@ -214,12 +216,13 @@ TEST_F(GeneratePlanTest, TogglesOverrideDefaultAndLastWriteWins)
     const std::string planPath = MakeVerifiedFile("plan_out_dir", "plan.json", result.Value());
     auto planResult = ParsePlanFile(planPath, nullptr);
     ASSERT_TRUE(planResult.HasValue()) << planResult.Error().message;
-    const auto& plan = planResult.Value();
+    ASSERT_EQ(planResult.Value().benchmarks.size(), 1u);
+    const auto& rules = planResult.Value().benchmarks[0].rules;
 
-    ASSERT_EQ(plan.rules.count("1.1.1.1"), 1u);
-    EXPECT_EQ(plan.rules.at("1.1.1.1").mode, ToggleMode::Audit);
-    ASSERT_EQ(plan.rules.count("1.1.1.2"), 1u);
-    EXPECT_EQ(plan.rules.at("1.1.1.2").mode, ToggleMode::Enforce);
+    ASSERT_EQ(rules.count("1/1/1/1"), 1u);
+    EXPECT_EQ(rules.at("1/1/1/1").mode, ToggleMode::Audit);
+    ASSERT_EQ(rules.count("1/1/1/2"), 1u);
+    EXPECT_EQ(rules.at("1/1/1/2").mode, ToggleMode::Enforce);
 }
 
 TEST_F(GeneratePlanTest, UnknownSectionInToggleIsRejected)
@@ -242,26 +245,26 @@ TEST_F(ParsePlanFileTest, ParsesValidPlan)
         GTEST_SKIP() << "chown requires root";
     }
     const char* const planJson = R"({
-      "benchmark": {"file": "/etc/kompli/definitions/x.benchmark.json", "name": "x", "sha256": "abc123"},
-      "rules": {
-        "1.1.1.1": {"mode": "audit", "parameters": {}},
-        "1.1.1.2": {"mode": "remediate", "parameters": {}}
-      }
+      "benchmarks": [{"file": "/etc/kompli/definitions/x.benchmark.json", "name": "x", "sha256": "abc123", "rules": {
+        "1/1/1/1": {"mode": "audit", "parameters": {}},
+        "1/1/1/2": {"mode": "remediate", "parameters": {}}
+      }}]
     })";
     const std::string path = MakeVerifiedFile("parse_plan_dir", "plan.json", planJson);
 
     auto result = ParsePlanFile(path, nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    const auto& plan = result.Value();
-    EXPECT_EQ(plan.benchmarkFile, "/etc/kompli/definitions/x.benchmark.json");
-    EXPECT_EQ(plan.benchmarkName, "x");
-    EXPECT_EQ(plan.benchmarkSha256, "abc123");
-    ASSERT_EQ(plan.rules.size(), 2u);
-    EXPECT_EQ(plan.rules.at("1.1.1.1").mode, ToggleMode::Audit);
-    EXPECT_EQ(plan.rules.at("1.1.1.2").mode, ToggleMode::Remediate);
+    ASSERT_EQ(result.Value().benchmarks.size(), 1u);
+    const auto& benchmark = result.Value().benchmarks[0];
+    EXPECT_EQ(benchmark.file, "/etc/kompli/definitions/x.benchmark.json");
+    EXPECT_EQ(benchmark.name, "x");
+    EXPECT_EQ(benchmark.sha256, "abc123");
+    ASSERT_EQ(benchmark.rules.size(), 2u);
+    EXPECT_EQ(benchmark.rules.at("1/1/1/1").mode, ToggleMode::Audit);
+    EXPECT_EQ(benchmark.rules.at("1/1/1/2").mode, ToggleMode::Remediate);
 }
 
-TEST_F(ParsePlanFileTest, RejectsMissingBenchmarkObject)
+TEST_F(ParsePlanFileTest, RejectsMissingBenchmarksArray)
 {
     if (::geteuid() != 0)
     {
@@ -274,6 +277,41 @@ TEST_F(ParsePlanFileTest, RejectsMissingBenchmarkObject)
     EXPECT_FALSE(result.HasValue());
 }
 
+TEST_F(ParsePlanFileTest, RejectsEmptyBenchmarksArray)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const char* const planJson = R"({"benchmarks": []})";
+    const std::string path = MakeVerifiedFile("parse_plan_dir_empty", "plan.json", planJson);
+
+    auto result = ParsePlanFile(path, nullptr);
+    EXPECT_FALSE(result.HasValue());
+}
+
+TEST_F(ParsePlanFileTest, ParsesMultipleBenchmarkEntries)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const char* const planJson = R"({
+      "benchmarks": [
+        {"file": "/etc/kompli/definitions/cis.benchmark.json", "name": "cis", "sha256": "abc", "rules": {"1/1/1/1": {"mode": "audit", "parameters": {}}}},
+        {"file": "/etc/kompli/definitions/stig.benchmark.json", "name": "stig", "sha256": "def", "rules": {"SV-1": {"mode": "remediate", "parameters": {}}}}
+      ]
+    })";
+    const std::string path = MakeVerifiedFile("parse_plan_dir_multi", "plan.json", planJson);
+
+    auto result = ParsePlanFile(path, nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    ASSERT_EQ(result.Value().benchmarks.size(), 2u);
+    EXPECT_EQ(result.Value().benchmarks[0].name, "cis");
+    EXPECT_EQ(result.Value().benchmarks[1].name, "stig");
+    EXPECT_EQ(result.Value().benchmarks[1].rules.at("SV-1").mode, ToggleMode::Remediate);
+}
+
 TEST_F(ParsePlanFileTest, RejectsInvalidMode)
 {
     if (::geteuid() != 0)
@@ -281,8 +319,7 @@ TEST_F(ParsePlanFileTest, RejectsInvalidMode)
         GTEST_SKIP() << "chown requires root";
     }
     const char* const planJson = R"({
-      "benchmark": {"file": "x.json", "name": "x", "sha256": "abc"},
-      "rules": {"1.1.1.1": {"mode": "bogus", "parameters": {}}}
+      "benchmarks": [{"file": "x.json", "name": "x", "sha256": "abc", "rules": {"1/1/1/1": {"mode": "bogus", "parameters": {}}}}]
     })";
     const std::string path = MakeVerifiedFile("parse_plan_dir3", "plan.json", planJson);
 
@@ -298,7 +335,7 @@ TEST_F(ParsePlanFileTest, RefusesNonRootOwnedFile)
     }
     const std::string dir = MakeSubdir("plain_plan_dir");
     const std::string path = dir + "/plan.json";
-    ASSERT_TRUE(WriteFile(path, R"({"benchmark":{"file":"x","name":"x","sha256":"a"},"rules":{}})"));
+    ASSERT_TRUE(WriteFile(path, R"({"benchmarks":[{"file":"x","name":"x","sha256":"a","rules":{}}]})"));
 
     auto result = ParsePlanFile(path, nullptr);
     EXPECT_FALSE(result.HasValue());

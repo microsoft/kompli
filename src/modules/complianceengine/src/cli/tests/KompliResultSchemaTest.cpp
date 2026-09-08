@@ -47,10 +47,8 @@ Resource MakeResource(const std::string& section, const std::string& title, cons
     r.resourceID = title;
     r.ruleId = ruleId;
     r.ruleName = ruleName;
-    r.benchmarkInfo.distribution = LinuxDistribution::Ubuntu;
-    r.benchmarkInfo.version = "24.04";
-    r.benchmarkInfo.benchmarkVersion = "v1.0.0";
-    r.benchmarkInfo.section = section;
+    r.section = section;
+    r.payloadKey = section;
     return r;
 }
 

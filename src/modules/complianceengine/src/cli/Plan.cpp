@@ -142,18 +142,12 @@ Result<string> HashFile(const string& path, OsConfigLogHandle logHandle)
 
 Result<string> GeneratePlan(const string& benchmarkFile, const std::vector<Toggle>& toggles, OsConfigLogHandle logHandle)
 {
-    auto resourcesResult = BenchmarkDefinition::ParseFile(benchmarkFile, logHandle);
-    if (!resourcesResult.HasValue())
+    auto docResult = BenchmarkDefinition::ParseFile(benchmarkFile, logHandle);
+    if (!docResult.HasValue())
     {
-        return resourcesResult.Error();
+        return docResult.Error();
     }
-    const auto& resources = resourcesResult.Value();
-
-    auto nameResult = BenchmarkDefinition::ParseName(benchmarkFile, logHandle);
-    if (!nameResult.HasValue())
-    {
-        return nameResult.Error();
-    }
+    const auto& doc = docResult.Value();
 
     auto hashResult = HashFile(benchmarkFile, logHandle);
     if (!hashResult.HasValue())
@@ -161,22 +155,33 @@ Result<string> GeneratePlan(const string& benchmarkFile, const std::vector<Toggl
         return hashResult.Error();
     }
 
-    // Seed every rule at `audit` (never a mutating default).
+    // Seed every rule at `audit` (never a mutating default), keyed by
+    // payloadKey (the identifier guaranteed unique within this file - see
+    // docs/payload-key-format.md \u00a76). Toggles are given by `section`
+    // (human-typeable), resolved to the matching rule's payloadKey here.
     std::map<string, ToggleMode> modes;
-    for (const auto& resource : resources)
+    std::map<string, string> sectionToPayloadKey;
+    for (const auto& resource : doc.resources)
     {
-        modes[resource.benchmarkInfo.section] = ToggleMode::Audit;
+        modes[resource.payloadKey] = ToggleMode::Audit;
+        // Last rule with a given section wins the lookup; section uniqueness
+        // isn't enforced by the parser (only payloadKey is - see
+        // BenchmarkDefinition::ParseString), so a duplicate section would
+        // silently resolve a toggle to whichever rule parsed last. Not
+        // guarded against here - out of scope for this pass.
+        sectionToPayloadKey[resource.section] = resource.payloadKey;
     }
 
     // Apply toggles in argument order; a section a toggle doesn't recognise is
     // a fail-fast error rather than a silently-ignored no-op.
     for (const auto& toggle : toggles)
     {
-        if (modes.find(toggle.section) == modes.end())
+        auto it = sectionToPayloadKey.find(toggle.section);
+        if (it == sectionToPayloadKey.end())
         {
             return Error("Unknown section '" + toggle.section + "' in benchmark definition '" + benchmarkFile + "'", EINVAL);
         }
-        modes[toggle.section] = toggle.mode;
+        modes[it->second] = toggle.mode;
     }
 
     auto jsonResult = JsonWrapper::MakeObject();
@@ -191,34 +196,42 @@ Result<string> GeneratePlan(const string& benchmarkFile, const std::vector<Toggl
         return Error("Failed to get plan JSON object", ENOMEM);
     }
 
+    auto* benchmarksValue = json_value_init_array();
+    if (nullptr == benchmarksValue)
+    {
+        return Error("Failed to initialize plan benchmarks JSON array", ENOMEM);
+    }
+    auto* benchmarksArray = json_value_get_array(benchmarksValue);
+
     auto* benchmarkValue = json_value_init_object();
     if (nullptr == benchmarkValue)
     {
+        json_value_free(benchmarksValue);
         return Error("Failed to initialize plan benchmark JSON object", ENOMEM);
     }
     auto* benchmarkObject = json_value_get_object(benchmarkValue);
     if (nullptr == benchmarkObject || JSONSuccess != json_object_set_string(benchmarkObject, "file", benchmarkFile.c_str()) ||
-        JSONSuccess != json_object_set_string(benchmarkObject, "name", nameResult.Value().c_str()) ||
+        JSONSuccess != json_object_set_string(benchmarkObject, "name", doc.name.c_str()) ||
         JSONSuccess != json_object_set_string(benchmarkObject, "sha256", hashResult.Value().c_str()))
     {
         json_value_free(benchmarkValue);
+        json_value_free(benchmarksValue);
         return Error("Failed to set plan benchmark fields", ENOMEM);
-    }
-    if (JSONSuccess != json_object_set_value(root, "benchmark", benchmarkValue))
-    {
-        json_value_free(benchmarkValue);
-        return Error("Failed to set plan benchmark object", ENOMEM);
     }
 
     auto* rulesValue = json_value_init_object();
     if (nullptr == rulesValue)
     {
+        json_value_free(benchmarkValue);
+        json_value_free(benchmarksValue);
         return Error("Failed to initialize plan rules JSON object", ENOMEM);
     }
     auto* rulesObject = json_value_get_object(rulesValue);
     if (nullptr == rulesObject)
     {
         json_value_free(rulesValue);
+        json_value_free(benchmarkValue);
+        json_value_free(benchmarksValue);
         return Error("Failed to get plan rules JSON object", ENOMEM);
     }
     for (const auto& entry : modes)
@@ -227,6 +240,8 @@ Result<string> GeneratePlan(const string& benchmarkFile, const std::vector<Toggl
         if (nullptr == ruleValue)
         {
             json_value_free(rulesValue);
+            json_value_free(benchmarkValue);
+            json_value_free(benchmarksValue);
             return Error("Failed to initialize plan rule JSON object", ENOMEM);
         }
         auto* ruleObject = json_value_get_object(ruleValue);
@@ -237,19 +252,36 @@ Result<string> GeneratePlan(const string& benchmarkFile, const std::vector<Toggl
             json_value_free(parametersValue);
             json_value_free(ruleValue);
             json_value_free(rulesValue);
+            json_value_free(benchmarkValue);
+            json_value_free(benchmarksValue);
             return Error("Failed to build plan rule '" + entry.first + "'", ENOMEM);
         }
         if (JSONSuccess != json_object_set_value(rulesObject, entry.first.c_str(), ruleValue))
         {
             json_value_free(ruleValue);
             json_value_free(rulesValue);
+            json_value_free(benchmarkValue);
+            json_value_free(benchmarksValue);
             return Error("Failed to set plan rule '" + entry.first + "'", ENOMEM);
         }
     }
-    if (JSONSuccess != json_object_set_value(root, "rules", rulesValue))
+    if (JSONSuccess != json_object_set_value(benchmarkObject, "rules", rulesValue))
     {
         json_value_free(rulesValue);
-        return Error("Failed to set plan rules object", ENOMEM);
+        json_value_free(benchmarkValue);
+        json_value_free(benchmarksValue);
+        return Error("Failed to set plan benchmark rules object", ENOMEM);
+    }
+    if (JSONSuccess != json_array_append_value(benchmarksArray, benchmarkValue))
+    {
+        json_value_free(benchmarkValue);
+        json_value_free(benchmarksValue);
+        return Error("Failed to append plan benchmark entry", ENOMEM);
+    }
+    if (JSONSuccess != json_object_set_value(root, "benchmarks", benchmarksValue))
+    {
+        json_value_free(benchmarksValue);
+        return Error("Failed to set plan benchmarks array", ENOMEM);
     }
 
     auto* serialized = json_serialize_to_string_pretty(json.get());
@@ -302,61 +334,80 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
         return Error("Plan file is not a JSON object", EINVAL);
     }
 
-    auto* benchmarkObject = json_object_get_object(root, "benchmark");
-    if (nullptr == benchmarkObject)
+    auto* benchmarksArray = json_object_get_array(root, "benchmarks");
+    if (nullptr == benchmarksArray)
     {
-        return Error("Plan file is missing the 'benchmark' object", EINVAL);
+        return Error("Plan file is missing the 'benchmarks' array", EINVAL);
+    }
+    const std::size_t benchmarkCount = json_array_get_count(benchmarksArray);
+    if (0 == benchmarkCount)
+    {
+        return Error("Plan file's 'benchmarks' array must not be empty", EINVAL);
     }
 
     Plan plan;
-    const char* file = json_object_get_string(benchmarkObject, "file");
-    if (nullptr == file || file[0] == '\0')
+    plan.benchmarks.reserve(benchmarkCount);
+    for (std::size_t b = 0; b < benchmarkCount; ++b)
     {
-        return Error("Plan file's 'benchmark.file' is missing or empty", EINVAL);
-    }
-    plan.benchmarkFile = file;
-
-    const char* name = json_object_get_string(benchmarkObject, "name");
-    plan.benchmarkName = (nullptr != name) ? string(name) : string();
-
-    const char* sha256 = json_object_get_string(benchmarkObject, "sha256");
-    if (nullptr == sha256 || sha256[0] == '\0')
-    {
-        return Error("Plan file's 'benchmark.sha256' is missing or empty", EINVAL);
-    }
-    plan.benchmarkSha256 = sha256;
-
-    auto* rulesObject = json_object_get_object(root, "rules");
-    if (nullptr == rulesObject)
-    {
-        return Error("Plan file is missing the 'rules' object", EINVAL);
-    }
-
-    const std::size_t count = json_object_get_count(rulesObject);
-    for (std::size_t i = 0; i < count; ++i)
-    {
-        const char* section = json_object_get_name(rulesObject, i);
-        if (nullptr == section || section[0] == '\0')
+        const string context = "benchmarks[" + std::to_string(b) + "]";
+        auto* benchmarkObject = json_array_get_object(benchmarksArray, b);
+        if (nullptr == benchmarkObject)
         {
-            return Error("Plan file has a rule with an empty section name", EINVAL);
+            return Error("Plan file's '" + context + "' is not a JSON object", EINVAL);
         }
-        auto* ruleValue = json_object_get_value_at(rulesObject, i);
-        auto* ruleObject = (nullptr != ruleValue) ? json_value_get_object(ruleValue) : nullptr;
-        if (nullptr == ruleObject)
+
+        PlanBenchmark benchmark;
+        const char* file = json_object_get_string(benchmarkObject, "file");
+        if (nullptr == file || file[0] == '\0')
         {
-            return Error("Plan file's rule '" + string(section) + "' is not a JSON object", EINVAL);
+            return Error("Plan file's '" + context + ".file' is missing or empty", EINVAL);
         }
-        const char* mode = json_object_get_string(ruleObject, "mode");
-        if (nullptr == mode || mode[0] == '\0')
+        benchmark.file = file;
+
+        const char* name = json_object_get_string(benchmarkObject, "name");
+        benchmark.name = (nullptr != name) ? string(name) : string();
+
+        const char* sha256 = json_object_get_string(benchmarkObject, "sha256");
+        if (nullptr == sha256 || sha256[0] == '\0')
         {
-            return Error("Plan file's rule '" + string(section) + "' is missing a 'mode' field", EINVAL);
+            return Error("Plan file's '" + context + ".sha256' is missing or empty", EINVAL);
         }
-        auto modeResult = FromModeString(mode);
-        if (!modeResult.HasValue())
+        benchmark.sha256 = sha256;
+
+        auto* rulesObject = json_object_get_object(benchmarkObject, "rules");
+        if (nullptr == rulesObject)
         {
-            return modeResult.Error();
+            return Error("Plan file's '" + context + "' is missing the 'rules' object", EINVAL);
         }
-        plan.rules[section] = PlanRuleMode{modeResult.Value()};
+
+        const std::size_t ruleCount = json_object_get_count(rulesObject);
+        for (std::size_t i = 0; i < ruleCount; ++i)
+        {
+            const char* payloadKey = json_object_get_name(rulesObject, i);
+            if (nullptr == payloadKey || payloadKey[0] == '\0')
+            {
+                return Error("Plan file's '" + context + "' has a rule with an empty payload key", EINVAL);
+            }
+            auto* ruleValue = json_object_get_value_at(rulesObject, i);
+            auto* ruleObject = (nullptr != ruleValue) ? json_value_get_object(ruleValue) : nullptr;
+            if (nullptr == ruleObject)
+            {
+                return Error("Plan file's '" + context + "' rule '" + string(payloadKey) + "' is not a JSON object", EINVAL);
+            }
+            const char* mode = json_object_get_string(ruleObject, "mode");
+            if (nullptr == mode || mode[0] == '\0')
+            {
+                return Error("Plan file's '" + context + "' rule '" + string(payloadKey) + "' is missing a 'mode' field", EINVAL);
+            }
+            auto modeResult = FromModeString(mode);
+            if (!modeResult.HasValue())
+            {
+                return modeResult.Error();
+            }
+            benchmark.rules[payloadKey] = PlanRuleMode{modeResult.Value()};
+        }
+
+        plan.benchmarks.push_back(std::move(benchmark));
     }
 
     return plan;

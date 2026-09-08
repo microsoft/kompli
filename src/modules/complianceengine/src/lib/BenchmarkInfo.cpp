@@ -70,6 +70,7 @@ Result<CISBenchmarkInfo> CISBenchmarkInfo::Parse(const string& payloadKey)
     {
         return benchmarkType.Error();
     }
+    result.benchmarkType = benchmarkType.Value();
 
     if (!std::getline(ss, token, '/'))
     {
@@ -101,6 +102,44 @@ Result<CISBenchmarkInfo> CISBenchmarkInfo::Parse(const string& payloadKey)
     {
         return Error("Invalid CIS benchmark payload key format: missing benchmark section", EINVAL);
     }
+    return result;
+}
+
+Result<CISBenchmarkInfo> CISBenchmarkInfo::FromMetadata(const string& framework, const string& distribution, const string& distributionVersion, const string& benchmarkVersion)
+{
+    CISBenchmarkInfo result;
+
+    const auto benchmarkType = ParseBenchmarkType(framework);
+    if (!benchmarkType.HasValue())
+    {
+        return benchmarkType.Error();
+    }
+    result.benchmarkType = benchmarkType.Value();
+
+    const auto distributionResult = DistributionInfo::ParseLinuxDistribution(distribution);
+    if (!distributionResult.HasValue())
+    {
+        return distributionResult.Error();
+    }
+    result.distribution = distributionResult.Value();
+
+    if (distributionVersion.empty())
+    {
+        return Error("Benchmark distribution version must not be empty", EINVAL);
+    }
+    auto error = ValidateGlobbing(distributionVersion);
+    if (error.HasValue())
+    {
+        return error.Value();
+    }
+    result.version = distributionVersion;
+
+    if (benchmarkVersion.empty() || benchmarkVersion[0] != 'v')
+    {
+        return Error("Benchmark version '" + benchmarkVersion + "' must start with 'v' (e.g. 'v1.0.0')", EINVAL);
+    }
+    result.benchmarkVersion = benchmarkVersion;
+
     return result;
 }
 
@@ -139,7 +178,7 @@ string to_string(ComplianceEngine::BenchmarkType benchmarkType)
 string to_string(const ComplianceEngine::CISBenchmarkInfo& benchmarkInfo)
 {
     ostringstream oss;
-    oss << "/" << to_string(ComplianceEngine::BenchmarkType::CIS) << "/" << to_string(benchmarkInfo.distribution) << "/" << benchmarkInfo.version << "/"
+    oss << "/" << to_string(benchmarkInfo.benchmarkType) << "/" << to_string(benchmarkInfo.distribution) << "/" << benchmarkInfo.version << "/"
         << benchmarkInfo.benchmarkVersion << "/" << benchmarkInfo.section;
     return oss.str();
 }

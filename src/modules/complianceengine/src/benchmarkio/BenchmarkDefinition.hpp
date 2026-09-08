@@ -6,6 +6,7 @@
 
 #include "Resource.hpp"
 
+#include <BenchmarkInfo.h>
 #include <Logging.h>
 #include <Result.h>
 #include <istream>
@@ -23,50 +24,59 @@ namespace BenchmarkDefinition
 // spec.rules array carries one inline rule payload per rule. It is the
 // canonical input format for both.
 //
-// Each definition rule maps onto a parsed BenchmarkIO::Resource:
-//   resourceID   <- rule.title
-//   ruleId       <- rule.ruleId
-//   ruleName     <- rule.ruleName
-//   benchmarkInfo<- CISBenchmarkInfo::Parse(rule.payloadKey) (section '/'->'.'),
-//                   cross-checked against the rule's explicit `section` field
-//   procedure    <- rule.payload serialized as compact JSON (the ComplianceEngine
-//                   parses plain JSON directly; see Engine::SetProcedure)
-//   hasInitAudit <- true (every rule carries an init object)
-//   payload      <- absent (definitions carry no desired object value)
+// Every rule in one file shares the same framework/distribution/
+// distributionVersion/benchmarkVersion prefix (see docs/payload-key-format.md
+// \u00a71/\u00a73) - hoisted once per file as `benchmarkInfo` below, rather than
+// repeated in every rule's payload key as before.
 using BenchmarkIO::Resource;
 
-// Parses a benchmark-definition JSON document into the caller's rule
-// resources. Strict about structure: it requires the resource envelope
-// (apiVersion / kind == "BenchmarkDefinition" / metadata / spec.rules) and the
-// fixed per-rule field set (section, ruleId, ruleName, title, payloadKey,
-// payload), rejects a rule whose `section` disagrees with the section encoded
-// in its payloadKey, and rejects malformed input. Consistent with the
-// definition schema (additionalProperties: true), unknown fields are ignored
-// rather than rejected.
-//
-// TODO(kompli CLI plan/run design, see docs/CLI.md): does NOT currently
-// reject a document with a duplicate `payloadKey` across its rules. The
-// planned per-rule request/plan model relies on payloadKey being unique
-// *within one file* (not globally - user-authored definitions can't be
-// guaranteed unique across files); this parser is where that guarantee needs
-// to be enforced before anything can rely on it.
-Result<std::vector<Resource>> ParseString(const std::string& json, OsConfigLogHandle logHandle);
+// A fully parsed benchmark-definition file: its stable name, its file-level
+// prefix info (shared by every rule), and its rules.
+struct BenchmarkDocument
+{
+    // metadata.name - the benchmark's stable identifier, e.g. "cis_ubuntu24.04".
+    std::string name;
+
+    // The file-level prefix (framework/distribution/distributionVersion/
+    // benchmarkVersion), built from metadata.labels/annotations
+    // (CISBenchmarkInfo::FromMetadata) - shared by every rule in this file.
+    // `.section` is left empty here; each rule carries its own (see
+    // BenchmarkIO::Resource::section).
+    CISBenchmarkInfo benchmarkInfo;
+
+    // One entry per rule in spec.rules, in document order. Each rule maps as:
+    //   resourceID   <- rule.title
+    //   ruleId       <- rule.ruleId
+    //   section      <- rule.section (verbatim, display/CLI-facing only)
+    //   payloadKey   <- rule.payloadKey (verbatim, opaque - see docs/payload-key-format.md \u00a72)
+    //   procedure    <- rule.payload serialized as compact JSON (the ComplianceEngine
+    //                   parses plain JSON directly; see Engine::SetProcedure)
+    //   hasInitAudit <- true (every rule carries an init object)
+    //   payload      <- absent (definitions carry no desired object value)
+    std::vector<Resource> resources;
+};
+
+// Parses a benchmark-definition JSON document. Strict about structure: it
+// requires the resource envelope (apiVersion / kind == "BenchmarkDefinition" /
+// metadata / spec.rules), the file-level prefix fields (metadata.labels.
+// framework/distribution/distributionVersion, metadata.annotations.
+// benchmarkVersion), and the fixed per-rule field set (section, ruleId,
+// ruleName, title, payloadKey, payload). Rejects a document with a duplicate
+// `payloadKey` across its rules (payloadKey must be unique within one file -
+// see docs/payload-key-format.md \u00a75/\u00a76) and rejects malformed input.
+// Consistent with the definition schema (additionalProperties: true),
+// unknown fields are ignored rather than rejected.
+Result<BenchmarkDocument> ParseString(const std::string& json, OsConfigLogHandle logHandle);
 
 // Reads the whole document from a stream (stdin / tests), bounding the total
 // input size, then parses it.
-Result<std::vector<Resource>> ParseStream(std::istream& stream, OsConfigLogHandle logHandle);
+Result<BenchmarkDocument> ParseStream(std::istream& stream, OsConfigLogHandle logHandle);
 
 // Opens a regular file on disk with the full input-hardening posture
 // (path-traversal rejection, root-owned non-writable parent directory,
 // O_NOFOLLOW open, regular-file/ownership/mode checks) before the first byte is
 // read, then parses it.
-Result<std::vector<Resource>> ParseFile(const std::string& path, OsConfigLogHandle logHandle);
-
-// Reads just a definition's `metadata.name` (its stable identifier, e.g.
-// "cis_ubuntu24.04") without parsing the full rule list. Applies the same
-// input-hardening posture as ParseFile. Used by `kompli plan` to stamp a
-// plan's `benchmark.name`.
-Result<std::string> ParseName(const std::string& path, OsConfigLogHandle logHandle);
+Result<BenchmarkDocument> ParseFile(const std::string& path, OsConfigLogHandle logHandle);
 
 } // namespace BenchmarkDefinition
 } // namespace ComplianceEngine

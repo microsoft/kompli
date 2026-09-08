@@ -139,7 +139,7 @@ Optional<Error> BenchmarkFormatter::AddEntry(const BenchmarkIO::Resource& entry,
         return Error("Failed to set JSON ruleId", ENOMEM);
     }
 
-    if (JSONSuccess != json_object_set_string(object, "section", entry.benchmarkInfo.section.c_str()))
+    if (JSONSuccess != json_object_set_string(object, "section", entry.section.c_str()))
     {
         return Error("Failed to set JSON section", ENOMEM);
     }

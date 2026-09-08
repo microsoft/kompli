@@ -125,6 +125,59 @@ TEST_F(BenchmarkInfoTest, Valid_Stig)
     EXPECT_EQ(result.Value().version, std::string("9"));
     EXPECT_EQ(result.Value().benchmarkVersion, std::string("V2R7"));
     EXPECT_EQ(result.Value().section, "SV-257777");
+    // Round-trips through to_string using the STIG framework, not a hardcoded 'cis'.
+    EXPECT_EQ(std::to_string(result.Value()), "/stig/rhel/9/V2R7/SV-257777");
+}
+
+TEST_F(BenchmarkInfoTest, FromMetadata_Valid)
+{
+    auto result = CISBenchmarkInfo::FromMetadata("cis", "ubuntu", "20.04", "v1.0.0");
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().distribution, LinuxDistribution::Ubuntu);
+    EXPECT_EQ(result.Value().version, std::string("20.04"));
+    EXPECT_EQ(result.Value().benchmarkVersion, std::string("v1.0.0"));
+    // FromMetadata doesn't know about any individual rule's section.
+    EXPECT_TRUE(result.Value().section.empty());
+}
+
+TEST_F(BenchmarkInfoTest, FromMetadata_Stig)
+{
+    auto result = CISBenchmarkInfo::FromMetadata("stig", "rhel", "9", "vV2R7");
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().distribution, LinuxDistribution::RHEL);
+    EXPECT_EQ(result.Value().version, std::string("9"));
+    EXPECT_EQ(result.Value().benchmarkVersion, std::string("vV2R7"));
+}
+
+TEST_F(BenchmarkInfoTest, FromMetadata_RejectsUnknownFramework)
+{
+    auto result = CISBenchmarkInfo::FromMetadata("unknown", "ubuntu", "20.04", "v1.0.0");
+    ASSERT_FALSE(result.HasValue());
+    ASSERT_EQ(result.Error().code, EINVAL);
+}
+
+TEST_F(BenchmarkInfoTest, FromMetadata_RejectsUnknownDistribution)
+{
+    auto result = CISBenchmarkInfo::FromMetadata("cis", "unknown", "20.04", "v1.0.0");
+    ASSERT_FALSE(result.HasValue());
+    ASSERT_EQ(result.Error().code, EINVAL);
+}
+
+TEST_F(BenchmarkInfoTest, FromMetadata_RejectsBenchmarkVersionWithoutVPrefix)
+{
+    // Unlike Parse (which stays backward-compatible with existing MOF-sourced
+    // full payload keys, see docs/payload-key-format.md §8), FromMetadata is
+    // only used by the new (non-MOF) parsing path and requires the 'v' prefix.
+    auto result = CISBenchmarkInfo::FromMetadata("cis", "ubuntu", "20.04", "1.0.0");
+    ASSERT_FALSE(result.HasValue());
+    ASSERT_EQ(result.Error().code, EINVAL);
+}
+
+TEST_F(BenchmarkInfoTest, FromMetadata_RejectsEmptyBenchmarkVersion)
+{
+    auto result = CISBenchmarkInfo::FromMetadata("cis", "ubuntu", "20.04", "");
+    ASSERT_FALSE(result.HasValue());
+    ASSERT_EQ(result.Error().code, EINVAL);
 }
 
 TEST_F(BenchmarkInfoTest, Match_1)
