@@ -156,32 +156,27 @@ Result<string> GeneratePlan(const string& benchmarkFile, const std::vector<Toggl
     }
 
     // Seed every rule at `audit` (never a mutating default), keyed by
-    // payloadKey (the identifier guaranteed unique within this file - see
-    // docs/payload-key-format.md \u00a76). Toggles are given by `section`
-    // (human-typeable), resolved to the matching rule's payloadKey here.
+    // id (the identifier guaranteed unique within this file - see
+    // docs/payload-key-format.md section 6/12). id is also the sole
+    // externally-quoted per-rule identifier (the CLI's --audit=/--remediate=/
+    // --enforce= toggles are given an id value directly - a separate
+    // `section` field/lookup no longer exists, see docs/payload-key-format.md).
     std::map<string, ToggleMode> modes;
-    std::map<string, string> sectionToPayloadKey;
     for (const auto& resource : doc.resources)
     {
-        modes[resource.payloadKey] = ToggleMode::Audit;
-        // Last rule with a given section wins the lookup; section uniqueness
-        // isn't enforced by the parser (only payloadKey is - see
-        // BenchmarkDefinition::ParseString), so a duplicate section would
-        // silently resolve a toggle to whichever rule parsed last. Not
-        // guarded against here - out of scope for this pass.
-        sectionToPayloadKey[resource.section] = resource.payloadKey;
+        modes[resource.id] = ToggleMode::Audit;
     }
 
-    // Apply toggles in argument order; a section a toggle doesn't recognise is
-    // a fail-fast error rather than a silently-ignored no-op.
+    // Apply toggles in argument order; an id a toggle doesn't recognise
+    // is a fail-fast error rather than a silently-ignored no-op.
     for (const auto& toggle : toggles)
     {
-        auto it = sectionToPayloadKey.find(toggle.section);
-        if (it == sectionToPayloadKey.end())
+        auto it = modes.find(toggle.section);
+        if (it == modes.end())
         {
-            return Error("Unknown section '" + toggle.section + "' in benchmark definition '" + benchmarkFile + "'", EINVAL);
+            return Error("Unknown rule '" + toggle.section + "' in benchmark definition '" + benchmarkFile + "'", EINVAL);
         }
-        modes[it->second] = toggle.mode;
+        it->second = toggle.mode;
     }
 
     auto jsonResult = JsonWrapper::MakeObject();
@@ -383,28 +378,28 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
         const std::size_t ruleCount = json_object_get_count(rulesObject);
         for (std::size_t i = 0; i < ruleCount; ++i)
         {
-            const char* payloadKey = json_object_get_name(rulesObject, i);
-            if (nullptr == payloadKey || payloadKey[0] == '\0')
+            const char* id = json_object_get_name(rulesObject, i);
+            if (nullptr == id || id[0] == '\0')
             {
-                return Error("Plan file's '" + context + "' has a rule with an empty payload key", EINVAL);
+                return Error("Plan file's '" + context + "' has a rule with an empty id", EINVAL);
             }
             auto* ruleValue = json_object_get_value_at(rulesObject, i);
             auto* ruleObject = (nullptr != ruleValue) ? json_value_get_object(ruleValue) : nullptr;
             if (nullptr == ruleObject)
             {
-                return Error("Plan file's '" + context + "' rule '" + string(payloadKey) + "' is not a JSON object", EINVAL);
+                return Error("Plan file's '" + context + "' rule '" + string(id) + "' is not a JSON object", EINVAL);
             }
             const char* mode = json_object_get_string(ruleObject, "mode");
             if (nullptr == mode || mode[0] == '\0')
             {
-                return Error("Plan file's '" + context + "' rule '" + string(payloadKey) + "' is missing a 'mode' field", EINVAL);
+                return Error("Plan file's '" + context + "' rule '" + string(id) + "' is missing a 'mode' field", EINVAL);
             }
             auto modeResult = FromModeString(mode);
             if (!modeResult.HasValue())
             {
                 return modeResult.Error();
             }
-            benchmark.rules[payloadKey] = PlanRuleMode{modeResult.Value()};
+            benchmark.rules[id] = PlanRuleMode{modeResult.Value()};
         }
 
         plan.benchmarks.push_back(std::move(benchmark));

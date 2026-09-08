@@ -1,15 +1,17 @@
 {
   "apiVersion": "v1",
   "kind": "BenchmarkDefinition",
-  "metadata": { "name": "cis_ubuntu_22.04_2.0.0" },
+  "metadata": {
+    "name": "cis_ubuntu_22.04_2.0.0",
+    "labels": { "distribution": "ubuntu", "distributionVersion": "22.04", "framework": "cis" },
+    "annotations": { "benchmarkVersion": "v2.0.0" }
+  },
   "spec": {
     "rules": [
       {
-        "section": "2.1.1",
-        "ruleId": "00000000-0000-0000-0000-000000000000",
         "ruleName": "WithParameters",
         "title": "2.1.1 Sample With Parameters",
-        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/2/1/1",
+        "id": "2.1.1",
         "tags": [],
         "metadata": { "description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x" },
         "payload": {

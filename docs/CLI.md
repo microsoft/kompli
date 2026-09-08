@@ -25,8 +25,12 @@ Common flags: `-h/--help`, `-V/--version`, `-v/--verbose`, `-d/--debug`.
 `audit`/`remediate`/`run`-only: `-e/--continue-on-error`, `-l/--log-file`
 (`run` does re-check `--section` is *not* accepted - the plan already selects
 rules). `audit`/`remediate`-only: `-s/--section` (prefix filter on a rule's
-dotted section). `plan`-only: repeatable `--audit=<section>` /
-`--remediate=<section>` / `--enforce=<section>` toggles, `-o/--output`.
+`id`, kompli's sole per-rule identifier - see
+[payload-key-format.md §12](payload-key-format.md#12-payloadkey-renamed-to-id-ruleid-removed-from-komplis-own-schema--decided-implemented);
+the flag keeps its name for CLI-ergonomics continuity even though there's no
+longer a separate `section` concept behind it). `plan`-only: repeatable
+`--audit=<section>` / `--remediate=<section>` / `--enforce=<section>`
+toggles (same naming continuity), `-o/--output`.
 `render`-only: `-f/--format {junit,nested-list,compact-list,debug}` (default
 `junit`), `--suite-name`.
 
@@ -47,11 +51,13 @@ section addresses.
 > **Payload key format, keying, and the hoisted-prefix definition-file schema
 > change are specified in [payload-key-format.md](payload-key-format.md)** —
 > this section covers the CLI-facing plan/run contract only; that document is
-> the canonical source for anything about the `payloadKey` string itself.
+> the canonical source for anything about the payload key string itself
+> (kompli's own JSON field for it is called `id` - see
+> [payload-key-format.md §12](payload-key-format.md#12-payloadkey-renamed-to-id-ruleid-removed-from-komplis-own-schema--decided-implemented)).
 
 ### Why
 
-The wire protocol `komplid` will speak is per-rule (`{benchmark, payloadKey,
+The wire protocol `komplid` will speak is per-rule (`{benchmark, id,
 mode}` → one canonical result), because different rules may need different
 modes (`audit` vs `remediate` vs the reserved, not-yet-working `enforce` —
 kept in this contract regardless, see below) in the same run. The CLI needs
@@ -60,25 +66,23 @@ hand-enumerate every rule for the common "audit/remediate everything" case.
 
 ### `kompli list <file>` — Planned
 
-Enumerates rules in a benchmark-definition file: `section`, `payloadKey`,
-`title`. Prerequisite for building a plan — a user or script needs to know
-what to reference before they can toggle its mode. A detail view for one rule
-(`kompli list <file> --rule=<section>`, exact flag not finalized) additionally
-shows its parameters and their defaults — needed so a user knows what's
-available to override in a plan (see "Parametrization" under `plan` below).
-Rules are referenced by `section` in **CLI-facing arguments**
-(`--audit=<section>`, `-s/--section`) — `section` is documented as the
-"externally-quoted per-rule identifier" in `benchmark.schema.json` and is
-meant to be human-typeable. **The plan file itself keys rules by the full
-`payloadKey`, not `section`** (see
-[payload-key-format.md §6](payload-key-format.md#6-planrun-key-by-payload-key-not-section--decided-implemented)
-for the rationale): `payloadKey` is the field actually guaranteed unique
-within a file, and unlike `ruleId` (a checksum, opaque) it needs no lossy
-transformation to serve as a lookup key. `plan` resolves a `--audit=<section>`
-argument to its rule's `payloadKey` at generation time (`BenchmarkIO::Resource`
-retains both fields verbatim); `run` never sees `section` at all.
+Enumerates rules in a benchmark-definition file: `id`, `title`.
+Prerequisite for building a plan — a user or script needs to know what to
+reference before they can toggle its mode. A detail view for one rule
+(`kompli list <file> --rule=<id>`, exact flag not finalized)
+additionally shows its parameters and their defaults — needed so a user
+knows what's available to override in a plan (see "Parametrization" under
+`plan` below). `id` is kompli's *sole* externally-quoted per-rule
+identifier — a separate `section` field used to exist but was eliminated
+(see [payload-key-format.md §11](payload-key-format.md#11-section-eliminated--unified-into-payloadkey--decided-implemented)),
+and the field itself was later renamed from `payloadKey` to `id` (see
+[payload-key-format.md §12](payload-key-format.md#12-payloadkey-renamed-to-id-ruleid-removed-from-komplis-own-schema--decided-implemented));
+it's dot-form for CIS (e.g. `1.1.1.1`) and unchanged for STIG (e.g.
+`SV-260469`), and doubles as both the CLI-facing argument
+(`--audit=<section>`, `-s/--section` — flag names kept for continuity) and
+the plan file's lookup key, with no translation step between the two.
 
-**Rule-identity caveat (enforced by the parser — see §5):** `payloadKey` is
+**Rule-identity caveat (enforced by the parser — see §5):** `id` is
 only guaranteed unique *within one benchmark-definition file*, not globally.
 Augmentation-engine-generated CIS/STIG definitions won't collide in
 practice, but kompli intends to support user-authored custom rule sets too,
@@ -125,15 +129,15 @@ CLI feature (tracked in §6):
       "name": "cis_ubuntu24.04",     // from the definition's metadata.name
       "sha256": "<hash of the file at plan-generation time>",
       "rules": {
-        "1/1/1/1": { "mode": "audit", "parameters": { "PKG_NAME": "cramfs" } },
-        "1/1/2": { "mode": "remediate", "parameters": {} }
+        "1.1.1.1": { "mode": "audit", "parameters": { "PKG_NAME": "cramfs" } },
+        "1.1.2": { "mode": "remediate", "parameters": {} }
       }
     }
   ]
 }
 ```
 
-Each `rules` map is keyed by `payloadKey` — now just the opaque remainder
+Each `rules` map is keyed by `id` — now just the opaque remainder
 (segment 5+ of the full payload key, see
 [payload-key-format.md §1](payload-key-format.md#1-structure--decided)),
 not the full `/cis/.../...` path, since the file-level prefix
@@ -288,25 +292,20 @@ is out of scope here.
 
 ## 5. Rule-reference uniqueness — implemented
 
-A rule reference (`payloadKey`, which plan/run key on) must be unambiguous
-within one file for any of the above to safely rely on it.
-`BenchmarkDefinition::ParseString`/`ParseFile`
+A rule reference (`id`, which plan/run key on, and which is now
+kompli's *sole* per-rule identifier — see
+[payload-key-format.md §12](payload-key-format.md#12-payloadkey-renamed-to-id-ruleid-removed-from-komplis-own-schema--decided-implemented))
+must be unambiguous within one file for any of the above to safely rely on
+it. `BenchmarkDefinition::ParseString`/`ParseFile`
 (`src/modules/complianceengine/src/benchmarkio/BenchmarkDefinition.hpp`) now
-**reject** a document with a duplicate `payloadKey` across its rules (checked
+**reject** a document with a duplicate `id` across its rules (checked
 as each rule is parsed — see `BenchmarkDefinitionTest.cpp`'s
-`RejectsDuplicatePayloadKey`). `section` uniqueness is **not** separately
-enforced (see [payload-key-format.md §2](payload-key-format.md#2-the-remainder-is-opaque--decided-implemented) —
-`section` and `payloadKey` are independent fields with no required
-relationship since the remainder-derivation cross-check was removed); a plan
-author referencing a rule by a non-unique `--audit=<section>` gets whichever
-rule `GeneratePlan`'s internal `section`→`payloadKey` resolution map happens
-to have retained last for that `section` — a known, accepted sharp edge, not
-guarded against today.
+`RejectsDuplicateId`).
 
-`BenchmarkIO::Resource` retains both `section` and `payloadKey` verbatim
-(implemented — the `Resource.hpp` TODO this used to block on is resolved),
-so `komplid`'s wire protocol (which will identify a rule by `payloadKey`) has
-what it needs once that work starts.
+`BenchmarkIO::Resource` retains `id` verbatim (the `Resource.hpp`
+TODO this used to block on is resolved), so `komplid`'s wire protocol (which
+will identify a rule by `id`) has what it needs once that work
+starts.
 
 ## 6. TODO items deferred to future planning sessions
 
@@ -330,16 +329,6 @@ Tracked here so they aren't lost, not solved in this document:
   files' plans into one, instead of the current manual-JSON-edit workaround.
 - **Plan file JSON schema.** Deferred until the plan format itself finishes
   settling — premature to write a schema for a format still in flux.
-- **`section` non-uniqueness sharp edge** (§5) — a plan author referencing a
-  non-unique `section` via `--audit=<section>` silently resolves to whichever
-  rule the internal lookup map retained; not guarded against.
-- **augmentation-engine side of the payload-key-format work has not started**
-  (see [payload-key-format.md §10](payload-key-format.md#10-augmentation-engine-side-work-not-started--blocking-gap)) —
-  every currently-committed `data/definitions/*.benchmark.json` file fails to
-  parse under the schema/validation changes above until the generator is
-  updated and the 28 files are regenerated. This blocks using real committed
-  definitions with the current kompli build, not just a hypothetical future
-  concern.
 - **Response envelope's exact `error` code taxonomy** and its formal JSON
   schema (see the envelope draft in
   [src/komplid/README.md](../src/komplid/README.md#wire-protocol)) — a clean

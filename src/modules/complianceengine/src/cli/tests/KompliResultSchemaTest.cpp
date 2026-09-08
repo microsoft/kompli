@@ -41,14 +41,12 @@ std::string ReadFile(const std::string& path)
     return ss.str();
 }
 
-Resource MakeResource(const std::string& section, const std::string& title, const std::string& ruleId, const std::string& ruleName)
+Resource MakeResource(const std::string& id, const std::string& title, const std::string& ruleName)
 {
     Resource r;
     r.resourceID = title;
-    r.ruleId = ruleId;
     r.ruleName = ruleName;
-    r.section = section;
-    r.payloadKey = section;
+    r.id = id;
     return r;
 }
 
@@ -77,9 +75,9 @@ std::string GenerateResult()
     auto formatterResult = BenchmarkFormatter::Begin(distInfo, Action::Audit);
     EXPECT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
-    EXPECT_FALSE(formatter.AddEntry(MakeResource("1.1", "1.1 First", "id1", "First"), Status::Compliant, "[]", {}).HasValue());
+    EXPECT_FALSE(formatter.AddEntry(MakeResource("1.1", "1.1 First", "First"), Status::Compliant, "[]", {}).HasValue());
     const std::map<std::string, std::string> params{{"mask", "0600"}};
-    EXPECT_FALSE(formatter.AddEntry(MakeResource("1.2", "1.2 Second", "id2", "Second"), Status::NonCompliant, "[]", params).HasValue());
+    EXPECT_FALSE(formatter.AddEntry(MakeResource("1.2", "1.2 Second", "Second"), Status::NonCompliant, "[]", params).HasValue());
     auto result = std::move(formatter).Finish(Status::NonCompliant);
     EXPECT_TRUE(result.HasValue());
     return result.HasValue() ? result.Value() : std::string();

@@ -132,23 +132,23 @@ Result<string> RenderText(const string& canonicalJson, const TextStyle style)
         {
             return Error("Canonical result JSON 'rules' entry is not an object", EINVAL);
         }
-        const string section = StringOrEmpty(json_object_get_string(rule, "section"));
+        const string id = StringOrEmpty(json_object_get_string(rule, "id"));
         const string ruleName = StringOrEmpty(json_object_get_string(rule, "ruleName"));
         const string status = StringOrEmpty(json_object_get_string(rule, "status"));
 
         switch (style)
         {
             case TextStyle::CompactList:
-                out << "  [" << status << "] " << section << " " << ruleName << "\n";
+                out << "  [" << status << "] " << id << " " << ruleName << "\n";
                 break;
 
             case TextStyle::NestedList:
-                out << "  " << section << " " << ruleName << " [" << status << "]\n";
+                out << "  " << id << " " << ruleName << " [" << status << "]\n";
                 AppendIndicators(json_object_get_array(rule, "indicators"), 0, 4, out);
                 break;
 
             case TextStyle::Debug: {
-                out << "  " << section << " " << ruleName << " (ruleId=" << StringOrEmpty(json_object_get_string(rule, "ruleId")) << ") [" << status << "]\n";
+                out << "  " << id << " " << ruleName << " [" << status << "]\n";
                 out << "    title: " << StringOrEmpty(json_object_get_string(rule, "title")) << "\n";
                 const string parameters = JoinParameters(rule);
                 if (!parameters.empty())

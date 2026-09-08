@@ -30,8 +30,9 @@ using ComplianceEngine::Cli::ToggleMode;
 
 namespace
 {
-// A minimal, schema-valid benchmark definition with two rules
-// (section "1.1.1.1" and "1.1.1.2", payloadKey "1/1/1/1" and "1/1/1/2").
+// A minimal, schema-valid benchmark definition with two rules, identified by
+// id "1.1.1.1" and "1.1.1.2" (the sole per-rule identifier now - see
+// docs/payload-key-format.md).
 const char* const kBenchmarkJson = R"({
   "apiVersion": "v1",
   "kind": "BenchmarkDefinition",
@@ -43,21 +44,17 @@ const char* const kBenchmarkJson = R"({
   "spec": {
     "rules": [
       {
-        "section": "1.1.1.1",
-        "ruleId": "00000000-0000-0000-0000-000000000001",
         "ruleName": "TestingProceduresPass",
         "title": "Rule one",
-        "payloadKey": "1/1/1/1",
+        "id": "1.1.1.1",
         "tags": [],
         "metadata": {"description": "", "rationale": "", "fixtext": "", "references": "", "severity": "Low"},
         "payload": {"audit": {}, "remediate": {}, "parameters": {}}
       },
       {
-        "section": "1.1.1.2",
-        "ruleId": "00000000-0000-0000-0000-000000000002",
         "ruleName": "TestingProceduresPass",
         "title": "Rule two",
-        "payloadKey": "1/1/1/2",
+        "id": "1.1.1.2",
         "tags": [],
         "metadata": {"description": "", "rationale": "", "fixtext": "", "references": "", "severity": "Low"},
         "payload": {"audit": {}, "remediate": {}, "parameters": {}}
@@ -191,8 +188,8 @@ TEST_F(GeneratePlanTest, SeedsEveryRuleAtAudit)
     EXPECT_EQ(benchmark.file, path);
     EXPECT_EQ(benchmark.name, "test_benchmark");
     ASSERT_EQ(benchmark.rules.size(), 2u);
-    EXPECT_EQ(benchmark.rules.at("1/1/1/1").mode, ToggleMode::Audit);
-    EXPECT_EQ(benchmark.rules.at("1/1/1/2").mode, ToggleMode::Audit);
+    EXPECT_EQ(benchmark.rules.at("1.1.1.1").mode, ToggleMode::Audit);
+    EXPECT_EQ(benchmark.rules.at("1.1.1.2").mode, ToggleMode::Audit);
 }
 
 TEST_F(GeneratePlanTest, TogglesOverrideDefaultAndLastWriteWins)
@@ -219,10 +216,10 @@ TEST_F(GeneratePlanTest, TogglesOverrideDefaultAndLastWriteWins)
     ASSERT_EQ(planResult.Value().benchmarks.size(), 1u);
     const auto& rules = planResult.Value().benchmarks[0].rules;
 
-    ASSERT_EQ(rules.count("1/1/1/1"), 1u);
-    EXPECT_EQ(rules.at("1/1/1/1").mode, ToggleMode::Audit);
-    ASSERT_EQ(rules.count("1/1/1/2"), 1u);
-    EXPECT_EQ(rules.at("1/1/1/2").mode, ToggleMode::Enforce);
+    ASSERT_EQ(rules.count("1.1.1.1"), 1u);
+    EXPECT_EQ(rules.at("1.1.1.1").mode, ToggleMode::Audit);
+    ASSERT_EQ(rules.count("1.1.1.2"), 1u);
+    EXPECT_EQ(rules.at("1.1.1.2").mode, ToggleMode::Enforce);
 }
 
 TEST_F(GeneratePlanTest, UnknownSectionInToggleIsRejected)

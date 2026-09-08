@@ -174,7 +174,7 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
         {
             return Error("Canonical result JSON 'rules' entry is not an object", EINVAL);
         }
-        const string section = StringOrEmpty(json_object_get_string(rule, "section"));
+        const string id = StringOrEmpty(json_object_get_string(rule, "id"));
         const string ruleName = StringOrEmpty(json_object_get_string(rule, "ruleName"));
         const string status = StringOrEmpty(json_object_get_string(rule, "status"));
 
@@ -185,7 +185,7 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             return Error("Canonical result JSON rule has invalid 'status' value: '" + status + "'", EINVAL);
         }
 
-        cases << "  <testcase classname=\"" << EscapeXml(section) << "\" name=\"" << EscapeXml(ruleName) << "\"";
+        cases << "  <testcase classname=\"" << EscapeXml(id) << "\" name=\"" << EscapeXml(ruleName) << "\"";
         if (status == "NonCompliant")
         {
             ++failureCount;

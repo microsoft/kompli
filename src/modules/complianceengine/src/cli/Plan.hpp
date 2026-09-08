@@ -37,11 +37,11 @@ struct PlanRuleMode
 };
 
 // A parsed plan file's entry for one benchmark file (see docs/CLI.md's
-// "plan / run" section and docs/payload-key-format.md \u00a77 for the on-disk
+// "plan / run" section and docs/payload-key-format.md section 7 for the on-disk
 // JSON shape). Rules absent from `rules` are rules the plan author
-// deliberately left out; `run` skips them. Keyed by `payloadKey` (the rule's
-// opaque payload-key remainder, unique within this one file), not `section`
-// - see docs/payload-key-format.md \u00a76.
+// deliberately left out; `run` skips them. Keyed by `id` (the rule's sole
+// per-rule identifier, unique within this one file) - see
+// docs/payload-key-format.md section 6/12.
 struct PlanBenchmark
 {
     std::string file;
@@ -53,7 +53,7 @@ struct PlanBenchmark
 // A parsed plan file: one or more benchmark entries. Each is independently
 // scoped (own file, own sha256, own rules map) so a single plan can mix
 // rules from multiple benchmark files (e.g. CIS + STIG) without copying rule
-// content - see docs/payload-key-format.md \u00a77. `run` hard-fails the whole
+// content - see docs/payload-key-format.md section 7. `run` hard-fails the whole
 // plan if any entry's file doesn't apply to the current host (no partial
 // results from a mismatched entry).
 struct Plan
@@ -68,13 +68,13 @@ struct Plan
 Result<std::string> HashFile(const std::string& path, OsConfigLogHandle logHandle);
 
 // Generates a plan for `benchmarkFile`: every rule is seeded at `audit`, then
-// `toggles` (given by `section`, resolved internally to each rule's
-// payloadKey) are applied in order (last write per rule wins). Returns the
+// `toggles` (given by `section`, resolved internally to each rule's `id`)
+// are applied in order (last write per rule wins). Returns the
 // plan serialized as pretty JSON, wrapping a single-entry `benchmarks` array
-// - combining plans from multiple files (docs/payload-key-format.md \u00a77) is
+// - combining plans from multiple files (docs/payload-key-format.md section 7) is
 // currently a manual edit (concatenate `benchmarks` arrays), not a CLI
 // feature yet. Fails if a toggle references a section the benchmark file
-// doesn't have (fail-fast validation, see docs/CLI.md \u00a72).
+// doesn't have (fail-fast validation, see docs/CLI.md section 2).
 Result<std::string> GeneratePlan(const std::string& benchmarkFile, const std::vector<Toggle>& toggles, OsConfigLogHandle logHandle);
 
 // Parses a plan file from disk, applying the same input-hardening posture as

@@ -66,8 +66,7 @@
       "required": [
         "indicators",
         "title",
-        "ruleId",
-        "section",
+        "id",
         "ruleName",
         "status",
         "parameters"
@@ -81,13 +80,9 @@
           "type": "string",
           "description": "Human-readable rule title (the ResourceID; reuses the definition's field name)."
         },
-        "ruleId": {
+        "id": {
           "type": "string",
-          "description": "Stable, benchmark-agnostic rule identifier (UUID derived from the payload key)."
-        },
-        "section": {
-          "type": "string",
-          "description": "Externally-quoted per-rule identifier (dotted CIS number or STIG id)."
+          "description": "The rule's sole externally-quoted identifier: the payload key remainder (opaque, unique within the benchmark file it was evaluated from - e.g. '1.1.1.1' for CIS, 'SV-260469' for STIG - see docs/payload-key-format.md). No separate UUID ruleId field - that lives only in the MOF now, still reconstructible from this id (UUID(sha256(full payload key)))."
         },
         "ruleName": {
           "type": "string",

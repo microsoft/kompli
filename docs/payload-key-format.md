@@ -7,6 +7,14 @@ each one stores. Cross-referenced from
 [CLI.md](CLI.md#2-plan--run-per-rule-granularity-implemented) (plan/run key
 choice) and [architecture.md](architecture.md).
 
+**Terminology note (§12): kompli's own JSON contracts (definition schema,
+result schema, `Resource`) no longer call this field `payloadKey` — it's
+`id`. This document keeps using `payloadKey`/"payload key" throughout as the
+name for the *conceptual* MOF-era string (prefix + remainder) being
+discussed, since that's still the term for the full slash-form key the MOF
+carries; §11/§12 narrate exactly when and why the per-rule JSON field itself
+was renamed.**
+
 Status legend: **Decided** (agreed direction, not all pieces implemented yet),
 **Implemented**, **Deferred** (agreed to leave for later, explicitly out of
 scope for now).
@@ -14,7 +22,7 @@ scope for now).
 ## 1. Structure — Decided
 
 ```
-/<framework>/<distribution>/<distributionVersion>/<benchmarkVersion>/<section>
+/<framework>/<distribution>/<distributionVersion>/<benchmarkVersion>/<remainder>
 ```
 
 | # | Segment | Example | Notes |
@@ -23,7 +31,7 @@ scope for now).
 | 2 | `distribution` | `ubuntu`, `azurelinux` | Matched against the host's detected distribution. |
 | 3 | `distributionVersion` | `22.04`, `3.*` | `fnmatch`-style glob, matched against the host's `VERSION_ID`. |
 | 4 | `benchmarkVersion` | `v2.0.0` | **Decided:** always `v`-prefixed, for every framework. STIG's existing generator omits the `v` (`2.5.0`) — see §4, this is being fixed since STIG is still early-stage. Opaque beyond the prefix requirement: kompli never parses or validates the rest of this segment, it's stored as-is. |
-| 5+ | `section` (the "remainder") | `1/1/1/1` (CIS), `SV-260469` (STIG) | Framework-defined shape, **opaque to kompli** — see §2. Only required to be unique within one file (see §5's duplicate-key enforcement). |
+| 5+ | `payloadKey` (the "remainder") | `1.1.1.1` (CIS), `SV-260469` (STIG) | Framework-defined shape, **opaque to kompli** — see §2. The sole externally-quoted per-rule identifier (§11 — a separate `section` field used to exist, now eliminated; §12 — later renamed to `id`, and the separate `ruleId` field removed from kompli's own schema). Only required to be unique within one file (see §5's duplicate-key enforcement). |
 
 Verified empirically (not assumed): every rule in a real committed definition
 file shares exactly one distinct 4-segment prefix — checked via `jq` across
@@ -55,6 +63,10 @@ source for anything display-facing (CLI `-s/--section` filtering,
 verbatim on `BenchmarkIO::Resource::section`. It is not required to be
 algorithmically re-derivable from the payload key, and (see §5) uniqueness is
 now enforced on `payloadKey`, not `section`.
+
+**Update (§11): `section` itself was later eliminated as a separate field —
+`payloadKey` became the sole per-rule identifier, dot-form for CIS. The
+`Resource::section` field this paragraph describes no longer exists.**
 
 ## 3. Unified definition file: hoisted prefix — Decided, Implemented (kompli side only — see §10)
 
@@ -249,47 +261,153 @@ does not extend to CIS, which is GA'ed.
   both frameworks (`BenchmarkInfoTest.cpp`'s `Valid_Stig` test asserts the
   `/stig/...` round-trip).
 
-## 10. Augmentation-engine-side work not started — blocking gap
+## 10. Augmentation-engine-side work — Decided, Implemented
 
-Everything above (§2, §3, §5, §6, §7) is **implemented on the kompli
-(C++) side only**. The augmentation-engine Python generator
-(`tools/compliancectl/`) has not been touched, and this is a real,
-currently-blocking incompatibility, not a future formality:
+Everything in §2, §3, §5, §6, §7 is now implemented on **both** sides:
+kompli (C++) and augmentation-engine (Python, `tools/compliancectl/`). This
+section previously documented a real, verified blocking gap (the generator
+hadn't been updated and every committed file failed to parse); that gap is
+now closed:
 
-- **Verified via `jq` against real committed files**: every
-  `data/definitions/*.benchmark.json` file's `metadata.annotations.
-  benchmarkVersion` is **not** `v`-prefixed today (e.g. `"1.0.0"`,
-  `"2.5.0"`), for CIS files as well as STIG (checked
-  `cis_aks_optimized_azure_linux_3_benchmark_v1.0.0.benchmark.json`,
-  `cis_ubuntu_linux_24.04_lts_benchmark_v1.0.0.benchmark.json`,
-  `disa_stig_ubuntu_22.04_lts_v2.5.0.benchmark.json`). This fails both the
-  JSON schema's new `^v.+` pattern and `CISBenchmarkInfo::FromMetadata`'s
-  `benchmarkVersion[0] == 'v'` check (§3, §8) — **all 28 committed
-  definition files currently fail to parse** under the kompli build produced
-  in this round. `metadata.labels.framework`/`.distribution`/
-  `.distributionVersion` are already present with correct values in the
-  files checked (the generator already derives them from the first rule's
-  payload key), so only the `benchmarkVersion` annotation's missing prefix
-  is the blocker on the labels/annotations side.
-- **`payloadKey` is not yet trimmed**: committed files still store the full
-  path (e.g. `"/cis/azurelinux/3.*/v1.0.0/1/1/1/1"`) rather than the
-  remainder (`"1/1/1/1"`). This does **not** fail parsing (kompli's parser no
-  longer validates `payloadKey`'s shape, only that it's present and unique —
-  §2, §5), but it means a plan generated against an un-regenerated file would
-  have to use the full path as its `rules` map key, defeating §6's ergonomics
-  goal, and it leaves the file's bytes not actually reflecting the "hoisted,
-  not repeated" design in §3.
-- **`rule.py`'s STIG `__get_payload_key()` still omits the `v` prefix**
-  (§8) — not yet fixed.
-- **Not started**: any regeneration of the 28 committed files, any change to
-  `rule.py`/`benchmark_def.py`/`mof.py`, any update to augmentation-engine's
-  own generator unit tests.
+- `rule.py`'s STIG `__get_payload_key()` now emits a `v`-prefixed
+  `benchmarkVersion` segment, matching CIS (§8).
+- `benchmark_def.py`'s `metadata.annotations.benchmarkVersion` is now sourced
+  from the payload key's own (already `v`-prefixed) 4th segment, not the raw
+  unprefixed XCCDF version string it used to echo — this was the actual root
+  cause of every committed file (CIS included) failing the new `^v.+`
+  pattern, not just STIG's missing prefix.
+- Each rule's `payloadKey` is trimmed to the remainder at generation time
+  (§11 — now the *sole* per-rule identifier, not a redundant pair with a
+  separate `section` field).
+- `common/definition_source.py`'s `DefinitionRule`/`DefinitionBenchmark`
+  (the `compliancectl get mof` replay path) reconstruct the full MOF key
+  from the file-level hoisted metadata + the stored remainder, preserving
+  §4's MOF-format-unchanged constraint for that path too.
+- All 28 committed `data/definitions/*.benchmark.json` files have been
+  regenerated and verified (via `jq`) to satisfy every requirement above.
+  **Verified empirically**: zero CIS `ruleId` changes across all 22 CIS
+  files (the no-churn requirement); all 835 changed `ruleId`s are confined
+  to the 6 STIG files (accepted per §8).
 
-**Practical consequence**: a real end-to-end `kompli plan`/`kompli run`
-against any currently-committed definition file will fail at the
-metadata-annotation-validation step until augmentation-engine's generator is
-updated (STIG `v`-prefix fix, `payloadKey` trimming, `ruleId` computed from
-the reconstructed full key — not the trimmed field) and the 28 files are
-regenerated. The round 15.7 successful real-host run recorded in repo memory
-predates this schema change and used the old (pre-hoisting) parser — it does
-not demonstrate the new schema working end-to-end.
+**Practical consequence, resolved**: a real `kompli plan`/`kompli run`
+against any currently-committed definition file no longer fails at the
+metadata-annotation-validation step described in the original version of
+this section.
+
+## 11. `section` eliminated — unified into `payloadKey` — Decided, Implemented
+
+Once the remainder became opaque (§2) and MOF-facing full-key parsing (§4)
+never decomposed it either, the definition file's separate `section` field
+and its `payloadKey` remainder carried near-duplicate information: identical
+for STIG, and for CIS differing *only* by separator (`section` used `.`,
+`payloadKey`'s remainder used `/` — a leftover of the old
+slash-to-dot-on-read derivation removed in §2, not a meaningful distinction).
+**Decided**: eliminate `section` as a separate concept. `payloadKey` is now
+the *sole* externally-quoted per-rule identifier, and it's dot-form for CIS
+(e.g. `1.1.1.1`), exactly what `section` always displayed — CIS's remainder
+is no longer path-like at all, since nothing decomposes it.
+
+- **Schema**: `section` removed from `benchmark.schema.json`'s and
+  `kompli-result.schema.json`'s rule `required`/`properties`. `payloadKey`'s
+  description updated to describe it as the identifier, not just an opaque
+  lookup key.
+- **`BenchmarkIO::Resource`**: the `section` field is gone; `payloadKey`
+  serves both roles (CLI `-s/--section` filtering, `--audit=<X>`/plan
+  lookup, and the canonical result's per-rule identifier).
+- **CLI surface, deliberately unchanged**: kompli's own flags
+  (`-s/--section`, `--audit=<section>`/`--remediate=<section>`/
+  `--enforce=<section>`) keep their existing names — renaming a public flag
+  is a separate UX decision this change doesn't force, and the values they
+  accept look identical to before (`1.1.1.1`-style strings) since `payloadKey`
+  now *is* what `section` used to display. Internally these flags now match
+  directly against `Resource::payloadKey`, with no translation step (the old
+  `section`→`payloadKey` resolution map in `GeneratePlan` is gone — the two
+  were the same map once `section` stopped existing separately).
+- **Augmentation-engine**: `rule.py`'s `get_section()` (unchanged — it
+  already computed the dot-form CIS remainder via `__get_section`'s existing
+  `/`→`.` replace) is now the *sole* source `benchmark_def.py` uses for the
+  serialized `payloadKey` field, replacing the separate
+  section-uniqueness-check-plus-independently-trimmed-payloadKey pair with
+  one value, one uniqueness check.
+- **MOF special-case handler (the hard requirement this section exists to
+  satisfy)**: the MOF format's `PayloadKey` must stay byte-identical to
+  today's slash-separated full key (§4) — unaffected for the XCCDF-direct
+  path, since `XccdfRule.get_key()` was never changed (`__get_payload_key`
+  still builds the full slash-form key for `ruleId` hashing and MOF
+  generation, unrelated to what `benchmark_def.py` now separately derives
+  for the definition file). The path that *does* need a handler is the
+  definition-replay MOF path (`compliancectl get mof` sourcing from a
+  committed definition instead of XCCDF, via `common/definition_source.py`):
+  `DefinitionRule.get_key()` now converts a CIS `payloadKey`'s dots back to
+  slashes (`self._framework == "cis"` gate) before concatenating it onto the
+  file-level hoisted prefix, reconstructing the exact original MOF key.
+  STIG's `payloadKey` has no dots to convert either way.
+- **Result schema**: `kompli-result.schema.json`'s per-rule `section` is
+  gone too, for the same reason — `JUnitRenderer`/`TextRenderers` (and any
+  external consumer, e.g. `tests/plan_run_test.sh` in augmentation-engine)
+  now read `payloadKey` from the canonical result instead.
+- **Verified**: all 28 committed definitions and the 7
+  `tests/remediation/*/definition.benchmark.json` fixtures regenerated/
+  hand-fixed and confirmed `section`-free with `payloadKey` present (`jq`);
+  kompli C++ `get_errors` clean workspace-wide; augmentation-engine's full
+  pytest suite green; `tests/plan_run_test.sh`'s jq pipeline dry-run
+  end-to-end against real regenerated CIS/STIG definitions.
+
+## 12. `payloadKey` renamed to `id`; `ruleId` removed from kompli's own schema — Decided, Implemented
+
+Once §11 unified `section` away, `payloadKey` was kompli's sole per-rule
+identifier — but the name was a holdover from when it doubled as a lookup key
+into the full MOF-style payload key. Now that it's just an opaque, per-rule
+string, keeping the name `payloadKey` was misleading (kompli itself never
+sees a "payload key" in the original MOF sense — only the definition file's
+`id`). Separately, `ruleId` (the UUID hash) had never been consumed by any
+kompli-internal code path — it existed purely for the benefit of external
+consumers reconstructing the pre-unification MOF/Azure-Policy identity.
+
+**Decided**: rename `payloadKey` → `id` everywhere in kompli's own JSON
+contracts (definition schema, canonical result schema, `Resource`, CLI
+internals, renderers), and remove `ruleId` from those same contracts
+entirely. The only requirement is that the original MOF-era `payloadKey` and
+`ruleId` remain **reconstructible** — not that kompli itself carries them.
+
+- **Schema**: `benchmark.schema.json`'s and `kompli-result.schema.json`'s
+  rule `required`/`properties` drop `ruleId` and rename `payloadKey` to
+  `id`; both descriptions updated to state `id` is kompli's *only* per-rule
+  identifier.
+- **`BenchmarkIO::Resource`**: the `ruleId` field is gone; `payloadKey` is
+  renamed to `id`. Every consumer (`BenchmarkFormatter`, `Main.cpp`'s
+  `-s/--section` filter and plan lookup, `Plan.cpp`'s plan-file
+  keying/parsing, `JUnitRenderer`, `TextRenderers`) follows suit. The
+  `TextStyle::Debug` renderer's `(ruleId=...)` display segment is removed
+  outright, since the canonical result no longer carries the field.
+- **CLI surface, deliberately unchanged**: same as §11 — `-s/--section`,
+  `--audit=<section>` etc. keep their names; they now match against
+  `Resource::id`.
+- **Augmentation-engine**: `Rule.get_section()` (abstract, and every
+  concrete override — `XccdfRule`, `DefinitionRule`, test `MockRule`s) is
+  renamed to `get_id()`. `benchmark_def.py` no longer emits a `"ruleId"` key
+  in `rule_def`; its `"payloadKey"` key is renamed to `"id"`. `mof.py` and
+  `policy.py`'s `rule.get_section()` calls become `rule.get_id()` — their
+  own `rule.get_uuid()`/`"RuleId"`/`"ruleId"` usages (the MOF's `RuleId` DSC
+  property, the Azure Policy artifact's `ref["ruleId"]`) are **unaffected**,
+  since those are MOF/Azure-Policy concerns, not kompli's own contract.
+- **Reconstructibility, the hard requirement this section exists to
+  satisfy**: `DefinitionRule.get_uuid()` previously read a stored
+  `self._d["ruleId"]` — now that the field no longer exists in the
+  definition file, it instead **recomputes** the same
+  `UUID(sha256(full_key))` formula `Rule.get_uuid()` uses, from
+  `self.get_key()` (which already reconstructs the full slash-form key via
+  §11's CIS dot→slash special handler). This means `compliancectl get mof`
+  sourcing from a committed definition still produces a byte-identical MOF
+  `RuleId`/`PayloadKey`, even though neither is stored in the definition
+  file any more — both are derived on demand from `id` plus the file-level
+  hoisted prefix (§3).
+- **Verified**: kompli C++ core, tests, and the 8 named fuzzer seed-corpus
+  fixtures all updated and `get_errors`-clean workspace-wide; the whole
+  augmentation-engine pytest suite green (including a rewritten
+  `test_get_key_and_uuid_come_from_definition` that computes the expected
+  hash rather than asserting a hardcoded stored value); all 28 committed
+  definitions and the 7 `tests/remediation/*/definition.benchmark.json`
+  fixtures regenerated/hand-fixed and confirmed `ruleId`-free with `id`
+  present (`jq`); `tests/plan_run_test.sh`'s jq pipeline updated
+  (`.payloadKey` → `.id`) and dry-run against real regenerated data.

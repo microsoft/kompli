@@ -22,27 +22,14 @@ struct Resource
     // JSON as `title`.
     std::string resourceID;
 
-    // Stable, benchmark-agnostic rule identifier (the definition's `ruleId`, a
-    // UUID derived from the payload key by the augmentation engine). Emitted in
-    // the canonical result JSON as `ruleId` so tooling can join to a rule
-    // reliably rather than matching on ruleName/section.
-    std::string ruleId;
-
-    // Externally-quoted per-rule identifier (dotted CIS section, STIG
-    // SV-XXXXX id, etc. - see docs/payload-key-format.md). Display/CLI-facing
-    // only (section filtering, --audit=<section> toggle resolution); verbatim
-    // copy of the rule's explicit `section` field, no longer required to be
-    // re-derivable from payloadKey (see BenchmarkDefinition.cpp).
-    std::string section;
-
-    // The rule's payload key, opaque beyond being unique within one file (see
-    // docs/payload-key-format.md \u00a72) - the identifier plan/run/the wire
-    // protocol/the task registry/the audit cache key on internally. Verbatim
-    // copy of the rule's `payloadKey` field; kompli never parses or transforms
-    // its contents (no distro/version live here anymore - see
-    // BenchmarkDefinition::BenchmarkDocument for the file-level prefix that
-    // used to be repeated per rule).
-    std::string payloadKey;
+    // Stable, benchmark-agnostic rule identifier (the definition's `id`).
+    // Emitted in the canonical result JSON as `id`. Formerly paired with a
+    // separate UUID `ruleId` field for external conformance; that field has
+    // been dropped from kompli's own schema/result - it lives only in the
+    // MOF now (still reconstructible there: UUID(sha256(full payload key)),
+    // see docs/payload-key-format.md §12) - so this is the sole per-rule
+    // identifier kompli carries.
+    std::string id;
 
     // The rule payload serialized as JSON. Passed to the ComplianceEngine as the
     // procedure; the engine parses plain JSON directly (Engine::SetProcedure).

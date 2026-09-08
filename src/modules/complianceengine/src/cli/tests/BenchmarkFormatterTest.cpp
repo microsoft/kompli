@@ -28,14 +28,12 @@ DistributionInfo TestDistribution()
     return DistributionInfo{};
 }
 
-Resource MakeResource(const std::string& section, const std::string& resourceID, const std::string& ruleId, const std::string& ruleName)
+Resource MakeResource(const std::string& id, const std::string& resourceID, const std::string& ruleName)
 {
     Resource r;
     r.resourceID = resourceID;
-    r.ruleId = ruleId;
     r.ruleName = ruleName;
-    r.section = section;
-    r.payloadKey = section;
+    r.id = id;
     return r;
 }
 
@@ -187,12 +185,12 @@ TEST(BenchmarkFormatterTest, HostBlockIsPopulatedFromDistributionInfo)
     EXPECT_STREQ(json_object_get_string(host, "distributionVersion"), "22.04");
 }
 
-TEST(BenchmarkFormatterTest, AddEntryEmitsTitleRuleIdSectionRuleNameStatus)
+TEST(BenchmarkFormatterTest, AddEntryEmitsTitleIdRuleNameStatus)
 {
     auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
-    auto entry = MakeResource("1.1.1", "1.1.1 Ensure something", "1234abcd-0000-0000-0000-000000000000", "EnsureSomething");
+    auto entry = MakeResource("1.1.1", "1.1.1 Ensure something", "EnsureSomething");
     ASSERT_FALSE(formatter.AddEntry(entry, Status::Compliant, "[]", {}).HasValue());
     auto result = std::move(formatter).Finish(Status::Compliant);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
@@ -206,14 +204,15 @@ TEST(BenchmarkFormatterTest, AddEntryEmitsTitleRuleIdSectionRuleNameStatus)
     ASSERT_NE(rule, nullptr);
 
     EXPECT_STREQ(json_object_get_string(rule, "title"), "1.1.1 Ensure something");
-    EXPECT_STREQ(json_object_get_string(rule, "ruleId"), "1234abcd-0000-0000-0000-000000000000");
-    EXPECT_STREQ(json_object_get_string(rule, "section"), "1.1.1");
+    EXPECT_STREQ(json_object_get_string(rule, "id"), "1.1.1");
     EXPECT_STREQ(json_object_get_string(rule, "ruleName"), "EnsureSomething");
     EXPECT_STREQ(json_object_get_string(rule, "status"), "Compliant");
     EXPECT_EQ(json_value_get_type(json_object_get_value(rule, "indicators")), JSONArray);
     EXPECT_EQ(json_value_get_type(json_object_get_value(rule, "parameters")), JSONObject);
     // The legacy alias must be gone.
     EXPECT_EQ(json_object_has_value(rule, "resourceID"), 0) << "resourceID must be renamed to title";
+    // ruleId is MOF-only now - kompli's own result no longer carries it.
+    EXPECT_EQ(json_object_has_value(rule, "ruleId"), 0) << "ruleId must not be in kompli's own result";
 }
 
 TEST(BenchmarkFormatterTest, IndicatorsPayloadIsEmbeddedVerbatim)
@@ -221,7 +220,7 @@ TEST(BenchmarkFormatterTest, IndicatorsPayloadIsEmbeddedVerbatim)
     auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
-    auto entry = MakeResource("2.3", "2.3 Rule", "id", "Rule");
+    auto entry = MakeResource("2.3", "2.3 Rule", "Rule");
     const std::string indicators = R"([{"message":"checked /etc/passwd","status":"Compliant"}])";
     ASSERT_FALSE(formatter.AddEntry(entry, Status::Compliant, indicators, {}).HasValue());
     auto result = std::move(formatter).Finish(Status::Compliant);
@@ -245,7 +244,7 @@ TEST(BenchmarkFormatterTest, NonCompliantEntryIsLabelled)
     auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
-    auto entry = MakeResource("3.1", "3.1 Rule", "id", "Rule");
+    auto entry = MakeResource("3.1", "3.1 Rule", "Rule");
     ASSERT_FALSE(formatter.AddEntry(entry, Status::NonCompliant, "[]", {}).HasValue());
     auto result = std::move(formatter).Finish(Status::NonCompliant);
     ASSERT_TRUE(result.HasValue());
@@ -261,7 +260,7 @@ TEST(BenchmarkFormatterTest, NotApplicableEntryIsLabelled)
     auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
-    auto entry = MakeResource("4.1", "4.1 Rule", "id", "Rule");
+    auto entry = MakeResource("4.1", "4.1 Rule", "Rule");
     ASSERT_FALSE(formatter.AddEntry(entry, Status::NotApplicable, "[]", {}).HasValue());
     auto result = std::move(formatter).Finish(Status::Compliant);
     ASSERT_TRUE(result.HasValue());
@@ -277,8 +276,8 @@ TEST(BenchmarkFormatterTest, MultipleEntriesArePreservedInOrder)
     auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
-    ASSERT_FALSE(formatter.AddEntry(MakeResource("1.1", "1.1 First", "id1", "First"), Status::Compliant, "[]", {}).HasValue());
-    ASSERT_FALSE(formatter.AddEntry(MakeResource("1.2", "1.2 Second", "id2", "Second"), Status::NonCompliant, "[]", {}).HasValue());
+    ASSERT_FALSE(formatter.AddEntry(MakeResource("1.1", "1.1 First", "First"), Status::Compliant, "[]", {}).HasValue());
+    ASSERT_FALSE(formatter.AddEntry(MakeResource("1.2", "1.2 Second", "Second"), Status::NonCompliant, "[]", {}).HasValue());
     auto result = std::move(formatter).Finish(Status::NonCompliant);
     ASSERT_TRUE(result.HasValue());
 
@@ -286,10 +285,8 @@ TEST(BenchmarkFormatterTest, MultipleEntriesArePreservedInOrder)
     ASSERT_NE(doc.object, nullptr);
     JSON_Array* rules = json_object_get_array(doc.object, "rules");
     ASSERT_EQ(json_array_get_count(rules), 2u);
-    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 0), "ruleId"), "id1");
-    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 1), "ruleId"), "id2");
-    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 0), "section"), "1.1");
-    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 1), "section"), "1.2");
+    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 0), "id"), "1.1");
+    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 1), "id"), "1.2");
 }
 
 TEST(BenchmarkFormatterTest, AddEntryRejectsNonArrayPayload)
@@ -297,7 +294,7 @@ TEST(BenchmarkFormatterTest, AddEntryRejectsNonArrayPayload)
     auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
-    auto entry = MakeResource("1.1", "1.1 Rule", "id", "Rule");
+    auto entry = MakeResource("1.1", "1.1 Rule", "Rule");
     // A JSON object (not an array) must be rejected.
     EXPECT_TRUE(formatter.AddEntry(entry, Status::Compliant, "{}", {}).HasValue());
 }
@@ -307,7 +304,7 @@ TEST(BenchmarkFormatterTest, AddEntryRejectsMalformedPayload)
     auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
-    auto entry = MakeResource("1.1", "1.1 Rule", "id", "Rule");
+    auto entry = MakeResource("1.1", "1.1 Rule", "Rule");
     EXPECT_TRUE(formatter.AddEntry(entry, Status::Compliant, "not json", {}).HasValue());
 }
 
@@ -316,7 +313,7 @@ TEST(BenchmarkFormatterTest, EffectiveParametersAreEmitted)
     auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
-    auto entry = MakeResource("1.1", "1.1 Rule", "id", "Rule");
+    auto entry = MakeResource("1.1", "1.1 Rule", "Rule");
     const std::map<std::string, std::string> params{{"mask", "0600"}, {"owner", "root"}};
     ASSERT_FALSE(formatter.AddEntry(entry, Status::Compliant, "[]", params).HasValue());
     auto result = std::move(formatter).Finish(Status::Compliant);

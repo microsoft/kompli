@@ -133,12 +133,12 @@ sequenceDiagram
     participant komplid as komplid (one process, one connection)
     participant Worker as forked worker
     participant DB as SQLite task/cache registry
-    Client->>komplid: { benchmark, payloadKey, mode: audit } (rule 1)
+    Client->>komplid: { benchmark, id, mode: audit } (rule 1)
     komplid-->>Client: result (fast rule)
-    Client->>komplid: { benchmark, payloadKey, mode: audit } (rule 2, slow)
+    Client->>komplid: { benchmark, id, mode: audit } (rule 2, slow)
     komplid->>Worker: fork() (BackgroundScan-style)
     komplid-->>Client: { taskId }
-    Client->>komplid: { benchmark, payloadKey, mode: audit } (rule 3)
+    Client->>komplid: { benchmark, id, mode: audit } (rule 3)
     komplid-->>Client: result (fast rule)
     Worker->>DB: write result (atomic)
     DB-->>komplid: completion detected (select()/SIGCHLD, not polling)

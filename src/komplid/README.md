@@ -207,7 +207,7 @@ or write it directly.
   surface) in front of a root-privileged daemon for no benefit on a local,
   single-purpose socket. `mpiclient` is not used by `komplid`.
 - **Request/response granularity: per-rule.** Decided. A request identifies
-  one rule (a `benchmark` + `payloadKey`) and one `mode`
+  one rule (a `benchmark` + `id`) and one `mode`
   (`audit` | `remediate` | `enforce`, the last a reserved placeholder — no
   working mechanism yet, deferred, but kept in every contract/roadmap so it's
   never forgotten — see below); the response is that rule's canonical result
@@ -223,16 +223,19 @@ or write it directly.
     decide how a mixed-mode batch response should look.
   - `kompli` is expected to gain its own "list benchmarks / rules in a
     benchmark" capability (reading the same directory) so it can enumerate
-    what to request; the daemon revalidating a `payloadKey` server-side is
+    what to request; the daemon revalidating an `id` server-side is
     defense-in-depth (e.g. a TOCTOU if the file changed underneath), not the
     primary error-reporting path.
-  - **`payloadKey`, not `ruleId`.** `ruleId` is a checksum *of* the payload
-    key, kept in the canonical result purely for external conformance (some
-    consumers already key off it) — it carries no information `payloadKey`
-    doesn't already have, so nothing internal (wire requests, the plan file,
-    the task registry, the audit cache) needs to reference it. Only
-    `payloadKey` is used internally. **Code note**: `BenchmarkIO::Resource`
-    now retains `payloadKey` verbatim (see `Resource.hpp`), and it's the
+  - **`id`, not `ruleId`.** `ruleId` is a checksum *of* the payload
+    key, needed only by external consumers reconstructing the pre-unification
+    MOF/Azure-Policy identity (some already key off it) — it carries no
+    information `id` doesn't already have, so nothing internal (wire
+    requests, the plan file, the task registry, the audit cache) needs to
+    reference it. kompli's own JSON contracts (definition schema, canonical
+    result schema, `Resource`) don't carry `ruleId` at all any more — see
+    [docs/payload-key-format.md §12](../../docs/payload-key-format.md#12-payloadkey-renamed-to-id-ruleid-removed-from-komplis-own-schema--decided-implemented).
+    Only `id` is used internally. **Code note**: `BenchmarkIO::Resource`
+    now retains `id` verbatim (see `Resource.hpp`), and it's the
     opaque remainder only (the hoisted file-level prefix lives on
     `BenchmarkDocument::benchmarkInfo` instead — see
     [docs/payload-key-format.md §3](../../docs/payload-key-format.md#3-unified-definition-file-hoisted-prefix--decided-implemented-kompli-side-only--see-10)) —
@@ -257,7 +260,7 @@ or write it directly.
   // omitted or empty means "use this rule's defaults" (see docs/CLI.md's
   // "Parametrization" section - kompli/komplid fold in the parameter
   // overrides GC/NRP already supports, via the plan file).
-  { "requestId": "1", "benchmark": "cis_ubuntu24.04", "payloadKey": "...", "mode": "audit", "parameters": {} }
+  { "requestId": "1", "benchmark": "cis_ubuntu24.04", "id": "...", "mode": "audit", "parameters": {} }
 
   // Responses all share {type, requestId}; shape beyond that depends on type:
   { "type": "result",     "requestId": "1", "result": { /* canonical per-rule result */ } }
@@ -267,8 +270,8 @@ or write it directly.
   { "type": "error",      "requestId": "1", "code": "...", "message": "..." }
   ```
 
-  The `error` type is what a malformed request, an unknown `benchmark`, a
-  `payloadKey` that fails server-side revalidation, or an internal failure
+  The `error` type is what a malformed request, an unknown `benchmark`, an
+  `id` that fails server-side revalidation, or an internal failure
   produces — distinct from a rule that ran fine and reported `NonCompliant`,
   which is a normal `result`, not an error. Exact `code` taxonomy: **not yet
   decided**, tracked as a TODO alongside the rest of this envelope.
@@ -301,17 +304,17 @@ in the background:
   procedures) that opt into backgrounding; everything else runs
   synchronously by default.
 - **Duplicate concurrent requests: attach to the existing task.** Decided
-  direction: if a request for the same `(benchmark, payloadKey, mode)` arrives
+  direction: if a request for the same `(benchmark, id, mode)` arrives
   while a task for it is already in flight, attach the new request to the
   existing task (return/correlate to its `taskId`) rather than starting a
   second one — avoids redundant work, and for `remediate` specifically avoids
   re-opening the "must not run concurrently" problem the remediation lock
   exists to close. **Open, deferred to a future planning session**: this is
   exactly where parametrization (see `docs/CLI.md`) bites — rules can be
-  parametrized, so two requests for the same `(benchmark, payloadKey, mode)`
+  parametrized, so two requests for the same `(benchmark, id, mode)`
   could carry *different* `parameters`, in which case they are not actually
   the same request and naively attaching would be wrong. Dedup needs to
-  compare `parameters` too, not just `(benchmark, payloadKey, mode)`. Needs
+  compare `parameters` too, not just `(benchmark, id, mode)`. Needs
   its own design pass once the daemon-split work resumes — tracked as a
   TODO, not solved here.
 - **Delivery: push while connected, pull if not.** The connection-owning
@@ -344,8 +347,8 @@ in the background:
   for real and are never served from a cache — the caller needs confirmation
   the action ran *this time*.
 - **Storage: the same SQLite database**, keyed by rule **and its
-  parameters** (`benchmark` + `payloadKey` + `parameters`) — not just
-  `(benchmark, payloadKey)`. Two audits of the same rule with different
+  parameters** (`benchmark` + `id` + `parameters`) — not just
+  `(benchmark, id)`. Two audits of the same rule with different
   parameter overrides (e.g. checking for a different package name) can
   legitimately produce different results, so they must not share a cache
   entry. Storing the last audit result and its timestamp.

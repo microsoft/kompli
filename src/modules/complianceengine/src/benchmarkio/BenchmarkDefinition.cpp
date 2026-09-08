@@ -126,25 +126,15 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
     {
         return title.Error();
     }
-    auto ruleId = RequiredString(ruleObject, "ruleId", context);
-    if (!ruleId.HasValue())
-    {
-        return ruleId.Error();
-    }
     auto ruleName = RequiredString(ruleObject, "ruleName", context);
     if (!ruleName.HasValue())
     {
         return ruleName.Error();
     }
-    auto payloadKey = RequiredString(ruleObject, "payloadKey", context);
-    if (!payloadKey.HasValue())
+    auto id = RequiredString(ruleObject, "id", context);
+    if (!id.HasValue())
     {
-        return payloadKey.Error();
-    }
-    auto section = RequiredString(ruleObject, "section", context);
-    if (!section.HasValue())
-    {
-        return section.Error();
+        return id.Error();
     }
     auto procedure = SerializeProcedure(ruleObject, context);
     if (!procedure.HasValue())
@@ -154,13 +144,12 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
 
     Resource resource;
     resource.resourceID = std::move(title.Value());
-    resource.ruleId = std::move(ruleId.Value());
-    resource.section = std::move(section.Value());
-    // payloadKey is opaque here (see docs/payload-key-format.md §2): the
-    // file-level prefix now lives once on BenchmarkDocument::benchmarkInfo,
-    // so this is just the rule's remainder, stored verbatim - no parsing, no
-    // slash-to-dot conversion, no cross-validation against `section`.
-    resource.payloadKey = std::move(payloadKey.Value());
+    // id is opaque here (see docs/payload-key-format.md §2): the file-level
+    // prefix lives once on BenchmarkDocument::benchmarkInfo, so this is just
+    // the rule's remainder, stored verbatim - no parsing. It's kompli's sole
+    // per-rule identifier - there is no separate ruleId field in this
+    // schema (see docs/payload-key-format.md §12).
+    resource.id = std::move(id.Value());
     resource.procedure = std::move(procedure.Value());
     resource.ruleName = std::move(ruleName.Value());
     // Every rule carries an init object.
@@ -278,11 +267,11 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
     doc.name = std::move(name.Value());
     doc.benchmarkInfo = std::move(benchmarkInfo.Value());
     doc.resources.reserve(ruleCount);
-    // Rules already seen, keyed by payloadKey - the identifier guaranteed
-    // unique within one file (docs/payload-key-format.md §1/§6); plan/run key
+    // Rules already seen, keyed by id - the identifier guaranteed unique
+    // within one file (docs/payload-key-format.md §1/§6/§12); plan/run key
     // on it directly, so a duplicate here would make a rule reference
     // ambiguous.
-    std::set<string> seenPayloadKeys;
+    std::set<string> seenIds;
     for (size_t i = 0; i < ruleCount; ++i)
     {
         const JSON_Object* ruleObject = json_array_get_object(rules, i);
@@ -297,9 +286,9 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
             OsConfigLogError(logHandle, "Failed to parse benchmark definition rule #%zu: %s", i, resource.Error().message.c_str());
             return resource.Error();
         }
-        if (!seenPayloadKeys.insert(resource.Value().payloadKey).second)
+        if (!seenIds.insert(resource.Value().id).second)
         {
-            return Error("Benchmark definition rule #" + std::to_string(i) + " has a duplicate payloadKey: '" + resource.Value().payloadKey + "'", EINVAL);
+            return Error("Benchmark definition rule #" + std::to_string(i) + " has a duplicate id: '" + resource.Value().id + "'", EINVAL);
         }
         doc.resources.push_back(std::move(resource.Value()));
     }

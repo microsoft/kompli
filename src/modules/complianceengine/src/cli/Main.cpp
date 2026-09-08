@@ -336,7 +336,7 @@ int main(int argc, char* argv[])
 
     // `audit`/`remediate` process exactly one file (options.input, the same
     // mode for every rule); `run` processes every benchmark entry in the plan
-    // (docs/payload-key-format.md \u00a77 - a plan can mix rules from multiple
+    // (docs/payload-key-format.md section 7 - a plan can mix rules from multiple
     // files, e.g. CIS + STIG), each independently hash-checked and
     // applicability-checked, accumulating into one combined result.
     const size_t benchmarkCount = (Command::Run == options.command) ? plan.Value().benchmarks.size() : 1;
@@ -346,7 +346,7 @@ int main(int argc, char* argv[])
 
         // `run` re-checks each benchmark file's hash against the one recorded
         // when the plan was generated - belt-and-suspenders against drift
-        // between plan generation and execution (see docs/CLI.md \u00a72's TOCTOU
+        // between plan generation and execution (see docs/CLI.md section 2's TOCTOU
         // note). A mismatch is a hard error: the plan's rule references were
         // only validated against the file as it existed at generation time.
         if (Command::Run == options.command)
@@ -380,7 +380,7 @@ int main(int argc, char* argv[])
         }
         const auto& doc = docResult.Value();
 
-        // Validate applicability once per file (docs/payload-key-format.md \u00a75) -
+        // Validate applicability once per file (docs/payload-key-format.md section 5) -
         // every rule in one file shares the same distro/version prefix, so this
         // is the only check possible now that rules no longer carry their own
         // (see BenchmarkIO::Resource). A mismatch hard-fails the whole run: for
@@ -403,7 +403,7 @@ int main(int argc, char* argv[])
         {
             if (options.section.HasValue())
             {
-                if (entry.section.find(options.section.Value()) != 0)
+                if (entry.id.find(options.section.Value()) != 0)
                 {
                     OsConfigLogDebug(logHandle.get(), "Skipping entry %s as it does not match section %s", entry.resourceID.c_str(),
                         options.section.Value().c_str());
@@ -413,14 +413,14 @@ int main(int argc, char* argv[])
 
             // `audit`/`remediate` apply the same mode to every rule. `run`
             // looks the mode up per rule in this benchmark entry, keyed by
-            // payloadKey (docs/payload-key-format.md \u00a76) - a rule the plan
+            // id (docs/payload-key-format.md section 6/12) - a rule the plan
             // doesn't mention is one the plan author deliberately left out,
             // skip it entirely rather than guessing a mode.
             ToggleMode mode = (Command::Remediate == options.command) ? ToggleMode::Remediate : ToggleMode::Audit;
             if (Command::Run == options.command)
             {
                 const auto& rules = plan.Value().benchmarks[b].rules;
-                const auto it = rules.find(entry.payloadKey);
+                const auto it = rules.find(entry.id);
                 if (it == rules.end())
                 {
                     OsConfigLogDebug(logHandle.get(), "Skipping entry %s: not present in the plan", entry.resourceID.c_str());

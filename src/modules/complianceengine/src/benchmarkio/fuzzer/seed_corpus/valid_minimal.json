@@ -3,16 +3,15 @@
   "kind": "BenchmarkDefinition",
   "metadata": {
     "name": "cis_ubuntu_22.04_2.0.0",
-    "labels": { "distribution": "ubuntu", "distributionVersion": "22.04", "framework": "cis" }
+    "labels": { "distribution": "ubuntu", "distributionVersion": "22.04", "framework": "cis" },
+    "annotations": { "benchmarkVersion": "v2.0.0" }
   },
   "spec": {
     "rules": [
       {
-        "section": "1.1.1.1",
-        "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
         "ruleName": "EnsureCramfsKernelModuleIsNotAvailable",
         "title": "1.1.1.1 Ensure cramfs kernel module is not available",
-        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "id": "1.1.1.1",
         "tags": ["level:l1"],
         "metadata": {
           "description": "d",

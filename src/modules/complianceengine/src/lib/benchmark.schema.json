@@ -42,7 +42,8 @@
           "properties": {
             "framework": {
               "type": "string",
-              "description": "Benchmark framework, e.g. 'cis', 'stig'."
+              "enum": ["cis", "stig"],
+              "description": "Benchmark framework. Closed set matching kompli's BenchmarkType (BenchmarkInfo.cpp's sBenchmarkTypeMap); an unrecognised value is a hard parse error."
             },
             "distribution": {
               "type": "string",
@@ -98,35 +99,25 @@
       "type": "object",
       "additionalProperties": true,
       "required": [
-        "section",
-        "ruleId",
         "ruleName",
         "title",
-        "payloadKey",
+        "id",
         "tags",
         "metadata",
         "payload"
       ],
       "properties": {
-        "section": {
-          "type": "string",
-          "description": "Externally-quoted per-rule identifier (dotted CIS number or STIG id). Unique within a benchmark."
-        },
-        "ruleId": {
-          "type": "string",
-          "description": "Stable, benchmark-agnostic rule identifier (UUID derived from the payload key)."
-        },
         "ruleName": {
           "type": "string",
           "description": "PascalCase ComplianceEngine rule name."
         },
         "title": {
           "type": "string",
-          "description": "Human-readable rule title (section prefix + rule name)."
+          "description": "Human-readable rule title (id prefix + rule name)."
         },
-        "payloadKey": {
+        "id": {
           "type": "string",
-          "description": "The rule's payload key remainder (opaque, framework-defined shape - e.g. '1/1/1/1' for CIS, 'SV-260469' for STIG). The file-level framework/distribution/distributionVersion/benchmarkVersion prefix lives once in metadata.labels/annotations (see docs/payload-key-format.md), not repeated here. Unique within a benchmark; not parsed or transformed by kompli."
+          "description": "The rule's sole externally-quoted identifier: the payload key remainder (opaque, framework-defined shape - e.g. '1.1.1.1' for CIS, 'SV-260469' for STIG). The file-level framework/distribution/distributionVersion/benchmarkVersion prefix lives once in metadata.labels/annotations, not repeated here. Unique within a benchmark; not parsed or transformed by kompli. There is no separate UUID ruleId field in this schema - the augmentation engine still computes one (UUID(sha256(full payload key))) for the MOF, but kompli's own definition/result no longer carries it (see docs/payload-key-format.md)."
         },
         "tags": {
           "type": "array",
