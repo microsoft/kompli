@@ -1,7 +1,6 @@
 [
 {  "name": "almalinux-9",  "arch": "amd64",  "tag": "@sha256:27aba382812a4ad52f32589bc35dad62bc1bec966df6c3ca34e15eea83dfb6cd",  "git_label": "ghcr.io/microsoft/kompli/almalinux-9-amd64:git-db3dcdd446c78630f9d77b6ae3a471bb8f0acfdb"},
 {  "name": "azurelinux-3",  "arch": "amd64",  "tag": "@sha256:5e972f22e641d609dbf490f2116ddb0eb6f232bb5e7d9ac48e0fb827d93d9566",  "git_label": "ghcr.io/microsoft/kompli/azurelinux-3-amd64:git-db3dcdd446c78630f9d77b6ae3a471bb8f0acfdb"},
-{  "name": "debian-11",  "arch": "amd64",  "tag": "@sha256:e20cf517b760221019d67ed38d238bd0b50e2763c2b97c8ab0dd6ae67d879708",  "git_label": "ghcr.io/microsoft/kompli/debian-11-amd64:git-db3dcdd446c78630f9d77b6ae3a471bb8f0acfdb"},
 {  "name": "debian-12",  "arch": "amd64",  "tag": "@sha256:eeb284231a1c4035cab7bdddc36af1e2e5fa5cbfb7d0e9888aed8ad4101d7eef",  "git_label": "ghcr.io/microsoft/kompli/debian-12-amd64:git-db3dcdd446c78630f9d77b6ae3a471bb8f0acfdb"},
 {  "name": "oraclelinux-8",  "arch": "amd64",  "tag": "@sha256:fbd141a63c80f05c18cd78a69ceede010e67f06ef74faf915d5d4a12c040c496",  "git_label": "ghcr.io/microsoft/kompli/oraclelinux-8-amd64:git-db3dcdd446c78630f9d77b6ae3a471bb8f0acfdb"},
 {  "name": "rhel-8",  "arch": "amd64",  "tag": "@sha256:4d527bf8eb9a71a745f7f8d965c50d3a1e9b26a5c49c778a139479e4d54626a2",  "git_label": "ghcr.io/microsoft/kompli/rhel-8-amd64:git-db3dcdd446c78630f9d77b6ae3a471bb8f0acfdb"},
