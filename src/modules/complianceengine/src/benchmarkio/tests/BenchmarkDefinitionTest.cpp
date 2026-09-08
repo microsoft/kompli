@@ -86,7 +86,7 @@ std::string MakeDoc(const std::string& rulesArray)
 // piece of it.
 std::string MakeDocWithMetadata(const std::string& metadataObject, const std::string& rulesArray)
 {
-    return std::string(R"({"apiVersion":"v1","kind":"BenchmarkDefinition","metadata":)") + metadataObject + R"(,"spec":{"rules":)") + rulesArray + "}}";
+    return std::string(R"({"apiVersion":"v1","kind":"BenchmarkDefinition","metadata":)") + metadataObject + R"(,"spec":{"rules":)" + rulesArray + "}}";
 }
 
 std::string OneRuleDoc()
