@@ -5,6 +5,7 @@
 #ifndef COMPLIANCEENGINE_PROCEDURE_MAP_H
 #define COMPLIANCEENGINE_PROCEDURE_MAP_H
 
+#include <AideAttributes.h>
 #include <ApparmorProfileState.h>
 #include <AuditdRules.h>
 #include <CommandOutputMatch.h>
@@ -269,6 +270,16 @@ inline const std::map<std::string, SystemdConfigValueOperator>& MapEnum<SystemdC
     };
     return map;
 }
+
+// Defines the bindings for the AideAttributesParams structure.
+template <>
+struct Bindings<AideAttributesParams>
+{
+    using T = AideAttributesParams;
+    static constexpr size_t size = 3;
+    static const char* names[];
+    static constexpr auto members = std::make_tuple(&T::configPath, &T::filename, &T::attributes);
+};
 
 // Defines the bindings for the ApparmorProfileStateParams structure.
 template <>

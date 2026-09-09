@@ -11,6 +11,7 @@ find_package(Lua REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(PROCEDURES
+    procedures/AideAttributes.cpp
     procedures/NoShellAccountsLocked.cpp
     procedures/AuditdRules.cpp
     procedures/PasswdGroupsExist.cpp
@@ -57,6 +58,7 @@ set(PROCEDURES
     procedures/SshKeyPermissions.cpp
 )
 set(SCHEMAS
+    procedures/AideAttributes.schema.json
     procedures/NoShellAccountsLocked.schema.json
     procedures/AuditdRules.schema.json
     procedures/PasswdGroupsExist.schema.json

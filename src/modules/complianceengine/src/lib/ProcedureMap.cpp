@@ -8,6 +8,9 @@
 
 namespace ComplianceEngine
 {
+// AideAttributes.h:18
+const char* Bindings<AideAttributesParams>::names[] = {"configPath", "filename", "attributes"};
+
 // ApparmorProfileState.h:15
 const char* Bindings<ApparmorProfileStateParams>::names[] = {"enforce"};
 
@@ -102,6 +105,7 @@ const char* Bindings<UniqueGroupIdParams>::names[] = {"groupName", "gid"};
 const char* Bindings<UniqueUserIdParams>::names[] = {"username", "uid", "gid"};
 
 const ProcedureMap Evaluator::mProcedureMap = {
+    {"AideAttributes", {MakeHandler(AuditAideAttributes), nullptr}},
     {"ApparmorProfileState", {MakeHandler(AuditApparmorProfileState), nullptr}},
     {"AuditFailure", {MakeHandler(AuditAuditFailure), nullptr}},
     {"AuditGetParamValues", {MakeHandler(AuditAuditGetParamValues), nullptr}},
