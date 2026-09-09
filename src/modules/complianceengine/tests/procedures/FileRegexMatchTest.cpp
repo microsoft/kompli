@@ -68,6 +68,70 @@ protected:
     }
 };
 
+TEST_F(FileRegexMatchTest, NumericBoundsCheckEverySelectedLine)
+{
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex("1");
+    params.matchPattern = "^freq=([^ ]+)";
+    params.minimumValue = "1";
+    params.maximumValue = "100";
+    params.allMatches = true;
+    MakeTempfile("freq=1\nfreq=+00100\n");
+    auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    for (const auto& invalid : {"0", "101", "-1", "1x", "999999999999999999999999"})
+    {
+        std::ofstream output(mTempfiles[0]);
+        output << "freq=1\nfreq=" << invalid << "\n";
+        output.close();
+        result = AuditFileRegexMatch(params, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), Status::NonCompliant) << invalid;
+    }
+    params.maximumValue = "invalid";
+    EXPECT_FALSE(AuditFileRegexMatch(params, mIndicators, mContext).HasValue());
+}
+
+TEST_F(FileRegexMatchTest, AllSelectedSettingsRespectOptionalExistence)
+{
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex(".*");
+    params.matchPattern = "^rounds=([0-9]+)$";
+    params.minimumValue = "100000";
+    params.allMatches = true;
+    params.behavior = Behavior::AnyExist;
+    MakeTempfile("unrelated=1\n");
+    auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    MakeTempfile("rounds=100000\n");
+    for (const auto behavior : {Behavior::AnyExist, Behavior::AtLeastOneExists, Behavior::AllExist})
+    {
+        params.behavior = behavior;
+        result = AuditFileRegexMatch(params, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), Status::Compliant);
+    }
+    MakeTempfile("rounds=5000\n");
+    for (const auto behavior : {Behavior::AnyExist, Behavior::AtLeastOneExists, Behavior::AllExist})
+    {
+        params.behavior = behavior;
+        result = AuditFileRegexMatch(params, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), Status::NonCompliant);
+    }
+    params.path = string(mTempdir) + "/missing";
+    params.behavior = Behavior::AnyExist;
+    result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    params.path = mTempfiles[0];
+    EXPECT_FALSE(AuditFileRegexMatch(params, mIndicators, mContext).HasValue());
+}
+
 TEST_F(FileRegexMatchTest, Audit_InvalidArguments_1)
 {
     FileRegexMatchParams params;

@@ -18,6 +18,28 @@ using std::regex_constants::syntax_option_type;
 namespace
 {
 
+bool ParseInteger(const std::string& text, long long& value)
+{
+    if (text.empty())
+    {
+        return false;
+    }
+    const size_t firstDigit = (text[0] == '+' || text[0] == '-') ? 1 : 0;
+    if (firstDigit == text.size() || text.find_first_not_of("0123456789", firstDigit) != std::string::npos)
+    {
+        return false;
+    }
+    try
+    {
+        value = std::stoll(text);
+        return true;
+    }
+    catch (const std::exception&)
+    {
+        return false;
+    }
+}
+
 // syntax Options for matchPattern and statePattern respectively
 using MatchStateSyntaxOptions = std::pair<syntax_option_type, syntax_option_type>;
 
@@ -25,8 +47,8 @@ using MatchStateSyntaxOptions = std::pair<syntax_option_type, syntax_option_type
 // It reads the file line by line and checks each line against the matchPattern.
 // If a line matches the matchPattern, it checks if the statePattern (if provided) also matches.
 // Based on the result of the matches, true is returned if the file matches, false if it doesn't.
-Result<bool> MultilineMatch(const std::string& filename, const string& matchPattern, const Optional<string>& statePattern,
-    MatchStateSyntaxOptions syntaxOptions, ContextInterface& context)
+Result<bool> MultilineMatch(const std::string& filename, const string& matchPattern, const Optional<string>& statePattern, MatchStateSyntaxOptions syntaxOptions,
+    ContextInterface& context, const Optional<long long>& minimumValue, const Optional<long long>& maximumValue, bool allMatches, bool& selected)
 {
     // We still need to manually consume the patterns as strings as the case sensitivity is handled
     // dynamically depending on the ignoreCase field value.
@@ -53,6 +75,7 @@ Result<bool> MultilineMatch(const std::string& filename, const string& matchPatt
     }
 
     int lineNumber = 0;
+    bool matchingValueFound = false;
 
     string line;
 
@@ -64,6 +87,23 @@ Result<bool> MultilineMatch(const std::string& filename, const string& matchPatt
         smatch match;
         if (regex_search(line, match, matchRegex.Value()))
         {
+            selected = true;
+            const auto capturedValue = match.size() > 1 ? match[1].str() : match[0].str();
+            bool valueMatches = true;
+            if (minimumValue.HasValue() || maximumValue.HasValue())
+            {
+                long long numericValue = 0;
+                valueMatches = ParseInteger(capturedValue, numericValue) && (!minimumValue.HasValue() || numericValue >= minimumValue.Value()) &&
+                               (!maximumValue.HasValue() || numericValue <= maximumValue.Value());
+            }
+            if (!valueMatches)
+            {
+                if (allMatches)
+                {
+                    return false;
+                }
+                continue;
+            }
             OsConfigLogDebug(context.GetLogHandle(), "Matched line %d: %s", lineNumber, line.c_str());
             if (stateRegex.HasValue())
             {
@@ -74,22 +114,57 @@ Result<bool> MultilineMatch(const std::string& filename, const string& matchPatt
                 if (regex_search(valueToMatch, stateRegex.Value()))
                 {
                     OsConfigLogDebug(context.GetLogHandle(), "Matched line %d: %s", lineNumber, line.c_str());
-                    return true;
+                    matchingValueFound = true;
+                    if (!allMatches)
+                    {
+                        return true;
+                    }
+                }
+                else if (allMatches)
+                {
+                    return false;
                 }
             }
             else
             {
                 OsConfigLogDebug(context.GetLogHandle(), "Matched line %d: %s", lineNumber, line.c_str());
-                return true;
+                matchingValueFound = true;
+                if (!allMatches)
+                {
+                    return true;
+                }
             }
         }
     }
-    return false;
+    return matchingValueFound;
 }
 } // anonymous namespace
 
 Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
+    Optional<long long> minimumValue;
+    Optional<long long> maximumValue;
+    long long bound = 0;
+    if (params.minimumValue.HasValue())
+    {
+        if (!ParseInteger(params.minimumValue.Value(), bound))
+        {
+            return Error("Invalid minimumValue", EINVAL);
+        }
+        minimumValue = bound;
+    }
+    if (params.maximumValue.HasValue())
+    {
+        if (!ParseInteger(params.maximumValue.Value(), bound))
+        {
+            return Error("Invalid maximumValue", EINVAL);
+        }
+        maximumValue = bound;
+    }
+    if (minimumValue.HasValue() && maximumValue.HasValue() && minimumValue.Value() > maximumValue.Value())
+    {
+        return Error("minimumValue exceeds maximumValue", EINVAL);
+    }
     // These optional fields are guaranteed to have default values
     assert(params.matchOperation.HasValue());
     const auto matchOperation = params.matchOperation.Value();
@@ -131,6 +206,17 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
     if (dir == nullptr)
     {
         int status = errno;
+        if (params.allMatches.Value())
+        {
+            if (status != ENOENT)
+            {
+                return Error("Failed to open directory '" + params.path + "'", status);
+            }
+            if (behavior == Behavior::AnyExist)
+            {
+                return indicators.Compliant("No selected settings in missing directory '" + params.path + "'");
+            }
+        }
         OsConfigLogInfo(context.GetLogHandle(), "Failed to open directory '%s': %s", params.path.c_str(), strerror(status));
         if (Behavior::NoneExist == behavior)
         {
@@ -144,6 +230,7 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
     int mismatchCount = 0;
     int fileCount = 0;
     int errorCount = 0;
+    int unselectedCount = 0;
     struct dirent* entry = nullptr;
     for (errno = 0, entry = readdir(dir); nullptr != entry; errno = 0, entry = readdir(dir))
     {
@@ -175,11 +262,17 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
         }
         fileCount++;
         auto filename = params.path + "/" + entry->d_name;
-        auto matchResult = MultilineMatch(filename, params.matchPattern, params.statePattern, syntaxOptions, context);
+        bool selected = false;
+        auto matchResult = MultilineMatch(filename, params.matchPattern, params.statePattern, syntaxOptions, context, minimumValue, maximumValue,
+            params.allMatches.Value(), selected);
         if (!matchResult.HasValue())
         {
             OsConfigLogInfo(context.GetLogHandle(), "Failed to match file '%s': %s", filename.c_str(), matchResult.Error().message.c_str());
             errorCount++;
+        }
+        else if (params.allMatches.Value() && !selected)
+        {
+            unselectedCount++;
         }
         else if (matchResult.Value())
         {
@@ -203,9 +296,21 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
     // see https://oval.mitre.org/language/version5.9/ovalsc/documentation/oval-common-schema.html#ExistenceEnumeration for details
     OsConfigLogInfo(context.GetLogHandle(), "Validating pattern matching results, behavior: '%s', matched: %d, mismatched: %d, errors: %d",
         std::to_string(behavior).c_str(), matchCount, mismatchCount, errorCount);
-    if (matchCount + mismatchCount + errorCount != fileCount)
+    if (matchCount + mismatchCount + errorCount + unselectedCount != fileCount)
     {
         return Error("Counters mismatch");
+    }
+
+    if (params.allMatches.Value() && behavior != Behavior::NoneExist)
+    {
+        if (errorCount > 0)
+        {
+            return Error("Error occurred during pattern matching", EINVAL);
+        }
+        if (mismatchCount > 0)
+        {
+            return indicators.NonCompliant("At least one selected setting failed its state constraint");
+        }
     }
 
     if (Behavior::AllExist == behavior)
