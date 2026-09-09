@@ -51,7 +51,7 @@ Result<std::vector<std::string>> GetAllMatches(ContextInterface& context)
             std::string directive;
             lineStream >> directive;
 
-            std::transform(directive.begin(), directive.end(), directive.begin(), ::tolower);
+            directive = ToLower(directive);
 
             if (directive == "include")
             {
@@ -90,8 +90,8 @@ Result<std::vector<std::string>> GetAllMatches(ContextInterface& context)
             {
                 std::string type, value;
                 lineStream >> type >> value;
-                std::transform(type.begin(), type.end(), type.begin(), ::tolower);
-                std::transform(value.begin(), value.end(), value.begin(), ::tolower);
+                type = ToLower(type);
+                value = ToLower(value);
                 if ((type == "user") || (type == "group") || (type == "host") || (type == "port") || (type == "address") || (type == "localaddress"))
                 {
                     // The Match criteria value may be a comma-separated pattern list, e.g.
@@ -185,8 +185,8 @@ Result<std::map<std::string, std::string>> GetSshdOptions(ContextInterface& cont
             std::string optionValue;
             std::getline(lineStream, optionValue);
             optionValue.erase(0, optionValue.find_first_not_of(" \t"));
-            std::transform(currentOption.begin(), currentOption.end(), currentOption.begin(), ::tolower);
-            std::transform(optionValue.begin(), optionValue.end(), optionValue.begin(), ::tolower);
+            currentOption = ToLower(currentOption);
+            optionValue = ToLower(optionValue);
             options[currentOption] = optionValue;
         }
     }
@@ -376,7 +376,7 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
     }
     for (auto& option : options)
     {
-        std::transform(option.begin(), option.end(), option.begin(), ::tolower);
+        option = ToLower(option);
     }
 
     std::vector<regex> valueRegexes;

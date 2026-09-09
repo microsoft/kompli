@@ -215,7 +215,8 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
             continue;
         }
         const auto matchEnd = static_cast<size_t>(searchMatch.position() + searchMatch.length());
-        if (searchItem.find("-S ") != std::string::npos && matchEnd < rule.size() && !std::isspace(rule[matchEnd]))
+        if (searchItem.find("-S ") != std::string::npos && matchEnd < rule.size() && !std::isspace(static_cast<unsigned char>(rule[matchEnd])) &&
+            (searchMatch.length() == 0 || !std::isspace(static_cast<unsigned char>(rule[matchEnd - 1]))))
         {
             continue;
         }
@@ -323,7 +324,7 @@ Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree&
         std::string syscall;
         while (std::getline(ss, syscall, ','))
         {
-            std::string searchItem = "-S ([^ \\t]+,)*" + syscall + "(,[^ \\t]+)*(?=[ \\t]|$)";
+            std::string searchItem = "-S ([^[:space:]]+,)*" + syscall + "(,[^[:space:]]+)*([[:space:]]|$)";
             auto runningResult = CheckRuleInList(runningRules, searchItem, excludeOption, requiredOptions, context, indicators);
             if (runningResult != Status::Compliant)
             {

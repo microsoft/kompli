@@ -265,6 +265,57 @@ TEST_F(AuditdRulesCheckTest, SyscallPrefixDoesNotMatchLongerSyscall)
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(AuditdRulesCheckTest, HighBitSyscallSuffixDoesNotSatisfyExactToken)
+{
+    const std::string rules = "-a always,exit -F arch=b64 -S unlink\x80 -F auid>=1000 -F auid!=unset\n";
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(rules)));
+
+    std::string dir = MakeTempDir();
+    ASSERT_FALSE(dir.empty());
+    std::string file = dir + "/deletion.rules";
+    WriteFile(file, rules);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", dir);
+
+    AuditdRulesParams params;
+    params.searchItem = "-S unlink";
+    params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)"};
+
+    auto result = AuditAuditdRules(params, indicators, mContext);
+
+    RemoveFile(file);
+    RemoveDir(dir);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(AuditdRulesCheckTest, SyscallMatchesTabAndEndOfLineBoundaries)
+{
+    const std::vector<std::string> ruleVariants = {"-a always,exit -F arch=b64 -S unlink\t-k deletion\n", "-a always,exit -F arch=b64 -S unlink\n"};
+    for (const auto& rules : ruleVariants)
+    {
+        EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(rules)));
+
+        std::string dir = MakeTempDir();
+        ASSERT_FALSE(dir.empty());
+        std::string file = dir + "/deletion.rules";
+        WriteFile(file, rules);
+        mContext.SetSpecialFilePath("/etc/audit/rules.d", dir);
+
+        AuditdRulesParams params;
+        params.searchItem = "-S unlink";
+        params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)"};
+
+        auto result = AuditAuditdRules(params, indicators, mContext);
+
+        RemoveFile(file);
+        RemoveDir(dir);
+
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), Status::Compliant) << rules;
+    }
+}
+
 TEST_F(AuditdRulesCheckTest, ParallelArchAndExitVariantsDoNotInvalidateRule)
 {
     const std::string rules =

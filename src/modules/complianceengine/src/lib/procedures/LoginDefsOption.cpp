@@ -6,8 +6,6 @@
 #include <LoginDefsOption.h>
 #include <ProcedureMap.h>
 #include <StringTools.h>
-#include <algorithm>
-#include <cctype>
 #include <sstream>
 #include <string>
 
@@ -53,12 +51,6 @@ Result<bool> StringComparison(const string& lhs, const string& rhs, ComparisonOp
     }
 
     return Error("Unsupported comparison operation for string value (only eq and ne are supported)", EINVAL);
-}
-
-string ToLower(string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), ::tolower);
-    return value;
 }
 
 Optional<string> FindLoginDefsValue(const string& fileContents, const string& optionName, OsConfigLogHandle logHandle)

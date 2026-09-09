@@ -177,7 +177,7 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
             return indicators.Compliant("No files in '" + directory + "' match the pattern as expected");
         }
 
-        OsConfigLogDebug(log, "No files in '%s' match the pattern but they shold", directory.c_str());
+        OsConfigLogDebug(log, "No files in '%s' match the pattern but they should", directory.c_str());
         return indicators.NonCompliant("No matching files found in '" + directory + "' but they should");
     }
     else if (Behavior::AtLeastOneExists == behavior)
