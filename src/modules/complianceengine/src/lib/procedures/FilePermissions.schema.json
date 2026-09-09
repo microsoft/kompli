@@ -70,6 +70,24 @@
                   "type": "string",
                   "description": "Whether to recurse"
                 },
+                "directoriesOnly": {
+                  "type": "string"
+                },
+                "allFileTypes": {
+                  "type": "string"
+                },
+                "excludeSymlinks": {
+                  "type": "string"
+                },
+                "excludeDirectories": {
+                  "type": "string"
+                },
+                "maximumUid": {
+                  "type": "string"
+                },
+                "maximumGid": {
+                  "type": "string"
+                },
                 "filePattern": {
                   "type": "string",
                   "description": "File pattern"
@@ -170,6 +188,24 @@
                 "recurse": {
                   "type": "string",
                   "description": "Whether to recurse"
+                },
+                "directoriesOnly": {
+                  "type": "string"
+                },
+                "allFileTypes": {
+                  "type": "string"
+                },
+                "excludeSymlinks": {
+                  "type": "string"
+                },
+                "excludeDirectories": {
+                  "type": "string"
+                },
+                "maximumUid": {
+                  "type": "string"
+                },
+                "maximumGid": {
+                  "type": "string"
                 },
                 "filePattern": {
                   "type": "string",

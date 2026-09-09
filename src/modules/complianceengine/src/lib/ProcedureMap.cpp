@@ -29,8 +29,8 @@ const char* Bindings<FileExistsParams>::names[] = {"filename"};
 // FilePermissions.h:36
 const char* Bindings<FilePermissionsParams>::names[] = {"path", "owner", "group", "permissions", "mask", "behavior"};
 
-// FilePermissions.h:68
-const char* Bindings<FilePermissionsCollectionParams>::names[] = {"directory", "recurse", "filePattern", "owner", "group", "permissions", "mask", "behavior"};
+// FilePermissions.h:80
+const char* Bindings<FilePermissionsCollectionParams>::names[] = {"directory", "recurse", "directoriesOnly", "allFileTypes", "excludeSymlinks", "excludeDirectories", "maximumUid", "maximumGid", "filePattern", "owner", "group", "permissions", "mask", "behavior"};
 
 // FileRegexMatch.h:64
 const char* Bindings<FileRegexMatchParams>::names[] = {"path", "filenamePattern", "matchOperation", "matchPattern", "stateOperation", "statePattern", "ignoreCase", "behavior"};

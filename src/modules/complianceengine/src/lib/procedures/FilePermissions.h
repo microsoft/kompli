@@ -46,6 +46,18 @@ struct FilePermissionsCollectionParams
     /// Whether to recurse
     Optional<bool> recurse = true;
 
+    Optional<bool> directoriesOnly = false;
+
+    Optional<bool> allFileTypes = false;
+
+    Optional<bool> excludeSymlinks = false;
+
+    Optional<bool> excludeDirectories = false;
+
+    Optional<int> maximumUid;
+
+    Optional<int> maximumGid;
+
     /// File pattern
     std::string filePattern;
 

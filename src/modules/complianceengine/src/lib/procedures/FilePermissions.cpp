@@ -4,6 +4,7 @@
 #include <CommonUtils.h>
 #include <Evaluator.h>
 #include <FilePermissions.h>
+#include <Regex.h>
 #include <Telemetry.h>
 #include <fcntl.h>
 #include <fnmatch.h>
@@ -28,15 +29,33 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
     assert(params.behavior.HasValue());
     const auto behavior = params.behavior.Value();
     auto log = context.GetLogHandle();
+    const bool numericOwnership = params.maximumUid.HasValue() || params.maximumGid.HasValue();
+    if ((params.maximumUid.HasValue() && params.maximumUid.Value() < 0) || (params.maximumGid.HasValue() && params.maximumGid.Value() < 0) ||
+        (params.allFileTypes.Value() && (params.directoriesOnly.Value() || !numericOwnership)) ||
+        (params.excludeSymlinks.Value() && !params.allFileTypes.Value()) || (params.excludeDirectories.Value() && !params.allFileTypes.Value()) ||
+        (numericOwnership && ((behavior != Behavior::AnyExist && behavior != Behavior::AtLeastOneExists) || params.owner.HasValue() ||
+                                 params.group.HasValue() || params.mask.HasValue() || params.permissions.HasValue())))
+    {
+        return Error("Invalid numeric ownership collection parameters", EINVAL);
+    }
+    if (isRemediation && (numericOwnership || params.allFileTypes.Value()))
+    {
+        return Error("Numeric ownership collections are audit-only", ENOTSUP);
+    }
     auto directory = params.directory;
     // Respect explicit false; default behavior when unset is true
     bool recurse = params.recurse.ValueOr(true);
     char* const paths[] = {&directory[0], nullptr};
-    FTS* ftsp = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, nullptr);
+    const int walkFlags = FTS_PHYSICAL | FTS_NOCHDIR | (isRemediation ? 0 : FTS_COMFOLLOW);
+    FTS* ftsp = fts_open(paths, walkFlags, nullptr);
 
     if (!ftsp)
     {
-        if (Behavior::NoneExist == params.behavior.Value() || Behavior::CheckIfExists == params.behavior.Value())
+        if (numericOwnership && errno != ENOENT)
+        {
+            return Error("Cannot open ownership traversal for '" + directory + "'", errno);
+        }
+        if (Behavior::NoneExist == behavior || Behavior::CheckIfExists == behavior || Behavior::AnyExist == behavior)
         {
             OsConfigLogDebug(log, "Directory '%s' does not exist as expected ", directory.c_str());
             return indicators.Compliant("Directory '" + directory + "' does not exist as expected");
@@ -46,42 +65,91 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
     }
     auto ftspDeleter = std::unique_ptr<FTS, int (*)(FTS*)>(ftsp, fts_close);
 
+    Optional<regex> fileRegex;
+    try
+    {
+        fileRegex = regex(params.filePattern);
+    }
+    catch (const regex_error&)
+    {
+        // Shell globs such as "*.conf" are not valid regular expressions.
+    }
+
     FTSENT* entry = nullptr;
     int numberOfCompliantFiles = 0;
     int numberOfNonCompliantFiles = 0;
-    while (nullptr != (entry = fts_read(ftsp)))
+    while (true)
     {
-        if (FTS_F == entry->fts_info && (recurse || entry->fts_level == 1))
+        errno = 0;
+        entry = fts_read(ftsp);
+        if (entry == nullptr)
         {
-            if (0 == fnmatch(params.filePattern.c_str(), entry->fts_name, 0))
+            if (numericOwnership && errno != 0)
+            {
+                return Error("Cannot finish ownership traversal", errno);
+            }
+            break;
+        }
+        if (numericOwnership && (entry->fts_info == FTS_ERR || entry->fts_info == FTS_DNR || entry->fts_info == FTS_NS))
+        {
+            if (entry->fts_level == 0 && entry->fts_errno == ENOENT)
+            {
+                continue;
+            }
+            return Error("Cannot inspect ownership of '" + std::string(entry->fts_path) + "'", entry->fts_errno);
+        }
+        const bool selectedType = params.allFileTypes.Value() ?
+                                      (entry->fts_level > 0 && (entry->fts_info == FTS_F || entry->fts_info == FTS_D || entry->fts_info == FTS_SL ||
+                                                                   entry->fts_info == FTS_SLNONE || entry->fts_info == FTS_DEFAULT)) :
+                                      (params.directoriesOnly.Value() ? FTS_D == entry->fts_info : FTS_F == entry->fts_info);
+        const bool selectedDepth = recurse || entry->fts_level == (params.directoriesOnly.Value() ? 0 : 1);
+        const bool excludedLink = params.excludeSymlinks.Value() && (entry->fts_info == FTS_SL || entry->fts_info == FTS_SLNONE);
+        const bool excludedDirectory = params.excludeDirectories.Value() && entry->fts_info == FTS_D;
+        if (selectedType && selectedDepth && !excludedLink && !excludedDirectory)
+        {
+            if ((0 == fnmatch(params.filePattern.c_str(), entry->fts_name, 0)) || (fileRegex.HasValue() && regex_match(entry->fts_name, fileRegex.Value())))
             {
                 const char* fileName = entry->fts_path;
 
-                FilePermissionsParams subParams;
-                subParams.path = fileName;
-                subParams.owner = params.owner;
-                subParams.group = params.group;
-                subParams.permissions = params.permissions;
-                subParams.mask = params.mask;
-                subParams.behavior = params.behavior;
-                Result<Status> result =
-                    isRemediation ? RemediateFilePermissions(subParams, indicators, context) : AuditFilePermissions(subParams, indicators, context);
-                if (!result.HasValue())
+                if (numericOwnership)
                 {
-                    OsConfigLogError(log, "Error processing permissions for '%s'", fileName);
-                    OSConfigTelemetryStatusTrace(isRemediation ? "RemediateFilePermissions" : "AuditFilePermissions", result.Error().code);
-                    return result;
-                }
-
-                if (Status::NonCompliant == result.Value())
-                {
-                    numberOfNonCompliantFiles++;
-                    OsConfigLogInfo(log, "File '%s' does not match required permissions", fileName);
+                    const bool validUid = !params.maximumUid.HasValue() || entry->fts_statp->st_uid <= static_cast<uid_t>(params.maximumUid.Value());
+                    const bool validGid = !params.maximumGid.HasValue() || entry->fts_statp->st_gid <= static_cast<gid_t>(params.maximumGid.Value());
+                    if (!validUid || !validGid)
+                    {
+                        return indicators.NonCompliant("Ownership exceeds allowed ID on '" + std::string(fileName) +
+                                                       "': " + std::to_string(entry->fts_statp->st_uid) + ":" + std::to_string(entry->fts_statp->st_gid));
+                    }
+                    numberOfCompliantFiles++;
                 }
                 else
                 {
-                    numberOfCompliantFiles++;
-                    OsConfigLogDebug(log, "File '%s' matches required permissions", fileName);
+                    FilePermissionsParams subParams;
+                    subParams.path = fileName;
+                    subParams.owner = params.owner;
+                    subParams.group = params.group;
+                    subParams.permissions = params.permissions;
+                    subParams.mask = params.mask;
+                    subParams.behavior = params.behavior;
+                    Result<Status> result =
+                        isRemediation ? RemediateFilePermissions(subParams, indicators, context) : AuditFilePermissions(subParams, indicators, context);
+                    if (!result.HasValue())
+                    {
+                        OsConfigLogError(log, "Error processing permissions for '%s'", fileName);
+                        OSConfigTelemetryStatusTrace(isRemediation ? "RemediateFilePermissions" : "AuditFilePermissions", result.Error().code);
+                        return result;
+                    }
+
+                    if (Status::NonCompliant == result.Value())
+                    {
+                        numberOfNonCompliantFiles++;
+                        OsConfigLogInfo(log, "File '%s' does not match required permissions", fileName);
+                    }
+                    else
+                    {
+                        numberOfCompliantFiles++;
+                        OsConfigLogDebug(log, "File '%s' matches required permissions", fileName);
+                    }
                 }
             }
         }
@@ -91,7 +159,7 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
         }
     }
 
-    if (Behavior::CheckIfExists == behavior)
+    if (Behavior::CheckIfExists == behavior || Behavior::AnyExist == behavior)
     {
         if (numberOfNonCompliantFiles == 0)
         {
@@ -112,7 +180,7 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
         OsConfigLogDebug(log, "No files in '%s' match the pattern but they shold", directory.c_str());
         return indicators.NonCompliant("No matching files found in '" + directory + "' but they should");
     }
-    else if (Behavior::AnyExist == behavior || Behavior::AtLeastOneExists == behavior)
+    else if (Behavior::AtLeastOneExists == behavior)
     {
         if ((numberOfCompliantFiles > 0) && (numberOfNonCompliantFiles == 0))
         {
