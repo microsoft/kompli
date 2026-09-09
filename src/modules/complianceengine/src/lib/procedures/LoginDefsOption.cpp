@@ -6,6 +6,8 @@
 #include <LoginDefsOption.h>
 #include <ProcedureMap.h>
 #include <StringTools.h>
+#include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <string>
 
@@ -51,6 +53,12 @@ Result<bool> StringComparison(const string& lhs, const string& rhs, ComparisonOp
     }
 
     return Error("Unsupported comparison operation for string value (only eq and ne are supported)", EINVAL);
+}
+
+string ToLower(string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), ::tolower);
+    return value;
 }
 
 Optional<string> FindLoginDefsValue(const string& fileContents, const string& optionName, OsConfigLogHandle logHandle)
@@ -127,8 +135,11 @@ Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, Indicat
                                        params.value + ")");
     }
 
-    // Fall back to string comparison
-    auto result = StringComparison(foundValue.Value(), params.value, params.comparison);
+    // login.defs accepts ENCRYPT_METHOD names case-insensitively.
+    const bool ignoreCase = params.option == "ENCRYPT_METHOD";
+    const string actualValue = ignoreCase ? ToLower(foundValue.Value()) : foundValue.Value();
+    const string expectedValue = ignoreCase ? ToLower(params.value) : params.value;
+    auto result = StringComparison(actualValue, expectedValue, params.comparison);
     if (!result.HasValue())
     {
         return result.Error();
