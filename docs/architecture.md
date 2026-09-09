@@ -324,7 +324,7 @@ Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns 
 
 `kompli` (`src/modules/complianceengine/src/cli/`) is a standalone CLI tool that reads a benchmark-definition JSON file and drives the engine directly — no platform daemon, MPI, or RC/DC files are involved. Benchmark-definition parsing and the root-safe input-file checks live in the sibling `src/modules/complianceengine/src/benchmarkio/` library so `komplid` can reuse them later without depending on CLI-only presentation code.
 
-See [CLI.md](CLI.md) for the canonical, code-synced CLI contract (subcommands, flags, the `plan`/`run` per-rule model, plan file format) — this section only summarizes what's shipped today.
+See [cli.md](cli.md) for the canonical, code-synced CLI contract (subcommands, flags, the `plan`/`run` per-rule model, plan file format) — this section only summarizes what's shipped today.
 
 ### Commands
 
@@ -338,7 +338,7 @@ See [CLI.md](CLI.md) for the canonical, code-synced CLI contract (subcommands, f
 | `plan <file>` | Generate a plan file selecting a mode (audit/remediate/enforce) per rule. |
 | `run <plan-file>` | Execute a plan file (one or more benchmark files), emit one combined canonical result JSON. |
 
-See [CLI.md §2](CLI.md#2-plan--run-per-rule-granularity-implemented) for `plan`/`run`'s full contract (plan file format, per-rule mode selection, multi-benchmark plans).
+See [cli.md §2](cli.md#2-plan--run-per-rule-granularity-implemented) for `plan`/`run`'s full contract (plan file format, per-rule mode selection, multi-benchmark plans).
 
 ### Input
 

@@ -4,7 +4,7 @@ This document is the canonical spec for the `payloadKey` string every rule
 carries — its structure, what's guaranteed vs. opaque, and how the unified
 benchmark-definition file format and the MOF format diverge in how much of it
 each one stores. Cross-referenced from
-[CLI.md](CLI.md#2-plan--run-per-rule-granularity-implemented) (plan/run key
+[cli.md](cli.md#2-plan--run-per-rule-granularity-implemented) (plan/run key
 choice) and [architecture.md](architecture.md).
 
 **Terminology note (§12): kompli's own JSON contracts (definition schema,
@@ -149,7 +149,7 @@ given each format's structure:
 
 ## 6. Plan/run key by payload key, not `section` — Decided, Implemented
 
-Earlier design rounds (recorded in `docs/CLI.md`'s history) decided plan
+Earlier design rounds (recorded in `docs/cli.md`'s history) decided plan
 files key rules by the human-typeable `section` field, with `payloadKey`
 reserved for internal/wire use. **This is reversed**: plan/run key rules by
 the verbatim `payloadKey` remainder — it's the field actually guaranteed
@@ -169,7 +169,7 @@ guarded against**: if two rules in a file share the same `section` (not
 rejected — see §5, only `payloadKey` uniqueness is enforced), the
 `section`→`payloadKey` resolution map silently retains whichever one was
 parsed last; `--audit=<that section>` then resolves to that one arbitrarily.
-Out of scope for now (tracked in `CLI.md` §6).
+Out of scope for now (tracked in `cli.md` §6).
 
 **Implementation prerequisite — done**: `BenchmarkIO::Resource` now retains
 both `section` and `payloadKey` verbatim (`Resource.hpp`), so plan/run and
@@ -214,7 +214,7 @@ becomes a `benchmarks` **array**, each entry independently scoped:
 }
 ```
 
-Each block keeps its own `sha256` drift-check (§ old CLI.md §2) and its own
+Each block keeps its own `sha256` drift-check (§ old cli.md §2) and its own
 `rules` map, keyed by that file's rule remainder (§6) — since the prefix is
 scoped per block, rules don't need to repeat it. `run` validates each block
 independently: re-hashes that block's file, re-validates that block's rule

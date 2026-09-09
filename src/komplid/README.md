@@ -30,7 +30,7 @@ below) — real request handling is a separate, follow-up piece of work.
   `definitions/` directory of installed benchmark-definition files).
 - The `kompli` CLI will gain daemon-awareness (a CLI flag that checks for the
   socket) once this exists; today the CLI always runs the engine in-process.
-  See [docs/CLI.md](../../docs/CLI.md) for the canonical CLI contract,
+  See [docs/cli.md](../../docs/cli.md) for the canonical CLI contract,
   including the planned per-rule `plan`/`run` model this wire protocol is
   designed to match.
 
@@ -67,7 +67,7 @@ root itself, in exchange for talking to something that already does:
   `kompli`-group member could *write* there too, that would be a
   privilege-escalation path back to root — group membership must only ever
   grant read access. Membership is what lets the `kompli` CLI read benchmark
-  definitions (`list`/`plan`, see [docs/CLI.md](../../docs/CLI.md)) and
+  definitions (`list`/`plan`, see [docs/cli.md](../../docs/cli.md)) and
   connect to `komplid`'s socket without being root.
   **Packaging**: creating this user/group happens via `.deb`/`.rpm`
   packaging scriptlets - see the "Packaging" section below for what's
@@ -95,7 +95,7 @@ root itself, in exchange for talking to something that already does:
   is the default and always requires root, full stop; there is no
   lower-privilege path through it. Passthrough mode is only entered when the
   caller explicitly passes `--passthrough` (see
-  [docs/CLI.md](../../docs/CLI.md) §7) — the CLI never silently prefers the
+  [docs/cli.md](../../docs/cli.md) §7) — the CLI never silently prefers the
   daemon just because its socket happens to exist. Once `--passthrough` is
   requested, it requires `kompli` group membership (or root) to connect. If
   the mode actually in effect can't meet its own requirement — e.g.
@@ -257,7 +257,7 @@ or write it directly.
   // Request: requestId is client-assigned (e.g. an incrementing counter),
   // used to correlate a response (including a later, asynchronous task-done
   // push) back to the request that triggered it. parameters is optional -
-  // omitted or empty means "use this rule's defaults" (see docs/CLI.md's
+  // omitted or empty means "use this rule's defaults" (see docs/cli.md's
   // "Parametrization" section - kompli/komplid fold in the parameter
   // overrides GC/NRP already supports, via the plan file).
   { "requestId": "1", "benchmark": "cis_ubuntu24.04", "id": "...", "mode": "audit", "parameters": {} }
@@ -310,7 +310,7 @@ in the background:
   second one — avoids redundant work, and for `remediate` specifically avoids
   re-opening the "must not run concurrently" problem the remediation lock
   exists to close. **Open, deferred to a future planning session**: this is
-  exactly where parametrization (see `docs/CLI.md`) bites — rules can be
+  exactly where parametrization (see `docs/cli.md`) bites — rules can be
   parametrized, so two requests for the same `(benchmark, id, mode)`
   could carry *different* `parameters`, in which case they are not actually
   the same request and naively attaching would be wrong. Dedup needs to

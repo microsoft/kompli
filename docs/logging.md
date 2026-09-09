@@ -165,5 +165,5 @@ roadmap. The only remaining `OpenLog(path)` consumers are fixed, root-owned path
   — replaced by *eliminate the operator path*.
 - The "Residual TOCTOU" note in
   `src/modules/complianceengine/src/cli/THREAT_MODEL.md` — resolved by removal; that
-  note (and the `--log-file` mentions in `docs/CLI.md` / `docs/architecture.md`) are
+  note (and the `--log-file` mentions in `docs/cli.md` / `docs/architecture.md`) are
   updated when the change lands.
