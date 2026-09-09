@@ -36,7 +36,7 @@ bool MkdirRecursive(const std::string& path, mode_t mode)
             }
         }
     }
-    return true;
+    return ::chmod(path.c_str(), mode) == 0;
 }
 
 } // namespace ComplianceEngine

@@ -7,7 +7,7 @@
 namespace ComplianceEngine
 {
 
-bool MkdirRecursive(const std::string& path, mode_t mode = 0755);
+bool MkdirRecursive(const std::string& path, mode_t mode = 0700);
 
 } // namespace ComplianceEngine
 #endif // COMPLIANCEENGINE_DIRTOOLS_H

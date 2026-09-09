@@ -303,7 +303,7 @@ int main(int argc, char* argv[])
     if (options.telemetryEnabled)
     {
         std::string telemetry_log_path(telemetry_log_dir);
-        if (!ComplianceEngine::MkdirRecursive(telemetry_log_path, 0755))
+        if (!ComplianceEngine::MkdirRecursive(telemetry_log_path, 0700))
         {
             OsConfigLogError(logHandle.get(), "Failed to create telemetry directory %s: %d", telemetry_log_path.c_str(), errno);
         }
