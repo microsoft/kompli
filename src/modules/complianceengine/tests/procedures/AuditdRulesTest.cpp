@@ -186,6 +186,159 @@ TEST_F(AuditdRulesCheckTest, SyscallSearchCompliantWithOverridePath)
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(AuditdRulesCheckTest, SuppressingSyscallRuleOverridesCompliantRule)
+{
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l"))
+        .WillOnce(Return(Result<std::string>(std::string("-a always,exit -F arch=b64 -S execve -C uid!=euid -F auid!=unset\n"
+                                                         "-a never,exit -F arch=b64 -S execve -F exe=/usr/bin/ls\n"))));
+
+    std::string dir = MakeTempDir();
+    ASSERT_FALSE(dir.empty());
+    std::string file = dir + "/execve.rules";
+    WriteFile(file,
+        "-a always,exit -F arch=b64 -S execve -C uid!=euid -F auid!=unset\n"
+        "-a never,exit -F arch=b64 -S execve -F exe=/usr/bin/ls\n");
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", dir);
+
+    AuditdRulesParams params;
+    params.searchItem = "-S execve";
+    params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-C (euid!=uid|uid!=euid)", "-F auid!=(unset|-1|4294967295)"};
+
+    auto result = AuditAuditdRules(params, indicators, mContext);
+
+    RemoveFile(file);
+    RemoveDir(dir);
+
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(AuditdRulesCheckTest, AdditionalAuditingRuleDoesNotInvalidateCompliantRule)
+{
+    const std::string rules =
+        "-a always,exit -F arch=b64 -S init_module -F auid>=1000 -F auid!=unset\n"
+        "-a always,exit -F arch=b64 -S execve,init_module -F auid!=unset\n";
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(rules)));
+
+    std::string dir = MakeTempDir();
+    ASSERT_FALSE(dir.empty());
+    std::string file = dir + "/kernel.rules";
+    WriteFile(file, rules);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", dir);
+
+    AuditdRulesParams params;
+    params.searchItem = "init_module";
+    params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-F auid>=123", "-F auid!=(unset|-1|4294967295)"};
+
+    auto result = AuditAuditdRules(params, indicators, mContext);
+
+    RemoveFile(file);
+    RemoveDir(dir);
+
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(AuditdRulesCheckTest, SyscallPrefixDoesNotMatchLongerSyscall)
+{
+    const std::string rules =
+        "-a always,exit -F arch=b64 -S create_module -F auid>=1000 -F auid!=unset\n"
+        "-a always,exit -F arch=b64 -S creat -F exit=-EACCES -F auid>=1000 -F auid!=unset\n";
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(rules)));
+
+    std::string dir = MakeTempDir();
+    ASSERT_FALSE(dir.empty());
+    std::string file = dir + "/access.rules";
+    WriteFile(file, rules);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", dir);
+
+    AuditdRulesParams params;
+    params.searchItem = "-S creat";
+    params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-F exit=-EACCES", "-F auid>=123", "-F auid!=(unset|-1|4294967295)"};
+
+    auto result = AuditAuditdRules(params, indicators, mContext);
+
+    RemoveFile(file);
+    RemoveDir(dir);
+
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(AuditdRulesCheckTest, ParallelArchAndExitVariantsDoNotInvalidateRule)
+{
+    const std::string rules =
+        "-a always,exit -F arch=b64 -S open -F exit=-EPERM -F auid>=1000 -F auid!=unset\n"
+        "-a always,exit -F arch=b32 -S open -F exit=-EACCES -F auid>=1000 -F auid!=unset\n";
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(rules)));
+
+    std::string dir = MakeTempDir();
+    ASSERT_FALSE(dir.empty());
+    std::string file = dir + "/access.rules";
+    WriteFile(file, rules);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", dir);
+
+    AuditdRulesParams params;
+    params.searchItem = "-S open";
+    params.requiredOptions.items = {"-F arch=b32", "-a (always,exit|exit,always)", "-F exit=-EACCES", "-F auid>=123", "-F auid!=(unset|-1|4294967295)"};
+
+    auto result = AuditAuditdRules(params, indicators, mContext);
+
+    RemoveFile(file);
+    RemoveDir(dir);
+
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(AuditdRulesCheckTest, SyscallListWithLongerSuffixStillMatchesExactToken)
+{
+    const std::string rules = "-a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat -F auid>=1000 -F auid!=unset\n";
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(rules)));
+
+    std::string dir = MakeTempDir();
+    ASSERT_FALSE(dir.empty());
+    std::string file = dir + "/deletion.rules";
+    WriteFile(file, rules);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", dir);
+
+    AuditdRulesParams params;
+    params.searchItem = "-S unlink,unlinkat,rename,renameat";
+    params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-F auid>=123", "-F auid!=(unset|-1|4294967295)"};
+
+    auto result = AuditAuditdRules(params, indicators, mContext);
+
+    RemoveFile(file);
+    RemoveDir(dir);
+
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(AuditdRulesCheckTest, LongerSyscallAloneDoesNotSatisfyExactToken)
+{
+    const std::string rules = "-a always,exit -F arch=b64 -S unlinkat,renameat -F auid>=1000 -F auid!=unset\n";
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(rules)));
+
+    std::string dir = MakeTempDir();
+    ASSERT_FALSE(dir.empty());
+    std::string file = dir + "/deletion.rules";
+    WriteFile(file, rules);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", dir);
+
+    AuditdRulesParams params;
+    params.searchItem = "-S unlink";
+    params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-F auid>=123", "-F auid!=(unset|-1|4294967295)"};
+
+    auto result = AuditAuditdRules(params, indicators, mContext);
+
+    RemoveFile(file);
+    RemoveDir(dir);
+
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::NonCompliant);
+}
+
 // Test: syscall search non-compliant when files missing required rule
 TEST_F(AuditdRulesCheckTest, SyscallSearchFilesMissingIsNonCompliant)
 {

@@ -8,6 +8,7 @@
 #include <StringTools.h>
 #include <Telemetry.h>
 #include <Users.h>
+#include <cctype>
 #include <fstream>
 #include <fts.h>
 #include <iostream>
@@ -169,10 +170,31 @@ Result<std::string> FindSudoLogfile(ContextInterface& context)
     return Error("Sudo logfile setting not found", ENOENT);
 }
 
+bool IsDifferentRuleVariant(const std::string& rule, const std::vector<std::pair<regex, std::string>>& requiredRegexes)
+{
+    const std::vector<std::pair<std::string, regex>> variantOptions = {{"-F arch=", regex(R"(-F[[:space:]]+arch=)")}, {"-F exit=", regex(R"(-F[[:space:]]+exit=)")}};
+    for (const auto& req : requiredRegexes)
+    {
+        if (regex_search(rule, req.first))
+        {
+            continue;
+        }
+        for (const auto& variant : variantOptions)
+        {
+            if (req.second.find(variant.first) == 0 && regex_search(rule, variant.second))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 Status CheckRuleInList(const std::vector<std::string>& rules, const std::string& searchItem, const Optional<regex>& excludeRegex,
     const std::vector<std::pair<regex, std::string>>& requiredRegexes, ContextInterface& context, IndicatorsTree& indicators)
 {
     regex searchItemRegex;
+    regex suppressingActionRegex(R"(-a[[:space:]]+(never,exit|exit,never)([[:space:]]|$))", std::regex_constants::icase | std::regex_constants::extended);
     try
     {
         searchItemRegex = regex(searchItem);
@@ -183,9 +205,17 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
         OSConfigTelemetryStatusTrace("regex", EINVAL);
         return indicators.NonCompliant("Invalid searchItem regex: " + std::string(e.what()));
     }
+    bool validRuleFound = false;
+    std::vector<std::string> incompleteRules;
     for (const auto& rule : rules)
     {
-        if (!regex_search(rule, searchItemRegex))
+        smatch searchMatch;
+        if (!regex_search(rule, searchMatch, searchItemRegex))
+        {
+            continue;
+        }
+        const auto matchEnd = static_cast<size_t>(searchMatch.position() + searchMatch.length());
+        if (searchItem.find("-S ") != std::string::npos && matchEnd < rule.size() && !std::isspace(rule[matchEnd]))
         {
             continue;
         }
@@ -193,20 +223,37 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
         {
             continue;
         }
+        if (IsDifferentRuleVariant(rule, requiredRegexes))
+        {
+            continue;
+        }
+        if (regex_search(rule, suppressingActionRegex))
+        {
+            return indicators.NonCompliant("Rule '" + rule + "' suppresses auditing for '" + searchItem + "'");
+        }
         bool optionMissing = false;
         for (const auto& req : requiredRegexes)
         {
             if (!regex_search(rule, req.first))
             {
-                indicators.NonCompliant("Rule '" + rule + "' matching '" + searchItem + "' is missing required option " + req.second);
+                incompleteRules.push_back("Rule '" + rule + "' matching '" + searchItem + "' is missing required option " + req.second);
                 optionMissing = true;
                 break;
             }
         }
         if (!optionMissing)
         {
-            return indicators.Compliant("Rule '" + rule + "' matching '" + searchItem + "' found  and is properly configured");
+            indicators.Compliant("Rule '" + rule + "' matching '" + searchItem + "' found  and is properly configured");
+            validRuleFound = true;
         }
+    }
+    if (validRuleFound)
+    {
+        return Status::Compliant;
+    }
+    for (const auto& incompleteRule : incompleteRules)
+    {
+        indicators.NonCompliant(incompleteRule);
     }
     return indicators.NonCompliant("Rule not found " + searchItem);
 }
@@ -276,7 +323,7 @@ Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree&
         std::string syscall;
         while (std::getline(ss, syscall, ','))
         {
-            std::string searchItem = "-S ([^ \\t]+,)*" + syscall + "(,[^ \\t]+)*";
+            std::string searchItem = "-S ([^ \\t]+,)*" + syscall + "(,[^ \\t]+)*(?=[ \\t]|$)";
             auto runningResult = CheckRuleInList(runningRules, searchItem, excludeOption, requiredOptions, context, indicators);
             if (runningResult != Status::Compliant)
             {
