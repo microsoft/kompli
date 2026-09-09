@@ -35,8 +35,8 @@ const char* Bindings<FilePermissionsCollectionParams>::names[] = {"directory", "
 // FileRegexMatch.h:70
 const char* Bindings<FileRegexMatchParams>::names[] = {"path", "filenamePattern", "matchOperation", "matchPattern", "stateOperation", "statePattern", "minimumValue", "maximumValue", "allMatches", "ignoreCase", "behavior"};
 
-// FilesystemMountOption.h:22
-const char* Bindings<FilesystemMountOptionParams>::names[] = {"mountpoint", "optionsSet", "optionsNotSet"};
+// FilesystemMountOption.h:26
+const char* Bindings<FilesystemMountOptionParams>::names[] = {"mountpoint", "mountpointIsPattern", "requireMountpoint", "optionsSet", "optionsNotSet"};
 
 // GsettingsValue.h:56
 const char* Bindings<GsettingsValueParams>::names[] = {"schema", "key", "keyType", "operation", "value"};

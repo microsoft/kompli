@@ -5,6 +5,7 @@
 
 #include <CommonUtils.h>
 #include <FilesystemMountOption.h>
+#include <Regex.h>
 #include <StringTools.h>
 #include <algorithm>
 #include <ctime>
@@ -128,15 +129,39 @@ Result<Status> AuditFilesystemMountOption(const FilesystemMountOptionParams& par
         std::copy(params.optionsNotSet->items.cbegin(), params.optionsNotSet->items.cend(), std::inserter(optionsNotSet, optionsNotSet.begin()));
     }
 
-    if (mtabEntries->find(params.mountpoint) != mtabEntries->end())
+    Optional<regex> mountpointPattern;
+    if (params.mountpointIsPattern.Value())
     {
-        if (Status::NonCompliant == CheckOptions(mtabEntries.Value()[params.mountpoint].options, optionsSet, optionsNotSet, indicators))
+        try
+        {
+            mountpointPattern = regex(params.mountpoint);
+        }
+        catch (const regex_error& error)
+        {
+            return Error("Invalid mountpoint pattern: " + std::string(error.what()), EINVAL);
+        }
+    }
+
+    bool found = false;
+    for (const auto& entry : mtabEntries.Value())
+    {
+        const bool matches = mountpointPattern.HasValue() ? regex_search(entry.first, mountpointPattern.Value()) : entry.first == params.mountpoint;
+        if (!matches)
+        {
+            continue;
+        }
+        found = true;
+        if (Status::NonCompliant == CheckOptions(entry.second.options, optionsSet, optionsNotSet, indicators))
         {
             return Status::NonCompliant;
         }
     }
-    else
+    if (!found)
     {
+        if (params.requireMountpoint.Value())
+        {
+            return indicators.NonCompliant("Required mountpoint " + params.mountpoint + " not found in /etc/mtab");
+        }
         indicators.Compliant("Mountpoint " + params.mountpoint + " not found in /etc/mtab");
     }
 
@@ -145,6 +170,10 @@ Result<Status> AuditFilesystemMountOption(const FilesystemMountOptionParams& par
 
 Result<Status> RemediateFilesystemMountOption(const FilesystemMountOptionParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
+    if (params.mountpointIsPattern.Value())
+    {
+        return Error("Mountpoint pattern remediation is not supported", EINVAL);
+    }
     auto fstabEntries = ParseFstab(context.GetSpecialFilePath("/etc/fstab"));
     if (!fstabEntries.HasValue())
     {

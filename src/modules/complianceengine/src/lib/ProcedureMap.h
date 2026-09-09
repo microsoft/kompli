@@ -366,9 +366,9 @@ template <>
 struct Bindings<FilesystemMountOptionParams>
 {
     using T = FilesystemMountOptionParams;
-    static constexpr size_t size = 3;
+    static constexpr size_t size = 5;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::mountpoint, &T::optionsSet, &T::optionsNotSet);
+    static constexpr auto members = std::make_tuple(&T::mountpoint, &T::mountpointIsPattern, &T::requireMountpoint, &T::optionsSet, &T::optionsNotSet);
 };
 
 // Defines the bindings for the GsettingsValueParams structure.

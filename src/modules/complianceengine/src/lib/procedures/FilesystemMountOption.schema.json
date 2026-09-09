@@ -21,6 +21,12 @@
                   "type": "string",
                   "description": "Filesystem mount point"
                 },
+                "mountpointIsPattern": {
+                  "type": "string"
+                },
+                "requireMountpoint": {
+                  "type": "string"
+                },
                 "optionsSet": {
                   "type": "string",
                   "description": "Comma-separated list of options that must be set"
@@ -54,6 +60,12 @@
                 "mountpoint": {
                   "type": "string",
                   "description": "Filesystem mount point"
+                },
+                "mountpointIsPattern": {
+                  "type": "string"
+                },
+                "requireMountpoint": {
+                  "type": "string"
                 },
                 "optionsSet": {
                   "type": "string",

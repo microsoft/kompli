@@ -14,6 +14,10 @@ struct FilesystemMountOptionParams
     /// Filesystem mount point
     std::string mountpoint;
 
+    Optional<bool> mountpointIsPattern = false;
+
+    Optional<bool> requireMountpoint = false;
+
     /// Comma-separated list of options that must be set
     Optional<Separated<std::string, ','>> optionsSet;
 
