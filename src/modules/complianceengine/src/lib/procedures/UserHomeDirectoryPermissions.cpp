@@ -4,7 +4,6 @@
 #include <FilePermissions.h>
 #include <ListValidShells.h>
 #include <Result.h>
-#include <Telemetry.h>
 #include <UserHomeDirectoryPermissions.h>
 #include <UsersIterator.h>
 #include <fcntl.h>
@@ -30,7 +29,6 @@ Result<Status> AuditUserHomeDirectoryPermissions(IndicatorsTree& indicators, Con
     if (!validShells.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to get valid shells: %s", validShells.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("ListValidShells", validShells.Error().code);
         return validShells.Error();
     }
 
@@ -64,7 +62,6 @@ Result<Status> AuditUserHomeDirectoryPermissions(IndicatorsTree& indicators, Con
             else
             {
                 OsConfigLogError(context.GetLogHandle(), "Failed to stat home directory '%s' for user '%s': %s", pwd.pw_dir, pwd.pw_name, strerror(status));
-                OSConfigTelemetryStatusTrace("stat", status);
                 return Error(string("Failed to stat home directory: ") + strerror(status), status);
             }
         }
@@ -73,7 +70,6 @@ Result<Status> AuditUserHomeDirectoryPermissions(IndicatorsTree& indicators, Con
         if (nullptr == group)
         {
             OsConfigLogError(context.GetLogHandle(), "Failed to get group for user '%s': %s", pwd.pw_name, strerror(errno));
-            OSConfigTelemetryStatusTrace("getgrgid", errno);
             return Error(string("Failed to get group for user: ") + strerror(errno), errno);
         }
 
@@ -100,7 +96,6 @@ Result<Status> AuditUserHomeDirectoryPermissions(IndicatorsTree& indicators, Con
         {
             OsConfigLogError(context.GetLogHandle(), "Failed to check permissions for home directory '%s' for user '%s': %s", pwd.pw_dir, pwd.pw_name,
                 subResult.Error().message.c_str());
-            OSConfigTelemetryStatusTrace("AuditFilePermissions", subResult.Error().code);
             return subResult;
         }
         indicators.Back().status = subResult.Value();
@@ -122,7 +117,6 @@ Result<Status> RemediateUserHomeDirectoryPermissions(IndicatorsTree& indicators,
     if (!validShells.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to get valid shells: %s", validShells.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("ListValidShells", validShells.Error().code);
         return validShells.Error();
     }
 
@@ -155,14 +149,12 @@ Result<Status> RemediateUserHomeDirectoryPermissions(IndicatorsTree& indicators,
                 {
                     status = errno;
                     OsConfigLogError(context.GetLogHandle(), "Failed to create home directory '%s' for user '%s': %s", pwd.pw_dir, pwd.pw_name, strerror(status));
-                    OSConfigTelemetryStatusTrace("mkdir", status);
                     return Error(string("Failed to create home directory: ") + strerror(status), status);
                 }
             }
             else
             {
                 OsConfigLogError(context.GetLogHandle(), "Failed to stat home directory '%s' for user '%s': %s", pwd.pw_dir, pwd.pw_name, strerror(status));
-                OSConfigTelemetryStatusTrace("stat", status);
                 return Error(string("Failed to stat home directory: ") + strerror(status), status);
             }
         }
@@ -171,7 +163,6 @@ Result<Status> RemediateUserHomeDirectoryPermissions(IndicatorsTree& indicators,
         if (nullptr == group)
         {
             OsConfigLogError(context.GetLogHandle(), "Failed to get group for user '%s': %s", pwd.pw_name, strerror(errno));
-            OSConfigTelemetryStatusTrace("getgrgid", errno);
             return Error(string("Failed to get group for user: ") + strerror(errno), errno);
         }
 
@@ -198,7 +189,6 @@ Result<Status> RemediateUserHomeDirectoryPermissions(IndicatorsTree& indicators,
         {
             OsConfigLogError(context.GetLogHandle(), "Failed to remediate permissions for home directory '%s' for user '%s': %s", pwd.pw_dir,
                 pwd.pw_name, subResult.Error().message.c_str());
-            OSConfigTelemetryStatusTrace("RemediateEnsureFilePermissionsHelper", subResult.Error().code);
             result = Status::NonCompliant;
         }
         indicators.Back().status = subResult.Value();

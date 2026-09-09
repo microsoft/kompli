@@ -75,8 +75,8 @@ if(DEFINED ENV{KompliTelemetryApiKey} AND NOT "$ENV{KompliTelemetryApiKey}" STRE
     set(KompliTelemetryApiKey $ENV{KompliTelemetryApiKey})
     message(STATUS "Using KompliTelemetryApiKey from environment variable")
 else()
-    message(WARNING "KompliTelemetryApiKey not set, using default value")
-    set(KompliTelemetryApiKey "999999999999999999999999999999999-999999999-9999-9999-9999-999999999999-9999")
+    message(FATAL_ERROR "Telemetry enabled but missing KompliTelemetryApiKey environment variable")
+    return()
 endif()
 configure_file(Keys.h.in ${CMAKE_CURRENT_BINARY_DIR}/Keys.h @ONLY)
 

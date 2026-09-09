@@ -160,6 +160,7 @@ add_library(complianceenginelib STATIC
     CommonContext.cpp
     ComplianceEngineInterface.cpp
     ContextInterface.cpp
+    DirTools.cpp
     DistributionInfo.cpp
     Engine.cpp
     Evaluator.cpp
@@ -181,6 +182,7 @@ add_library(complianceenginelib STATIC
     Result.cpp
     StringTools.cpp
     SystemdCatConfig.cpp
+    Telemetry.cpp
     Users.cpp
     UsersIterator.cpp
     ${PROCEDURES}

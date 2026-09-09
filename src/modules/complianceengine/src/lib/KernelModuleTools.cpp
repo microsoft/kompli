@@ -5,7 +5,6 @@
 #include <Evaluator.h>
 #include <KernelModuleTools.h>
 #include <Regex.h>
-#include <Telemetry.h>
 #include <algorithm>
 #include <dirent.h>
 #include <fts.h>
@@ -65,7 +64,6 @@ Result<bool> SearchFilesystemForModuleName(std::string& moduleName, ContextInter
         if (!fts)
         {
             OsConfigLogError(context.GetLogHandle(), "Failed to open %s - errno %d", modulesVersionDir.c_str(), errno);
-            OSConfigTelemetryStatusTrace("fts_open", errno);
             continue;
         }
         auto ftspDeleter = std::unique_ptr<FTS, int (*)(FTS*)>(fts, fts_close);
@@ -167,7 +165,6 @@ Result<bool> IsModuleAvailableInRunningKernel(const std::string& moduleName, Con
             return false;
         }
         OsConfigLogError(context.GetLogHandle(), "Failed to stat %s - errno %d", kernelDirPath.c_str(), errno);
-        OSConfigTelemetryStatusTrace("stat", errno);
         return true;
     }
     if (!S_ISDIR(st.st_mode))
@@ -180,7 +177,6 @@ Result<bool> IsModuleAvailableInRunningKernel(const std::string& moduleName, Con
     if (!fts)
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to open %s - errno %d", kernelDirPath.c_str(), errno);
-        OSConfigTelemetryStatusTrace("fts_open", errno);
         return false;
     }
     auto ftsDeleter = std::unique_ptr<FTS, int (*)(FTS*)>(fts, fts_close);

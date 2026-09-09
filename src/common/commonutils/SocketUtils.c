@@ -14,7 +14,6 @@ static char* ReadUntilStringFound(int socketHandle, const char* what, OsConfigLo
     if ((NULL == what) || (socketHandle < 0))
     {
         OsConfigLogError(log, "ReadUntilStringFound: invalid arguments");
-        OSConfigTelemetryStatusTrace("what", EINVAL);
         return NULL;
     }
 
@@ -22,7 +21,6 @@ static char* ReadUntilStringFound(int socketHandle, const char* what, OsConfigLo
     if (NULL == buffer)
     {
         OsConfigLogError(log, "ReadUntilStringFound: out of memory allocating initial buffer");
-        OSConfigTelemetryStatusTrace("malloc", ENOMEM);
         return NULL;
     }
 
@@ -42,7 +40,6 @@ static char* ReadUntilStringFound(int socketHandle, const char* what, OsConfigLo
             if (NULL == buffer)
             {
                 OsConfigLogError(log, "ReadUntilStringFound: out of memory reallocating buffer");
-                OSConfigTelemetryStatusTrace("realloc", ENOMEM);
                 break;
             }
             else
@@ -72,7 +69,6 @@ int ReadHttpStatusFromSocket(int socketHandle, OsConfigLogHandle log)
     if (socketHandle < 0)
     {
         OsConfigLogError(log, "ReadHttpStatusFromSocket: invalid socket (%d)", socketHandle);
-        OSConfigTelemetryStatusTrace("socketHandle", EINVAL);
         return httpStatus;
     }
 
@@ -80,7 +76,6 @@ int ReadHttpStatusFromSocket(int socketHandle, OsConfigLogHandle log)
     if (NULL == buffer)
     {
         OsConfigLogError(log, "ReadHttpStatusFromSocket: '%s' prefix not found", httpPrefix);
-        OSConfigTelemetryStatusTrace("ReadUntilStringFound", ENOENT);
         return httpStatus;
     }
 
@@ -110,7 +105,6 @@ int ReadHttpContentLengthFromSocket(int socketHandle, OsConfigLogHandle log)
     if (socketHandle < 0)
     {
         OsConfigLogError(log, "ReadHttpContentLengthFromSocket: invalid socket (%d)", socketHandle);
-        OSConfigTelemetryStatusTrace("socketHandle", EINVAL);
         return httpContentLength;
     }
 

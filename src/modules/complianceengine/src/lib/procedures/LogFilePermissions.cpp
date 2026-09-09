@@ -8,7 +8,6 @@
 #include <ListValidShells.h>
 #include <LogFilePermissions.h>
 #include <Result.h>
-#include <Telemetry.h>
 #include <UsersIterator.h>
 #include <fnmatch.h>
 #include <map>
@@ -63,7 +62,6 @@ Result<DaemonUidSet> BuildDaemonUidSet(ContextInterface& context)
     if (!validShells.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to list valid shells: %s", validShells.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("ListValidShells", validShells.Error().code);
         return validShells.Error();
     }
 
@@ -71,7 +69,6 @@ Result<DaemonUidSet> BuildDaemonUidSet(ContextInterface& context)
     if (!users.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to enumerate users: %s", users.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("UsersRange", users.Error().code);
         return users.Error();
     }
 
@@ -155,7 +152,6 @@ Result<Status> ProcessLogfile(const std::string& path, const std::string& filena
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to %s permissions for logfile '%s': %s", remediate ? "remediate" : "audit", fullPath.c_str(),
             result.Error().message.c_str());
-        OSConfigTelemetryStatusTrace(remediate ? "RemediateEnsureFilePermissionsHelper" : "AuditEnsureFilePermissionsHelper", result.Error().code);
         return result.Error();
     }
     indicators.Back().status = result.Value();
@@ -192,7 +188,6 @@ Result<Status> AuditLogFilePermissions(const LogFilePermissionsParams& params, I
     if (!result.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to walk log directory '%s': %s", params.path->c_str(), result.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("FileTreeWalk", result.Error().code);
         return result.Error();
     }
 
@@ -226,7 +221,6 @@ Result<Status> RemediateLogFilePermissions(const LogFilePermissionsParams& param
     if (!result.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to walk log directory '%s': %s", params.path->c_str(), result.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("FileTreeWalk", result.Error().code);
         return result.Error();
     }
 

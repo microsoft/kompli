@@ -10,6 +10,7 @@
 struct CommandLineArgs
 {
     bool verbose;
+    bool no_validation;
     std::string filepath;
     std::chrono::seconds teardown_time;
 };

@@ -7,7 +7,10 @@
 #include "ContextInterface.h"
 #include "Logging.h"
 #include "Result.h"
+#include "Telemetry.h"
 
+#include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -17,9 +20,10 @@ namespace ComplianceEngine
 class CommonContext : public ContextInterface
 {
 public:
-    CommonContext(OsConfigLogHandle log, const std::string& statePath)
+    CommonContext(OsConfigLogHandle log, const std::string& statePath, const int fd = -1)
         : mLog(log),
           mStatePath(statePath),
+          mTelemetry(fd),
           mFsScanner("/", mStatePath + "/" + sFsCachePath, sLockPath, sSoftTimeout, sHardTimeout, sScanWaitTime)
     {
     }
@@ -33,6 +37,11 @@ public:
     Result<std::string> GetFileContents(const std::string& filePath) const override;
     Result<std::vector<InterfaceInfo>> GetNetworkInterfaces() const override;
     Result<std::string> GetRunningKernelRelease() const override;
+
+    Telemetry& GetTelemetry() override
+    {
+        return mTelemetry;
+    }
     OsConfigLogHandle GetLogHandle() const override
     {
         return mLog;
@@ -58,6 +67,7 @@ private:
 
     OsConfigLogHandle mLog;
     std::string mStatePath;
+    Telemetry mTelemetry;
     FilesystemScanner mFsScanner;
 };
 } // namespace ComplianceEngine

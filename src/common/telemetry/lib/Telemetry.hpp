@@ -19,12 +19,13 @@ public:
     static constexpr std::chrono::seconds CONFIG_DEFAULT_TEARDOWN_TIME{5};
     static constexpr const char* TELEMETRY_NAME = "OSConfigTelemetry";
     static constexpr const char* TELEMETRY_VERSION = "1.0.0";
+    /// KK FIX this sutfff
     static constexpr const char* TELEMETRY_CACHE_FILE_NAME = "/var/lib/osconfig/telemetry/cache.db";
     static constexpr const int TELEMETRY_CACHE_FILE_SIZE = 10 * 1024 * 1024;
     static constexpr const int TELEMETRY_RAM_QUEUE_SIZE = 2 * 1024 * 1024;
 
     explicit TelemetryManager(std::string cacheFilePath, bool enableDebug = false, std::chrono::seconds teardownTime = CONFIG_DEFAULT_TEARDOWN_TIME,
-        OsConfigLogHandle logHandle = nullptr);
+        bool validateEvents = true, OsConfigLogHandle logHandle = nullptr);
 
     ~TelemetryManager() noexcept;
 
