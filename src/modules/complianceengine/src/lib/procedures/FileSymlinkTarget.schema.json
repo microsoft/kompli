@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "audit": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "FileSymlinkTarget"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "FileSymlinkTarget": {
+              "type": "object",
+              "required": [
+                "filename",
+                "targetPattern"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "filename": {
+                  "type": "string"
+                },
+                "targetPattern": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "remediation": {
+      "anyOf": []
+    }
+  }
+}

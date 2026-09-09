@@ -20,6 +20,7 @@ set(PROCEDURES
     procedures/ShellTimeout.cpp
     procedures/DefaultUmask.cpp
     procedures/FileExists.cpp
+    procedures/FileSymlinkTarget.cpp
     procedures/FilePermissions.cpp
     procedures/FilesystemMountOption.cpp
     procedures/FirewalldZoneTargets.cpp
@@ -67,6 +68,7 @@ set(SCHEMAS
     procedures/ShellTimeout.schema.json
     procedures/DefaultUmask.schema.json
     procedures/FileExists.schema.json
+    procedures/FileSymlinkTarget.schema.json
     procedures/FilePermissions.schema.json
     procedures/FilesystemMountOption.schema.json
     procedures/FirewalldZoneTargets.schema.json

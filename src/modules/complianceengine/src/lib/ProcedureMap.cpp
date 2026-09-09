@@ -35,6 +35,9 @@ const char* Bindings<FilePermissionsCollectionParams>::names[] = {"directory", "
 // FileRegexMatch.h:70
 const char* Bindings<FileRegexMatchParams>::names[] = {"path", "filenamePattern", "matchOperation", "matchPattern", "stateOperation", "statePattern", "minimumValue", "maximumValue", "allMatches", "ignoreCase", "behavior"};
 
+// FileSymlinkTarget.h:13
+const char* Bindings<FileSymlinkTargetParams>::names[] = {"filename", "targetPattern"};
+
 // FilesystemMountOption.h:26
 const char* Bindings<FilesystemMountOptionParams>::names[] = {"mountpoint", "mountpointIsPattern", "requireMountpoint", "optionsSet", "optionsNotSet"};
 
@@ -119,6 +122,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"FilePermissions", {MakeHandler(AuditFilePermissions), MakeHandler(RemediateFilePermissions)}},
     {"FilePermissionsCollection", {MakeHandler(AuditFilePermissionsCollection), MakeHandler(RemediateFilePermissionsCollection)}},
     {"FileRegexMatch", {MakeHandler(AuditFileRegexMatch), nullptr}},
+    {"FileSymlinkTarget", {MakeHandler(AuditFileSymlinkTarget), nullptr}},
     {"FilesystemMountOption", {MakeHandler(AuditFilesystemMountOption), MakeHandler(RemediateFilesystemMountOption)}},
     {"FirewalldZoneTargets", {MakeHandler(AuditFirewalldZoneTargets), nullptr}},
     {"GsettingsValue", {MakeHandler(AuditGsettingsValue), nullptr}},

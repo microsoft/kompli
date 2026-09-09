@@ -14,6 +14,7 @@
 #include <FileExists.h>
 #include <FilePermissions.h>
 #include <FileRegexMatch.h>
+#include <FileSymlinkTarget.h>
 #include <FilesystemMountOption.h>
 #include <FirewallOpenPorts.h>
 #include <FirewalldZoneTargets.h>
@@ -359,6 +360,16 @@ struct Bindings<FileRegexMatchParams>
     static constexpr size_t size = 11;
     static const char* names[];
     static constexpr auto members = std::make_tuple(&T::path, &T::filenamePattern, &T::matchOperation, &T::matchPattern, &T::stateOperation, &T::statePattern, &T::minimumValue, &T::maximumValue, &T::allMatches, &T::ignoreCase, &T::behavior);
+};
+
+// Defines the bindings for the FileSymlinkTargetParams structure.
+template <>
+struct Bindings<FileSymlinkTargetParams>
+{
+    using T = FileSymlinkTargetParams;
+    static constexpr size_t size = 2;
+    static const char* names[];
+    static constexpr auto members = std::make_tuple(&T::filename, &T::targetPattern);
 };
 
 // Defines the bindings for the FilesystemMountOptionParams structure.

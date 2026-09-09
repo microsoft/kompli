@@ -17,6 +17,7 @@ set(PROCEDURES
     procedures/ShellTimeoutTest.cpp
     procedures/DefaultUmaskTest.cpp
     procedures/FileExistsTest.cpp
+    procedures/FileSymlinkTargetTest.cpp
     procedures/FilePermissionsTest.cpp
     procedures/FilesystemMountOptionTest.cpp
     procedures/FirewalldZoneTargetsTest.cpp
