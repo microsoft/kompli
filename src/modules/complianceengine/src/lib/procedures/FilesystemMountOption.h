@@ -14,8 +14,10 @@ struct FilesystemMountOptionParams
     /// Filesystem mount point
     std::string mountpoint;
 
+    /// Treat mountpoint as a regular expression and audit every matching mounted filesystem; remediation is not supported in this mode
     Optional<bool> mountpointIsPattern = false;
 
+    /// Fail the audit when no mounted filesystem matches mountpoint; otherwise a missing mount is compliant
     Optional<bool> requireMountpoint = false;
 
     /// Comma-separated list of options that must be set

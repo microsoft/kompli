@@ -19,10 +19,12 @@
               "additionalProperties": false,
               "properties": {
                 "filename": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Path that must be a symbolic link"
                 },
                 "targetPattern": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Regular expression searched in the fully resolved canonical target path"
                 }
               }
             }

@@ -32,13 +32,13 @@ const char* Bindings<FilePermissionsParams>::names[] = {"path", "owner", "group"
 // FilePermissions.h:80
 const char* Bindings<FilePermissionsCollectionParams>::names[] = {"directory", "recurse", "directoriesOnly", "allFileTypes", "excludeSymlinks", "excludeDirectories", "maximumUid", "maximumGid", "filePattern", "owner", "group", "permissions", "mask", "behavior"};
 
-// FileRegexMatch.h:70
+// FileRegexMatch.h:73
 const char* Bindings<FileRegexMatchParams>::names[] = {"path", "filenamePattern", "matchOperation", "matchPattern", "stateOperation", "statePattern", "minimumValue", "maximumValue", "allMatches", "ignoreCase", "behavior"};
 
-// FileSymlinkTarget.h:13
+// FileSymlinkTarget.h:15
 const char* Bindings<FileSymlinkTargetParams>::names[] = {"filename", "targetPattern"};
 
-// FilesystemMountOption.h:26
+// FilesystemMountOption.h:28
 const char* Bindings<FilesystemMountOptionParams>::names[] = {"mountpoint", "mountpointIsPattern", "requireMountpoint", "optionsSet", "optionsNotSet"};
 
 // GsettingsValue.h:56

@@ -17,7 +17,7 @@ Result<Status> AuditFileSymlinkTarget(const FileSymlinkTargetParams& params, Ind
         {
             return indicators.NonCompliant("Symlink does not exist: " + params.filename);
         }
-        return Error("Cannot inspect symlink: " + std::string(strerror(status)), status);
+        return Error("Cannot inspect symlink " + params.filename + ": " + std::string(strerror(status)), status);
     }
     if (!S_ISLNK(metadata.st_mode))
     {
@@ -31,7 +31,7 @@ Result<Status> AuditFileSymlinkTarget(const FileSymlinkTargetParams& params, Ind
         {
             return indicators.NonCompliant("Symlink target cannot be resolved: " + params.filename);
         }
-        return Error("Cannot resolve symlink: " + std::string(strerror(status)), status);
+        return Error("Cannot resolve symlink " + params.filename + ": " + std::string(strerror(status)), status);
     }
     const std::string target(canonical.get());
     if (!regex_search(target, params.targetPattern))

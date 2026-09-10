@@ -7,6 +7,8 @@
 #include <Regex.h>
 #include <Result.h>
 #include <Telemetry.h>
+#include <cerrno>
+#include <cstdlib>
 #include <dirent.h>
 #include <fstream>
 
@@ -18,37 +20,45 @@ using std::regex_constants::syntax_option_type;
 namespace
 {
 
-bool ParseInteger(const std::string& text, long long& value)
+Result<long long> ParseInteger(const std::string& text)
 {
     if (text.empty())
     {
-        return false;
+        return Error("Integer value is empty", EINVAL);
     }
     const size_t firstDigit = (text[0] == '+' || text[0] == '-') ? 1 : 0;
     if (firstDigit == text.size() || text.find_first_not_of("0123456789", firstDigit) != std::string::npos)
     {
-        return false;
+        return Error("Invalid integer syntax", EINVAL);
     }
-    try
+    errno = 0;
+    char* end = nullptr;
+    const auto value = std::strtoll(text.c_str(), &end, 10);
+    if (errno == ERANGE)
     {
-        value = std::stoll(text);
-        return true;
+        return Error("Integer value is out of range", ERANGE);
     }
-    catch (const std::exception&)
+    if (end != text.c_str() + text.size())
     {
-        return false;
+        return Error("Invalid integer syntax", EINVAL);
     }
+    return value;
 }
 
 // syntax Options for matchPattern and statePattern respectively
 using MatchStateSyntaxOptions = std::pair<syntax_option_type, syntax_option_type>;
 
-// This function is used to check if the file contents match the given pattern.
-// It reads the file line by line and checks each line against the matchPattern.
-// If a line matches the matchPattern, it checks if the statePattern (if provided) also matches.
-// Based on the result of the matches, true is returned if the file matches, false if it doesn't.
-Result<bool> MultilineMatch(const std::string& filename, const string& matchPattern, const Optional<string>& statePattern, MatchStateSyntaxOptions syntaxOptions,
-    ContextInterface& context, const Optional<long long>& minimumValue, const Optional<long long>& maximumValue, bool allMatches, bool& selected)
+struct MultilineMatchResult
+{
+    // At least one selected value passes, or every selected value passes when allMatches is set.
+    bool success;
+    // At least one line matches matchPattern, regardless of its state or numeric constraints.
+    bool selected;
+};
+
+// Select lines with matchPattern, then evaluate their state and numeric constraints.
+Result<MultilineMatchResult> MultilineMatch(const std::string& filename, const string& matchPattern, const Optional<string>& statePattern,
+    MatchStateSyntaxOptions syntaxOptions, ContextInterface& context, const Optional<long long>& minimumValue, const Optional<long long>& maximumValue, bool allMatches)
 {
     // We still need to manually consume the patterns as strings as the case sensitivity is handled
     // dynamically depending on the ignoreCase field value.
@@ -76,6 +86,7 @@ Result<bool> MultilineMatch(const std::string& filename, const string& matchPatt
 
     int lineNumber = 0;
     bool matchingValueFound = false;
+    bool selected = false;
 
     string line;
 
@@ -92,15 +103,15 @@ Result<bool> MultilineMatch(const std::string& filename, const string& matchPatt
             bool valueMatches = true;
             if (minimumValue.HasValue() || maximumValue.HasValue())
             {
-                long long numericValue = 0;
-                valueMatches = ParseInteger(capturedValue, numericValue) && (!minimumValue.HasValue() || numericValue >= minimumValue.Value()) &&
-                               (!maximumValue.HasValue() || numericValue <= maximumValue.Value());
+                const auto numericValue = ParseInteger(capturedValue);
+                valueMatches = numericValue.HasValue() && (!minimumValue.HasValue() || numericValue.Value() >= minimumValue.Value()) &&
+                               (!maximumValue.HasValue() || numericValue.Value() <= maximumValue.Value());
             }
             if (!valueMatches)
             {
                 if (allMatches)
                 {
-                    return false;
+                    return MultilineMatchResult{false, selected};
                 }
                 continue;
             }
@@ -117,12 +128,12 @@ Result<bool> MultilineMatch(const std::string& filename, const string& matchPatt
                     matchingValueFound = true;
                     if (!allMatches)
                     {
-                        return true;
+                        return MultilineMatchResult{true, selected};
                     }
                 }
                 else if (allMatches)
                 {
-                    return false;
+                    return MultilineMatchResult{false, selected};
                 }
             }
             else
@@ -131,12 +142,12 @@ Result<bool> MultilineMatch(const std::string& filename, const string& matchPatt
                 matchingValueFound = true;
                 if (!allMatches)
                 {
-                    return true;
+                    return MultilineMatchResult{true, selected};
                 }
             }
         }
     }
-    return matchingValueFound;
+    return MultilineMatchResult{matchingValueFound, selected};
 }
 } // anonymous namespace
 
@@ -144,22 +155,23 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
 {
     Optional<long long> minimumValue;
     Optional<long long> maximumValue;
-    long long bound = 0;
     if (params.minimumValue.HasValue())
     {
-        if (!ParseInteger(params.minimumValue.Value(), bound))
+        const auto bound = ParseInteger(params.minimumValue.Value());
+        if (!bound.HasValue())
         {
-            return Error("Invalid minimumValue", EINVAL);
+            return Error("Invalid minimumValue: " + bound.Error().message, bound.Error().code);
         }
-        minimumValue = bound;
+        minimumValue = bound.Value();
     }
     if (params.maximumValue.HasValue())
     {
-        if (!ParseInteger(params.maximumValue.Value(), bound))
+        const auto bound = ParseInteger(params.maximumValue.Value());
+        if (!bound.HasValue())
         {
-            return Error("Invalid maximumValue", EINVAL);
+            return Error("Invalid maximumValue: " + bound.Error().message, bound.Error().code);
         }
-        maximumValue = bound;
+        maximumValue = bound.Value();
     }
     if (minimumValue.HasValue() && maximumValue.HasValue() && minimumValue.Value() > maximumValue.Value())
     {
@@ -262,19 +274,18 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
         }
         fileCount++;
         auto filename = params.path + "/" + entry->d_name;
-        bool selected = false;
         auto matchResult = MultilineMatch(filename, params.matchPattern, params.statePattern, syntaxOptions, context, minimumValue, maximumValue,
-            params.allMatches.Value(), selected);
+            params.allMatches.Value());
         if (!matchResult.HasValue())
         {
             OsConfigLogInfo(context.GetLogHandle(), "Failed to match file '%s': %s", filename.c_str(), matchResult.Error().message.c_str());
             errorCount++;
         }
-        else if (params.allMatches.Value() && !selected)
+        else if (params.allMatches.Value() && !matchResult.Value().selected)
         {
             unselectedCount++;
         }
-        else if (matchResult.Value())
+        else if (matchResult.Value().success)
         {
             matchCount++;
         }

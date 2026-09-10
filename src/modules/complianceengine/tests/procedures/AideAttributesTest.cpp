@@ -3,6 +3,7 @@
 #include <AideAttributes.h>
 #include <CommonContext.h>
 #include <StringTools.h>
+#include <cerrno>
 #include <cstdlib>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -77,6 +78,9 @@ TEST_F(AideAttributesTest, EveryAttributeIsRequired)
         auto result = AuditAideAttributes(params, indicators, context);
         ASSERT_TRUE(result.HasValue());
         EXPECT_EQ(result.Value(), Status::NonCompliant) << attribute;
+        ASSERT_FALSE(indicators.Back().indicators.empty());
+        EXPECT_EQ(indicators.Back().indicators.back().message,
+            "Required AIDE attributes are missing for: " + params.filename + "; first missing attribute: " + attribute);
     }
 }
 
@@ -126,11 +130,15 @@ TEST_F(AideAttributesTest, RejectInvalidArguments)
     for (const auto& attributes : {"sha512; echo injected", "", "+sha512", "sha512+", "p++sha512"})
     {
         params.attributes = attributes;
-        EXPECT_FALSE(AuditAideAttributes(params, indicators, context).HasValue());
+        auto result = AuditAideAttributes(params, indicators, context);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(result.Error().code, EINVAL);
     }
     params.attributes = "sha512";
     params.configPath.clear();
-    EXPECT_FALSE(AuditAideAttributes(params, indicators, context).HasValue());
+    auto result = AuditAideAttributes(params, indicators, context);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
 }
 
 TEST_F(AideAttributesTest, EscapeConfigPath)

@@ -46,13 +46,16 @@
                   "description": "The pattern to match against each line that matches the 'statePattern'"
                 },
                 "minimumValue": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Inclusive signed integer lower bound for the first capture group, or the entire match if no group exists"
                 },
                 "maximumValue": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Inclusive signed integer upper bound for the first capture group, or the entire match if no group exists"
                 },
                 "allMatches": {
-                  "type": "string"
+                  "type": "string",
+                  "description": "Require every line selected by matchPattern to satisfy the state and numeric constraints; otherwise accept any passing line"
                 },
                 "ignoreCase": {
                   "type": "string",

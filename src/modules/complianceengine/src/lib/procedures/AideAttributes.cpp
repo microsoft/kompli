@@ -1,7 +1,9 @@
 #include <AideAttributes.h>
+#include <Separated.h>
 #include <StringTools.h>
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
 #include <memory>
 #include <set>
@@ -14,23 +16,25 @@ Result<Status> AuditAideAttributes(const AideAttributesParams& params, Indicator
     if (params.configPath.empty() || params.filename.empty() || params.attributes.empty() || params.configPath.find('\0') != std::string::npos ||
         params.filename.find('\0') != std::string::npos)
     {
-        return Error("AIDE configuration, filename and required attributes must be specified");
+        return Error("AIDE configuration, filename and required attributes must be specified", EINVAL);
     }
-    std::set<std::string> requiredAttributes;
-    std::istringstream requested(params.attributes);
-    std::string requiredAttribute;
-    while (std::getline(requested, requiredAttribute, '+'))
+    if (params.attributes.back() == '+')
+    {
+        return Error("Invalid trailing AIDE attribute separator", EINVAL);
+    }
+    const auto requested = Separated<std::string, '+'>::Parse(params.attributes);
+    if (!requested.HasValue())
+    {
+        return requested.Error();
+    }
+    const auto& requiredAttributes = requested.Value().items;
+    for (const auto& requiredAttribute : requiredAttributes)
     {
         if (requiredAttribute.empty() || !std::all_of(requiredAttribute.begin(), requiredAttribute.end(),
                                              [](unsigned char character) { return std::isalnum(character) || character == '_'; }))
         {
-            return Error("Invalid AIDE attribute: " + requiredAttribute);
+            return Error("Invalid AIDE attribute: " + requiredAttribute, EINVAL);
         }
-        requiredAttributes.insert(requiredAttribute);
-    }
-    if (params.attributes.back() == '+')
-    {
-        return Error("Invalid trailing AIDE attribute separator");
     }
 
     std::unique_ptr<char, decltype(&free)> canonical(realpath(params.filename.c_str(), nullptr), &free);
@@ -47,6 +51,7 @@ Result<Status> AuditAideAttributes(const AideAttributesParams& params, Indicator
 
     std::istringstream lines(output.Value());
     std::string line;
+    std::string missingAttribute = requiredAttributes.front();
     while (std::getline(lines, line))
     {
         std::replace(line.begin(), line.end(), '+', ' ');
@@ -57,12 +62,14 @@ Result<Status> AuditAideAttributes(const AideAttributesParams& params, Indicator
         {
             enabled.insert(attribute);
         }
-        if (std::all_of(requiredAttributes.begin(), requiredAttributes.end(),
-                [&enabled](const std::string& required) { return enabled.count(required) != 0; }))
+        const auto missing = std::find_if_not(requiredAttributes.begin(), requiredAttributes.end(),
+            [&enabled](const std::string& required) { return enabled.count(required) != 0; });
+        if (missing == requiredAttributes.end())
         {
             return indicators.Compliant("AIDE attributes are configured for: " + params.filename);
         }
+        missingAttribute = *missing;
     }
-    return indicators.NonCompliant("Required AIDE attributes are missing for: " + params.filename);
+    return indicators.NonCompliant("Required AIDE attributes are missing for: " + params.filename + "; first missing attribute: " + missingAttribute);
 }
 } // namespace ComplianceEngine

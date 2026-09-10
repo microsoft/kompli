@@ -94,6 +94,30 @@ TEST_F(FileRegexMatchTest, NumericBoundsCheckEverySelectedLine)
     EXPECT_FALSE(AuditFileRegexMatch(params, mIndicators, mContext).HasValue());
 }
 
+TEST_F(FileRegexMatchTest, IntegerConversionBoundaries)
+{
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex("1");
+    params.matchPattern = "^value=(.*)$";
+    params.minimumValue = "-9223372036854775808";
+    params.maximumValue = "9223372036854775807";
+    params.allMatches = true;
+    MakeTempfile("value=-9223372036854775808\nvalue=9223372036854775807\n");
+    auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    for (const auto& invalid : {"9223372036854775808", "-9223372036854775809", "", "+", "-", " 1", "1 ", "1x"})
+    {
+        std::ofstream output(mTempfiles[0]);
+        output << "value=" << invalid << "\n";
+        output.close();
+        result = AuditFileRegexMatch(params, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), Status::NonCompliant) << invalid;
+    }
+}
+
 TEST_F(FileRegexMatchTest, AllSelectedSettingsRespectOptionalExistence)
 {
     FileRegexMatchParams params;

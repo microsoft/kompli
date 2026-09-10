@@ -138,7 +138,7 @@ Result<Status> AuditFilesystemMountOption(const FilesystemMountOptionParams& par
         }
         catch (const regex_error& error)
         {
-            return Error("Invalid mountpoint pattern: " + std::string(error.what()), EINVAL);
+            return Error("Invalid mountpoint pattern " + params.mountpoint + ": " + std::string(error.what()), EINVAL);
         }
     }
 

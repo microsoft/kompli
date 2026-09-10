@@ -8,7 +8,9 @@ namespace ComplianceEngine
 {
 struct FileSymlinkTargetParams
 {
+    /// Path that must be a symbolic link
     std::string filename;
+    /// Regular expression searched in the fully resolved canonical target path
     regex targetPattern;
 };
 
