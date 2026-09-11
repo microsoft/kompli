@@ -5,26 +5,24 @@
 #include "Logging.h"
 
 #include <Mmi.h>
-#include <assert.h>
 #include <stddef.h>
 
-static OsConfigLogHandle gLog = NULL;
 static const char* gComplianceEngineModuleName = "OSConfig ComplianceEngine module";
-static const char* gLogFile = "/var/log/osconfig_complianceengine.log";
-static const char* gRolledLogFile = "/var/log/osconfig_complianceengine.bak";
 
+// Loaded in-process by the configuration agent, so this module's own stderr
+// is the agent's, not an independent channel: log to syslog(3) instead of
+// opening a log file by path (see docs/logging.md in this repo).
 void __attribute__((constructor)) InitModule(void)
 {
-    gLog = OpenLog(gLogFile, gRolledLogFile);
-    assert(NULL != gLog);
-    ComplianceEngineInitialize(gLog);
-    OsConfigLogInfo(gLog, "%s initialized", gComplianceEngineModuleName);
+    OpenSyslog("kompli");
+    ComplianceEngineInitialize(NULL);
+    OsConfigLogInfo(NULL, "%s initialized", gComplianceEngineModuleName);
 }
 
 void __attribute__((destructor)) DestroyModule(void)
 {
     ComplianceEngineShutdown();
-    CloseLog(&gLog);
+    CloseSyslog();
 }
 
 int MmiGetInfo(const char* clientName, MMI_JSON_STRING* payload, int* payloadSizeBytes)

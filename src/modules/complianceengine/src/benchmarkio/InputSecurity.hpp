@@ -50,26 +50,6 @@ ComplianceEngine::Result<int> OpenVerifiedInput(const std::string& path, OsConfi
 // Returns true (and logs an error) if the path contains traversal components.
 bool RefusePathTraversal(const std::string& path, OsConfigLogHandle logHandle);
 
-// Returns true (and logs an error) if the log-file `path` is unsafe to open
-// while running as root. The shared logging code opens the log with a
-// symlink-following append and then chmod's it, so an attacker-controlled
-// symlink or a writable parent directory could redirect root's writes onto a
-// sensitive file. This applies the same posture as OpenVerifiedInput: rejects
-// path traversal, requires a root-owned non-writable parent directory, and (if
-// the path already exists) rejects symlinks, non-regular files, non-root
-// ownership, and group/world-writable modes. A non-existent path is allowed
-// because it is created inside the validated parent directory.
-//
-// Known limitation (TOCTOU): unlike OpenVerifiedInput, this cannot fstat() a
-// held fd, because the shared OpenLog() API is path-only and TrimLog()
-// re-opens the path on every rotation. The check is therefore an lstat() of
-// the path shortly before OpenLog() (and each later rotation) re-resolves it
-// with symlink-following fopen(), leaving a small check-to-use window. The
-// required root-owned, non-writable parent directory closes that window in
-// practice by preventing any swap of the entry. See THREAT_MODEL.md in this
-// directory for details.
-bool RefuseUnsafeLogFile(const std::string& path, OsConfigLogHandle logHandle);
-
 } // namespace BenchmarkIO
 } // namespace ComplianceEngine
 

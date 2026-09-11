@@ -42,7 +42,7 @@ static bool g_consoleLoggingEnabled = true;
 
 bool IsConsoleLoggingEnabled(void)
 {
-    return IsDaemon() ? false : g_consoleLoggingEnabled;
+    return g_consoleLoggingEnabled;
 }
 
 void SetConsoleLoggingEnabled(bool enabledOrDisabled)
@@ -254,7 +254,56 @@ void TrimLog(OsConfigLogHandle log)
     errno = savedErrno;
 }
 
-bool IsDaemon()
+static bool g_syslogLoggingEnabled = false;
+
+void OpenSyslog(const char* ident)
 {
-    return (1 == getppid());
+    openlog(ident, LOG_PID, LOG_DAEMON);
+    g_syslogLoggingEnabled = true;
+}
+
+void CloseSyslog(void)
+{
+    if (g_syslogLoggingEnabled)
+    {
+        closelog();
+        g_syslogLoggingEnabled = false;
+    }
+}
+
+bool IsSyslogLoggingEnabled(void)
+{
+    return g_syslogLoggingEnabled;
+}
+
+// Maps OsConfig's RFC 5424 levels onto their syslog(3) priority equivalents.
+int LoggingLevelToSyslogPriority(LoggingLevel level)
+{
+    switch (level)
+    {
+        case LoggingLevelEmergency:
+            return LOG_EMERG;
+
+        case LoggingLevelAlert:
+            return LOG_ALERT;
+
+        case LoggingLevelCritical:
+            return LOG_CRIT;
+
+        case LoggingLevelError:
+            return LOG_ERR;
+
+        case LoggingLevelWarning:
+            return LOG_WARNING;
+
+        case LoggingLevelNotice:
+            return LOG_NOTICE;
+
+        case LoggingLevelInformational:
+            return LOG_INFO;
+
+        case LoggingLevelDebug:
+        default:
+            return LOG_DEBUG;
+    }
 }

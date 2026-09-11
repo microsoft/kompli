@@ -5,10 +5,6 @@
 #include "Baseline.h"
 #include <version.h>
 
-// The log file for the NRP
-#define LOG_FILE "/var/log/osconfig_nrp.log"
-#define ROLLED_LOG_FILE "/var/log/osconfig_nrp.bak"
-
 #define MAX_PAYLOAD_LENGTH 0
 
 #define MPI_CLIENT_NAME "OSConfig Universal NRP"
@@ -36,21 +32,19 @@ static unsigned int g_reportedMpiResult = 0;
 
 MPI_HANDLE g_mpiHandle = NULL;
 
-static OsConfigLogHandle g_log = NULL;
-
 static const char* g_osconfig = "osconfig";
 static const char* g_mpiServer = "osconfig-platform";
 
 static const char version[] __attribute__((section(".version.info"))) = KOMPLI_VERSION;
 
+// Loaded in-process by the MI provider host, so this module's own stderr is
+// the host's, not an independent channel: log via syslog(3) instead of a
+// fixed-path file (see docs/logging.md in the kompli repo). A null handle is
+// safe here since OsConfigLog() checks IsSyslogLoggingEnabled() before ever
+// touching it.
 OsConfigLogHandle GetLog(void)
 {
-    if (NULL == g_log)
-    {
-        g_log = OpenLog(LOG_FILE, ROLLED_LOG_FILE);
-    }
-
-    return g_log;
+    return NULL;
 }
 
 void __attribute__((constructor)) Initialize()
@@ -73,7 +67,7 @@ void __attribute__((constructor)) Initialize()
         g_mpiHandle = NULL;
     }
 
-    SetConsoleLoggingEnabled(false);
+    OpenSyslog("kompli");
 
     BaselineInitialize(GetLog());
 
@@ -114,7 +108,7 @@ void __attribute__((destructor)) Destroy()
 
     OsConfigLogInfo(GetLog(), "[OsConfigResource] SO library unloaded by host process %d", getpid());
 
-    CloseLog(&g_log);
+    CloseSyslog();
 }
 
 static void LogOsConfigVersion(MI_Context* context)

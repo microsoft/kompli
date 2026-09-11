@@ -1,7 +1,21 @@
 # kompli — Logging
 
 Design decision and reference for where kompli's diagnostic logging goes, and why.
-Written before implementation; the code changes it describes land in a follow-up.
+
+**Status: implemented.** The syslog sink (`src/common/logging/Logging.{h,c}`),
+both NRP adapters' switch to it
+(`src/modules/complianceengine/src/so/ComplianceEngineModule.c` and
+`src/adapters/mc/OsConfigResource.c`), the CLI's `--log-file` removal
+(`Main.cpp`, `CliOptions.{hpp,cpp}`, `InputSecurity.{hpp,cpp}`), and the
+removal of the `IsDaemon()` heuristic from `IsConsoleLoggingEnabled()` (so
+stderr logging is unconditional everywhere, not gated by a `getppid()==1`
+check that misfired for both `komplid` and, in some containerized CI
+environments, the standalone CLI) are all in place. `komplid` itself doesn't
+yet call into the shared logging library for its own request/response
+handling (still a JSONL echo placeholder, see
+[../src/komplid/README.md](../src/komplid/README.md)); Engine-internal
+`OsConfigLog*` calls made through it already benefit from the
+unconditional-stderr fix.
 
 ## Model
 
@@ -82,34 +96,37 @@ passthrough, where kompli is launched by the agent rather than an interactive sh
 ## Decisions
 
 1. **Console logging → stderr.** *(Implemented.)* Diagnostics never touch stdout.
-2. **Standalone default → stderr.** No file by default; operators redirect
-   (`kompli audit f.json 2> run.log`) for persistence. `komplid` logs to stderr
-   **unconditionally** rather than relying on the `IsDaemon()` (`getppid()==1`)
-   heuristic, which doesn't cover ad-hoc local runs.
-3. **Passthrough and NRP → `syslog(3)`.** Both run under the configuration agent, so
-   they route to the system log via `syslog()` rather than opening a file — the
-   in-process NRP module can't rely on its own stderr (see the mechanics section).
-   This replaces the NRP module's current fixed `/var/log/osconfig_nrp.log` open.
-   Open with `openlog("kompli", LOG_PID, LOG_DAEMON)` so records filter cleanly
-   (`journalctl -t kompli`).
-4. **`--log-file` deprecated, targeting removal.** Its sole purpose is now served by
-   stderr redirection. Keeping it re-introduces an operator-supplied, root-opened
-   path — the *only* attacker-influenceable log path in the system. Remove it; if a
-   documented power-user need forces keeping it, treat it explicitly as trusted
-   operator input.
-5. **No app-managed log-file rotation for kompli.** Retention/rotation is owned by
-   syslog/journald (passthrough/NRP) or the operator (standalone/komplid). This also
-   disposes of the single-`.bak` overwrite risk (two size-cap saturations in quick
-   succession could drop the older backup).
+2. **Standalone default → stderr.** *(Implemented.)* No file by default;
+   operators redirect (`kompli audit f.json 2> run.log`) for persistence.
+   `komplid` logs to stderr **unconditionally**, and the `IsDaemon()`
+   (`getppid()==1`) heuristic it used to rely on has been removed from
+   `IsConsoleLoggingEnabled()` entirely — it didn't cover ad-hoc local runs,
+   and it also falsely suppressed console logging for the standalone CLI in
+   some containerized CI environments where kompli runs as a direct child of
+   PID 1.
+3. **Passthrough and NRP → `syslog(3)`.** *(Both NRP adapters implemented;
+   passthrough not yet built.)* Both run under the configuration agent, so
+   they route to the system log via `syslog()` rather than opening a file —
+   the in-process NRP modules can't rely on their own stderr (see the
+   mechanics section). This replaces both NRP adapters'
+   (`ComplianceEngineModule.c` and `OsConfigResource.c`) previous fixed-path
+   `OpenLog()` open. Open with `openlog("kompli", LOG_PID, LOG_DAEMON)` so
+   records filter cleanly (`journalctl -t kompli`).
+4. **`--log-file` removed.** *(Implemented.)* Its sole purpose was already served by
+   stderr redirection. Keeping it would have re-introduced an operator-supplied,
+   root-opened path — the *only* attacker-influenceable log path in the system.
+5. **No app-managed log-file rotation for kompli.** *(Implemented by construction —
+   there is no longer a kompli-managed log file to rotate.)* Retention/rotation is
+   owned by syslog/journald (passthrough/NRP) or the operator (standalone/komplid).
 
-## Security outcome — the residual TOCTOU closes by *elimination*
+## Security outcome — the residual TOCTOU closed by *elimination*
 
-The residual TOCTOU (documented in
-`src/modules/complianceengine/src/cli/THREAT_MODEL.md`, tracked in
-`src/komplid/README.md`): `OpenLog()` is path-only and `TrimLog()` re-opens the path
-on every rotation, leaving a check-to-use window on the operator-supplied
-`--log-file`. The mitigation to date (require a root-owned, non-writable parent) only
-*narrows* it.
+The former residual TOCTOU (previously documented in
+`src/modules/complianceengine/src/cli/THREAT_MODEL.md`): `OpenLog()` is path-only
+and `TrimLog()` re-opens the path on every rotation, leaving a check-to-use window
+on the operator-supplied `--log-file`. The mitigation to date (require a
+root-owned, non-writable parent) only *narrowed* it — removing the flag
+closed it outright.
 
 **Resolution: remove the operator-supplied path entirely.** With standalone/komplid
 → stderr and passthrough/NRP → syslog, kompli never opens an attacker-influenceable
@@ -140,14 +157,18 @@ roadmap. The only remaining `OpenLog(path)` consumers are fixed, root-owned path
 - **Syslog sink in the shared logging library** (`Logging.c`/`Logging.h`): a third
   mode alongside file/console. When active, `OsConfigLog(...)` routes to
   `syslog(priority, "%s", …)` instead of a `FILE*`, using the mapping above. The file
-  mode stays for other consumers (telemetry).
+  mode stays for other consumers (telemetry). **Done** — `OpenSyslog`/`CloseSyslog`/
+  `IsSyslogLoggingEnabled` plus `LoggingLevelToSyslogPriority`.
 - **NRP module init** (`src/modules/complianceengine/src/so/ComplianceEngineModule.c`
-  and the MC adapter) switches from `OpenLog("/var/log/osconfig_nrp.log", …)` to the
-  syslog sink.
+  and `src/adapters/mc/OsConfigResource.c`) switches from
+  `OpenLog("/var/log/osconfig_nrp.log", …)` to the syslog sink. **Done** — both
+  now call `OpenSyslog("kompli")`/`CloseSyslog()` (`InitModule`/`DestroyModule`
+  for the former; `Initialize`/`Destroy` for the latter, whose `GetLog()` now
+  always returns `NULL` since the syslog path never touches the handle).
 - **`Main.cpp`**: remove `--log-file` (and the `RefuseUnsafeLogFile` call/validation);
-  the stderr default is already in place via the console→stderr fix.
+  the stderr default is already in place via the console→stderr fix. **Done.**
 - **Retire** the `OpenLogEx`/hardened-open design and the `logrotate.d/kompli` idea —
-  both obviated by this model.
+  both obviated by this model. **Done** — neither existed in code; nothing to remove.
 
 ## Caveats / migration
 
@@ -158,6 +179,44 @@ roadmap. The only remaining `OpenLog(path)` consumers are fixed, root-owned path
   `journalctl -t kompli` (or the configured syslog target). Call this out in the
   package changelog.
 - **Telemetry** keeps its own file log; it is out of scope for this change.
+- **Known gap (undecided): augmentation-engine test-reporting regression.**
+  `augmentation-engine/tests/reporting/osconfig_logfile.py`'s
+  `load_osconfig_logfile` regex-parses the old
+  `[timestamp][LEVEL][file:line] [OsConfigResource] …` prefix out of
+  `/var/log/osconfig_nrp.log` to compute per-rule `duration_seconds` for the
+  JUnit report (`reporting/junit.py`). That file is never written now, and
+  `syslog(3)` doesn't carry the same prefix even if the harness were pointed at
+  `journalctl -t kompli` instead, so this per-rule timing enrichment is broken.
+  Impact is cosmetic only — `duration_seconds` is set nowhere else, so the
+  OSConfig/kompli approach's rules just report `time="0.0"` in JUnit XML like
+  every other approach already does; nothing else reads this field. Left
+  broken for now pending a decision on whether to rework it against journalctl
+  or drop it (see
+  [../../docs/unified-definitions/feature.md](../../docs/unified-definitions/feature.md)
+  Open questions).
+  - **Constraint for any `journalctl` rework (2026-09-11 review):** reading
+    the *system* journal (where the NRP module's syslog records land) needs
+    either root or `systemd-journal` group membership — it's gated by the
+    journal files' group ownership (`root:systemd-journal`, mode `2750`), not
+    by which UID emitted the record. In this repo's test harness the *only*
+    place that's already guaranteed to have root is `run_osconfig.sh` itself
+    (`[[ ${EUID} -ne 0 ]] && invalid_args …`, invoked via
+    `runtime_exec --elevate`) — the same script that used to
+    copy out `/var/log/osconfig_nrp.log`. A rework must call `journalctl -t
+    kompli` **there** and store its output as a plain-text artifact (mirroring
+    the existing `gc_agent.log`/`gc_worker.log` capture), so the downstream
+    Python reporting stage (`osconfig_logfile.py`/`accumulate.py`) keeps only
+    reading an already-extracted file, exactly as it does today. If a rework
+    instead had the Python side invoke `journalctl` itself, it would newly
+    require the *developer's own account* to be root or in
+    `systemd-journal` wherever `accumulate.py` runs (including on a bare
+    developer machine, once local conformance runs land) — that is a
+    regression from today's sudo-free reporting stage and must be avoided.
+    Also note journal entries from concurrent/repeated runs interleave with
+    no per-run file boundary; scope the `journalctl` query with `--since`/
+    `--until` around the run (the harness already brackets NRP execution with
+    `profiling_start`/`profiling_stop`) rather than assuming a single
+    contiguous block.
 
 ## Supersedes
 
@@ -165,5 +224,4 @@ roadmap. The only remaining `OpenLog(path)` consumers are fixed, root-owned path
   — replaced by *eliminate the operator path*.
 - The "Residual TOCTOU" note in
   `src/modules/complianceengine/src/cli/THREAT_MODEL.md` — resolved by removal; that
-  note (and the `--log-file` mentions in `docs/cli.md` / `docs/architecture.md`) are
-  updated when the change lands.
+  note (and the `--log-file` mentions in `docs/cli.md`) are updated to match.

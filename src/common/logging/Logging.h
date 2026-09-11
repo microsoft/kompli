@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <syslog.h>
 
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
@@ -56,7 +57,16 @@ void SetConsoleLoggingEnabled(bool enabledOrDisabled);
 FILE* GetLogFile(OsConfigLogHandle log);
 const char* GetFormattedTime(void);
 void TrimLog(OsConfigLogHandle log);
-bool IsDaemon(void);
+
+// Syslog sink: for callers that run under the configuration agent (in-process
+// NRP module, future passthrough), where the process's own stderr is not an
+// independent channel and no log file is opened by path (see docs/logging.md
+// in the kompli repo). OpenSyslog() calls openlog(3); once enabled,
+// OsConfigLog(...) routes to syslog(3) instead of the file/console sinks.
+void OpenSyslog(const char* ident);
+void CloseSyslog(void);
+bool IsSyslogLoggingEnabled(void);
+int LoggingLevelToSyslogPriority(LoggingLevel level);
 
 #define __PREFIX_TEMPLATE__ "[%s][%s][%s:%d] "
 #define __SHORT_FILE__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
@@ -74,12 +84,16 @@ bool IsDaemon(void);
 // Universal macro that can log at any of the 7 levels:
 #define OsConfigLog(log, level, FORMAT, ...) {\
     if (level <= GetLoggingLevel()) {\
-        if (NULL != GetLogFile(log)) {\
-            OSCONFIG_LOG_TO_FILE(log, level, FORMAT, ##__VA_ARGS__);\
-            fflush(GetLogFile(log));\
-        }\
-        if (IsConsoleLoggingEnabled()) {\
-            OSCONFIG_LOG(log, level, FORMAT, ##__VA_ARGS__);\
+        if (IsSyslogLoggingEnabled()) {\
+            syslog(LoggingLevelToSyslogPriority(level), FORMAT, ##__VA_ARGS__);\
+        } else {\
+            if (NULL != GetLogFile(log)) {\
+                OSCONFIG_LOG_TO_FILE(log, level, FORMAT, ##__VA_ARGS__);\
+                fflush(GetLogFile(log));\
+            }\
+            if (IsConsoleLoggingEnabled()) {\
+                OSCONFIG_LOG(log, level, FORMAT, ##__VA_ARGS__);\
+            }\
         }\
     }\
 }\

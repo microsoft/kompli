@@ -24,7 +24,6 @@
 
 using ComplianceEngine::BenchmarkIO::OpenVerifiedInput;
 using ComplianceEngine::BenchmarkIO::RefusePathTraversal;
-using ComplianceEngine::BenchmarkIO::RefuseUnsafeLogFile;
 using ComplianceEngine::BenchmarkIO::RefuseWritableParentDir;
 
 namespace
@@ -72,9 +71,6 @@ class RefuseWritableParentDirTest : public InputSecurityFixture
 {
 };
 class OpenVerifiedInputTest : public InputSecurityFixture
-{
-};
-class RefuseUnsafeLogFileTest : public InputSecurityFixture
 {
 };
 
@@ -406,126 +402,4 @@ TEST_F(OpenVerifiedInputTest, FifoIsRefused)
     {
         ::close(result.Value());
     }
-}
-
-// ---------------------------------------------------------------------------
-// RefuseUnsafeLogFile
-// ---------------------------------------------------------------------------
-
-TEST_F(RefuseUnsafeLogFileTest, NonExistentPathInSafeParentIsAccepted)
-{
-    // "/" is root-owned and not world-writable; a not-yet-existing log file
-    // there is acceptable (it will be created in the validated directory).
-    EXPECT_FALSE(RefuseUnsafeLogFile("/ipsec_test_new_log.log", nullptr));
-}
-
-TEST_F(RefuseUnsafeLogFileTest, PathTraversalIsRefused)
-{
-    EXPECT_TRUE(RefuseUnsafeLogFile("/var/log/../../etc/passwd", nullptr));
-}
-
-TEST_F(RefuseUnsafeLogFileTest, SymlinkIsRefused)
-{
-    if (::geteuid() != 0)
-    {
-        GTEST_SKIP() << "chown requires root";
-    }
-    const std::string dir = MakeSubdir("log_dir", 0755);
-    ASSERT_EQ(0, ::chown(dir.c_str(), 0, 0)) << std::strerror(errno);
-    const std::string target = dir + "/target";
-    const std::string link = dir + "/link.log";
-    ASSERT_TRUE(CreateFile(target, 0600)) << std::strerror(errno);
-    ASSERT_EQ(0, ::chown(target.c_str(), 0, 0)) << std::strerror(errno);
-    ASSERT_EQ(0, ::symlink(target.c_str(), link.c_str())) << std::strerror(errno);
-
-    EXPECT_TRUE(RefuseUnsafeLogFile(link, nullptr));
-}
-
-TEST_F(RefuseUnsafeLogFileTest, WritableParentIsRefused)
-{
-    if (::geteuid() != 0)
-    {
-        GTEST_SKIP() << "chown requires root";
-    }
-    const std::string dir = MakeSubdir("log_writable_dir", 0755);
-    ASSERT_EQ(0, ::chown(dir.c_str(), 0, 0)) << std::strerror(errno);
-    ASSERT_EQ(0, ::chmod(dir.c_str(), 0777)) << std::strerror(errno); // world-writable; set after creation to bypass umask
-
-    EXPECT_TRUE(RefuseUnsafeLogFile(dir + "/new.log", nullptr));
-}
-
-TEST_F(RefuseUnsafeLogFileTest, RootOwnedRegularFileIsAccepted)
-{
-    if (::geteuid() != 0)
-    {
-        GTEST_SKIP() << "chown requires root";
-    }
-    const std::string dir = MakeSubdir("log_safe_dir", 0755);
-    ASSERT_EQ(0, ::chown(dir.c_str(), 0, 0)) << std::strerror(errno);
-    const std::string file = dir + "/safe.log";
-    ASSERT_TRUE(CreateFile(file, 0600)) << std::strerror(errno);
-    ASSERT_EQ(0, ::chown(file.c_str(), 0, 0)) << std::strerror(errno);
-
-    EXPECT_FALSE(RefuseUnsafeLogFile(file, nullptr));
-}
-
-TEST_F(RefuseUnsafeLogFileTest, NonRootOwnedExistingFileIsRefused)
-{
-    if (::geteuid() != 0)
-    {
-        GTEST_SKIP() << "chown requires root";
-    }
-    // Parent is root-owned and safe (passes RefuseWritableParentDir), but the
-    // existing log file itself is owned by a non-root user. This exercises the
-    // file-level ownership branch, which is distinct from the parent-directory
-    // ownership check.
-    const std::string dir = MakeSubdir("log_nonroot_owner_dir", 0755);
-    ASSERT_EQ(0, ::chown(dir.c_str(), 0, 0)) << std::strerror(errno);
-    const std::string file = dir + "/owned.log";
-    ASSERT_TRUE(CreateFile(file, 0600)) << std::strerror(errno);
-    ASSERT_EQ(0, ::chown(file.c_str(), 1000, 1000)) << std::strerror(errno);
-
-    EXPECT_TRUE(RefuseUnsafeLogFile(file, nullptr));
-}
-
-TEST_F(RefuseUnsafeLogFileTest, GroupWritableExistingFileIsRefused)
-{
-    if (::geteuid() != 0)
-    {
-        GTEST_SKIP() << "chown requires root";
-    }
-    // Parent is root-owned and safe, and the existing log file is root-owned,
-    // but the file is group-writable. This exercises the file-level mode
-    // branch, which is distinct from the parent-directory writability check
-    // (covered by WritableParentIsRefused). Mode 0660 sets S_IWGRP only.
-    const std::string dir = MakeSubdir("log_grpwrite_file_dir", 0755);
-    ASSERT_EQ(0, ::chown(dir.c_str(), 0, 0)) << std::strerror(errno);
-    const std::string file = dir + "/grpwrite.log";
-    ASSERT_TRUE(CreateFile(file, 0600)) << std::strerror(errno);
-    ASSERT_EQ(0, ::chmod(file.c_str(), 0660)) << std::strerror(errno); // group-writable; set after creation to bypass umask
-    ASSERT_EQ(0, ::chown(file.c_str(), 0, 0)) << std::strerror(errno);
-
-    EXPECT_TRUE(RefuseUnsafeLogFile(file, nullptr));
-}
-
-TEST_F(RefuseUnsafeLogFileTest, NonRegularExistingFileIsRefused)
-{
-    if (::geteuid() != 0)
-    {
-        GTEST_SKIP() << "chown requires root";
-    }
-    // A root-owned 0600 FIFO in a safe parent passes the ownership and mode
-    // checks but must be refused because it is not a regular file. This
-    // exercises the S_ISREG branch of RefuseUnsafeLogFile (separate from the
-    // one in OpenVerifiedInput).
-    const std::string dir = MakeSubdir("log_fifo_dir", 0755);
-    ASSERT_EQ(0, ::chown(dir.c_str(), 0, 0)) << std::strerror(errno);
-    const std::string fifo = dir + "/log.fifo";
-    if (::mkfifo(fifo.c_str(), 0600) != 0)
-    {
-        GTEST_SKIP() << "mkfifo failed";
-    }
-    ASSERT_EQ(0, ::chown(fifo.c_str(), 0, 0)) << std::strerror(errno);
-
-    EXPECT_TRUE(RefuseUnsafeLogFile(fifo, nullptr));
 }

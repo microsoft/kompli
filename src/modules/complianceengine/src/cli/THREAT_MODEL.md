@@ -8,11 +8,12 @@ input format, the input-hardening posture, or the trust boundary changes.
 
 The tool runs **as root** on Linux endpoints to perform CIS benchmark audit and
 remediation. The trust boundary is the invoking operator: the input
-benchmark-definition file, the log-file path, and command-line arguments are
-operator-supplied — trusted to be benign in *intent*, but not trusted to be free
-of bugs or accidental hostile content. The hardening below defends the root
-process against a malformed, tampered, or swapped input rather than against the
-operator.
+benchmark-definition file and command-line arguments are operator-supplied —
+trusted to be benign in *intent*, but not trusted to be free of bugs or
+accidental hostile content. The hardening below defends the root process
+against a malformed, tampered, or swapped input rather than against the
+operator. (There is no operator-supplied log-file path: kompli logs to stderr
+unconditionally — see [../../../../../docs/logging.md](../../../../../docs/logging.md).)
 
 ### Why input integrity is security-critical
 
@@ -87,29 +88,14 @@ a result JSON and performs none of these checks, still accepts stdin.)
 ## Other process hardening
 
 - **umask** is tightened to at least `S_IRWXG | S_IRWXO` (preserving any stricter
-  inherited mask). The `--log-file` case is the primary beneficiary.
+  inherited mask).
 
-- **`--log-file` path validation** (`RefuseUnsafeLogFile`): the shared logging
-  code opens the log with a symlink-following append and `chmod`s it while we run
-  as root, so a symlink, non-root-owned target, or writable parent directory is
-  refused to prevent redirecting root's writes onto a sensitive file.
-
-  *Residual TOCTOU (known limitation, now tracked as a roadmap item):* unlike
-  the definition-file input, the log file is not verified via `fstat()` on a
-  held fd. The shared `OpenLog()` API is path-only (no fd-accepting entry
-  point) and `TrimLog()` re-opens the path with `fopen()` on every rotation,
-  so a pinned, pre-verified fd cannot be handed to the logging layer.
-  `RefuseUnsafeLogFile()` checks the path with `lstat()` shortly before
-  `OpenLog()` resolves it again, leaving a small check-to-use window. That
-  window is closed in practice by the parent-directory check: requiring the
-  parent to be root-owned and not group/world-writable prevents an attacker
-  from creating, renaming, or swapping the entry at all. Fully eliminating
-  the window (an fd-based open with `O_NOFOLLOW` handed to the logger) would
-  require reworking the shared logging library. Previously out of scope
-  because it's shared with every azure-osconfig binary upstream — now that
-  this is a fork, that constraint no longer applies, and it's tracked as a
-  roadmap item (see the "Logging" section in
-  `src/komplid/README.md`) rather than a permanent limitation.
+- **`--log-file` removed.** The flag (and its `RefuseUnsafeLogFile` path
+  validation, plus the residual TOCTOU it carried) was removed rather than
+  further hardened: kompli logs to stderr unconditionally, so there is no
+  longer an operator-supplied, root-opened log path to redirect. See
+  [../../../../../docs/logging.md](../../../../../docs/logging.md) for the full
+  rationale (also covers the NRP module's switch to `syslog(3)`).
 
 - **`PATH` / `IFS`** are inherited and used by the procedure scripts the engine
   spawns. Sanitizing the environment is the engine's responsibility, not
