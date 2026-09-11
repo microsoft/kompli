@@ -28,11 +28,11 @@ src/
       complianceengine/   NRP adapter (Baseline.c, OsConfigResource.c, generated MOF)
   common/
     commonutils/        Shared OS utility functions
-    logging/            Circular file logging
+    logging/             File, console, and syslog logging sinks
     mpiclient/          MPI REST API client
     parson/             Vendored JSON parser
     telemetry/          Telemetry support
-  komplid/              Reserved space for the kompli daemon (not yet implemented)
+  komplid/              kompli daemon: synchronous JSONL audit/remediate over UDS
   modules/
     complianceengine/   ComplianceEngine module and tests
       src/lib/          Core engine, evaluator, procedures, Lua integration
@@ -55,7 +55,7 @@ Kompli supports two integration scenarios that share the same ComplianceEngine m
 - **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The augmentation engine generates MOF files that drive audit and remediation per rule.
 - **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/cli/`) that reads a benchmark-definition JSON file (supplied on disk as a required positional filename argument; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
 
-A third scenario, **`komplid`** (a native, systemd-managed daemon sharing the same ComplianceEngine core), is planned; see §3 and [src/komplid/README.md](../src/komplid/README.md) for its current (reserved, not-yet-implemented) status.
+A third scenario, **`komplid`** (a native, systemd-managed daemon sharing the same ComplianceEngine core), runs a synchronous audit/remediate subset today; see §3 and [src/komplid/README.md](../src/komplid/README.md) for its current status.
 
 All three scenarios ultimately drive the same `Engine` through the same
 per-rule MMI calls (`MmiSet`/`MmiGet`, §3.1) — they differ only in what sits in
@@ -67,14 +67,14 @@ flowchart TB
     subgraph "Front-ends (§2.2 scenarios)"
         NRP["MC / NRP adapter\nOsConfigResource.c"]
         CLI["kompli CLI"]
-        Daemon["komplid (placeholder today)"]
+        Daemon["komplid (synchronous audit/remediate)"]
     end
     MMI["MMI: MmiSet / MmiGet\n(per-rule interface, §3.1)"]
     Engine["Engine (complianceenginelib)"]
 
     NRP -->|ComplianceMmiSet/Get| MMI
     CLI -->|engine.MmiSet/MmiGet| MMI
-    Daemon -.->|planned, not yet wired| MMI
+    Daemon -->|engine.MmiSet/MmiGet, synchronous| MMI
     MMI --> Engine
 ```
 
@@ -83,20 +83,24 @@ flowchart TB
 Kompli will be able to run as a standalone daemon that can evaluate policy given requests from external sources.
 
 > The concrete name for this daemon is **`komplid`**. Its build-graph location
-> is [src/komplid/](../src/komplid/README.md), currently a placeholder
-> implementation only (validates socket-activation wiring; does not yet act on
-> its input). It is started by systemd via socket activation with
+> is [src/komplid/](../src/komplid/README.md), which now runs a real,
+> **synchronous** audit/remediate subset (`SO_PEERCRED`-authenticated,
+> engine-backed) — see the linked README for the current status and what's
+> still not implemented. It is started by systemd via socket activation with
 > **`Accept=yes`** (one fresh process per connection, chosen for initial
-> simplicity) and will share the ComplianceEngine core and the `benchmarkio`
+> simplicity) and shares the ComplianceEngine core and the `benchmarkio`
 > benchmark-definition/input-security library with the `kompli` CLI rather
 > than duplicating that logic. Wire protocol: JSONL over the Unix domain
 > socket, replacing the old MPI-over-UDS/HTTP design, one connection per
 > session carrying many sequential per-rule requests (see
-> [src/komplid/README.md](../src/komplid/README.md#wire-protocol)
-> — exact message field names are still open). Slow rules can respond with a
-> task ID instead of blocking, backed by a SQLite task registry/audit-result
-> cache (see [src/komplid/README.md](../src/komplid/README.md#long-running-rules-background-tasks)).
-> `komplid` always runs as root; passthrough clients only need membership in
+> [src/komplid/README.md](../src/komplid/README.md#wire-protocol) for the
+> decided `requestId`/`benchmark`/`id`/`mode`/`parameters` request shape and
+> `result`/`error` response envelopes). Slow rules responding with a task ID
+> instead of blocking, backed by a SQLite task registry/audit-result cache,
+> is designed but **not implemented yet** (see
+> [src/komplid/README.md](../src/komplid/README.md#long-running-rules-background-tasks)) —
+> every request today runs to completion before responding. `komplid` always
+> runs as root; passthrough clients only need membership in
 > a new `kompli` system group, with no fallback to standalone (root-required)
 > execution if the daemon is unreachable (see
 > [src/komplid/README.md](../src/komplid/README.md#privilege-model)).
@@ -114,18 +118,17 @@ sequenceDiagram
     Client->>systemd: connect(/run/komplid.sock)
     systemd->>komplid: accept() + spawn (Accept=yes: one process per connection)
     Client->>komplid: JSONL line (stdin)
-    komplid->>komplid: parse + pretty-print (not otherwise acted on yet)
-    komplid-->>Client: pretty-printed JSON (stdout)
+    komplid->>komplid: SO_PEERCRED check, parse, run synchronously via Engine
+    komplid-->>Client: result/error JSONL (stdout)
     Client->>komplid: connection closed
     komplid->>komplid: process exits
 ```
 
-The JSONL request schema's exact field names are still under discussion, but
-the shape of the exchange is decided (see
-[src/komplid/README.md](../src/komplid/README.md#wire-protocol) for the
+The JSONL request/response schema is implemented for the synchronous path
+(see [src/komplid/README.md](../src/komplid/README.md#wire-protocol) for the
 up-to-date status): one request per rule, many sequential requests per
-connection, and a slow rule can defer to a background task instead of
-blocking:
+connection. The background-task extension below (a slow rule deferring to a
+task instead of blocking) is designed but not yet built:
 
 ```mermaid
 sequenceDiagram
@@ -391,7 +394,7 @@ sequenceDiagram
 
 - The process umask is tightened to at least `S_IRWXG | S_IRWXO` at startup (preserving any stricter inherited mask), restricting file-creation permissions.
 - The positional benchmark-definition filename is checked for path traversal and a writable parent directory, then opened with `O_NOFOLLOW`, before it is read.
-- The `--log-file` path is validated to refuse symlinks and attacker-writable locations before the log handle is opened.
+- kompli logs to stderr unconditionally; there is no `--log-file` flag (removed — see [logging.md](logging.md) for the sink model and why the operator-supplied log path was eliminated rather than hardened).
 
 # 5. kompli Universal Native Resource Provider (NRP)
 

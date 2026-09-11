@@ -1,13 +1,35 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# The kompli daemon (komplid). Currently a placeholder implementation - see
-# README.md. Gated by -DBUILD_KOMPLID (default ON) so it can be turned off
-# for builds that don't want it.
+# The kompli daemon (komplid). See README.md for status: the JSONL wire
+# protocol runs synchronous audit/remediate through the same Engine the
+# `kompli` CLI uses; background tasks, result caching and a persistent task
+# registry are not implemented yet. Gated by -DBUILD_KOMPLID (default ON) so
+# it can be turned off for builds that don't want it.
 project(komplid)
+set(lib_name komplid-lib)
+
+# Library: wire protocol + peer auth + request dispatch. Split out from the
+# binary so unit tests can link the same object code as the shipping daemon
+# without rebuilding it or duplicating sources (mirrors cli/CMakeLists.txt's
+# kompli-cli-lib split).
+add_library(${lib_name} STATIC
+    PeerAuth.cpp
+    Protocol.cpp
+    RequestHandler.cpp
+)
+target_include_directories(${lib_name} PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(${lib_name} PUBLIC
+    logging
+    parsonlib
+    complianceenginelib
+    benchmarkio
+)
 
 add_executable(komplid Main.cpp)
-target_link_libraries(komplid PRIVATE parsonlib)
+target_link_libraries(komplid PRIVATE ${lib_name})
 
 include(GNUInstallDirs)
 install(TARGETS komplid RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
@@ -23,4 +45,10 @@ if (NOT SYSTEMD_UNIT_DIR)
     set(SYSTEMD_UNIT_DIR "${CMAKE_INSTALL_PREFIX}/lib/systemd/system")
 endif()
 
+
 install(FILES komplid.socket komplid@.service DESTINATION ${SYSTEMD_UNIT_DIR})
+
+if (BUILD_TESTS)
+    add_subdirectory(tests)
+endif()
+

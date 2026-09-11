@@ -1,19 +1,31 @@
 # komplid
 
-This directory holds `komplid`, the planned native kompli agent. It currently
-ships only a **placeholder implementation** (see "Current implementation"
-below) — real request handling is a separate, follow-up piece of work.
+This directory holds `komplid`, the native kompli agent. It runs a real,
+synchronous JSONL audit/remediate protocol against the shared `Engine` (the
+same one the `kompli` CLI uses) — see "Current implementation" below for
+what is, and isn't yet, in scope.
 
 ## Status
 
-- Build target exists and produces a real (if placeholder) binary + systemd
-  units. Built by default (`-DBUILD_KOMPLID=ON` is now the default; pass
-  `-DBUILD_KOMPLID=OFF` to exclude it).
-- Current implementation: reads JSONL from its socket-activated connection and
-  echoes back a pretty-printed copy of each line. It does **not** interpret,
-  validate, or act on the input in any way yet — no engine, no benchmark
-  evaluation. This exists to validate the socket-activation wiring end to end
-  before the real protocol lands.
+- Build target exists and produces a real binary + systemd units. Built by
+  default (`-DBUILD_KOMPLID=ON` is now the default; pass `-DBUILD_KOMPLID=OFF`
+  to exclude it). Split into `komplid-lib` (peer auth, wire protocol, request
+  dispatch) and the `komplid` executable, so `komplid-tests` links the same
+  object code without duplicating it (mirrors the CLI's
+  `kompli-cli-lib`/`kompli-cli-tests` split).
+- Current implementation: authenticates the connecting peer via `SO_PEERCRED`
+  (see "Privilege model" below), then reads bounded (≤1 MiB) JSONL lines from
+  its socket-activated connection and runs each one **synchronously** — no
+  task IDs, no backgrounding — through the same `Engine` the `kompli` CLI
+  uses, in `audit`/`remediate` mode, against benchmark definitions under
+  `/etc/kompli/definitions`. Each response is one JSONL line: a `result` or
+  `error` envelope (see "Wire protocol" below for the exact fields).
+- **Not implemented yet, by design** (see §3 of
+  [docs/architecture.md](../../docs/architecture.md)): `enforce` mode (parses,
+  but rejected with `unsupported_mode`), background tasks / the SQLite task
+  registry, result caching, and `--passthrough` forwarding.
+- Unit tests: `komplid/tests/ProtocolTest.cpp` (25 cases) covers request
+  parsing, error-code mapping, and response-envelope building.
 
 ## Planned shape (see [docs/architecture.md](../../docs/architecture.md))
 
@@ -104,30 +116,30 @@ root itself, in exchange for talking to something that already does:
   explicit failure. It must never silently
   degrade into attempting the other mode.
 
-## Logging: stderr by default, descriptor-based rework (roadmap item)
+## Logging: stderr by default
 
 `komplid`'s `StandardOutput=socket` means stdout **is** the wire protocol
 stream — any diagnostic logging that ended up there would corrupt it.
-`IsDaemon()` (`getppid() == 1`, in `src/common/logging/Logging.c`) already
-auto-disables console logging today, and that likely covers real
-systemd-spawned instances in practice — but it's an indirect heuristic built
-for the old double-forking OSConfig platform daemon, not something
-deliberately verified for `komplid`, and it does **not** protect an ad-hoc
-invocation for local testing (`komplid < input.jsonl` from a shell, where
-`getppid()` isn't 1). `komplid` should log to stderr unconditionally instead
-of relying on that heuristic — standard daemon behavior, and something this
-fork is now free to do that the upstream OSConfig project wasn't.
+Console logging (stderr) is unconditional now: the shared logging library's
+`IsConsoleLoggingEnabled()` used to auto-disable it whenever `IsDaemon()`
+(`getppid() == 1`, in `src/common/logging/Logging.c`) was true — an indirect
+heuristic built for the old double-forking OSConfig platform daemon, not
+something deliberately verified for `komplid`, and one that also misfired for
+the standalone CLI in some containerized CI environments (where kompli runs
+as a direct child of PID 1). That heuristic has been **removed** rather than
+special-cased, so `komplid` (and every other kompli entry point) logs to
+stderr unconditionally — standard daemon behavior, and something this fork is
+now free to do that the upstream OSConfig project wasn't.
 
-Separately, and tracked as its own **roadmap item**: the shared logging
-library's `OpenLog()` is path-only (see the "Residual TOCTOU" note in
-`src/modules/complianceengine/src/cli/THREAT_MODEL.md`), which is a real,
-already-documented TOCTOU gap for `--log-file` — previously accepted as a
-permanent limitation because fixing it meant touching a library shared with
-every azure-osconfig binary upstream. Now that this is a fork, that
-constraint no longer applies: reworking the logging library to a
-descriptor-based interface (caller opens/verifies the fd, hands it to the
-logger) is in scope and should happen, just not as part of this
-design pass — tracked here so it isn't lost.
+**Resolved:** the shared logging library's `OpenLog()`-based TOCTOU gap (see
+the former "Residual TOCTOU" note in
+`src/modules/complianceengine/src/cli/THREAT_MODEL.md`) was closed by
+elimination rather than by a descriptor-based rework — the `kompli` CLI's
+`--log-file` flag (the only consumer of that path) was removed outright, and
+the NRP module now logs to `syslog(3)` instead of a fixed-path `OpenLog()`.
+See [docs/logging.md](../../docs/logging.md) for the full design. The
+descriptor-based `OpenLog` rework is therefore **dropped**, not just
+deferred: there is no longer an operator-supplied log path left to harden.
 
 ## Packaging
 
@@ -275,10 +287,13 @@ or write it directly.
   produces — distinct from a rule that ran fine and reported `NonCompliant`,
   which is a normal `result`, not an error. Exact `code` taxonomy: **not yet
   decided**, tracked as a TODO alongside the rest of this envelope.
-- **Message schema: still a draft, not finalized.** The placeholder
-  implementation sidesteps this entirely by not interpreting the input at
-  all. Treat everything above as provisional until a real JSON schema exists
-  for it (deferred — planning should finish settling first).
+- **Message schema: implemented for the synchronous path, decided.** The
+  request shape (`requestId`, `benchmark`, `id`, `mode`, optional
+  `parameters`) and the `result`/`error` response envelopes above are
+  implemented and unit-tested (`Protocol.hpp`/`.cpp`,
+  `komplid/tests/ProtocolTest.cpp`). The `task`/`taskResult`/`taskStatus`
+  envelope types remain provisional/draft — they have no implementation yet,
+  since background tasks aren't built (see "Long-running rules" below).
 
 ## Long-running rules: background tasks
 
