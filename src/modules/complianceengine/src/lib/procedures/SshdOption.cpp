@@ -462,7 +462,7 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
             // Match context could not be simulated) is an engine error, not evidence that the
             // system is non-compliant. Reporting it as NonCompliant produces a false negative;
             // propagate it as an Error so it is surfaced as "could not evaluate" and honored by
-            // the assessor's --continue-on-error handling.
+            // kompli's --continue-on-error handling.
             return Error("Failed to get sshd options: " + sshdConfig.Error().message, sshdConfig.Error().code);
         }
         for (auto const& option : options)

@@ -36,7 +36,8 @@ src/
     complianceengine/   ComplianceEngine module and tests
       src/lib/          Core engine, evaluator, procedures, Lua integration
       src/so/           Module shared-object entry point
-      src/assessor/     CLI assessor tool
+      src/benchmarkio/  Benchmark-definition parsing + input-file security
+      src/cli/          kompli CLI tool
       src/lua-evaluator/ Lua evaluator tool
       tests/            Unit tests
     inc/                Module interface headers (Mmi.h)
@@ -51,7 +52,7 @@ src/
 Kompli supports two integration scenarios that share the same ComplianceEngine module:
 
 - **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The augmentation engine generates MOF files that drive audit and remediation per rule.
-- **Assessor** — a standalone CLI tool (`src/modules/complianceengine/src/assessor/`) that reads a benchmark-definition JSON file (supplied on disk as a required positional filename argument; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
+- **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/cli/`) that reads a benchmark-definition JSON file (supplied on disk as a required positional filename argument; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
 
 # 3. kompli Agent
 
@@ -276,17 +277,17 @@ Desired objects (`MmiSet`). Same key-value format as init entries. Triggers exec
 
 Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns a string that begins with `PASS` on success or contains a descriptive log on failure.
 
-## 5.3. Assessor Mode
+## 5.3. kompli CLI Mode
 
-The Assessor (`src/modules/complianceengine/src/assessor/`) is a standalone CLI tool that reads a MOF file and drives the engine directly — no platform daemon, MPI, or RC/DC files are involved.
+The kompli CLI (`src/modules/complianceengine/src/cli/`) is a standalone CLI tool that reads a MOF file and drives the engine directly — no platform daemon, MPI, or RC/DC files are involved.
 
 ### Input
 
-The Assessor accepts a MOF file via `--input <path>` or from stdin. Input is capped at 8 MB and 100 000 MOF entries to guard against malformed or hostile input when running as root.
+kompli accepts a MOF file via `--input <path>` or from stdin. Input is capped at 8 MB and 100 000 MOF entries to guard against malformed or hostile input when running as root.
 
 ### Per-entry execution
 
-For each `OsConfigResource` instance in the MOF file the Assessor:
+For each `OsConfigResource` instance in the MOF file, kompli:
 
 1. **Registers the procedure** — calls `engine.MmiSet("procedure" + ruleName, procedurePayload)` to load the base64-encoded audit/remediation definition and its default parameter values.
 2. **Audit path**

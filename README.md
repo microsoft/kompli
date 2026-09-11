@@ -24,7 +24,8 @@ src/
 │   └── telemetry/                  Telemetry library
 └── modules/complianceengine/       ComplianceEngine module
     ├── src/lib/                    Core engine, procedures, Lua evaluator
-    ├── src/assessor/               CLI assessor tool
+    ├── src/benchmarkio/            Benchmark-definition parsing + input-file security
+    ├── src/cli/                    kompli CLI tool
     └── tests/                      GTest suite
 ```
 
