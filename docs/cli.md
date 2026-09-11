@@ -82,15 +82,15 @@ identifier — a separate `section` field used to exist but was eliminated
 (see [payload-key-format.md §11](payload-key-format.md#11-id-the-sole-per-rule-identifier-no-separate-section)),
 and the field itself was later renamed from `payloadKey` to `id` (see
 [payload-key-format.md §12](payload-key-format.md#12-id-not-ruleid-in-komplis-own-schema));
-it's dot-form for CIS (e.g. `1.1.1.1`) and unchanged for STIG (e.g.
-`SV-260469`), and doubles as both the CLI-facing argument
+it's dot-form for Framework A (e.g. `1.1.1.1`) and unchanged for Framework B
+(e.g. `RULE-4502`), and doubles as both the CLI-facing argument
 (`--audit=<section>` — flag name kept for continuity with the former
 `section` field) and the plan file's lookup key, with no translation step
 between the two.
 
 **Rule-identity caveat (enforced by the parser — see §5):** `id` is
 only guaranteed unique *within one benchmark-definition file*, not globally.
-Augmentation-engine-generated CIS/STIG definitions won't collide in
+Definitions-generator-produced files won't collide in
 practice, but kompli intends to support user-authored custom rule sets too,
 which can't be guaranteed unique against anything else on the system.
 [payload-key-format.md §7](payload-key-format.md#7-plan-format-mixing-rules-from-multiple-benchmark-files)
@@ -130,8 +130,8 @@ the command line produce **one** plan with one `benchmarks[]` entry per file:
 {
   "benchmarks": [
     {
-      "file": "cis_ubuntu24.04.benchmark.json",
-      "name": "cis_ubuntu24.04",     // from the definition's metadata.name
+      "file": "frameworkA_ubuntu24.04.benchmark.json",
+      "name": "frameworkA_ubuntu24.04",     // from the definition's metadata.name
       "sha256": "<hash of the file at plan-generation time>",
       "rules": {
         "1.1.1.1": { "mode": "audit", "parameters": { "PKG_NAME": "cramfs" } },
@@ -145,7 +145,7 @@ the command line produce **one** plan with one `benchmarks[]` entry per file:
 Each `rules` map is keyed by `id` — now just the opaque remainder
 (segment 5+ of the full payload key, see
 [payload-key-format.md §1](payload-key-format.md#1-structure)),
-not the full `/cis/.../...` path, since the file-level prefix
+not the full `/frameworkA/.../...` path, since the file-level prefix
 (framework/distribution/distributionVersion/benchmarkVersion) is hoisted into
 each `benchmarks[]` entry's referenced file metadata rather than repeated per
 rule.
@@ -213,7 +213,7 @@ already supports multiple `benchmarks[]` entries (see above,
   `--audit=<id>` could match a rule in more than one of them. Resolution:
   when **more than one** file is given, every `--audit=`/`--remediate=`/
   `--enforce=`/`--param=` value must be **qualified** as `<file-basename>:<id>` (e.g.
-  `--audit=cis_ubuntu24.04.benchmark.json:1.1.1.1`); an unqualified value is a
+  `--audit=frameworkA_ubuntu24.04.benchmark.json:1.1.1.1`); an unqualified value is a
   hard error in that case. With exactly **one** file, unqualified values keep
   working exactly as with a single-file `plan` (no forced migration for the
   common case). An unrecognised `<file-basename>` (doesn't match any of the

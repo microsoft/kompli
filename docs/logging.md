@@ -167,8 +167,8 @@ roadmap. The only remaining `OpenLog(path)` consumers are fixed, root-owned path
   `journalctl -t kompli` (or the configured syslog target). Call this out in the
   package changelog.
 - **Telemetry** keeps its own file log; it is out of scope for this change.
-- **Open question: augmentation-engine test-reporting regression.**
-  `augmentation-engine/tests/reporting/osconfig_logfile.py`'s
+- **Open question: definitions-generator test-reporting regression.**
+  The definitions generator's `tests/reporting/osconfig_logfile.py`'s
   `load_osconfig_logfile` regex-parses the old
   `[timestamp][LEVEL][file:line] [OsConfigResource] …` prefix out of
   `/var/log/osconfig_nrp.log` to compute per-rule `duration_seconds` for the

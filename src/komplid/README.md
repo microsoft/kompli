@@ -161,19 +161,19 @@ scriptlets under `devops/rpm/` and `devops/debian/`.
 - **Cross-repo delivery of benchmark content:** this repo's package ships
   `komplid`/`kompli` and an *empty* `/etc/kompli/definitions/` directory
   only - it deliberately does not ship any `*.benchmark.json` content,
-  because that content (CIS/STIG benchmark text) is externally-sourced,
-  third-party material and shouldn't be coupled to this repo's release
-  cadence or licensing. Definitions are produced by a separate pipeline (the
-  Compliance Augmentation Engine), which publishes them as NuGet packages
-  (the GC/Azure Policy delivery path) and is meant to also build native
-  `.deb`/`.rpm` packages straight from the same generated
+  because that content (benchmark text for each supported framework) is
+  externally-sourced, third-party material and shouldn't be coupled to this
+  repo's release cadence or licensing. Definitions are produced by a
+  separate pipeline (the definitions generator), which publishes them as
+  NuGet packages (the GC/Azure Policy delivery path) and is meant to also
+  build native `.deb`/`.rpm` packages straight from the same generated
   `*.benchmark.json` content - separate from, and installed on top of, this
   repo's `kompli`/`komplid` package - dropping files into
   `/etc/kompli/definitions/` with the ownership/permissions this repo's
   package establishes. Preferably signed and upstreamed to PMC (Microsoft's
   `packages.microsoft.com` Linux package repository), the same
   trusted-distribution channel other Microsoft Linux tooling uses. This is
-  augmentation-engine-side pipeline work, not this repo's.
+  the definitions generator's own pipeline work, not this repo's.
 - Per-distro verification: `devops/docker/` has build images for 12
   distributions (Debian/Ubuntu and RHEL-family/SUSE) to exercise the
   scriptlets against.
@@ -257,7 +257,7 @@ directly.
   // omitted or empty means "use this rule's defaults" (see docs/cli.md's
   // "Parametrization" section - kompli/komplid fold in the parameter
   // overrides GC/NRP already supports, via the plan file).
-  { "requestId": "1", "benchmark": "cis_ubuntu24.04", "id": "...", "mode": "audit", "parameters": {} }
+  { "requestId": "1", "benchmark": "frameworkA_ubuntu24.04", "id": "...", "mode": "audit", "parameters": {} }
 
   // Responses all share {type, requestId}; shape beyond that depends on type:
   { "type": "result",     "requestId": "1", "result": { /* canonical per-rule result */ } }
