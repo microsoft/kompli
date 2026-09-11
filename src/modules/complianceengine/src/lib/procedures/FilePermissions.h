@@ -46,8 +46,22 @@ struct FilePermissionsCollectionParams
     /// Whether to recurse
     Optional<bool> recurse = true;
 
+    Optional<bool> directoriesOnly = false;
+
+    Optional<bool> allFileTypes = false;
+
+    Optional<bool> excludeSymlinks = false;
+
+    Optional<bool> excludeDirectories = false;
+
+    Optional<int> maximumUid;
+
+    Optional<int> maximumGid;
+
     /// File pattern
     std::string filePattern;
+
+    Optional<bool> filePatternIsRegex = false;
 
     /// Required owner of the file, single or | separated, first one is used for remediation
     Optional<Separated<Pattern, '|'>> owner;

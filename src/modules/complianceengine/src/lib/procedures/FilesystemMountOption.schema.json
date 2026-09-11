@@ -21,6 +21,14 @@
                   "type": "string",
                   "description": "Filesystem mount point"
                 },
+                "mountpointIsPattern": {
+                  "type": "string",
+                  "description": "Treat mountpoint as a regular expression and audit every matching mounted filesystem; remediation is not supported in this mode"
+                },
+                "requireMountpoint": {
+                  "type": "string",
+                  "description": "Fail the audit when no mounted filesystem matches mountpoint; otherwise a missing mount is compliant"
+                },
                 "optionsSet": {
                   "type": "string",
                   "description": "Comma-separated list of options that must be set"
@@ -54,6 +62,14 @@
                 "mountpoint": {
                   "type": "string",
                   "description": "Filesystem mount point"
+                },
+                "mountpointIsPattern": {
+                  "type": "string",
+                  "description": "Treat mountpoint as a regular expression and audit every matching mounted filesystem; remediation is not supported in this mode"
+                },
+                "requireMountpoint": {
+                  "type": "string",
+                  "description": "Fail the audit when no mounted filesystem matches mountpoint; otherwise a missing mount is compliant"
                 },
                 "optionsSet": {
                   "type": "string",

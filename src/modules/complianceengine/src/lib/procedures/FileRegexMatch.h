@@ -54,6 +54,15 @@ struct FileRegexMatchParams
     /// The pattern to match against each line that matches the 'statePattern'
     Optional<std::string> statePattern;
 
+    /// Inclusive signed integer lower bound for the first capture group, or the entire match if no group exists
+    Optional<std::string> minimumValue;
+
+    /// Inclusive signed integer upper bound for the first capture group, or the entire match if no group exists
+    Optional<std::string> maximumValue;
+
+    /// Require every line selected by matchPattern to satisfy the state and numeric constraints; otherwise accept any passing line
+    Optional<bool> allMatches = false;
+
     /// Determine whether a match or state should ignore case sensitivity 'matchPattern' and 'statePattern' or none when empty'
     /// pattern: ^(matchPattern\sstatePattern|matchPattern|statePattern)$
     Optional<IgnoreCase> ignoreCase;

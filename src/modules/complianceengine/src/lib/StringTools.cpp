@@ -3,6 +3,7 @@
 
 #include <StringTools.h>
 #include <algorithm>
+#include <cctype>
 #include <stdexcept>
 
 namespace ComplianceEngine
@@ -47,6 +48,12 @@ std::string TrimWhiteSpaces(const std::string& str)
         return std::string(start, end);
     }
     return std::string();
+}
+
+std::string ToLower(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    return value;
 }
 
 Result<int> TryStringToInt(const std::string& str, int base)

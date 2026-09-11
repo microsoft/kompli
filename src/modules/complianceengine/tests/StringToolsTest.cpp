@@ -12,6 +12,14 @@ class StringToolsTest : public ::testing::Test
 {
 };
 
+TEST_F(StringToolsTest, ToLowerPreservesNonLetters)
+{
+    EXPECT_EQ(ComplianceEngine::ToLower(""), "");
+    EXPECT_EQ(ComplianceEngine::ToLower("MiXeD_123"), "mixed_123");
+    EXPECT_EQ(ComplianceEngine::ToLower(std::string("A\0Z", 3)), std::string("a\0z", 3));
+    EXPECT_EQ(ComplianceEngine::ToLower("A\x80\xff"), "a\x80\xff");
+}
+
 // Tests for EscapeForShell
 
 TEST_F(StringToolsTest, EscapeForShell_EmptyString)

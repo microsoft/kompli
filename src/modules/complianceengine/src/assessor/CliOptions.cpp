@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 #include <CliOptions.hpp>
-#include <algorithm>
+#include <StringTools.h>
 #include <getopt.h>
 #include <iostream>
 #include <string>
@@ -107,8 +107,7 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
                 {
                     return Error("Format must not be empty.");
                 }
-                auto formatArg = std::string(optarg);
-                std::transform(formatArg.begin(), formatArg.end(), formatArg.begin(), [](unsigned char c) { return static_cast<char>(::tolower(c)); });
+                const auto formatArg = ToLower(optarg);
                 if (formatArg == "junit")
                 {
                     result.format = Format::Junit;

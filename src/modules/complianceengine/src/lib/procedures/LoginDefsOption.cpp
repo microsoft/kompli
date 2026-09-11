@@ -127,8 +127,11 @@ Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, Indicat
                                        params.value + ")");
     }
 
-    // Fall back to string comparison
-    auto result = StringComparison(foundValue.Value(), params.value, params.comparison);
+    // login.defs accepts ENCRYPT_METHOD names case-insensitively.
+    const bool ignoreCase = params.option == "ENCRYPT_METHOD";
+    const string actualValue = ignoreCase ? ToLower(foundValue.Value()) : foundValue.Value();
+    const string expectedValue = ignoreCase ? ToLower(params.value) : params.value;
+    auto result = StringComparison(actualValue, expectedValue, params.comparison);
     if (!result.HasValue())
     {
         return result.Error();

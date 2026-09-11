@@ -76,6 +76,7 @@ Result<bool> SearchFilesystemForModuleName(std::string& moduleName, ContextInter
             if (node->fts_info == FTS_F)
             {
                 std::string baseName = node->fts_name;
+                std::replace(baseName.begin(), baseName.end(), '-', '_');
 
                 std::string target = moduleName + ".ko";
                 std::string overlayTarget = moduleName + "_overlay.ko";
@@ -107,6 +108,7 @@ Result<bool> SearchFilesystemForModuleName(std::string& moduleName, ContextInter
 static std::string UnderscoreForRegex(std::string input)
 {
     std::string result = input;
+    std::replace(result.begin(), result.end(), '_', '-');
     size_t pos = 0;
     while ((pos = result.find('-', pos)) != std::string::npos)
     {
@@ -200,6 +202,7 @@ Result<bool> IsModuleAvailableInRunningKernel(const std::string& moduleName, Con
             continue;
         }
         std::string baseName = node->fts_name;
+        std::replace(baseName.begin(), baseName.end(), '-', '_');
         if (baseName.find(target) == 0 || baseName.find(targetUnderscore) == 0 || baseName.find(overlayTarget) == 0 || baseName.find(overlayTargetUnderscore) == 0)
         {
             return true;

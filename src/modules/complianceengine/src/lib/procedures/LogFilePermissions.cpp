@@ -113,6 +113,12 @@ FilePermissionsParams GetDefaultFilePermissionArgs(const std::string& fullPath, 
 FilePermissionsParams GetFilePermissionArgs(const std::string& filename, const std::string& fullPath, const struct stat& statInfo,
     const DaemonUidSet& daemonUids, bool remediate)
 {
+    const std::string aptPathSuffix = "/apt/" + filename;
+    if (fullPath.size() >= aptPathSuffix.size() && fullPath.compare(fullPath.size() - aptPathSuffix.size(), aptPathSuffix.size(), aptPathSuffix) == 0)
+    {
+        return GetFilePermissionsParams(fullPath, {{"owner", "root"}, {"group", "root|adm"}, {"mask", "0133"}});
+    }
+
     for (const auto& pattern : g_logfilePatterns)
     {
         if (fnmatch(pattern.first.c_str(), filename.c_str(), FNM_CASEFOLD) == 0)

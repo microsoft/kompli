@@ -11,6 +11,7 @@ find_package(Lua REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(PROCEDURES
+    procedures/AideAttributes.cpp
     procedures/NoShellAccountsLocked.cpp
     procedures/AuditdRules.cpp
     procedures/PasswdGroupsExist.cpp
@@ -19,6 +20,7 @@ set(PROCEDURES
     procedures/ShellTimeout.cpp
     procedures/DefaultUmask.cpp
     procedures/FileExists.cpp
+    procedures/FileSymlinkTarget.cpp
     procedures/FilePermissions.cpp
     procedures/FilesystemMountOption.cpp
     procedures/FirewalldZoneTargets.cpp
@@ -57,6 +59,7 @@ set(PROCEDURES
     procedures/SshKeyPermissions.cpp
 )
 set(SCHEMAS
+    procedures/AideAttributes.schema.json
     procedures/NoShellAccountsLocked.schema.json
     procedures/AuditdRules.schema.json
     procedures/PasswdGroupsExist.schema.json
@@ -65,6 +68,7 @@ set(SCHEMAS
     procedures/ShellTimeout.schema.json
     procedures/DefaultUmask.schema.json
     procedures/FileExists.schema.json
+    procedures/FileSymlinkTarget.schema.json
     procedures/FilePermissions.schema.json
     procedures/FilesystemMountOption.schema.json
     procedures/FirewalldZoneTargets.schema.json

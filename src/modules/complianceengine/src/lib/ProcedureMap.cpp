@@ -8,6 +8,9 @@
 
 namespace ComplianceEngine
 {
+// AideAttributes.h:18
+const char* Bindings<AideAttributesParams>::names[] = {"configPath", "filename", "attributes"};
+
 // ApparmorProfileState.h:15
 const char* Bindings<ApparmorProfileStateParams>::names[] = {"enforce"};
 
@@ -26,14 +29,17 @@ const char* Bindings<FileExistsParams>::names[] = {"filename"};
 // FilePermissions.h:36
 const char* Bindings<FilePermissionsParams>::names[] = {"path", "owner", "group", "permissions", "mask", "behavior"};
 
-// FilePermissions.h:68
-const char* Bindings<FilePermissionsCollectionParams>::names[] = {"directory", "recurse", "filePattern", "owner", "group", "permissions", "mask", "behavior"};
+// FilePermissions.h:82
+const char* Bindings<FilePermissionsCollectionParams>::names[] = {"directory", "recurse", "directoriesOnly", "allFileTypes", "excludeSymlinks", "excludeDirectories", "maximumUid", "maximumGid", "filePattern", "filePatternIsRegex", "owner", "group", "permissions", "mask", "behavior"};
 
-// FileRegexMatch.h:64
-const char* Bindings<FileRegexMatchParams>::names[] = {"path", "filenamePattern", "matchOperation", "matchPattern", "stateOperation", "statePattern", "ignoreCase", "behavior"};
+// FileRegexMatch.h:73
+const char* Bindings<FileRegexMatchParams>::names[] = {"path", "filenamePattern", "matchOperation", "matchPattern", "stateOperation", "statePattern", "minimumValue", "maximumValue", "allMatches", "ignoreCase", "behavior"};
 
-// FilesystemMountOption.h:22
-const char* Bindings<FilesystemMountOptionParams>::names[] = {"mountpoint", "optionsSet", "optionsNotSet"};
+// FileSymlinkTarget.h:15
+const char* Bindings<FileSymlinkTargetParams>::names[] = {"filename", "targetPattern"};
+
+// FilesystemMountOption.h:28
+const char* Bindings<FilesystemMountOptionParams>::names[] = {"mountpoint", "mountpointIsPattern", "requireMountpoint", "optionsSet", "optionsNotSet"};
 
 // GsettingsValue.h:56
 const char* Bindings<GsettingsValueParams>::names[] = {"schema", "key", "keyType", "operation", "value"};
@@ -102,6 +108,7 @@ const char* Bindings<UniqueGroupIdParams>::names[] = {"groupName", "gid"};
 const char* Bindings<UniqueUserIdParams>::names[] = {"username", "uid", "gid"};
 
 const ProcedureMap Evaluator::mProcedureMap = {
+    {"AideAttributes", {MakeHandler(AuditAideAttributes), nullptr}},
     {"ApparmorProfileState", {MakeHandler(AuditApparmorProfileState), nullptr}},
     {"AuditFailure", {MakeHandler(AuditAuditFailure), nullptr}},
     {"AuditGetParamValues", {MakeHandler(AuditAuditGetParamValues), nullptr}},
@@ -115,6 +122,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"FilePermissions", {MakeHandler(AuditFilePermissions), MakeHandler(RemediateFilePermissions)}},
     {"FilePermissionsCollection", {MakeHandler(AuditFilePermissionsCollection), MakeHandler(RemediateFilePermissionsCollection)}},
     {"FileRegexMatch", {MakeHandler(AuditFileRegexMatch), nullptr}},
+    {"FileSymlinkTarget", {MakeHandler(AuditFileSymlinkTarget), nullptr}},
     {"FilesystemMountOption", {MakeHandler(AuditFilesystemMountOption), MakeHandler(RemediateFilesystemMountOption)}},
     {"FirewalldZoneTargets", {MakeHandler(AuditFirewalldZoneTargets), nullptr}},
     {"GsettingsValue", {MakeHandler(AuditGsettingsValue), nullptr}},
