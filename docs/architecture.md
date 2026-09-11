@@ -106,9 +106,11 @@ Kompli will be able to run as a standalone daemon that can evaluate policy given
 > [src/komplid/README.md](../src/komplid/README.md#privilege-model)).
 > Neither `komplid` nor the `kompli` CLI
 > use a shared persistent state directory yet (each `kompli`/`komplid`
-> invocation gets its own ephemeral temp directory) — intentionally deferred
-> until `/etc/kompli/` and a `/var/lib/` state path are finalized, chosen to
-> avoid clashing with GuestConfiguration's own state paths on the same system.
+> invocation gets its own ephemeral temp directory) — the `kompli` CLI stays
+> ephemeral, while `komplid`'s own persistent state lives at the now-settled,
+> root-only `/var/lib/komplid/` (chosen to avoid clashing with
+> GuestConfiguration's `/var/lib/GuestConfig`); see
+> [docs/configuration.md](configuration.md).
 
 ```mermaid
 sequenceDiagram

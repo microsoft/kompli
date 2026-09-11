@@ -40,9 +40,11 @@ what is, and isn't yet, in scope.
 - Benchmark definitions are read from a fixed, non-configurable
   `/etc/kompli/definitions` (see `Main.cpp`) — deliberately not overridable
   via an environment variable or flag, since that would defeat the point of
-  it being a root-owned, trusted directory. A separate `/etc/kompli/` main
-  config file (for anything beyond the definitions path) is still planned,
-  not yet built.
+  it being a root-owned, trusted directory. The separate `/etc/kompli/`
+  main config file for behavioral knobs beyond the definitions path is
+  `/etc/kompli/kompli.conf` (JSON; `root:kompli` `0640`) — its schema and load
+  semantics are the contract in [docs/configuration.md](../../docs/configuration.md);
+  not yet consumed by the current synchronous core.
 - The `kompli` CLI will gain daemon-awareness (a CLI flag that checks for the
   socket) once this exists; today the CLI always runs the engine in-process.
   See [docs/cli.md](../../docs/cli.md) for the canonical CLI contract,
@@ -164,9 +166,12 @@ package would have failed outright.
   practice for system service accounts - matches e.g. postgres/nginx-style
   packaging).
 - **Not yet covered, deferred until the relevant design settles**:
-  - The rest of `/etc/kompli/`'s layout (the main config file, the
-    provisional `/var/lib/komplid/komplid.db` task/cache database's
-    ownership) isn't finalized yet, so the scriptlets don't touch it.
+  - The `/etc/kompli/` layout and the `/var/lib/komplid/komplid.db` ownership
+    are now **settled** (fixed paths, owners, and modes) — see
+    [docs/configuration.md](../../docs/configuration.md) and the feature-scoped
+    filesystem/privilege contract it links. The scriptlets create
+    `/etc/kompli/` (+ `definitions/`, `kompli.conf`) and `/var/lib/komplid/`
+    with those owners/modes as they are implemented (M-13).
   - **Cross-repo delivery of benchmark content, decided direction:** this
     repo's package ships `komplid`/`kompli` and an *empty*
     `/etc/kompli/definitions/` directory only - it deliberately does not
@@ -205,12 +210,12 @@ because the location must be chosen to avoid clashing with GuestConfiguration
 **Exception**: the task registry and audit-result cache (below) are
 intrinsically shared, persistent state — they can't be per-invocation
 ephemeral by definition, since a later connection/process needs to read what
-an earlier one wrote. Until the broader shared-state-directory question is
-settled, `komplid` will use a narrow, provisional path of its own
-(`/var/lib/komplid/komplid.db`, a single SQLite database) rather than waiting
-on that larger decision. This path is provisional and may move once the
-broader `/var/lib/` layout is finalized; the `kompli` CLI has no need to read
-or write it directly.
+an earlier one wrote. `komplid` uses its own root-only state path
+(`/var/lib/komplid/komplid.db`, a single SQLite database, `root:root` `0600`) —
+now the **settled** location (see [docs/configuration.md](../../docs/configuration.md)),
+chosen under `/var/lib/komplid/` rather than `/var/lib/GuestConfig` to avoid
+clashing with GuestConfiguration; the `kompli` CLI has no need to read or write
+it directly.
 
 ## Wire protocol
 
