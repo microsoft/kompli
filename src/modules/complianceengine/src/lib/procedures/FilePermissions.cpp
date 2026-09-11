@@ -42,6 +42,18 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
     {
         return Error("Numeric ownership collections are audit-only", ENOTSUP);
     }
+    Optional<regex> fileRegex;
+    if (params.filePatternIsRegex.Value())
+    {
+        try
+        {
+            fileRegex = regex(params.filePattern);
+        }
+        catch (const regex_error& error)
+        {
+            return Error("Invalid file pattern '" + params.filePattern + "': " + error.what(), EINVAL);
+        }
+    }
     auto directory = params.directory;
     // Respect explicit false; default behavior when unset is true
     bool recurse = params.recurse.ValueOr(true);
@@ -64,19 +76,6 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
         return indicators.NonCompliant("Directory '" + directory + "' does not exist, but it should");
     }
     auto ftspDeleter = std::unique_ptr<FTS, int (*)(FTS*)>(ftsp, fts_close);
-
-    Optional<regex> fileRegex;
-    if (params.filePatternIsRegex.Value())
-    {
-        try
-        {
-            fileRegex = regex(params.filePattern);
-        }
-        catch (const regex_error& error)
-        {
-            return Error("Invalid file pattern '" + params.filePattern + "': " + error.what(), EINVAL);
-        }
-    }
 
     FTSENT* entry = nullptr;
     int numberOfCompliantFiles = 0;
