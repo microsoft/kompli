@@ -22,9 +22,9 @@ src/
 │   ├── mpiclient/                  MPI client (socket communication)
 │   ├── parson/                     JSON library
 │   └── telemetry/                  Telemetry library
+├── komplid/                        Reserved space for the kompli daemon (not yet implemented)
 └── modules/complianceengine/       ComplianceEngine module
     ├── src/lib/                    Core engine, procedures, Lua evaluator
-    ├── src/benchmarkio/            Benchmark-definition parsing + input-file security
     ├── src/kompli/                 kompli CLI tool
     └── tests/                      GTest suite
 ```
