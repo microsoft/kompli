@@ -61,6 +61,8 @@ struct FilePermissionsCollectionParams
     /// File pattern
     std::string filePattern;
 
+    Optional<bool> filePatternIsRegex = false;
+
     /// Required owner of the file, single or | separated, first one is used for remediation
     Optional<Separated<Pattern, '|'>> owner;
 

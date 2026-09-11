@@ -347,9 +347,9 @@ template <>
 struct Bindings<FilePermissionsCollectionParams>
 {
     using T = FilePermissionsCollectionParams;
-    static constexpr size_t size = 14;
+    static constexpr size_t size = 15;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::directory, &T::recurse, &T::directoriesOnly, &T::allFileTypes, &T::excludeSymlinks, &T::excludeDirectories, &T::maximumUid, &T::maximumGid, &T::filePattern, &T::owner, &T::group, &T::permissions, &T::mask, &T::behavior);
+    static constexpr auto members = std::make_tuple(&T::directory, &T::recurse, &T::directoriesOnly, &T::allFileTypes, &T::excludeSymlinks, &T::excludeDirectories, &T::maximumUid, &T::maximumGid, &T::filePattern, &T::filePatternIsRegex, &T::owner, &T::group, &T::permissions, &T::mask, &T::behavior);
 };
 
 // Defines the bindings for the FileRegexMatchParams structure.

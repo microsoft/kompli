@@ -66,13 +66,16 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
     auto ftspDeleter = std::unique_ptr<FTS, int (*)(FTS*)>(ftsp, fts_close);
 
     Optional<regex> fileRegex;
-    try
+    if (params.filePatternIsRegex.Value())
     {
-        fileRegex = regex(params.filePattern);
-    }
-    catch (const regex_error&)
-    {
-        // Shell globs such as "*.conf" are not valid regular expressions.
+        try
+        {
+            fileRegex = regex(params.filePattern);
+        }
+        catch (const regex_error& error)
+        {
+            return Error("Invalid file pattern '" + params.filePattern + "': " + error.what(), EINVAL);
+        }
     }
 
     FTSENT* entry = nullptr;
@@ -107,7 +110,7 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
         const bool excludedDirectory = params.excludeDirectories.Value() && entry->fts_info == FTS_D;
         if (selectedType && selectedDepth && !excludedLink && !excludedDirectory)
         {
-            if ((0 == fnmatch(params.filePattern.c_str(), entry->fts_name, 0)) || (fileRegex.HasValue() && regex_match(entry->fts_name, fileRegex.Value())))
+            if (fileRegex.HasValue() ? regex_match(entry->fts_name, fileRegex.Value()) : 0 == fnmatch(params.filePattern.c_str(), entry->fts_name, 0))
             {
                 const char* fileName = entry->fts_path;
 

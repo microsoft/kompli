@@ -92,6 +92,9 @@
                   "type": "string",
                   "description": "File pattern"
                 },
+                "filePatternIsRegex": {
+                  "type": "string"
+                },
                 "owner": {
                   "type": "string",
                   "description": "Required owner of the file, single or | separated, first one is used for remediation"
@@ -210,6 +213,9 @@
                 "filePattern": {
                   "type": "string",
                   "description": "File pattern"
+                },
+                "filePatternIsRegex": {
+                  "type": "string"
                 },
                 "owner": {
                   "type": "string",

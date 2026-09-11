@@ -110,7 +110,7 @@ TEST_F(EnsureFilePermissionsTest, DirectoryCollectionChecksRootAndChildren)
     CreateFileInDir("regular", 0, 1, 0600);
     FilePermissionsCollectionParams params;
     params.directory = testDir;
-    params.filePattern = ".*";
+    params.filePattern = "*";
     params.directoriesOnly = true;
     auto group = Pattern::Make("root");
     ASSERT_TRUE(group.HasValue());
@@ -136,7 +136,7 @@ TEST_F(EnsureFilePermissionsTest, NumericOwnershipIncludesSymlinksAndDirectories
 {
     FilePermissionsCollectionParams params;
     params.directory = testDir;
-    params.filePattern = ".*";
+    params.filePattern = "*";
     params.allFileTypes = true;
     params.maximumUid = 0;
     params.maximumGid = 999;
@@ -172,7 +172,7 @@ TEST_F(EnsureFilePermissionsTest, NumericOwnershipCanExcludeOnlySymlinks)
 {
     FilePermissionsCollectionParams params;
     params.directory = testDir;
-    params.filePattern = ".*";
+    params.filePattern = "*";
     params.allFileTypes = true;
     params.excludeSymlinks = true;
     params.maximumUid = 0;
@@ -217,7 +217,7 @@ TEST_F(EnsureFilePermissionsTest, NumericFilenameOwnershipExcludesDirectories)
 {
     FilePermissionsCollectionParams params;
     params.directory = testDir;
-    params.filePattern = ".*";
+    params.filePattern = "*";
     params.allFileTypes = true;
     params.excludeSymlinks = true;
     params.excludeDirectories = true;
@@ -268,6 +268,7 @@ TEST_F(EnsureFilePermissionsTest, LibraryGroupFilterChecksSelectedFiles)
     FilePermissionsCollectionParams params;
     params.directory = testDir;
     params.filePattern = ".*(?:(\\.so\\S*)$).*";
+    params.filePatternIsRegex = true;
     params.recurse = true;
     params.behavior = Behavior::AnyExist;
     auto group = Pattern::Make("root");
@@ -298,7 +299,7 @@ TEST_F(EnsureFilePermissionsTest, CollectionFollowsConfiguredRootSymlinkOnly)
     ASSERT_EQ(symlink("/missing-target", (realDirectory + "/broken").c_str()), 0);
     FilePermissionsCollectionParams params;
     params.directory = linkedDirectory;
-    params.filePattern = ".*";
+    params.filePattern = "*";
     params.mask = 0077;
     auto result = AuditFilePermissionsCollection(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
@@ -800,11 +801,37 @@ TEST_F(EnsureFilePermissionsTest, AuditCollectionRegexPattern)
     FilePermissionsCollectionParams params;
     params.directory = testDir;
     params.filePattern = R"(^.*\.(conf|rules)$)";
+    params.filePatternIsRegex = true;
     params.mask = 0137;
 
     auto result = AuditFilePermissionsCollection(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureFilePermissionsTest, CollectionExactPatternDoesNotSelectRegexLookalike)
+{
+    CreateFileInDir("a.conf", 0, 0, 0600);
+    CreateFileInDir("axconf", 0, 0, 0666);
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = "a.conf";
+    params.mask = 0137;
+    auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    result = RemediateFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    struct stat metadata;
+    ASSERT_EQ(stat((testDir + "/axconf").c_str(), &metadata), 0);
+    EXPECT_EQ(metadata.st_mode & 0777, 0666u);
+    params.filePatternIsRegex = true;
+    result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    params.filePattern = "[";
+    EXPECT_FALSE(AuditFilePermissionsCollection(params, indicators, mContext).HasValue());
 }
 
 TEST_F(EnsureFilePermissionsTest, NumericOwnershipLimitsAreIndependentlyOptional)
@@ -1408,6 +1435,7 @@ TEST_F(EnsureFilePermissionsTest, AuditCollectionMissingDirectoryAnyExist)
     FilePermissionsCollectionParams params;
     params.directory = testDir + "/missing";
     params.filePattern = R"(^.+\.conf$)";
+    params.filePatternIsRegex = true;
     params.mask = 0177;
     params.behavior = Behavior::AnyExist;
 
