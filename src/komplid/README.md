@@ -1,33 +1,31 @@
 # komplid
 
-This directory holds `komplid`, the native kompli agent. It runs a real,
+This directory holds `komplid`, the native kompli agent. It speaks a
 synchronous JSONL audit/remediate protocol against the shared `Engine` (the
-same one the `kompli` CLI uses) — see "Current implementation" below for
-what is, and isn't yet, in scope.
+same one the `kompli` CLI uses) — see "Design overview" below for what it
+covers, and the open design questions still ahead.
 
-## Status
+## Design overview
 
-- Build target exists and produces a real binary + systemd units. Built by
-  default (`-DBUILD_KOMPLID=ON` is now the default; pass `-DBUILD_KOMPLID=OFF`
-  to exclude it). Split into `komplid-lib` (peer auth, wire protocol, request
-  dispatch) and the `komplid` executable, so `komplid-tests` links the same
-  object code without duplicating it (mirrors the CLI's
-  `kompli-cli-lib`/`kompli-cli-tests` split).
-- Current implementation: authenticates the connecting peer via `SO_PEERCRED`
-  (see "Privilege model" below), then reads bounded (≤1 MiB) JSONL lines from
-  its socket-activated connection and runs each one **synchronously** — no
-  task IDs, no backgrounding — through the same `Engine` the `kompli` CLI
-  uses, in `audit`/`remediate` mode, against benchmark definitions under
-  `/etc/kompli/definitions`. Each response is one JSONL line: a `result` or
-  `error` envelope (see "Wire protocol" below for the exact fields).
-- **Not implemented yet, by design** (see §3 of
-  [docs/architecture.md](../../docs/architecture.md)): `enforce` mode (parses,
-  but rejected with `unsupported_mode`), background tasks / the SQLite task
-  registry, result caching, and `--passthrough` forwarding.
-- Unit tests: `komplid/tests/ProtocolTest.cpp` (25 cases) covers request
-  parsing, error-code mapping, and response-envelope building.
+- Split into `komplid-lib` (peer auth, wire protocol, request dispatch) and
+  the `komplid` executable, so `komplid-tests` links the same object code
+  without duplicating it (mirrors the CLI's `kompli-cli-lib`/
+  `kompli-cli-tests` split). Built via the `-DBUILD_KOMPLID` CMake option.
+- Authenticates the connecting peer via `SO_PEERCRED` (see "Privilege model"
+  below), then reads bounded (≤1 MiB) JSONL lines from its socket-activated
+  connection and runs each one **synchronously** through the same `Engine`
+  the `kompli` CLI uses, in `audit`/`remediate` mode, against benchmark
+  definitions under `/etc/kompli/definitions`. Each response is one JSONL
+  line: a `result` or `error` envelope (see "Wire protocol" below for the
+  exact fields).
+- `enforce` mode is a reserved value that parses but is rejected with
+  `unsupported_mode` (see §3 of
+  [docs/architecture.md](../../docs/architecture.md)) — no execution backend
+  exists for it. Background tasks / the SQLite task registry, result
+  caching, and `--passthrough` forwarding are separate design layers,
+  described below.
 
-## Current linkage & configuration (see [docs/architecture.md](../../docs/architecture.md))
+## Linkage & configuration (see [docs/architecture.md](../../docs/architecture.md))
 
 - `komplid` links `complianceenginelib`
   ([src/modules/complianceengine/src/lib](../modules/complianceengine/src/lib))
@@ -36,28 +34,25 @@ what is, and isn't yet, in scope.
   — the same benchmark-definition parsing and root-safe input-file checks
   used by the `kompli` CLI
   ([src/modules/complianceengine/src/cli](../modules/complianceengine/src/cli)) —
-  rather than duplicating that logic. **Done.**
+  rather than duplicating that logic.
 - Benchmark definitions are read from a fixed, non-configurable
   `/etc/kompli/definitions` (see `Main.cpp`) — deliberately not overridable
   via an environment variable or flag, since that would defeat the point of
   it being a root-owned, trusted directory. The separate `/etc/kompli/`
   main config file for behavioral knobs beyond the definitions path is
   `/etc/kompli/kompli.conf` (JSON; `root:kompli` `0640`) — its schema and load
-  semantics are the contract in [docs/configuration.md](../../docs/configuration.md);
-  not yet consumed by the current synchronous core.
-- The `kompli` CLI will gain daemon-awareness (a CLI flag that checks for the
-  socket) once this exists; today the CLI always runs the engine in-process.
-  See [docs/cli.md](../../docs/cli.md) for the canonical CLI contract,
-  including the planned per-rule `plan`/`run` model this wire protocol is
-  designed to match.
-
-Each remaining bullet above is a separate, follow-up piece of work.
+  semantics are the contract in [docs/configuration.md](../../docs/configuration.md).
+- The `kompli` CLI gains daemon-awareness via `--passthrough` (a CLI flag
+  that checks for the socket); without it, the CLI runs the engine
+  in-process. See [docs/cli.md](../../docs/cli.md) for the CLI contract,
+  including the per-rule `plan`/`run` model this wire protocol is designed
+  to match.
 
 ## Socket activation: started by systemd, `Accept=yes`
 
 `komplid` is started by systemd via socket activation (`komplid.socket` /
-`komplid@.service`, socket at `/run/komplid.sock`), never run directly.
-**Decided: `Accept=yes`** — systemd accepts each connection itself and spawns
+`komplid@.service`, socket at `/run/komplid.sock`), never run directly with
+**`Accept=yes`** — systemd accepts each connection itself and spawns
 one fresh `komplid` process per connection, with the connection wired to that
 process's stdin/stdout. Chosen first because it keeps the initial
 implementation simple: no accept loop, no in-process concurrency, no shared
@@ -87,19 +82,19 @@ root itself, in exchange for talking to something that already does:
   definitions (`list`/`plan`, see [docs/cli.md](../../docs/cli.md)) and
   connect to `komplid`'s socket without being root.
   **Packaging**: creating this user/group happens via `.deb`/`.rpm`
-  packaging scriptlets - see the "Packaging" section below for what's
-  implemented and what's still open.
+  packaging scriptlets - see the "Packaging" section below for the scriptlet
+  design.
 - **Socket permissions**: `komplid.socket` sets `SocketMode=0660` +
   `SocketGroup=kompli` — connecting requires `kompli` group membership (or
   root), not world access.
-- **Defense-in-depth beyond the socket file mode**: `komplid` should also
-  verify the connecting peer's credentials via `SO_PEERCRED`
+- **Defense-in-depth beyond the socket file mode**: `komplid` also
+  verifies the connecting peer's credentials via `SO_PEERCRED`
   (`getsockopt(SOL_SOCKET, SO_PEERCRED, ...)`) — kernel-verified uid/gid/pid
   of the actual connected process, independent of and unspoofable relative to
-  the socket file's mode. Not yet implemented (the placeholder doesn't
-  authorize anything), but decided as a requirement: protects against the
-  socket file's permissions being loosened by mistake later, and is the
-  natural hook for an audit trail of which user requested what.
+  the socket file's mode. This is a requirement, not just a nice-to-have:
+  protects against the socket file's permissions being loosened by mistake
+  later, and is the natural hook for an audit trail of which user requested
+  what.
 - **No role separation.** A single `kompli` group gates all passthrough
   access, regardless of mode (`audit`/`remediate`/the reserved `enforce`).
   Deliberately not split into finer-grained groups (e.g. read-only vs.
@@ -108,8 +103,8 @@ root itself, in exchange for talking to something that already does:
   permissions), so a read/write split at the group level wouldn't produce a
   clean security boundary anyway.
 - **No fallback between modes, and no auto-detection.** Standalone mode (no
-  daemon involved, the CLI drives the engine directly — today's only mode)
-  is the default and always requires root, full stop; there is no
+  daemon involved, the CLI drives the engine directly) is the default and
+  always requires root, full stop; there is no
   lower-privilege path through it. Passthrough mode is only entered when the
   caller explicitly passes `--passthrough` (see
   [docs/cli.md](../../docs/cli.md) §7) — the CLI never silently prefers the
@@ -125,112 +120,97 @@ root itself, in exchange for talking to something that already does:
 
 `komplid`'s `StandardOutput=socket` means stdout **is** the wire protocol
 stream — any diagnostic logging that ended up there would corrupt it.
-Console logging (stderr) is unconditional now: the shared logging library's
-`IsConsoleLoggingEnabled()` used to auto-disable it whenever `IsDaemon()`
-(`getppid() == 1`, in `src/common/logging/Logging.c`) was true — an indirect
-heuristic built for the old double-forking OSConfig platform daemon, not
-something deliberately verified for `komplid`, and one that also misfired for
-the standalone CLI in some containerized CI environments (where kompli runs
-as a direct child of PID 1). That heuristic has been **removed** rather than
-special-cased, so `komplid` (and every other kompli entry point) logs to
-stderr unconditionally — standard daemon behavior, and something this fork is
-now free to do that the upstream OSConfig project wasn't.
+Console logging (stderr) is unconditional: the shared logging library has no
+`IsDaemon()` (`getppid() == 1`) heuristic gating
+`IsConsoleLoggingEnabled()` — such a heuristic would be built for the old
+double-forking OSConfig platform daemon, not something verified for
+`komplid`, and would also misfire for the standalone CLI in some
+containerized CI environments (where kompli runs as a direct child of
+PID 1). `komplid` (and every other kompli entry point) logs to stderr
+unconditionally — standard daemon behavior.
 
-**Resolved:** the shared logging library's `OpenLog()`-based TOCTOU gap (see
+The shared logging library's `OpenLog()`-based TOCTOU gap (see
 the former "Residual TOCTOU" note in
-`src/modules/complianceengine/src/cli/THREAT_MODEL.md`) was closed by
-elimination rather than by a descriptor-based rework — the `kompli` CLI's
-`--log-file` flag (the only consumer of that path) was removed outright, and
-the NRP module now logs to `syslog(3)` instead of a fixed-path `OpenLog()`.
+`src/modules/complianceengine/src/cli/THREAT_MODEL.md`) is closed by
+elimination rather than by a descriptor-based rework — the `kompli` CLI has
+no `--log-file` flag (the only consumer of that path), and the NRP module
+logs to `syslog(3)` instead of a fixed-path `OpenLog()`.
 See [docs/logging.md](../../docs/logging.md) for the full design. The
-descriptor-based `OpenLog` rework is therefore **dropped**, not just
-deferred: there is no longer an operator-supplied log path left to harden.
+descriptor-based `OpenLog` rework is therefore not needed: there is no
+operator-supplied log path to harden.
 
 ## Packaging
 
-CPack is already configured for both formats in `src/CMakeLists.txt`
-(package metadata, `CPACK_RPM_*`/`CPACK_DEBIAN_*` variables) and references
-six scriptlet files plus an RPM changelog under `devops/rpm/` and
-`devops/debian/` - until now, those files didn't exist, so building either
-package would have failed outright.
+CPack is configured for both formats in `src/CMakeLists.txt`
+(package metadata, `CPACK_RPM_*`/`CPACK_DEBIAN_*` variables), referencing
+scriptlets under `devops/rpm/` and `devops/debian/`.
 
-- **Implemented**: `devops/rpm/{postinst,preun,postun,changelog}` and
-  `devops/debian/{postinst,prerm,postrm}` now exist and cover what's already
-  decided: create the `kompli` system group/user (idempotent, no login shell
-  or home directory - nothing ever authenticates as this identity, it only
-  exists to own files and gate socket access), create `/etc/kompli/definitions/`
-  owned `root:kompli` with group-read-only permissions (§ "Privilege model"
-  above), enable/start `komplid.socket` on install, stop/disable it only on
-  an actual removal (not an upgrade, to avoid an availability blip), and
-  deliberately *not* remove the user/group/directory on uninstall (standard
-  practice for system service accounts - matches e.g. postgres/nginx-style
-  packaging).
-- **Not yet covered, deferred until the relevant design settles**:
-  - The `/etc/kompli/` layout and the `/var/lib/komplid/komplid.db` ownership
-    are now **settled** (fixed paths, owners, and modes) — see
-    [docs/configuration.md](../../docs/configuration.md) and the feature-scoped
-    filesystem/privilege contract it links. The scriptlets create
-    `/etc/kompli/` (+ `definitions/`, `kompli.conf`) and `/var/lib/komplid/`
-    with those owners/modes as they are implemented (M-13).
-  - **Cross-repo delivery of benchmark content, decided direction:** this
-    repo's package ships `komplid`/`kompli` and an *empty*
-    `/etc/kompli/definitions/` directory only - it deliberately does not
-    ship any `*.benchmark.json` content, because that content (CIS/STIG
-    benchmark text) is externally-sourced, third-party material and
-    shouldn't be coupled to this repo's release cadence or licensing.
-    Definitions are produced by a separate pipeline (the Compliance
-    Augmentation Engine), which today only publishes them as NuGet packages
-    (the GC/Azure Policy delivery path). **Planned**: that pipeline gains the
-    ability to also build native `.deb`/`.rpm` packages straight from the
-    same generated `*.benchmark.json` content - separate from, and installed
-    on top of, this repo's `kompli`/`komplid` package - dropping files into
-    `/etc/kompli/definitions/` with the ownership/permissions this repo's
-    package already established. Preferably signed and upstreamed to PMC
-    (Microsoft's `packages.microsoft.com` Linux package repository), the
-    same trusted-distribution channel other Microsoft Linux tooling uses.
-    This is augmentation-engine-side pipeline work, not implemented in this
-    repo - tracked here as the resolution to what was an open question, not
-    yet built.
-  - Per-distro verification: `devops/docker/` already has build images for
-    12 distributions (Debian/Ubuntu and RHEL-family/SUSE), but none of the
-    scriptlets above have been exercised against any of them yet.
+- **Scriptlets** (`devops/rpm/{postinst,preun,postun,changelog}`,
+  `devops/debian/{postinst,prerm,postrm}`) create the `kompli` system
+  group/user (idempotent, no login shell or home directory - nothing ever
+  authenticates as this identity, it only exists to own files and gate
+  socket access), create `/etc/kompli/` (+ `definitions/`, `kompli.conf`)
+  and `/var/lib/komplid/` with the ownership/modes in
+  [docs/configuration.md](../../docs/configuration.md) and its
+  feature-scoped filesystem/privilege contract
+  (§ "Privilege model" above), enable/start `komplid.socket` on install,
+  stop/disable it only on an actual removal (not an upgrade, to avoid an
+  availability blip), and deliberately *not* remove the user/group/directory
+  on uninstall (standard practice for system service accounts - matches
+  e.g. postgres/nginx-style packaging).
+- **Cross-repo delivery of benchmark content:** this repo's package ships
+  `komplid`/`kompli` and an *empty* `/etc/kompli/definitions/` directory
+  only - it deliberately does not ship any `*.benchmark.json` content,
+  because that content (CIS/STIG benchmark text) is externally-sourced,
+  third-party material and shouldn't be coupled to this repo's release
+  cadence or licensing. Definitions are produced by a separate pipeline (the
+  Compliance Augmentation Engine), which publishes them as NuGet packages
+  (the GC/Azure Policy delivery path) and is meant to also build native
+  `.deb`/`.rpm` packages straight from the same generated
+  `*.benchmark.json` content - separate from, and installed on top of, this
+  repo's `kompli`/`komplid` package - dropping files into
+  `/etc/kompli/definitions/` with the ownership/permissions this repo's
+  package establishes. Preferably signed and upstreamed to PMC (Microsoft's
+  `packages.microsoft.com` Linux package repository), the same
+  trusted-distribution channel other Microsoft Linux tooling uses. This is
+  augmentation-engine-side pipeline work, not this repo's.
+- Per-distro verification: `devops/docker/` has build images for 12
+  distributions (Debian/Ubuntu and RHEL-family/SUSE) to exercise the
+  scriptlets against.
 
-## State directory: intentionally not yet shared
+## State directory
 
-`komplid` does not yet use a persistent state directory, and neither does the
-`kompli` CLI (`CliContext` creates a fresh, ephemeral `/tmp/...` directory per
-invocation, removed on exit). **This is expected for now, not an oversight.**
-Once the contents and layout of `/etc/kompli/` and the daemon's persistent
-state directory (under `/var/lib/`) are stabilized, both `kompli` and
-`komplid` will point at a single shared location — deliberately deferred
-because the location must be chosen to avoid clashing with GuestConfiguration
-(the Azure Automanage Machine Configuration agent), which owns its own
+`komplid` and the `kompli` CLI each use their own ephemeral per-invocation
+temp directory (`CliContext` creates a fresh `/tmp/...` directory, removed
+on exit) rather than a shared persistent state directory — the location
+must be chosen to avoid clashing with GuestConfiguration (the Azure
+Automanage Machine Configuration agent), which owns its own
 `/var/lib/GuestConfig` (and similar) paths on the same system.
 
 **Exception**: the task registry and audit-result cache (below) are
 intrinsically shared, persistent state — they can't be per-invocation
 ephemeral by definition, since a later connection/process needs to read what
 an earlier one wrote. `komplid` uses its own root-only state path
-(`/var/lib/komplid/komplid.db`, a single SQLite database, `root:root` `0600`) —
-now the **settled** location (see [docs/configuration.md](../../docs/configuration.md)),
-chosen under `/var/lib/komplid/` rather than `/var/lib/GuestConfig` to avoid
-clashing with GuestConfiguration; the `kompli` CLI has no need to read or write
-it directly.
+(`/var/lib/komplid/komplid.db`, a single SQLite database, `root:root` `0600`)
+— see [docs/configuration.md](../../docs/configuration.md) — chosen under
+`/var/lib/komplid/` rather than `/var/lib/GuestConfig` to avoid clashing
+with GuestConfiguration; the `kompli` CLI has no need to read or write it
+directly.
 
 ## Wire protocol
 
 - **Framing: JSONL (newline-delimited JSON) over the Unix domain socket.**
-  Decided. Each request/response is a single JSON value terminated by `\n`.
-  This deliberately replaces the old OSConfig-era MPI design (a small
+  Each request/response is a single JSON value terminated by `\n`.
+  This replaces the old OSConfig-era MPI design (a small
   HTTP/REST layer over UDS, see `src/common/mpiclient/`): parsing HTTP just to
   immediately unwrap a JSON body adds an extra, unnecessary parser (and attack
   surface) in front of a root-privileged daemon for no benefit on a local,
   single-purpose socket. `mpiclient` is not used by `komplid`.
-- **Request/response granularity: per-rule.** Decided. A request identifies
+- **Request/response granularity: per-rule.** A request identifies
   one rule (a `benchmark` + `id`) and one `mode`
   (`audit` | `remediate` | `enforce`, the last a reserved placeholder — no
-  working mechanism yet, deferred, but kept in every contract/roadmap so it's
-  never forgotten — see below); the response is that rule's canonical result
+  execution backend, kept in every contract so it's never forgotten — see
+  below); the response is that rule's canonical result
   (indicators, status, etc. — the same shape regardless of `mode`). This was
   chosen over sending a whole benchmark, or a map of rule-to-mode overrides,
   in one message:
@@ -252,21 +232,18 @@ it directly.
     information `id` doesn't already have, so nothing internal (wire
     requests, the plan file, the task registry, the audit cache) needs to
     reference it. kompli's own JSON contracts (definition schema, canonical
-    result schema, `Resource`) don't carry `ruleId` at all any more — see
-    [docs/payload-key-format.md §12](../../docs/payload-key-format.md#12-payloadkey-renamed-to-id-ruleid-removed-from-komplis-own-schema--decided-implemented).
-    Only `id` is used internally. **Code note**: `BenchmarkIO::Resource`
-    now retains `id` verbatim (see `Resource.hpp`), and it's the
-    opaque remainder only (the hoisted file-level prefix lives on
-    `BenchmarkDocument::benchmarkInfo` instead — see
-    [docs/payload-key-format.md §3](../../docs/payload-key-format.md#3-unified-definition-file-hoisted-prefix--decided-implemented-kompli-side-only--see-10)) —
-    this prerequisite is done.
+    result schema, `Resource`) don't carry `ruleId` — see
+    [docs/payload-key-format.md §12](../../docs/payload-key-format.md#12-id-not-ruleid-in-komplis-own-schema).
+    Only `id` is used internally. `BenchmarkIO::Resource` retains `id`
+    verbatim (see `Resource.hpp`), as the opaque remainder only (the
+    hoisted file-level prefix lives on `BenchmarkDocument::benchmarkInfo`
+    instead — see
+    [docs/payload-key-format.md §3](../../docs/payload-key-format.md#3-unified-definition-file-hoisted-prefix-kompli-side-only--see-10)).
 - **Connection scope: one connection per session, many sequential
-  requests.** Decided. `Accept=yes` spawns one process per *connection*, not
+  requests.** `Accept=yes` spawns one process per *connection*, not
   per request — so a whole benchmark run is one connection carrying many
   sequential per-rule request/response pairs, not one connection per rule
-  (which would mean hundreds of fork/execs for a large benchmark). The
-  placeholder implementation already loops over multiple JSONL lines per
-  connection, so this needs no structural change.
+  (which would mean hundreds of fork/execs for a large benchmark).
 - **Response envelope: a starter draft.** Every response (not just
   successful rule results) needs a common shape so a client can tell them
   apart, including asynchronous task-completion pushes interleaved with
@@ -293,15 +270,13 @@ it directly.
   The `error` type is what a malformed request, an unknown `benchmark`, an
   `id` that fails server-side revalidation, or an internal failure
   produces — distinct from a rule that ran fine and reported `NonCompliant`,
-  which is a normal `result`, not an error. Exact `code` taxonomy: **not yet
-  decided**, tracked as a TODO alongside the rest of this envelope.
-- **Message schema: implemented for the synchronous path, decided.** The
-  request shape (`requestId`, `benchmark`, `id`, `mode`, optional
-  `parameters`) and the `result`/`error` response envelopes above are
-  implemented and unit-tested (`Protocol.hpp`/`.cpp`,
-  `komplid/tests/ProtocolTest.cpp`). The `task`/`taskResult`/`taskStatus`
-  envelope types remain provisional/draft — they have no implementation yet,
-  since background tasks aren't built (see "Long-running rules" below).
+  which is a normal `result`, not an error. Exact `code` taxonomy: an open
+  question, tracked alongside the rest of this envelope.
+- **Message schema.** The request shape (`requestId`, `benchmark`, `id`,
+  `mode`, optional `parameters`) and the `result`/`error` response envelopes
+  above are specified in `Protocol.hpp`/`.cpp`. The
+  `task`/`taskResult`/`taskStatus` envelope types remain a draft, pending
+  the background-tasks design settling (see "Long-running rules" below).
 
 ## Long-running rules: background tasks
 
@@ -311,10 +286,10 @@ be a task ID instead of an immediate result, with the actual work continuing
 in the background:
 
 - **Precedent, not a new mechanism.** `FilesystemScanner::BackgroundScan()`
-  (`src/modules/complianceengine/src/lib/FilesystemScanner.cpp`) already
-  forks a child to do slow work independently of the parent's lifetime,
-  writing its result via lock + atomic rename. The task model generalizes
-  this existing, proven pattern rather than inventing a new one.
+  (`src/modules/complianceengine/src/lib/FilesystemScanner.cpp`) forks a
+  child to do slow work independently of the parent's lifetime, writing its
+  result via lock + atomic rename. The task model generalizes this existing
+  pattern rather than inventing a new one.
 - **Task registry: the SQLite database above** (`task_id`, rule, mode,
   status, result, timestamps). Required because the process that later polls
   or reconnects for a task's result is very likely a *different* forked
@@ -326,20 +301,19 @@ in the background:
   slow (e.g. `PackageInstalled` on a cold cache, filesystem-scan-dependent
   procedures) that opt into backgrounding; everything else runs
   synchronously by default.
-- **Duplicate concurrent requests: attach to the existing task.** Decided
-  direction: if a request for the same `(benchmark, id, mode)` arrives
+- **Duplicate concurrent requests: attach to the existing task.** If a
+  request for the same `(benchmark, id, mode)` arrives
   while a task for it is already in flight, attach the new request to the
   existing task (return/correlate to its `taskId`) rather than starting a
   second one — avoids redundant work, and for `remediate` specifically avoids
   re-opening the "must not run concurrently" problem the remediation lock
-  exists to close. **Open, deferred to a future planning session**: this is
+  exists to close. **Open question**: this is
   exactly where parametrization (see `docs/cli.md`) bites — rules can be
   parametrized, so two requests for the same `(benchmark, id, mode)`
   could carry *different* `parameters`, in which case they are not actually
   the same request and naively attaching would be wrong. Dedup needs to
-  compare `parameters` too, not just `(benchmark, id, mode)`. Needs
-  its own design pass once the daemon-split work resumes — tracked as a
-  TODO, not solved here.
+  compare `parameters` too, not just `(benchmark, id, mode)` — needs
+  its own design pass, not solved here.
 - **Delivery: push while connected, pull if not.** The connection-owning
   process forks the background worker, then keeps servicing that same
   connection — reading further rule requests *and* watching for its own
@@ -366,7 +340,7 @@ in the background:
 
 ## Result caching
 
-- **Audit results only.** Decided. `remediate` and `enforce` always execute
+- **Audit results only.** `remediate` and `enforce` always execute
   for real and are never served from a cache — the caller needs confirmation
   the action ran *this time*.
 - **Storage: the same SQLite database**, keyed by rule **and its
