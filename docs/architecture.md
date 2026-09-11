@@ -333,46 +333,45 @@ See [cli.md](cli.md) for the target design contract (subcommands, flags, the `pl
 
 ### Commands
 
-`kompli` has six subcommands:
+`kompli` has four subcommands:
 
 | Command | Description |
 |---|---|
-| `audit <file>` | Evaluate a benchmark-definition file and emit the canonical result JSON. |
-| `remediate <file>` | Remediate a benchmark-definition file and emit the canonical result JSON. |
-| `render [file]` | Render a canonical result JSON (from `audit`/`remediate`) into a presentation format. |
+| `render [file]` | Render a canonical result JSON (from `plan`+`run`) into a presentation format. |
 | `plan <file>...` | Generate a plan file selecting a mode (audit/remediate/enforce) per rule, from one or more definition files. |
 | `run <plan-file>` | Execute a plan file (one or more benchmark files), emit one combined canonical result JSON. |
 | `list <file>` | List every rule's `id`/`title`, one per line. |
 
-See [cli.md §2](cli.md#2-plan--run-per-rule-granularity) for `plan`/`run`'s full contract (plan file format, per-rule mode selection, multi-benchmark plans).
+See [cli.md §2](cli.md#2-plan--run-per-rule-granularity) for `plan`/`run`'s full contract (plan file format, per-rule mode selection, multi-benchmark plans). There is no whole-file, single-mode `audit`/`remediate` command — `plan`+`run` is the only way to scope and execute rules.
 
 ### Input
 
-`audit` / `remediate` / `plan` / `run` / `list` require a file as a positional filename argument (the benchmark-definition file for the first three and `list`, the plan file for `run`); a missing path or `-` is a hard error — stdin is deliberately unsupported for definitions so the file-integrity checks (root-owned non-writable parent directory, `O_NOFOLLOW` open, regular-file/ownership/mode checks) can never be bypassed by piping data into the root process. `render` is a root-free, pure transformation and does accept stdin.
+`plan` / `run` / `list` require a file as a positional filename argument (the benchmark-definition file for `plan`/`list`, the plan file for `run`); a missing path or `-` is a hard error — stdin is deliberately unsupported for definitions so the file-integrity checks (root-owned non-writable parent directory, `O_NOFOLLOW` open, regular-file/ownership/mode checks) can never be bypassed by piping data into the root process. `render` is a root-free, pure transformation and does accept stdin.
 
 ### Per-rule execution
 
-For each rule parsed from the definition, `kompli`:
+`kompli run` executes a plan file produced by `kompli plan` (see [cli.md §2](cli.md#2-plan--run-per-rule-granularity)): for each rule listed in the plan, in the mode the plan assigns it (`audit`/`remediate`/the reserved `enforce`), `kompli`:
 
 1. **Registers the procedure** — calls `engine.MmiSet("procedure" + ruleName, procedurePayload)` to load the audit/remediation definition and its default parameter values.
-2. **Audit path**
-   - If an init payload is present, calls `engine.MmiSet("init" + ruleName, initPayload)` to apply user-provided parameter overrides.
+2. **Audit mode**
+   - If parameter overrides are present, calls `engine.MmiSet("init" + ruleName, initPayload)`.
    - Calls `engine.MmiGet("audit" + ruleName)` to execute the audit and collect the result.
-3. **Remediate path** — calls `engine.MmiSet("remediate" + ruleName, desiredPayload)` to execute the remediation procedure.
+3. **Remediate mode** — calls `engine.MmiSet("remediate" + ruleName, desiredPayload)` to execute the remediation procedure.
 
 ```mermaid
 sequenceDiagram
     participant User
     participant CLI as kompli
     participant Engine
-    User->>CLI: kompli audit|remediate <file>
-    CLI->>CLI: ParseFile (benchmarkio)
-    loop each rule in the definition
+    User->>CLI: kompli plan <file> -o plan.json
+    User->>CLI: kompli run plan.json
+    CLI->>CLI: ParsePlanFile
+    loop each rule in the plan
         CLI->>Engine: MmiSet("procedure"+ruleName, payload)
-        alt audit
+        alt mode: audit
             CLI->>Engine: MmiSet("init"+ruleName, overrides)
             CLI->>Engine: MmiGet("audit"+ruleName)
-        else remediate
+        else mode: remediate
             CLI->>Engine: MmiSet("remediate"+ruleName, payload)
         end
     end
@@ -391,7 +390,7 @@ sequenceDiagram
 | `compact-list` | Single-line-per-rule text |
 | `debug` | Verbose diagnostic output |
 
-`audit` / `remediate` always emit the canonical result JSON; `render` is what turns that JSON into one of the formats above.
+`run` always emits the canonical result JSON; `render` is what turns that JSON into one of the formats above.
 
 ### Security controls
 

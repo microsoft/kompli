@@ -30,7 +30,7 @@ share that stream — hence stderr or syslog, never stdout.
 ## Background — why this changed
 
 - The shared logging macro historically wrote console output with `printf`, i.e. to
-  **stdout**. A `kompli audit` with no `--log-file` therefore interleaved `[INFO]…`
+  **stdout**. A `kompli run` with no `--log-file` therefore interleaved `[INFO]…`
   lines into the result JSON.
 - `--log-file` was originally added **only** to escape that stdout clobbering — a
   workaround, not a feature in its own right.
@@ -45,7 +45,7 @@ different scenarios pick different sinks.
 
 - **stderr** is just a file descriptor (fd 2). kompli writes bytes to it; *where they
   land* is decided by whoever launched the process — a terminal, a redirect
-  (`kompli audit f.json 2> run.log`), or, for a **systemd service**, the journal
+  (`kompli run plan.json 2> run.log`), or, for a **systemd service**, the journal
   (systemd sets `StandardError=journal` by default). kompli doesn't “connect” to
   anything; it emits and lets the environment route.
 - **`syslog(3)`** is an explicit IPC call: `openlog()` + `syslog(priority, …)` sends a
@@ -87,7 +87,7 @@ passthrough, where kompli is launched by the agent rather than an interactive sh
 
 1. **Console logging → stderr.** Diagnostics never touch stdout.
 2. **Standalone default → stderr.** No file by default;
-   operators redirect (`kompli audit f.json 2> run.log`) for persistence.
+   operators redirect (`kompli run plan.json 2> run.log`) for persistence.
    `komplid` logs to stderr **unconditionally**; there is no `IsDaemon()`
    (`getppid()==1`) heuristic gating `IsConsoleLoggingEnabled()` — such a
    heuristic wouldn't cover ad-hoc local runs, and would falsely suppress
