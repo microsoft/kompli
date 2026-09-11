@@ -55,12 +55,12 @@ Kompli supports two integration scenarios that share the same ComplianceEngine m
 - **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The augmentation engine generates MOF files that drive audit and remediation per rule.
 - **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/cli/`) that reads a benchmark-definition JSON file (supplied on disk as a required positional filename argument; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
 
-A third scenario, **`komplid`** (a native, systemd-managed daemon sharing the same ComplianceEngine core), runs a synchronous audit/remediate subset today; see §3 and [src/komplid/README.md](../src/komplid/README.md) for its current status.
+A third scenario, **`komplid`** (a native, systemd-managed daemon sharing the same ComplianceEngine core), runs a synchronous audit/remediate subset; see §3 and [src/komplid/README.md](../src/komplid/README.md) for its design.
 
 All three scenarios ultimately drive the same `Engine` through the same
 per-rule MMI calls (`MmiSet`/`MmiGet`, §3.1) — they differ only in what sits in
-front of it (a GC-driven MOF file, a benchmark-definition file, or — once
-implemented — a JSONL request):
+front of it (a GC-driven MOF file, a benchmark-definition file, or a JSONL
+request):
 
 ```mermaid
 flowchart TB
@@ -83,31 +83,31 @@ flowchart TB
 Kompli will be able to run as a standalone daemon that can evaluate policy given requests from external sources.
 
 > The concrete name for this daemon is **`komplid`**. Its build-graph location
-> is [src/komplid/](../src/komplid/README.md), which now runs a real,
+> is [src/komplid/](../src/komplid/README.md), which runs a
 > **synchronous** audit/remediate subset (`SO_PEERCRED`-authenticated,
-> engine-backed) — see the linked README for the current status and what's
-> still not implemented. It is started by systemd via socket activation with
-> **`Accept=yes`** (one fresh process per connection, chosen for initial
-> simplicity) and shares the ComplianceEngine core and the `benchmarkio`
+> engine-backed) — see the linked README for the full design. It is started
+> by systemd via socket activation with **`Accept=yes`** (one fresh process
+> per connection, chosen for initial simplicity) and shares the
+> ComplianceEngine core and the `benchmarkio`
 > benchmark-definition/input-security library with the `kompli` CLI rather
 > than duplicating that logic. Wire protocol: JSONL over the Unix domain
 > socket, replacing the old MPI-over-UDS/HTTP design, one connection per
 > session carrying many sequential per-rule requests (see
 > [src/komplid/README.md](../src/komplid/README.md#wire-protocol) for the
-> decided `requestId`/`benchmark`/`id`/`mode`/`parameters` request shape and
-> `result`/`error` response envelopes). Slow rules responding with a task ID
-> instead of blocking, backed by a SQLite task registry/audit-result cache,
-> is designed but **not implemented yet** (see
-> [src/komplid/README.md](../src/komplid/README.md#long-running-rules-background-tasks)) —
-> every request today runs to completion before responding. `komplid` always
+> `requestId`/`benchmark`/`id`/`mode`/`parameters` request shape and
+> `result`/`error` response envelopes). Slow rules respond with a task ID
+> instead of blocking, backed by a SQLite task registry/audit-result cache
+> (see
+> [src/komplid/README.md](../src/komplid/README.md#long-running-rules-background-tasks)
+> for the design). `komplid` always
 > runs as root; passthrough clients only need membership in
 > a new `kompli` system group, with no fallback to standalone (root-required)
 > execution if the daemon is unreachable (see
 > [src/komplid/README.md](../src/komplid/README.md#privilege-model)).
 > Neither `komplid` nor the `kompli` CLI
-> use a shared persistent state directory yet (each `kompli`/`komplid`
+> use a shared persistent state directory (each `kompli`/`komplid`
 > invocation gets its own ephemeral temp directory) — the `kompli` CLI stays
-> ephemeral, while `komplid`'s own persistent state lives at the now-settled,
+> ephemeral, while `komplid`'s own persistent state lives at the
 > root-only `/var/lib/komplid/` (chosen to avoid clashing with
 > GuestConfiguration's `/var/lib/GuestConfig`); see
 > [docs/configuration.md](configuration.md).
@@ -126,11 +126,11 @@ sequenceDiagram
     komplid->>komplid: process exits
 ```
 
-The JSONL request/response schema is implemented for the synchronous path
-(see [src/komplid/README.md](../src/komplid/README.md#wire-protocol) for the
-up-to-date status): one request per rule, many sequential requests per
+The JSONL request/response schema is per-rule (see
+[src/komplid/README.md](../src/komplid/README.md#wire-protocol) for the
+full schema): one request per rule, many sequential requests per
 connection. The background-task extension below (a slow rule deferring to a
-task instead of blocking) is designed but not yet built:
+task instead of blocking) is a separate design layer:
 
 ```mermaid
 sequenceDiagram
@@ -150,24 +150,24 @@ sequenceDiagram
     komplid-->>Client: unsolicited: task done, result
 ```
 
-**Note on MMI's status**: MMI (§3.1 below) is *not* being removed. It remains
-the real, current, per-rule interface underneath every scenario in §2.2 —
+**Note on MMI**: MMI (§3.1 below) is *not* being removed. It remains
+the per-rule interface underneath every scenario in §2.2 —
 `kompli`'s `Engine` class calls it directly (`Engine::MmiSet`/`Engine::MmiGet`,
 §4.2), and the NRP/MC adapter's `ComplianceMmiSet`/`ComplianceMmiGet` wrap it
 (§5.1). It is "legacy" only in the sense that it's inherited from OSConfig
-rather than designed for `komplid`'s JSONL protocol — there is no current plan
+rather than designed for `komplid`'s JSONL protocol — there is no plan
 to replace it. What *is* being dropped is the old OSConfig platform daemon and
 its MPI/HTTP-over-UDS transport (formerly documented here as "kompli
 Management Platform"): that daemon has been removed from this fork, and
 `komplid`'s JSONL protocol is its replacement, not a peer to it.
 
-MPI's code footprint is not fully gone yet, though: [OsConfigResource.c](../src/adapters/mc/OsConfigResource.c)
+MPI's code footprint remains, though: [OsConfigResource.c](../src/adapters/mc/OsConfigResource.c)
 still calls into `mpiclient` (`CallMpiOpen`/`CallMpiSet`/`CallMpiGet`) for
 non-Compliance (ASB-style) components — dead code in practice, since no
 platform daemon exists to answer those calls and kompli's own Compliance
-component uses direct MMI (§5.1) instead. It is left untouched for now
-(no functional reason to touch it today) and is a candidate for a future
-follow-up cleanup pass, tracked here rather than acted on.
+component uses direct MMI (§5.1) instead. It is left untouched (no functional
+reason to touch it) and is a candidate for a future cleanup pass, tracked
+here rather than acted on.
 
 ## 3.1. MMI
 
@@ -329,25 +329,26 @@ Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns 
 
 `kompli` (`src/modules/complianceengine/src/cli/`) is a standalone CLI tool that reads a benchmark-definition JSON file and drives the engine directly — no platform daemon, MPI, or RC/DC files are involved. Benchmark-definition parsing and the root-safe input-file checks live in the sibling `src/modules/complianceengine/src/benchmarkio/` library so `komplid` can reuse them later without depending on CLI-only presentation code.
 
-See [cli.md](cli.md) for the canonical, code-synced CLI contract (subcommands, flags, the `plan`/`run` per-rule model, plan file format) — this section only summarizes what's shipped today.
+See [cli.md](cli.md) for the target design contract (subcommands, flags, the `plan`/`run` per-rule model, plan file format) — this section only summarizes the CLI's shape.
 
 ### Commands
 
-`kompli` has five subcommands:
+`kompli` has six subcommands:
 
 | Command | Description |
 |---|---|
 | `audit <file>` | Evaluate a benchmark-definition file and emit the canonical result JSON. |
 | `remediate <file>` | Remediate a benchmark-definition file and emit the canonical result JSON. |
 | `render [file]` | Render a canonical result JSON (from `audit`/`remediate`) into a presentation format. |
-| `plan <file>` | Generate a plan file selecting a mode (audit/remediate/enforce) per rule. |
+| `plan <file>...` | Generate a plan file selecting a mode (audit/remediate/enforce) per rule, from one or more definition files. |
 | `run <plan-file>` | Execute a plan file (one or more benchmark files), emit one combined canonical result JSON. |
+| `list <file>` | List every rule's `id`/`title`, one per line. |
 
-See [cli.md §2](cli.md#2-plan--run-per-rule-granularity-implemented) for `plan`/`run`'s full contract (plan file format, per-rule mode selection, multi-benchmark plans).
+See [cli.md §2](cli.md#2-plan--run-per-rule-granularity) for `plan`/`run`'s full contract (plan file format, per-rule mode selection, multi-benchmark plans).
 
 ### Input
 
-`audit` / `remediate` / `plan` / `run` require a file as a positional filename argument (the benchmark-definition file for the first three, the plan file for `run`); a missing path or `-` is a hard error — stdin is deliberately unsupported for definitions so the file-integrity checks (root-owned non-writable parent directory, `O_NOFOLLOW` open, regular-file/ownership/mode checks) can never be bypassed by piping data into the root process. `render` is a root-free, pure transformation and does accept stdin.
+`audit` / `remediate` / `plan` / `run` / `list` require a file as a positional filename argument (the benchmark-definition file for the first three and `list`, the plan file for `run`); a missing path or `-` is a hard error — stdin is deliberately unsupported for definitions so the file-integrity checks (root-owned non-writable parent directory, `O_NOFOLLOW` open, regular-file/ownership/mode checks) can never be bypassed by piping data into the root process. `render` is a root-free, pure transformation and does accept stdin.
 
 ### Per-rule execution
 

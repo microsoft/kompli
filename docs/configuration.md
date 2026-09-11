@@ -1,8 +1,8 @@
 # kompli / komplid configuration (`/etc/kompli/kompli.conf`)
 
 The single main configuration file for `komplid` (and any future `kompli` CLI
-settings) is `/etc/kompli/kompli.conf`. This document is its **living contract**:
-the format is fixed, the key set grows as milestones land. The filesystem
+settings) is `/etc/kompli/kompli.conf`. This document is its design contract:
+the format is fixed, the key set grows over time. The filesystem
 placement, ownership, and the security invariants around it are fixed by
 [ADR-0004](../../docs/unified-definitions/adr/ADR-0004-komplid-filesystem-privilege-contract.md)
 (feature-scoped) — this file only documents the *schema* of the file's contents.
@@ -50,18 +50,18 @@ must be rejected here and reconsidered as an ADR instead.
 
 ## Keys
 
-### `v1` — current
+### `v1`
 
-The initial `v1` schema defines only the envelope (`apiVersion`, `kind`). No
-behavioral keys are stabilized yet; `komplid`'s current synchronous core (M-5)
-needs none. Keys are added below as their owning milestone lands.
+The initial `v1` schema defines only the envelope (`apiVersion`, `kind`) — no
+behavioral keys are defined yet. Keys are added below as their design
+settles.
 
-### Planned (added when the owning milestone lands)
+### Anticipated keys (not yet defined)
 
-These are **reserved** — documented for direction, not yet implemented. Names,
-shapes, and defaults are provisional until their milestone stabilizes them.
+These are **reserved** for direction, not yet defined. Names,
+shapes, and defaults are provisional until the design settles.
 
-- **M-15 — background tasks.** The static list of slow rules/procedures that opt
+- **Background tasks.** The static list of slow rules/procedures that opt
   into backgrounding (everything else runs synchronously):
 
   ```jsonc
@@ -72,16 +72,15 @@ shapes, and defaults are provisional until their milestone stabilizes them.
   }
   ```
 
-- **M-16 — audit-result cache.** The audit-cache time-to-live and related knobs:
+- **Audit-result cache.** The audit-cache time-to-live and related knobs:
 
   ```jsonc
   {
     "auditCache": {
-      "ttlSeconds": 0      // provisional: default value TBD in M-16
+      "ttlSeconds": 0      // provisional: default value TBD
     }
   }
   ```
 
-Each planned block is added to this document (with a stabilized default and
-validation rules) by the milestone that implements it, and removed from
-"Planned" once shipped under `v1`.
+Each anticipated block moves into the `v1` schema (with a stabilized default
+and validation rules) once its design settles.
