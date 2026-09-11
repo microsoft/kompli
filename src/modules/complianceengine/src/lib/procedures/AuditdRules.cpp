@@ -9,6 +9,7 @@
 #include <Telemetry.h>
 #include <Users.h>
 #include <cctype>
+#include <cstring>
 #include <fstream>
 #include <fts.h>
 #include <iostream>
@@ -89,7 +90,8 @@ Result<std::vector<std::string>> GetRulesFromFilesAtPath(ContextInterface& conte
     }
 
     char* paths[] = {const_cast<char*>(directory.c_str()), nullptr};
-    FTS* fts = fts_open(paths, FTS_NOCHDIR | FTS_PHYSICAL, nullptr);
+    FTS* fts = fts_open(paths, FTS_NOCHDIR | FTS_PHYSICAL,
+        [](const FTSENT** left, const FTSENT** right) { return strverscmp((*left)->fts_name, (*right)->fts_name); });
     if (fts == nullptr)
     {
         OsConfigLogWarning(context.GetLogHandle(), "Failed to open %s directory", directory.c_str());
@@ -99,6 +101,11 @@ Result<std::vector<std::string>> GetRulesFromFilesAtPath(ContextInterface& conte
     FTSENT* ent = nullptr;
     while ((ent = fts_read(fts)) != nullptr)
     {
+        if (ent->fts_info == FTS_D && ent->fts_level > 0)
+        {
+            fts_set(fts, ent, FTS_SKIP);
+            continue;
+        }
         if (ent->fts_info == FTS_F)
         {
             std::string filename = ent->fts_name;
@@ -124,7 +131,15 @@ Result<std::vector<std::string>> GetRulesFromFilesAtPath(ContextInterface& conte
                     {
                         continue;
                     }
-                    rules.push_back(line);
+                    if (line.size() > 2 && line.compare(0, 2, "-A") == 0 && std::isspace(static_cast<unsigned char>(line[2])))
+                    {
+                        line[1] = 'a';
+                        rules.insert(rules.begin(), line);
+                    }
+                    else
+                    {
+                        rules.push_back(line);
+                    }
                 }
             }
         }
@@ -205,7 +220,6 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
         OSConfigTelemetryStatusTrace("regex", EINVAL);
         return indicators.NonCompliant("Invalid searchItem regex: " + std::string(e.what()));
     }
-    bool validRuleFound = false;
     std::vector<std::string> incompleteRules;
     for (const auto& rule : rules)
     {
@@ -244,13 +258,8 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
         }
         if (!optionMissing)
         {
-            indicators.Compliant("Rule '" + rule + "' matching '" + searchItem + "' found  and is properly configured");
-            validRuleFound = true;
+            return indicators.Compliant("Rule '" + rule + "' matching '" + searchItem + "' found  and is properly configured");
         }
-    }
-    if (validRuleFound)
-    {
-        return Status::Compliant;
     }
     for (const auto& incompleteRule : incompleteRules)
     {

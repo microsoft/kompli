@@ -186,31 +186,33 @@ TEST_F(AuditdRulesCheckTest, SyscallSearchCompliantWithOverridePath)
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
-TEST_F(AuditdRulesCheckTest, SuppressingSyscallRuleOverridesCompliantRule)
+TEST_F(AuditdRulesCheckTest, SyscallSuppressionRespectsFirstMatchingRule)
 {
-    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l"))
-        .WillOnce(Return(Result<std::string>(std::string("-a always,exit -F arch=b64 -S execve -C uid!=euid -F auid!=unset\n"
-                                                         "-a never,exit -F arch=b64 -S execve -F exe=/usr/bin/ls\n"))));
-
+    const std::string auditing = "-a always,exit -F arch=b64 -S execve -C uid!=euid -F auid!=unset\n";
+    const std::string suppressing = "-a never,exit -F arch=b64 -S execve -F exe=/usr/bin/ls\n";
     std::string dir = MakeTempDir();
     ASSERT_FALSE(dir.empty());
     std::string file = dir + "/execve.rules";
-    WriteFile(file,
-        "-a always,exit -F arch=b64 -S execve -C uid!=euid -F auid!=unset\n"
-        "-a never,exit -F arch=b64 -S execve -F exe=/usr/bin/ls\n");
     mContext.SetSpecialFilePath("/etc/audit/rules.d", dir);
-
     AuditdRulesParams params;
     params.searchItem = "-S execve";
     params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-C (euid!=uid|uid!=euid)", "-F auid!=(unset|-1|4294967295)"};
-
-    auto result = AuditAuditdRules(params, indicators, mContext);
-
+    for (bool runningSuppressed : {false, true})
+    {
+        for (bool filesSuppressed : {false, true})
+        {
+            SCOPED_TRACE(::testing::Message() << "running suppressed=" << runningSuppressed << ", files suppressed=" << filesSuppressed);
+            EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(runningSuppressed ? suppressing + auditing : auditing + suppressing)));
+            WriteFile(file, filesSuppressed ? suppressing + auditing : auditing + suppressing);
+            IndicatorsTree caseIndicators;
+            caseIndicators.Push("AuditdRulesCheck");
+            auto result = AuditAuditdRules(params, caseIndicators, mContext);
+            ASSERT_TRUE(result.HasValue());
+            EXPECT_EQ(result.Value(), runningSuppressed || filesSuppressed ? Status::NonCompliant : Status::Compliant);
+        }
+    }
     RemoveFile(file);
     RemoveDir(dir);
-
-    ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
 
 TEST_F(AuditdRulesCheckTest, AdditionalAuditingRuleDoesNotInvalidateCompliantRule)
@@ -237,6 +239,59 @@ TEST_F(AuditdRulesCheckTest, AdditionalAuditingRuleDoesNotInvalidateCompliantRul
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(AuditdRulesCheckTest, PersistentRulesUseNaturalOrderAndPrependActions)
+{
+    const std::string auditing = "-a always,exit -F arch=b64 -S execve\n";
+    const std::string suppressing = "-a never,exit -F arch=b64 -S execve\n";
+    std::string dir = MakeTempDir();
+    ASSERT_FALSE(dir.empty());
+    const std::string earlyFile = dir + "/2-audit.rules";
+    const std::string lateFile = dir + "/10-suppress.rules";
+    WriteFile(lateFile, suppressing);
+    WriteFile(earlyFile, auditing);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", dir);
+    AuditdRulesParams params;
+    params.searchItem = "-S execve";
+    params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)"};
+    for (bool prepend : {false, true})
+    {
+        SCOPED_TRACE(::testing::Message() << "prepend=" << prepend);
+        if (prepend)
+        {
+            WriteFile(lateFile, "-A never,exit -F arch=b64 -S execve\n");
+        }
+        EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(auditing)));
+        auto result = AuditAuditdRules(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), prepend ? Status::NonCompliant : Status::Compliant);
+    }
+    RemoveFile(earlyFile);
+    RemoveFile(lateFile);
+    RemoveDir(dir);
+}
+
+TEST_F(AuditdRulesCheckTest, EarlierDisjointSuppressionDoesNotInvalidateRule)
+{
+    const std::string rules =
+        "-a never,exit -F arch=b32 -S open -F exit=-EACCES\n"
+        "-a never,exit -F arch=b64 -S open -F exit=-EPERM\n"
+        "-a always,exit -F arch=b64 -S open -F exit=-EACCES\n";
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(rules)));
+    std::string dir = MakeTempDir();
+    ASSERT_FALSE(dir.empty());
+    std::string file = dir + "/access.rules";
+    WriteFile(file, rules);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", dir);
+    AuditdRulesParams params;
+    params.searchItem = "-S open";
+    params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-F exit=-EACCES"};
+    auto result = AuditAuditdRules(params, indicators, mContext);
+    RemoveFile(file);
+    RemoveDir(dir);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
 TEST_F(AuditdRulesCheckTest, SyscallPrefixDoesNotMatchLongerSyscall)
