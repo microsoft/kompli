@@ -155,6 +155,108 @@ TEST(BenchmarkDefinitionParserTest, IgnoresUnknownFields)
 }
 
 // ---------------------------------------------------------------------------
+// parameterMetadata (docs/CLI.md "Parametrization")
+// ---------------------------------------------------------------------------
+
+TEST(BenchmarkDefinitionParserTest, RuleWithNoParameterMetadataYieldsEmptyMap)
+{
+    auto result = ParseString(OneRuleDoc(), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_TRUE(result.Value().resources[0].parameterMetadata.empty());
+}
+
+TEST(BenchmarkDefinitionParserTest, ParsesParameterMetadataFields)
+{
+    const char* const ruleWithParams = R"({
+        "ruleName": "EnsureMountPoint",
+        "title": "1.1.2.1.1 Ensure mount point",
+        "id": "1.1.2.1.1",
+        "payload": {"audit": {"X": {}}, "parameters": {"mountPoint": "/tmp"}},
+        "parameterMetadata": {
+            "mountPoint": {
+                "type": "string",
+                "default": "/tmp",
+                "displayName": "Mount Point",
+                "validationRegex": "^/[a-zA-Z0-9/_.-]+$",
+                "validationFailedMessage": "Must be an absolute path.",
+                "mandatory": true
+            }
+        }
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    ASSERT_EQ(result.Value().resources.size(), 1u);
+    const auto& metadata = result.Value().resources[0].parameterMetadata;
+    ASSERT_EQ(metadata.count("mountPoint"), 1u);
+    const auto& mountPoint = metadata.at("mountPoint");
+    EXPECT_EQ(mountPoint.type, "string");
+    EXPECT_EQ(mountPoint.defaultValue, "/tmp");
+    ASSERT_TRUE(mountPoint.displayName.HasValue());
+    EXPECT_EQ(mountPoint.displayName.Value(), "Mount Point");
+    ASSERT_TRUE(mountPoint.validationRegex.HasValue());
+    EXPECT_EQ(mountPoint.validationRegex.Value(), "^/[a-zA-Z0-9/_.-]+$");
+    ASSERT_TRUE(mountPoint.validationFailedMessage.HasValue());
+    EXPECT_EQ(mountPoint.validationFailedMessage.Value(), "Must be an absolute path.");
+    EXPECT_TRUE(mountPoint.mandatory);
+}
+
+TEST(BenchmarkDefinitionParserTest, ParsesMultipleParameterMetadataEntries)
+{
+    const char* const ruleWithParams = R"({
+        "ruleName": "EnsureMountPoint",
+        "title": "1.1.2.1.2 Ensure mount point options",
+        "id": "1.1.2.1.2",
+        "payload": {"audit": {"X": {}}, "parameters": {"mountPoint": "/tmp", "requiredMountOptions": "nodev"}},
+        "parameterMetadata": {
+            "mountPoint": {"type": "string", "default": "/tmp"},
+            "requiredMountOptions": {"type": "string", "default": "nodev"}
+        }
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().resources[0].parameterMetadata.size(), 2u);
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsParameterMetadataNotAnObject)
+{
+    const char* const ruleWithParams = R"({
+        "ruleName": "EnsureMountPoint",
+        "title": "1.1.2.1.1 Ensure mount point",
+        "id": "1.1.2.1.1",
+        "payload": {"audit": {"X": {}}, "parameters": {}},
+        "parameterMetadata": "not-an-object"
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
+    EXPECT_FALSE(result.HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsParameterMetadataMissingDefault)
+{
+    const char* const ruleWithParams = R"({
+        "ruleName": "EnsureMountPoint",
+        "title": "1.1.2.1.1 Ensure mount point",
+        "id": "1.1.2.1.1",
+        "payload": {"audit": {"X": {}}, "parameters": {}},
+        "parameterMetadata": {"mountPoint": {"type": "string"}}
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
+    EXPECT_FALSE(result.HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsParameterMetadataEntryNotAnObject)
+{
+    const char* const ruleWithParams = R"({
+        "ruleName": "EnsureMountPoint",
+        "title": "1.1.2.1.1 Ensure mount point",
+        "id": "1.1.2.1.1",
+        "payload": {"audit": {"X": {}}, "parameters": {}},
+        "parameterMetadata": {"mountPoint": "not-an-object"}
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
+    EXPECT_FALSE(result.HasValue());
+}
+
+// ---------------------------------------------------------------------------
 // Malformed documents
 // ---------------------------------------------------------------------------
 

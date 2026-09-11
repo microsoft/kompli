@@ -21,7 +21,9 @@ enum class Command
     // Generates a plan file for a benchmark-definition file (see docs/CLI.md).
     Plan,
     // Executes a plan file (see docs/CLI.md).
-    Run
+    Run,
+    // Enumerates a benchmark-definition file's rules (id, title - see docs/CLI.md section 2).
+    List
 };
 
 // Presentation formats produced by the `render` subcommand. `audit` / `remediate`
@@ -64,22 +66,54 @@ struct Toggle
     }
 };
 
+// One `--param=<ref>.<name>=<value>` occurrence, in the order it appeared on
+// the command line. `ref` uses the same <id> / <file-basename>:<id> form as
+// a Toggle's `section` (docs/CLI.md section 8.1, "Parametrization");
+// GeneratePlan resolves it and validates `name` against the rule's
+// parameterMetadata.
+struct ParamOverride
+{
+    std::string ref;
+    std::string name;
+    std::string value;
+
+    ParamOverride(std::string ref, std::string name, std::string value)
+        : ref(std::move(ref)),
+          name(std::move(name)),
+          value(std::move(value))
+    {
+    }
+};
+
 struct Options
 {
     bool verbose = false;
     bool debug = false;
     bool continueOnError = false;
-    Optional<std::string> logFile;
     Optional<Format> format;
     Command command = Command::Help;
+    // Every subcommand but `plan` takes exactly one file (render/list/run).
     std::string input;
+    // `plan` only: one or more benchmark-definition files, in argument order
+    // (variadic, see docs/CLI.md section 8.1). `plan <file>` (today's exact
+    // contract) populates this with a single entry; `input` above is left
+    // empty for `plan`.
+    std::vector<std::string> inputs;
     Optional<std::string> section;
     // `render` only: the JUnit <testsuite name>. The CLI does not know which
     // benchmark package it came from, so the caller supplies this.
     Optional<std::string> suiteName;
     // `plan` only: repeatable --audit=/--remediate=/--enforce= toggles, in
-    // argument order.
+    // argument order. Each toggle's `section` is `<id>` when `inputs` has one
+    // file, or must be qualified as `<file-basename>:<id>` when it has more
+    // than one (docs/CLI.md section 8.1) - GeneratePlan resolves the
+    // qualifier, CliOptions doesn't parse it.
     std::vector<Toggle> toggles;
+    // `plan` only: repeatable --param=<ref>.<name>=<value> overrides, in
+    // argument order (docs/CLI.md "Parametrization") - a scripting
+    // convenience for hand-editing a generated plan's pre-filled parameter
+    // defaults. Same <ref> qualification rule as `toggles`.
+    std::vector<ParamOverride> paramOverrides;
     // `plan` only: write the generated plan here instead of stdout.
     Optional<std::string> output;
 };

@@ -117,6 +117,73 @@ Result<string> SerializeProcedure(const JSON_Object* ruleObject, const string& c
     return procedure;
 }
 
+// Parses a rule's optional `parameterMetadata` object (name -> {type,
+// default, displayName, validationRegex, validationFailedMessage, mandatory}
+// - see benchmark.schema.json). Absent entirely is not an error: a rule with
+// no tunable parameters simply has none.
+Result<std::map<string, BenchmarkIO::ParameterMetadata>> ParseParameterMetadata(const JSON_Object* ruleObject, const string& context)
+{
+    std::map<string, BenchmarkIO::ParameterMetadata> result;
+    const JSON_Value* value = json_object_get_value(ruleObject, "parameterMetadata");
+    if (nullptr == value)
+    {
+        return result;
+    }
+    if (json_value_get_type(value) != JSONObject)
+    {
+        return Error("Benchmark definition " + context + " has a 'parameterMetadata' field that is not a JSON object", EINVAL);
+    }
+    const JSON_Object* metadataObject = json_value_get_object(value);
+    const size_t count = json_object_get_count(metadataObject);
+    for (size_t i = 0; i < count; ++i)
+    {
+        const char* name = json_object_get_name(metadataObject, i);
+        if (nullptr == name || name[0] == '\0')
+        {
+            return Error("Benchmark definition " + context + " has a 'parameterMetadata' entry with an empty name", EINVAL);
+        }
+        const string entryContext = context + ".parameterMetadata." + string(name);
+        const JSON_Value* entryValue = json_object_get_value_at(metadataObject, i);
+        const JSON_Object* entryObject = (nullptr != entryValue) ? json_value_get_object(entryValue) : nullptr;
+        if (nullptr == entryObject)
+        {
+            return Error("Benchmark definition " + entryContext + " is not a JSON object", EINVAL);
+        }
+        auto defaultValue = RequiredString(entryObject, "default", entryContext);
+        if (!defaultValue.HasValue())
+        {
+            return defaultValue.Error();
+        }
+        auto type = RequiredString(entryObject, "type", entryContext);
+        if (!type.HasValue())
+        {
+            return type.Error();
+        }
+
+        BenchmarkIO::ParameterMetadata metadata;
+        metadata.defaultValue = std::move(defaultValue.Value());
+        metadata.type = std::move(type.Value());
+        const char* displayName = json_object_get_string(entryObject, "displayName");
+        if (nullptr != displayName)
+        {
+            metadata.displayName = string(displayName);
+        }
+        const char* validationRegex = json_object_get_string(entryObject, "validationRegex");
+        if (nullptr != validationRegex)
+        {
+            metadata.validationRegex = string(validationRegex);
+        }
+        const char* validationFailedMessage = json_object_get_string(entryObject, "validationFailedMessage");
+        if (nullptr != validationFailedMessage)
+        {
+            metadata.validationFailedMessage = string(validationFailedMessage);
+        }
+        metadata.mandatory = (1 == json_object_get_boolean(entryObject, "mandatory"));
+        result[name] = std::move(metadata);
+    }
+    return result;
+}
+
 Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
 {
     const string context = "rule #" + std::to_string(index);
@@ -141,6 +208,11 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
     {
         return procedure.Error();
     }
+    auto parameterMetadata = ParseParameterMetadata(ruleObject, context);
+    if (!parameterMetadata.HasValue())
+    {
+        return parameterMetadata.Error();
+    }
 
     Resource resource;
     resource.resourceID = std::move(title.Value());
@@ -156,9 +228,11 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
     resource.hasInitAudit = true;
     // Definitions carry no desired object value; the payload is modelled as
     // absent.
+    resource.parameterMetadata = std::move(parameterMetadata.Value());
 
     return resource;
 }
+
 } // anonymous namespace
 
 Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logHandle)

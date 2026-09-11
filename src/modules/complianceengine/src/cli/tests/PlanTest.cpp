@@ -22,8 +22,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+using ComplianceEngine::Cli::ApplyParameterOverrides;
 using ComplianceEngine::Cli::GeneratePlan;
 using ComplianceEngine::Cli::HashFile;
+using ComplianceEngine::Cli::ParamOverride;
 using ComplianceEngine::Cli::ParsePlanFile;
 using ComplianceEngine::Cli::Toggle;
 using ComplianceEngine::Cli::ToggleMode;
@@ -58,6 +60,34 @@ const char* const kBenchmarkJson = R"({
         "tags": [],
         "metadata": {"description": "", "rationale": "", "fixtext": "", "references": "", "severity": "Low"},
         "payload": {"audit": {}, "remediate": {}, "parameters": {}}
+      }
+    ]
+  }
+})";
+
+// Same as kBenchmarkJson, but rule "1.1.1.1" carries a parameterMetadata
+// entry (docs/CLI.md "Parametrization"), for tests exercising default
+// pre-filling and --param= override validation.
+const char* const kParameterizedBenchmarkJson = R"({
+  "apiVersion": "v1",
+  "kind": "BenchmarkDefinition",
+  "metadata": {
+    "name": "test_benchmark",
+    "labels": {"framework": "cis", "distribution": "ubuntu", "distributionVersion": "22.04"},
+    "annotations": {"benchmarkVersion": "v1.0.0"}
+  },
+  "spec": {
+    "rules": [
+      {
+        "ruleName": "TestingProceduresPass",
+        "title": "Rule one",
+        "id": "1.1.1.1",
+        "tags": [],
+        "metadata": {"description": "", "rationale": "", "fixtext": "", "references": "", "severity": "Low"},
+        "payload": {"audit": {}, "remediate": {}, "parameters": {"mountPoint": "/tmp"}},
+        "parameterMetadata": {
+          "mountPoint": {"type": "string", "default": "/tmp", "validationRegex": "^/[a-zA-Z0-9/_.-]+$"}
+        }
       }
     ]
   }
@@ -172,7 +202,7 @@ TEST_F(GeneratePlanTest, SeedsEveryRuleAtAudit)
     }
     const std::string path = MakeVerifiedFile("plan_bench_dir", "bench.benchmark.json", kBenchmarkJson);
 
-    auto result = GeneratePlan(path, {}, nullptr);
+    auto result = GeneratePlan({path}, {}, {}, nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
 
     // Parse the generated plan back rather than string-matching its raw JSON:
@@ -207,7 +237,7 @@ TEST_F(GeneratePlanTest, TogglesOverrideDefaultAndLastWriteWins)
         Toggle{"1.1.1.1", ToggleMode::Audit},
         Toggle{"1.1.1.2", ToggleMode::Enforce},
     };
-    auto result = GeneratePlan(path, toggles, nullptr);
+    auto result = GeneratePlan({path}, toggles, {}, nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
 
     const std::string planPath = MakeVerifiedFile("plan_out_dir", "plan.json", result.Value());
@@ -231,7 +261,7 @@ TEST_F(GeneratePlanTest, UnknownSectionInToggleIsRejected)
     const std::string path = MakeVerifiedFile("plan_bench_dir3", "bench.benchmark.json", kBenchmarkJson);
 
     const std::vector<Toggle> toggles = {Toggle{"9.9.9.9", ToggleMode::Remediate}};
-    auto result = GeneratePlan(path, toggles, nullptr);
+    auto result = GeneratePlan({path}, toggles, {}, nullptr);
     EXPECT_FALSE(result.HasValue());
 }
 
@@ -259,6 +289,126 @@ TEST_F(ParsePlanFileTest, ParsesValidPlan)
     ASSERT_EQ(benchmark.rules.size(), 2u);
     EXPECT_EQ(benchmark.rules.at("1/1/1/1").mode, ToggleMode::Audit);
     EXPECT_EQ(benchmark.rules.at("1/1/1/2").mode, ToggleMode::Remediate);
+}
+
+TEST_F(ParsePlanFileTest, ParsesRuleParameters)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const char* const planJson = R"({
+      "benchmarks": [{"file": "/etc/kompli/definitions/x.benchmark.json", "name": "x", "sha256": "abc123", "rules": {
+        "1.1.1.1": {"mode": "audit", "parameters": {"mountPoint": "/tmp"}}
+      }}]
+    })";
+    const std::string path = MakeVerifiedFile("parse_plan_params_dir", "plan.json", planJson);
+
+    auto result = ParsePlanFile(path, nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    ASSERT_EQ(result.Value().benchmarks.size(), 1u);
+    const auto& rule = result.Value().benchmarks[0].rules.at("1.1.1.1");
+    ASSERT_EQ(rule.parameters.count("mountPoint"), 1u);
+    EXPECT_EQ(rule.parameters.at("mountPoint"), "/tmp");
+}
+
+TEST_F(GeneratePlanTest, PreFillsParameterDefaultsFromMetadata)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const std::string path = MakeVerifiedFile("plan_param_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
+
+    auto result = GeneratePlan({path}, {}, {}, nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+
+    const std::string planPath = MakeVerifiedFile("plan_param_out_dir", "plan.json", result.Value());
+    auto planResult = ParsePlanFile(planPath, nullptr);
+    ASSERT_TRUE(planResult.HasValue()) << planResult.Error().message;
+    const auto& rule = planResult.Value().benchmarks[0].rules.at("1.1.1.1");
+    ASSERT_EQ(rule.parameters.count("mountPoint"), 1u);
+    EXPECT_EQ(rule.parameters.at("mountPoint"), "/tmp");
+}
+
+TEST_F(GeneratePlanTest, ParamOverrideReplacesDefault)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const std::string path = MakeVerifiedFile("plan_param_override_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
+
+    const std::vector<ParamOverride> overrides = {ParamOverride{"1.1.1.1", "mountPoint", "/var/tmp"}};
+    auto result = GeneratePlan({path}, {}, overrides, nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+
+    const std::string planPath = MakeVerifiedFile("plan_param_override_out_dir", "plan.json", result.Value());
+    auto planResult = ParsePlanFile(planPath, nullptr);
+    ASSERT_TRUE(planResult.HasValue()) << planResult.Error().message;
+    const auto& rule = planResult.Value().benchmarks[0].rules.at("1.1.1.1");
+    EXPECT_EQ(rule.parameters.at("mountPoint"), "/var/tmp");
+}
+
+TEST_F(GeneratePlanTest, ParamOverrideRejectsValueNotMatchingValidationRegex)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const std::string path = MakeVerifiedFile("plan_param_regex_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
+
+    const std::vector<ParamOverride> overrides = {ParamOverride{"1.1.1.1", "mountPoint", "relative/path"}};
+    auto result = GeneratePlan({path}, {}, overrides, nullptr);
+    EXPECT_FALSE(result.HasValue());
+}
+
+TEST_F(GeneratePlanTest, ParamOverrideRejectsUnknownParameterName)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const std::string path = MakeVerifiedFile("plan_param_unknown_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
+
+    const std::vector<ParamOverride> overrides = {ParamOverride{"1.1.1.1", "notAParameter", "x"}};
+    auto result = GeneratePlan({path}, {}, overrides, nullptr);
+    EXPECT_FALSE(result.HasValue());
+}
+
+TEST_F(GeneratePlanTest, ParamOverrideRejectsUnknownRule)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const std::string path = MakeVerifiedFile("plan_param_unknown_rule_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
+
+    const std::vector<ParamOverride> overrides = {ParamOverride{"9.9.9.9", "mountPoint", "/var/tmp"}};
+    auto result = GeneratePlan({path}, {}, overrides, nullptr);
+    EXPECT_FALSE(result.HasValue());
+}
+
+TEST(ApplyParameterOverridesTest, AddsParametersObjectWhenAbsent)
+{
+    auto result = ApplyParameterOverrides(R"({"audit":{}})", {{"mountPoint", "tmp"}});
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_NE(result.Value().find("\"mountPoint\""), std::string::npos);
+    EXPECT_NE(result.Value().find("\"tmp\""), std::string::npos);
+}
+
+TEST(ApplyParameterOverridesTest, OverwritesExistingParameterValue)
+{
+    auto result = ApplyParameterOverrides(R"({"audit":{},"parameters":{"mountPoint":"tmp"}})", {{"mountPoint", "vartmp"}});
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_NE(result.Value().find("\"vartmp\""), std::string::npos);
+    EXPECT_EQ(result.Value().find("\"tmp\""), std::string::npos);
+}
+
+TEST(ApplyParameterOverridesTest, RejectsNonObjectProcedureJson)
+{
+    auto result = ApplyParameterOverrides("[]", {{"mountPoint", "tmp"}});
+    EXPECT_FALSE(result.HasValue());
 }
 
 TEST_F(ParsePlanFileTest, RejectsMissingBenchmarksArray)
@@ -335,5 +485,53 @@ TEST_F(ParsePlanFileTest, RefusesNonRootOwnedFile)
     ASSERT_TRUE(WriteFile(path, R"({"benchmarks":[{"file":"x","name":"x","sha256":"a","rules":{}}]})"));
 
     auto result = ParsePlanFile(path, nullptr);
+    EXPECT_FALSE(result.HasValue());
+}
+
+namespace
+{
+// No filesystem/root needed: CheckUniqueBenchmarkIdentities operates purely
+// on already-parsed CISBenchmarkInfo values.
+ComplianceEngine::CISBenchmarkInfo MakeInfo(const std::string& framework, const std::string& distribution, const std::string& version,
+    const std::string& benchmarkVersion)
+{
+    auto result = ComplianceEngine::CISBenchmarkInfo::FromMetadata(framework, distribution, version, benchmarkVersion);
+    EXPECT_TRUE(result.HasValue()) << result.Error().message;
+    return result.Value();
+}
+} // namespace
+
+TEST(CheckUniqueBenchmarkIdentitiesTest, AcceptsDistinctIdentities)
+{
+    const std::vector<std::pair<std::string, ComplianceEngine::CISBenchmarkInfo>> benchmarks = {
+        {"cis_ubuntu24.04.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v1.0.0")},
+        {"stig_ubuntu24.04.benchmark.json", MakeInfo("stig", "ubuntu", "24.04", "v1.0.0")},
+    };
+
+    auto result = ComplianceEngine::Cli::CheckUniqueBenchmarkIdentities(benchmarks);
+    EXPECT_FALSE(result.HasValue());
+}
+
+TEST(CheckUniqueBenchmarkIdentitiesTest, RejectsDuplicateIdentity)
+{
+    const std::vector<std::pair<std::string, ComplianceEngine::CISBenchmarkInfo>> benchmarks = {
+        {"cis_ubuntu24.04.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v1.0.0")},
+        {"cis_ubuntu24.04_copy.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v1.0.0")},
+    };
+
+    auto result = ComplianceEngine::Cli::CheckUniqueBenchmarkIdentities(benchmarks);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_NE(result.Value().message.find("cis_ubuntu24.04.benchmark.json"), std::string::npos);
+    EXPECT_NE(result.Value().message.find("cis_ubuntu24.04_copy.benchmark.json"), std::string::npos);
+}
+
+TEST(CheckUniqueBenchmarkIdentitiesTest, DifferingBenchmarkVersionIsNotADuplicate)
+{
+    const std::vector<std::pair<std::string, ComplianceEngine::CISBenchmarkInfo>> benchmarks = {
+        {"cis_ubuntu24.04_v1.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v1.0.0")},
+        {"cis_ubuntu24.04_v2.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v2.0.0")},
+    };
+
+    auto result = ComplianceEngine::Cli::CheckUniqueBenchmarkIdentities(benchmarks);
     EXPECT_FALSE(result.HasValue());
 }

@@ -27,26 +27,29 @@ what is, and isn't yet, in scope.
 - Unit tests: `komplid/tests/ProtocolTest.cpp` (25 cases) covers request
   parsing, error-code mapping, and response-envelope building.
 
-## Planned shape (see [docs/architecture.md](../../docs/architecture.md))
+## Current linkage & configuration (see [docs/architecture.md](../../docs/architecture.md))
 
-- `komplid` will link `complianceenginelib`
+- `komplid` links `complianceenginelib`
   ([src/modules/complianceengine/src/lib](../modules/complianceengine/src/lib))
   and `benchmarkio`
   ([src/modules/complianceengine/src/benchmarkio](../modules/complianceengine/src/benchmarkio))
   — the same benchmark-definition parsing and root-safe input-file checks
   used by the `kompli` CLI
   ([src/modules/complianceengine/src/cli](../modules/complianceengine/src/cli)) —
-  rather than duplicating that logic. (The current placeholder only links
-  `parsonlib`; these links land with the real implementation.)
-- It will read its configuration from `/etc/kompli/` (main config file plus a
-  `definitions/` directory of installed benchmark-definition files).
+  rather than duplicating that logic. **Done.**
+- Benchmark definitions are read from a fixed, non-configurable
+  `/etc/kompli/definitions` (see `Main.cpp`) — deliberately not overridable
+  via an environment variable or flag, since that would defeat the point of
+  it being a root-owned, trusted directory. A separate `/etc/kompli/` main
+  config file (for anything beyond the definitions path) is still planned,
+  not yet built.
 - The `kompli` CLI will gain daemon-awareness (a CLI flag that checks for the
   socket) once this exists; today the CLI always runs the engine in-process.
   See [docs/cli.md](../../docs/cli.md) for the canonical CLI contract,
   including the planned per-rule `plan`/`run` model this wire protocol is
   designed to match.
 
-Each of these is a separate, follow-up piece of work.
+Each remaining bullet above is a separate, follow-up piece of work.
 
 ## Socket activation: started by systemd, `Accept=yes`
 

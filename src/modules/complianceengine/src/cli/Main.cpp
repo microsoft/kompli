@@ -12,7 +12,6 @@
 #include "BenchmarkDefinition.hpp"
 #include "BenchmarkFormatter.hpp"
 #include "CliOptions.hpp"
-#include "InputSecurity.hpp"
 #include "JUnitRenderer.hpp"
 #include "Plan.hpp"
 #include "TextRenderers.hpp"
@@ -32,9 +31,12 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <utility>
+#include <vector>
 #include <version.h>
 
 using ComplianceEngine::Action;
+using ComplianceEngine::CISBenchmarkInfo;
 using ComplianceEngine::CliContext;
 using ComplianceEngine::CombineAllOf;
 using ComplianceEngine::DistributionInfo;
@@ -46,7 +48,8 @@ using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 using ComplianceEngine::BenchmarkDefinition::ParseFile;
 using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
-using ComplianceEngine::BenchmarkIO::RefuseUnsafeLogFile;
+using ComplianceEngine::Cli::ApplyParameterOverrides;
+using ComplianceEngine::Cli::CheckUniqueBenchmarkIdentities;
 using ComplianceEngine::Cli::Command;
 using ComplianceEngine::Cli::Format;
 using ComplianceEngine::Cli::GeneratePlan;
@@ -147,7 +150,7 @@ int RunRender(const Options& options)
 // reads the benchmark file and hashes it, it evaluates nothing.
 int RunPlan(const Options& options)
 {
-    auto planResult = GeneratePlan(options.input, options.toggles, nullptr);
+    auto planResult = GeneratePlan(options.inputs, options.toggles, options.paramOverrides, nullptr);
     if (!planResult.HasValue())
     {
         std::cerr << "Error: " << planResult.Error().message << std::endl;
@@ -172,6 +175,27 @@ int RunPlan(const Options& options)
     else
     {
         std::cout << planResult.Value();
+    }
+    return 0;
+}
+
+// Enumerates `options.input`'s rules (id, title) to stdout, one per line,
+// in document order (docs/CLI.md section 2). Runs without root: it only
+// reads and parses the benchmark file, same posture as `plan`/`render`. The
+// per-rule detail view (parameters and defaults) described in docs/CLI.md
+// isn't implemented yet - it needs BenchmarkIO::Resource to parse
+// parameterMetadata first (tracked as the Parametrization gap).
+int RunList(const Options& options)
+{
+    auto docResult = ParseFile(options.input, nullptr);
+    if (!docResult.HasValue())
+    {
+        std::cerr << "Error: " << docResult.Error().message << std::endl;
+        return 1;
+    }
+    for (const auto& resource : docResult.Value().resources)
+    {
+        std::cout << resource.id << '\t' << resource.resourceID << '\n';
     }
     return 0;
 }
@@ -219,6 +243,12 @@ int main(int argc, char* argv[])
         return RunPlan(options);
     }
 
+    // `list` is likewise a pure, root-free read of a benchmark-definition file.
+    if (Command::List == options.command)
+    {
+        return RunList(options);
+    }
+
     // `run` resolves and validates its plan file before anything else needs a
     // log handle or the engine, so do that first and carry the parsed plan
     // (and the benchmark file path it points at) forward.
@@ -232,31 +262,43 @@ int main(int argc, char* argv[])
             return 1;
         }
         plan = std::move(planResult.Value());
-    }
 
-    // Validate the log-file path before opening it. The shared logging code
-    // opens the log with a symlink-following append and chmod's it while we run
-    // as root, so an attacker-controlled symlink or writable parent directory
-    // could redirect those writes. No log handle exists yet, so failures are
-    // reported to stderr.
-    if (options.logFile.HasValue())
-    {
-        if (options.logFile->empty() || RefuseUnsafeLogFile(options.logFile.Value(), nullptr))
+        // Reject a plan whose blocks don't all resolve to distinct benchmark
+        // identities, before evaluating any rule (fail fast) - two blocks
+        // pointing at files that share a (framework, distribution,
+        // distributionVersion, benchmarkVersion) tuple are ambiguous, not a
+        // case to silently pick one and continue (docs/CLI.md section 8.1).
+        // This re-reads each benchmark file up front (a nullptr log handle is
+        // fine here, same as ParsePlanFile above); the per-block loop below
+        // parses it again once log handle / applicability checks are ready.
+        std::vector<std::pair<string, CISBenchmarkInfo>> identities;
+        identities.reserve(plan.Value().benchmarks.size());
+        for (const auto& benchmark : plan.Value().benchmarks)
         {
-            std::cerr << "Error: refusing to use unsafe log file path." << std::endl;
+            auto identityDocResult = ParseFile(benchmark.file, nullptr);
+            if (!identityDocResult.HasValue())
+            {
+                std::cerr << "Error: failed to parse benchmark definition input: " << identityDocResult.Error().message << std::endl;
+                return 1;
+            }
+            identities.emplace_back(benchmark.file, identityDocResult.Value().benchmarkInfo);
+        }
+        auto duplicateIdentityError = CheckUniqueBenchmarkIdentities(identities);
+        if (duplicateIdentityError.HasValue())
+        {
+            std::cerr << "Error: refusing to run plan: " << duplicateIdentityError.Value().message << std::endl;
             return 1;
         }
     }
 
-    std::unique_ptr<OsConfigLog, void (*)(OsConfigLog*)> logHandle(options.logFile.HasValue() ? OpenLog(options.logFile->c_str(), nullptr) : nullptr,
-        [](OsConfigLog* h) {
-            OsConfigLogHandle tmp = h;
-            CloseLog(&tmp);
-        });
-    if (logHandle)
-    {
-        SetConsoleLoggingEnabled(false);
-    }
+    // The CLI logs to stderr unconditionally (no `--log-file`; see
+    // docs/logging.md in the kompli repo for why the operator-supplied log
+    // path was removed rather than hardened further). A null log handle
+    // routes every OsConfigLog* call through the console sink.
+    std::unique_ptr<OsConfigLog, void (*)(OsConfigLog*)> logHandle(nullptr, [](OsConfigLog* h) {
+        OsConfigLogHandle tmp = h;
+        CloseLog(&tmp);
+    });
 
     if (options.verbose)
     {
@@ -417,6 +459,11 @@ int main(int argc, char* argv[])
             // doesn't mention is one the plan author deliberately left out,
             // skip it entirely rather than guessing a mode.
             ToggleMode mode = (Command::Remediate == options.command) ? ToggleMode::Remediate : ToggleMode::Audit;
+            // `run` only: the plan's pre-filled/overridden parameter values
+            // for this rule (docs/CLI.md "Parametrization"), threaded into
+            // the procedure below. Empty for `audit`/`remediate`, which
+            // always execute a rule's own baked-in defaults unchanged.
+            std::string procedure = entry.procedure;
             if (Command::Run == options.command)
             {
                 const auto& rules = plan.Value().benchmarks[b].rules;
@@ -427,12 +474,28 @@ int main(int argc, char* argv[])
                     continue;
                 }
                 mode = it->second.mode;
+                if (!it->second.parameters.empty())
+                {
+                    auto overrideResult = ApplyParameterOverrides(entry.procedure, it->second.parameters);
+                    if (!overrideResult.HasValue())
+                    {
+                        OsConfigLogError(logHandle.get(), "Failed to apply plan parameters for %s: %s", entry.resourceID.c_str(),
+                            overrideResult.Error().message.c_str());
+                        if (!options.continueOnError)
+                        {
+                            return 1;
+                        }
+                        hasError = true;
+                        continue;
+                    }
+                    procedure = std::move(overrideResult.Value());
+                }
             }
 
             // The rule is selected for evaluation (past the section filter / plan lookup).
             ++evaluatedRules;
 
-            auto procedureResult = engine.MmiSet((string("procedure") + entry.ruleName).c_str(), entry.procedure);
+            auto procedureResult = engine.MmiSet((string("procedure") + entry.ruleName).c_str(), procedure);
             if (!procedureResult.HasValue())
             {
                 OsConfigLogError(logHandle.get(), "Failed to set procedure: %s", procedureResult.Error().message.c_str());

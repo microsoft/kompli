@@ -5,12 +5,36 @@
 #define COMPLIANCE_ENGINE_BENCHMARKIO_RESOURCE_HPP
 
 #include <Optional.h>
+#include <map>
 #include <string>
 
 namespace ComplianceEngine
 {
 namespace BenchmarkIO
 {
+// One entry of a rule's `parameterMetadata` (docs/CLI.md "Parametrization"):
+// the UI/validation contract for one tunable parameter, keyed by name in
+// Resource::parameterMetadata. Mirrors benchmark.schema.json's
+// `parameterMetadata` per-entry shape.
+struct ParameterMetadata
+{
+    // Default value applied when the parameter is not overridden. Always
+    // present (schema-required); `plan` pre-fills every rule's parameters
+    // with this.
+    std::string defaultValue;
+    // Value type; currently only "string" is defined by the schema.
+    std::string type;
+    Optional<std::string> displayName;
+    // A `--param=` override's value must match this when present (checked by
+    // GeneratePlan).
+    Optional<std::string> validationRegex;
+    // Shown instead of a generic error when validationRegex doesn't match.
+    Optional<std::string> validationFailedMessage;
+    // Not enforced yet: defaults are always present, so a plan is never
+    // generated with a missing mandatory parameter.
+    bool mandatory = false;
+};
+
 // A single parsed benchmark rule, as consumed by callers (the `kompli` CLI's
 // main loop and output formatters today; `komplid` in the future). Populated
 // by the benchmark-definition parser (BenchmarkDefinition) from one entry of a
@@ -46,15 +70,14 @@ struct Resource
     // True when the rule carries an init object (always true for definitions).
     bool hasInitAudit = false;
 
-    // TODO(kompli parametrization design, see docs/CLI.md): not yet parsed or
-    // retained. The rule's `parameterMetadata` (name -> {default,
-    // validationRegex, mandatory, displayName}) is a plain top-level sibling
-    // of `payload` in the benchmark-definition schema - NOT buried inside the
-    // opaque procedure payload - so `kompli plan` can read it straight out of
-    // this parser (no need to reuse Engine/Procedure's own parameter
-    // handling) to pre-populate a plan's parameters with defaults and to
-    // validate user-supplied overrides (name exists, value matches
+    // The rule's `parameterMetadata` (name -> {default, validationRegex,
+    // mandatory, displayName}), a plain top-level sibling of `payload` in the
+    // benchmark-definition schema - NOT buried inside the opaque procedure
+    // payload. Empty for a rule with no tunable parameters. `kompli plan`
+    // reads this directly to pre-populate a plan's parameters with defaults
+    // and to validate `--param=` overrides (name exists, value matches
     // validationRegex) before dispatch.
+    std::map<std::string, ParameterMetadata> parameterMetadata;
 };
 } // namespace BenchmarkIO
 } // namespace ComplianceEngine

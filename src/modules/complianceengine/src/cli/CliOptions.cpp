@@ -16,13 +16,14 @@ using std::string;
 
 void PrintHelp(const std::string& programName)
 {
-    std::cout << "Usage: " + programName + " [options] <command> [filename]\n\n";
+    std::cout << "Usage: " + programName + " [options] <command> [filename...]\n\n";
     std::cout << "Commands:\n";
     std::cout << "\taudit\t\tEvaluate a benchmark and emit the canonical result JSON.\n";
     std::cout << "\tremediate\tRemediate a benchmark and emit the canonical result JSON.\n";
     std::cout << "\trender\t\tRender a canonical result JSON into a presentation format.\n";
-    std::cout << "\tplan\t\tGenerate a plan file selecting a mode (audit/remediate/enforce) per rule.\n";
+    std::cout << "\tplan\t\tGenerate a plan file selecting a mode (audit/remediate/enforce) per rule, from one or more files.\n";
     std::cout << "\trun\t\tExecute a plan file, emit the canonical result JSON.\n";
+    std::cout << "\tlist\t\tEnumerate a benchmark-definition file's rules (id, title).\n";
     std::cout << "\n";
     std::cout << "Common options:\n";
     std::cout << "\t-h, --help\tShow help and exit.\n";
@@ -32,22 +33,29 @@ void PrintHelp(const std::string& programName)
     std::cout << "\n";
     std::cout << "audit / remediate / run options:\n";
     std::cout << "\t-e, --continue-on-error\tSkip rules that fail due to engine errors and continue processing. Returns 1 if any error occurred.\n";
-    std::cout << "\t-l, --log-file\tSpecify a log file. Default: print log entries to standard output.\n";
     std::cout << "\t-s, --section\tProcess only specific sections. Default: process all available rules. Not valid for 'run' (the plan already selects "
                  "rules).\n";
     std::cout << "\tfilename\tProcess the specified benchmark-definition JSON file ('run': a plan file). Required: the file must be supplied on disk; "
                  "stdin ('-') is not supported for definitions.\n";
     std::cout << "\n";
     std::cout << "plan options:\n";
-    std::cout << "\t    --audit=<section>\tSet <section>'s mode to audit (the default for every rule). Repeatable.\n";
-    std::cout << "\t    --remediate=<section>\tSet <section>'s mode to remediate. Repeatable.\n";
-    std::cout << "\t    --enforce=<section>\tSet <section>'s mode to enforce (accepted, not yet executable by 'run'). Repeatable.\n";
+    std::cout << "\tfilename...\tOne or more benchmark-definition JSON files; one plan spanning all of them.\n";
+    std::cout << "\t    --audit=<ref>\tSet <ref>'s mode to audit (the default for every rule). Repeatable. <ref> is an unqualified <id> with\n"
+                 "\t\t\tone file, or <file-basename>:<id> with more than one.\n";
+    std::cout << "\t    --remediate=<ref>\tSet <ref>'s mode to remediate. Repeatable. Same <ref> form as --audit=.\n";
+    std::cout << "\t    --enforce=<ref>\tSet <ref>'s mode to enforce (accepted, not yet executable by 'run'). Repeatable. Same <ref> form as "
+                 "--audit=.\n";
+    std::cout << "\t    --param=<ref>.<name>=<value>\tOverride parameter <name> for <ref> (default: pre-filled from the definition's "
+                 "parameterMetadata). Repeatable. Same <ref> form as --audit=.\n";
     std::cout << "\t-o, --output\tWrite the generated plan to this path. Default: standard output.\n";
     std::cout << "\n";
     std::cout << "render options:\n";
     std::cout << "\t-f, --format\tPresentation format. Allowed values: {junit, nested-list, compact-list, debug}. Default: junit.\n";
     std::cout << "\t    --suite-name\tName for the JUnit <testsuite>. Default: compliance.\n";
     std::cout << "\tfilename\tRead the canonical result JSON from this file. Optional: if skipped or '-', reads standard input.\n";
+    std::cout << "\n";
+    std::cout << "list options:\n";
+    std::cout << "\tfilename\tEnumerate rules (id, title, one per line) in this benchmark-definition JSON file.\n";
 }
 
 // Long-only option identifiers (no short equivalent). Values start above the
@@ -57,7 +65,8 @@ enum
     kSuiteNameOpt = 256,
     kAuditOpt,
     kRemediateOpt,
-    kEnforceOpt
+    kEnforceOpt,
+    kParamOpt
 };
 
 // Command line parser using getopt_long.
@@ -73,12 +82,13 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
     optind = 1;
 #endif
 
-    const auto* short_opts = "hVvdel:s:f:o:";
+    const auto* short_opts = "hVvdes:f:o:";
     const option long_opts[] = {{"help", no_argument, nullptr, 'h'}, {"version", no_argument, nullptr, 'V'}, {"verbose", no_argument, nullptr, 'v'},
-        {"debug", no_argument, nullptr, 'd'}, {"continue-on-error", no_argument, nullptr, 'e'}, {"log-file", required_argument, nullptr, 'l'},
+        {"debug", no_argument, nullptr, 'd'}, {"continue-on-error", no_argument, nullptr, 'e'},
         {"section", required_argument, nullptr, 's'}, {"format", required_argument, nullptr, 'f'}, {"output", required_argument, nullptr, 'o'},
         {"suite-name", required_argument, nullptr, kSuiteNameOpt}, {"audit", required_argument, nullptr, kAuditOpt},
-        {"remediate", required_argument, nullptr, kRemediateOpt}, {"enforce", required_argument, nullptr, kEnforceOpt}, {nullptr, 0, nullptr, 0}};
+        {"remediate", required_argument, nullptr, kRemediateOpt}, {"enforce", required_argument, nullptr, kEnforceOpt},
+        {"param", required_argument, nullptr, kParamOpt}, {nullptr, 0, nullptr, 0}};
 
     auto result = Options{};
     int opt = getopt_long(argc, argv, short_opts, long_opts, nullptr);
@@ -100,13 +110,6 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
                 break;
             case 'e':
                 result.continueOnError = true;
-                break;
-            case 'l':
-                if (optarg[0] == '\0')
-                {
-                    return Error("Log file path must not be empty.");
-                }
-                result.logFile = std::string(optarg);
                 break;
             case 's':
                 if (optarg[0] == '\0')
@@ -169,6 +172,27 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
                 result.toggles.push_back(Toggle{std::string(optarg), mode});
                 break;
             }
+            case kParamOpt: {
+                // <ref>.<name>=<value>: split off the value at the first '=',
+                // then the name at the last '.' before it - a rule id may
+                // itself contain dots (e.g. CIS '1.1.1.1'), but a parameter
+                // name never does, so the last '.' unambiguously separates them.
+                const std::string arg(optarg);
+                const auto eq = arg.find('=');
+                if (std::string::npos == eq || 0 == eq || eq + 1 == arg.size())
+                {
+                    return Error("--param must be of the form <ref>.<name>=<value>.");
+                }
+                const std::string key = arg.substr(0, eq);
+                const std::string value = arg.substr(eq + 1);
+                const auto dot = key.find_last_of('.');
+                if (std::string::npos == dot || 0 == dot || dot + 1 == key.size())
+                {
+                    return Error("--param must be of the form <ref>.<name>=<value>.");
+                }
+                result.paramOverrides.push_back(ParamOverride{key.substr(0, dot), key.substr(dot + 1), value});
+                break;
+            }
             default:
                 return Error("Unknown option.");
         }
@@ -200,29 +224,45 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
         {
             result.command = Command::Run;
         }
+        else if (arg == "list")
+        {
+            result.command = Command::List;
+        }
         else
         {
-            return Error("Invalid command: '" + arg + "'. Must be 'audit', 'remediate', 'render', 'plan' or 'run'.");
+            return Error("Invalid command: '" + arg + "'. Must be 'audit', 'remediate', 'render', 'plan', 'run' or 'list'.");
         }
         ++optind;
     }
     else
     {
-        return Error("Missing required command: 'audit', 'remediate', 'render', 'plan' or 'run'.");
+        return Error("Missing required command: 'audit', 'remediate', 'render', 'plan', 'run' or 'list'.");
     }
 
-    // Input filename
-    if (optind < argc)
+    // Input filename(s). `plan` is variadic (one or more files, docs/CLI.md
+    // section 8.1); every other subcommand takes exactly one.
+    if (Command::Plan == result.command)
     {
-        const std::string arg = argv[optind];
-        result.input = arg;
-        ++optind;
+        while (optind < argc)
+        {
+            result.inputs.push_back(argv[optind]);
+            ++optind;
+        }
     }
-
-    // End of positional arguments
-    if (optind < argc)
+    else
     {
-        return Error("Too many arguments provided.");
+        if (optind < argc)
+        {
+            const std::string arg = argv[optind];
+            result.input = arg;
+            ++optind;
+        }
+
+        // End of positional arguments
+        if (optind < argc)
+        {
+            return Error("Too many arguments provided.");
+        }
     }
 
     // Cross-option validation: keep each subcommand's flags scoped to what it
@@ -262,16 +302,16 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
             {
                 return Error("--continue-on-error is not valid for 'plan'; it doesn't execute anything.");
             }
-            if (result.logFile.HasValue())
-            {
-                return Error("--log-file is not valid for 'plan'; it doesn't execute anything.");
-            }
         }
         else
         {
             if (!result.toggles.empty())
             {
                 return Error("--audit=/--remediate=/--enforce= are only valid for 'plan'.");
+            }
+            if (!result.paramOverrides.empty())
+            {
+                return Error("--param= is only valid for 'plan'.");
             }
             if (result.output.HasValue())
             {
@@ -281,15 +321,41 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
             {
                 return Error("--section is not valid for 'run'; the plan file already selects rules.");
             }
+            if (Command::List == result.command)
+            {
+                if (result.section.HasValue())
+                {
+                    return Error("--section is not valid for 'list'; it enumerates every rule in the file.");
+                }
+                if (result.continueOnError)
+                {
+                    return Error("--continue-on-error is not valid for 'list'; it doesn't execute anything.");
+                }
+            }
         }
 
-        // audit/remediate/plan/run all require an on-disk file as the positional
-        // argument (the benchmark definition for audit/remediate/plan, the plan
-        // file for run). stdin ('-') is deliberately rejected so the
-        // input-hardening checks cannot be bypassed by piping data in.
-        if (result.input.empty() || result.input == "-")
+        // audit/remediate/run/list require a single on-disk file as the
+        // positional argument (the benchmark definition for audit/remediate/
+        // list, the plan file for run); `plan` requires at least one
+        // (docs/CLI.md section 8.1). stdin ('-') is deliberately rejected so
+        // the input-hardening checks cannot be bypassed by piping data in.
+        if (Command::Plan == result.command)
         {
-            return Error("A file argument is required for 'audit', 'remediate', 'plan' and 'run'; stdin ('-') is not supported.");
+            if (result.inputs.empty())
+            {
+                return Error("At least one benchmark-definition file is required for 'plan'.");
+            }
+            for (const auto& file : result.inputs)
+            {
+                if (file.empty() || file == "-")
+                {
+                    return Error("A file argument is required for 'plan'; stdin ('-') is not supported.");
+                }
+            }
+        }
+        else if (result.input.empty() || result.input == "-")
+        {
+            return Error("A file argument is required for 'audit', 'remediate', 'run' and 'list'; stdin ('-') is not supported.");
         }
     }
 

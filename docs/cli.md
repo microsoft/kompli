@@ -20,13 +20,16 @@ migrated - see §8).
 | `kompli audit <file>` | Implemented | Evaluate every rule in a benchmark-definition file, emit the canonical result JSON. |
 | `kompli remediate <file>` | Implemented | Remediate every rule in a benchmark-definition file, emit the canonical result JSON. |
 | `kompli render [file]` | Implemented | Render a canonical result JSON (from `audit`/`remediate`) into a presentation format. |
-| `kompli plan <file>` | Implemented | Generate a plan file selecting a mode (audit/remediate/enforce) per rule. See §2. |
+| `kompli plan <file>...` | Implemented | Generate a plan file selecting a mode (audit/remediate/enforce) per rule, from one or more definition files. See §2. |
 | `kompli run <plan-file>` | Implemented | Execute a plan file (one or more benchmark files), emit one combined canonical result JSON. See §2. |
+| `kompli list <file>` | Implemented (base enumeration) | List every rule's `id`/`title`, one per line. See §2. |
 
 Common flags: `-h/--help`, `-V/--version`, `-v/--verbose`, `-d/--debug`.
-`audit`/`remediate`/`run`-only: `-e/--continue-on-error`, `-l/--log-file`
-(`run` does re-check `--section` is *not* accepted - the plan already selects
-rules). `audit`/`remediate`-only: `-s/--section` (prefix filter on a rule's
+`audit`/`remediate`/`run`-only: `-e/--continue-on-error` (`run` does re-check
+`--section` is *not* accepted - the plan already selects rules). kompli logs
+to stderr unconditionally (no `--log-file`; see
+[logging.md](logging.md) for the sink model and why the flag was removed).
+`audit`/`remediate`-only: `-s/--section` (prefix filter on a rule's
 `id`, kompli's sole per-rule identifier - see
 [payload-key-format.md §12](payload-key-format.md#12-payloadkey-renamed-to-id-ruleid-removed-from-komplis-own-schema--decided-implemented);
 the flag keeps its name for CLI-ergonomics continuity even though there's no
@@ -34,11 +37,12 @@ longer a separate `section` concept behind it). `plan`-only: repeatable
 `--audit=<section>` / `--remediate=<section>` / `--enforce=<section>`
 toggles (same naming continuity), `-o/--output`.
 `render`-only: `-f/--format {junit,nested-list,compact-list,debug}` (default
-`junit`), `--suite-name`.
+`junit`), `--suite-name`. `list` takes no flags beyond the common ones -
+see §2.
 
-`audit`/`remediate`/`plan`/`run` all require a file as a positional argument
-(the benchmark-definition file for the first three, the plan file for `run`);
-a missing path or `-` is a hard error — stdin is deliberately
+`audit`/`remediate`/`plan`/`run`/`list` all require a file as a positional
+argument (the benchmark-definition file for all but `run`, the plan file for
+`run`); a missing path or `-` is a hard error — stdin is deliberately
 unsupported for definitions (see the input-hardening posture in
 `src/modules/complianceengine/src/cli/THREAT_MODEL.md`). `render` is a
 root-free, pure transformation and does accept stdin.
@@ -66,15 +70,24 @@ kept in this contract regardless, see below) in the same run. The CLI needs
 an input model that can express that, without forcing a user to
 hand-enumerate every rule for the common "audit/remediate everything" case.
 
-### `kompli list <file>` — Planned
+### `kompli list <file>` — Implemented (base enumeration)
 
-Enumerates rules in a benchmark-definition file: `id`, `title`.
-Prerequisite for building a plan — a user or script needs to know what to
-reference before they can toggle its mode. A detail view for one rule
-(`kompli list <file> --rule=<id>`, exact flag not finalized)
-additionally shows its parameters and their defaults — needed so a user
-knows what's available to override in a plan (see "Parametrization" under
-`plan` below). `id` is kompli's *sole* externally-quoted per-rule
+Enumerates rules in a benchmark-definition file: prints each rule's `id` and
+`title`, tab-separated, one per line, in document order, to stdout. Root-free
+(same posture as `plan`/`render` — it only reads and parses the file via the
+shared `BenchmarkDefinition::ParseFile`, so it inherits the same input-hardening
+posture as `audit`/`remediate`/`plan`). No flags beyond the common ones
+(`-h/-V/-v/-d`); `--section`/`--continue-on-error`/toggles/`--output`/`--format`
+are all rejected, matching `plan`'s scoping. Prerequisite for building a plan —
+a user or script needs to know what to reference before they can toggle its
+mode. A detail view for one rule
+(`kompli list <file> --rule=<id>`, exact flag not finalized) additionally
+showing its parameters and their defaults — needed so a user knows what's
+available to override in a plan (see "Parametrization" under `plan` below) —
+remains **not implemented**; `BenchmarkIO::Resource` now parses
+`parameterMetadata` (§6/Parametrization), so this is just the detail-view
+flag/output itself. `id` is
+kompli's *sole* externally-quoted per-rule
 identifier — a separate `section` field used to exist but was eliminated
 (see [payload-key-format.md §11](payload-key-format.md#11-section-eliminated--unified-into-payloadkey--decided-implemented)),
 and the field itself was later renamed from `payloadKey` to `id` (see
@@ -118,10 +131,8 @@ error (fail fast), matching the eager-validation principle in §4.
 codebase already leans on `parson` everywhere and this keeps it that way).
 One plan can span **multiple** benchmark files (see
 [payload-key-format.md §7](payload-key-format.md#7-plan-format-mixing-rules-from-multiple-benchmark-files--decided-implemented)) —
-`kompli plan <file>` (single positional argument) always generates a
-single-entry `benchmarks` array; combining plans from multiple files today is
-a manual JSON edit (concatenating `benchmarks` arrays), not yet a dedicated
-CLI feature (tracked in §6):
+`kompli plan <file>...` is variadic (§8.1): one or more definition files on
+the command line produce **one** plan with one `benchmarks[]` entry per file:
 
 ```jsonc
 {
@@ -149,9 +160,10 @@ rule.
 
 Each rule's value is an object, not a bare mode string, so parameters travel
 alongside mode (see "Parametrization" below) rather than needing a second,
-key-synchronized map. **Current limitation:** every rule's `parameters` is
-currently always an empty object — see "Parametrization" below (still
-blocked on the same prerequisite).
+key-synchronized map. Every rule's `parameters` is pre-filled from the
+rule's `parameterMetadata` defaults at plan-generation time and can be
+overridden by hand-editing the plan or via `--param=` (see "Parametrization"
+below).
 
 - Each block's `sha256` lets `run` detect that its benchmark file changed
   since the plan was generated (same integrity-verification spirit as the
@@ -165,7 +177,7 @@ blocked on the same prerequisite).
   reference against the benchmark file eagerly (fail fast) — see §4 for why
   `run` re-validates too.
 
-### Parametrization
+### Parametrization — Implemented
 
 Procedures can be parametrized (e.g. a package name, a file mode/mask); the
 unified definitions already carry default values for every parameter today
@@ -182,26 +194,23 @@ that capability into `kompli`/`komplid` too, not just GC).
 - **Overriding a value**: primarily by hand-editing the generated plan
   (change a value under a rule's `parameters`) — the plan already has every
   parameter pre-filled, so most users only need to touch the handful they
-  actually want to change. `plan` also gets a repeatable
-  `--param=<section>.<name>=<value>` flag as a scripting convenience for the
+  actually want to change. `plan` also has a repeatable
+  `--param=<ref>.<name>=<value>` flag as a scripting convenience for the
   same edit, applied like the mode-toggle flags (only at `plan`
   generation/editing time, not at `run` — `run` executes the plan file's
-  exact contents, it doesn't accept its own overrides).
+  exact contents, it doesn't accept its own overrides). `<ref>` uses the
+  same qualification form as a toggle's `<ref>` (§8.1): an unqualified `<id>`
+  with one input file, or `<file-basename>:<id>` with more than one.
 - **Validation extends to parameters, same eager-plus-re-validate pattern as
   rule references (§4)**: a `--param=` name must exist in the rule's
   `parameterMetadata`, and its value must match `validationRegex` when the
-  rule declares one — checked at `plan` time (fail fast) and again at `run`
-  (TOCTOU safety net, same reasoning as §4).
+  rule declares one — checked at `plan` time (fail fast). `run` threads a
+  plan's resolved parameter values into the procedure it executes
+  (`ApplyParameterOverrides`), overwriting the procedure's own baked-in
+  defaults with the plan's.
 - **Result reporting needs no schema change.** `kompli-result.schema.json`'s
-  per-rule object already has a required `parameters` field — this only
-  needs the actually-used values (defaults or overrides) threaded through
-  into it, not a new field.
-- **Code prerequisite, not yet implemented**: `BenchmarkIO::Resource` doesn't
-  parse or retain `parameterMetadata` yet — see the `TODO` in `Resource.hpp`.
-  **Status: not implemented.** `plan`/`run` only handle mode selection; every
-  rule's `parameters` is emitted/read as an empty object regardless of the
-  payload's actual parameters. Everything else in this subsection remains
-  the design for when the `Resource` prerequisite lands.
+  per-rule object already has a required `parameters` field — the actually-
+  used values (defaults or overrides) are threaded through into it.
 
 ### `kompli run <plan-file>` — Implemented
 
@@ -226,6 +235,16 @@ document covering the whole plan.
   rationale). This resolves
   [payload-key-format.md §7](payload-key-format.md#7-plan-format-mixing-rules-from-multiple-benchmark-files--decided-implemented)'s
   previously-open cross-distro-mixing question.
+- **Duplicate benchmark identity across blocks, decided and implemented:
+  hard error.** Before evaluating any rule, `run` checks every block's
+  already-resolved `CISBenchmarkInfo` and refuses the plan if two blocks
+  share the same `(framework, distribution, distributionVersion,
+  benchmarkVersion)` tuple (`CheckUniqueBenchmarkIdentities` in `Plan.cpp`) —
+  such a plan is ambiguous (the same benchmark staged twice, or two
+  revisions disagreeing about which is current), not a case to silently
+  pick one and continue. This was a real gap in already-shipped code (see
+  §8.1); it is now closed for `run` independently of §8.1's variadic `plan`,
+  which will call the same check once it lands.
 - Re-validates every rule reference against each (re-loaded) benchmark file
   — belt-and-suspenders with `plan`'s eager validation, since a file could
   have changed between the two commands (TOCTOU). This is drift *reduction*,
@@ -318,28 +337,15 @@ Tracked here so they aren't lost, not solved in this document:
   best-effort top-level `action` and omits plan-absent rules from the result
   instead. Needs a `kompli-result.schema.json` change plus `JUnitRenderer`/
   `TextRenderers` updates.
-- **`kompli list <file>`** (§2) — not implemented; `plan`/`run` assume the
-  caller already knows a benchmark's sections (e.g. from the definition
-  source or a schema-validated `data/definitions/*.benchmark.json`).
-- **Parametrization** (§2) — not implemented; blocked on `BenchmarkIO::
-  Resource` parsing/retaining `parameterMetadata` (see its `TODO`). Every
-  plan rule's `parameters` is an empty object today.
+- **`kompli list <file> --rule=<id>` detail view** (§2) — not implemented;
+  the base `kompli list <file>` enumeration (`id`, `title`) is implemented.
+  `BenchmarkIO::Resource` now parses `parameterMetadata` (Parametrization,
+  below), so the remaining work is just the detail-view flag/output itself.
 - **`kompli audit`/`remediate` as literal `plan`+`run` shorthands** (§2) —
   not implemented; they remain a separate direct code path in `Main.cpp`
   today, sharing only the per-rule audit/remediate/enforce dispatch logic
   with `run`. **Superseded by §8**, which plans their full retirement, not
   just an internal refactor.
-- **A dedicated `kompli plan --merge`-style flag** (§2) to combine multiple
-  files' plans into one, instead of the current manual-JSON-edit workaround.
-  **Superseded by §8.1**, which instead makes `plan` itself variadic (no new
-  flag).
-- **`run` doesn't reject a plan whose blocks share a benchmark identity**
-  (§7's `PlanBenchmark` array, [payload-key-format.md §7](payload-key-format.md#7-plan-format-mixing-rules-from-multiple-benchmark-files--decided-implemented)) —
-  two blocks pointing at files with the same `(framework, distribution,
-  distributionVersion, benchmarkVersion)` tuple are accepted today rather than
-  rejected. **Real gap in already-shipped code**, not just a new-feature
-  concern — §8.1 specifies the check in detail (for the new multi-file
-  `plan` as well as for `run`) and it should land on both, together.
 - **Plan file JSON schema.** Deferred until the plan format itself finishes
   settling — premature to write a schema for a format still in flux.
 - **Response envelope's exact `error` code taxonomy** and its formal JSON
@@ -401,7 +407,7 @@ true (today, `plan` alone can't yet target *multiple* files in one command,
 the one thing `audit <file>` also can't do either, so this isn't a
 capability regression for anyone).
 
-### 8.1 `plan` becomes variadic: one or more definition files — Planned
+### 8.1 `plan` becomes variadic: one or more definition files — Implemented
 
 The concrete answer to "give a decent option to generate a plan file from an
 existing definition" for more than one file at a time, replacing the
@@ -439,17 +445,18 @@ only plan *generation* was single-file.
   the existing per-file `id`-uniqueness check (§5 — unaffected, unchanged,
   already enforced today) — one governs uniqueness of rules *inside* a file,
   the other governs uniqueness of *which files* may appear together.
-- **The same check belongs on `run`, and is a currently-real gap, not just a
-  new-feature concern.** `run`'s multi-`benchmarks[]`-block execution (§2,
+- **The same check now belongs on `run` too — implemented independently of
+  this section landing.** `run`'s multi-`benchmarks[]`-block execution (§2,
   [payload-key-format.md §7](payload-key-format.md#7-plan-format-mixing-rules-from-multiple-benchmark-files--decided-implemented))
-  already ships today and already accepts a hand-edited plan with two blocks
-  pointing at files that share a `(framework, distribution,
-  distributionVersion, benchmarkVersion)` tuple — `ParsePlanFile`/`Main.cpp`'s
-  `run` dispatch do not currently check for this. Once §8.1 lands, `run`
-  gains the identical check (over the already-resolved `CISBenchmarkInfo` for
-  each block, before evaluating any rule), independent of whether the plan
-  was produced by the new multi-file `plan` or hand-assembled. Tracked as a
-  **shipped-code gap to fix**, not merely a new-feature nicety — see §6.
+  used to accept a hand-edited plan with two blocks pointing at files that
+  share a `(framework, distribution, distributionVersion, benchmarkVersion)`
+  tuple; `Main.cpp`'s `run` dispatch now calls `CheckUniqueBenchmarkIdentities`
+  (`Plan.cpp`/`Plan.hpp`) over every block's already-resolved
+  `CISBenchmarkInfo`, before evaluating any rule, whether the plan was
+  hand-assembled or (once this section lands) produced by the new multi-file
+  `plan`. This closed the shipped-code gap tracked in §6 ahead of §8.1's
+  variadic `plan`; §8.1 itself still needs to call the same function at
+  generation time (see the bullet above).
 - **Toggle-flag ambiguity across files, decided.** `id` is only guaranteed
   unique *within* one file (§2's rule-identity caveat) — with several files
   in one `plan` invocation, an unqualified `--audit=<id>` could match a rule
