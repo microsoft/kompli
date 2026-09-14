@@ -257,7 +257,7 @@ directly.
   // omitted or empty means "use this rule's defaults" (see docs/cli.md's
   // "Parametrization" section - kompli/komplid fold in the parameter
   // overrides GC/NRP already supports, via the plan file).
-  { "requestId": "1", "benchmark": "frameworkA_ubuntu24.04", "id": "...", "mode": "audit", "parameters": {} }
+  { "requestId": "1", "benchmark": "ubuntu24.04", "id": "...", "mode": "audit", "parameters": {} }
 
   // Responses all share {type, requestId}; shape beyond that depends on type:
   { "type": "result",     "requestId": "1", "result": { /* canonical per-rule result */ } }
