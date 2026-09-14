@@ -30,7 +30,7 @@ void PrintHelp(const std::string& programName)
     std::cout << "\n";
     std::cout << "audit / remediate options:\n";
     std::cout << "\t-e, --continue-on-error\tSkip rules that fail due to engine errors and continue processing. Returns 1 if any error occurred.\n";
-    std::cout << "\t-l, --log-file\tSpecify a log file. Default: print log entries to standard output.\n";
+    std::cout << "\t-l, --log-file\tSpecify a log file. Default: print log entries to standard error.\n";
     std::cout << "\t-s, --section\tProcess only specific sections. Default: process all available rules.\n";
     std::cout << "\tfilename\tProcess the specified benchmark-definition JSON file. Required: the file must be supplied on disk; "
                  "stdin ('-') is not supported for definitions.\n";
