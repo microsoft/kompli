@@ -20,11 +20,11 @@ remainder, under the field name `id`.
 
 | # | Segment | Example | Notes |
 |---|---|---|---|
-| 1 | `framework` | `frameworkA`, `frameworkB` | Closed set (`BenchmarkInfo.cpp`'s `sBenchmarkTypeMap`); an unrecognised value is a hard parse error. Opening this to arbitrary framework strings (for user-authored/custom benchmarks) is out of scope for now (§9) — the format itself doesn't preclude it later. |
+| 1 | `framework` | `example-framework` | Closed set (`BenchmarkInfo.cpp`'s `sBenchmarkTypeMap`); an unrecognised value is a hard parse error. Opening this to arbitrary framework strings (for user-authored/custom benchmarks) is out of scope for now (§9) — the format itself doesn't preclude it later. |
 | 2 | `distribution` | `ubuntu`, `azurelinux` | Matched against the host's detected distribution. |
 | 3 | `distributionVersion` | `22.04`, `3.*` | `fnmatch`-style glob, matched against the host's `VERSION_ID`. |
-| 4 | `benchmarkVersion` | `v2.0.0` | Always `v`-prefixed, for every framework (§8). Opaque beyond the prefix requirement: kompli never parses or validates the rest of this segment, it's stored as-is. |
-| 5+ | `id` (the "remainder") | `1.1.1.1` (Framework A), `RULE-4502` (Framework B) | Framework-defined shape, **opaque to kompli** — see §2. The sole externally-quoted per-rule identifier (§11/§12). Only required to be unique within one file (§5). |
+| 4 | `benchmarkVersion` | `v2.0.0` | Always `v`-prefixed (§8). Opaque beyond the prefix requirement: kompli never parses or validates the rest of this segment, it's stored as-is. |
+| 5+ | `id` (the "remainder") | `1.1.1.1` | Framework-defined shape, **opaque to kompli** — see §2. The sole externally-quoted per-rule identifier (§11/§12). Only required to be unique within one file (§5). |
 
 Every rule in one benchmark-definition file shares exactly one distinct
 4-segment prefix — this is the invariant §3's hoisting relies on.
@@ -60,9 +60,8 @@ MOF change — see §4):
 logical key** (prefix + remainder), not the trimmed stored string — the
 generator computes the full key in memory before serialization
 (`rule.get_key()`), independent of what gets written into the `id` JSON
-field. Getting this wrong would change every existing Framework A `ruleId`,
-which is the one thing explicitly ruled out for Framework A (GA'ed, external
-consumers already key off `ruleId`).
+field. Getting this wrong would change an already-GA'd framework's `ruleId`,
+which is ruled out once external consumers key off it.
 
 **Consequence for kompli's parser**: distribution/version extraction happens
 *per file*, not per rule (`BenchmarkDefinition::ParseString` calls
@@ -113,7 +112,7 @@ reference), and usable as a lookup key with no transformation (§2).
 **CLI ergonomics**: the CLI toggle flags (`--audit=<X>` etc.) and
 `-s/--section` keep those flag names for continuity, even though there is no
 separate `section` field behind them (§11) — they match directly against a
-rule's `id` (dot-form for Framework A, e.g. `1.1.1.1`). The stored plan format is
+rule's `id` (e.g. `1.1.1.1`). The stored plan format is
 keyed purely by `id` (framework-agnostic, unique-by-construction).
 
 `BenchmarkIO::Resource` retains `id` verbatim (`Resource.hpp`), so plan/run
@@ -123,8 +122,8 @@ anything. The duplicate-rule-reference rejection in
 
 ## 7. Plan format: mixing rules from multiple benchmark files
 
-Motivation: a corporate baseline combining, say, Framework A rules and
-Framework B rules for the same host, without hand-copying rule content into
+Motivation: a corporate baseline combining rules from two different
+frameworks for the same host, without hand-copying rule content into
 a new file (which would drift out of sync with upstream fixes) and without
 being forced into `N` separate scans (`N` plans, `N` `run` invocations) just
 because the rules originate from different unified-definition files.
@@ -136,17 +135,17 @@ independently scoped:
 {
   "benchmarks": [
     {
-      "file": "frameworkA_ubuntu_22.04.benchmark.json",
+      "file": "ubuntu_22.04_primary.benchmark.json",
       "sha256": "<hash at plan-generation time>",
       "rules": {
         "1.1.1.1": { "mode": "audit", "parameters": {} }
       }
     },
     {
-      "file": "frameworkB_ubuntu_22.04.benchmark.json",
+      "file": "ubuntu_22.04_secondary.benchmark.json",
       "sha256": "<hash at plan-generation time>",
       "rules": {
-        "RULE-4502": { "mode": "audit", "parameters": {} }
+        "2.3.1": { "mode": "audit", "parameters": {} }
       }
     }
   ]
@@ -160,8 +159,8 @@ re-hashes that block's file, re-validates that block's rule references, and
 applies §5's per-file applicability check separately per block.
 
 **Cross-distro mixing: hard fail.** The primary motivating scenario is
-same-distro Framework A + Framework B (one host, two frameworks); the array
-shape doesn't
+same-distro, multiple frameworks (one host, several benchmark files); the
+array shape doesn't
 *prevent* referencing files targeting different distros in one plan, though.
 A block whose file doesn't match the current host's distro/version (§5's
 per-file check) hard-fails the **whole** `run` immediately — it is not
@@ -169,20 +168,15 @@ skipped while other blocks continue. Rationale: partial results from a plan
 that silently dropped a mismatched benchmark would be misleading ("let's not
 mix too much, otherwise we'd have to work with partial reports").
 
-## 8. Framework B `benchmarkVersion`
+## 8. `benchmarkVersion` format
 
-Framework B's generator omits the `v` prefix (`2.5.0`) that Framework A
-always has (`v1.0.0`) — a pre-existing inconsistency. Framework B matches
-Framework A's `v`-prefixed format. Unlike Framework A, this is accepted to
-cause a one-time `ruleId` change for Framework B's definitions, since
-Framework B is still early-stage / not yet broadly deployed — the same
-tolerance does not extend to Framework A, which is GA'ed.
+Always `v`-prefixed (e.g. `v2.0.0`), enforced by the `^v.+` pattern in both
+the JSON schema and `FromMetadata` (§3).
 
 ## 9. Not addressed here (explicitly out of scope)
 
-- Opening the `framework` segment (§1) beyond `frameworkA`/`frameworkB` to
-  arbitrary framework strings for genuinely user-authored benchmarks — not
-  urgent while only Framework A is GA and Framework B is early-stage.
+- Opening the `framework` segment (§1) to arbitrary framework strings for
+  genuinely user-authored benchmarks.
 
 ## 10. Definitions-generator-side work
 
@@ -190,8 +184,8 @@ Everything in §2, §3, §5, §6, §7 needs a matching implementation on **both*
 sides: kompli (C++) and the definitions generator (Python,
 `tools/compliancectl/`):
 
-- `rule.py`'s Framework B `__get_payload_key()` emits a `v`-prefixed
-  `benchmarkVersion` segment, matching Framework A (§8).
+- `rule.py`'s `__get_payload_key()` emits a `v`-prefixed `benchmarkVersion`
+  segment for every framework (§8).
 - `benchmark_def.py`'s `metadata.annotations.benchmarkVersion` is sourced
   from the payload key's own (already `v`-prefixed) 4th segment, not the raw
   unprefixed XCCDF version string.
@@ -206,8 +200,8 @@ sides: kompli (C++) and the definitions generator (Python,
 ## 11. `id`: the sole per-rule identifier (no separate `section`)
 
 The definition file has no separate `section` field — `id` (§1) is the sole
-externally-quoted per-rule identifier, dot-form for Framework A (e.g.
-`1.1.1.1`) and unchanged for Framework B (e.g. `RULE-4502`).
+externally-quoted per-rule identifier, e.g. `1.1.1.1` (shape is
+framework-defined).
 
 - **Schema**: neither `benchmark.schema.json` nor `kompli-result.schema.json`
   has a `section` property on a rule; `id`'s description states it as the
@@ -220,19 +214,20 @@ externally-quoted per-rule identifier, dot-form for Framework A (e.g.
   `--enforce=<section>`) keep these names for continuity — renaming a
   public flag is a separate UX decision this format doesn't force — and
   match directly against `Resource::id`, with no translation step.
-- **Definitions generator**: `rule.py`'s `get_id()` (the dot-form Framework A
-  remainder via `__get_section`'s `/`→`.` replace) is the sole source
-  `benchmark_def.py` uses for the serialized `id` field.
+- **Definitions generator**: `rule.py`'s `get_id()` (a framework-specific
+  remainder transform, e.g. a `/`→`.` replace for dot-form ids) is the sole
+  source `benchmark_def.py` uses for the serialized `id` field.
 - **MOF special-case handler**: the MOF format's `PayloadKey` stays
   byte-identical to the slash-separated full key (§4) — unaffected for the
   XCCDF-direct path (`XccdfRule.get_key()`/`__get_payload_key` build the
   full slash-form key for `ruleId` hashing and MOF generation). The
   definition-replay MOF path (`compliancectl get mof` sourcing from a
   committed definition instead of XCCDF, via `common/definition_source.py`)
-  needs a handler: `DefinitionRule.get_key()` converts a Framework A `id`'s
-  dots back to slashes (`self._framework == "frameworkA"` gate) before
-  concatenating it onto the file-level hoisted prefix, reconstructing the
-  original MOF key. Framework B's `id` has no dots to convert either way.
+  needs a handler: `DefinitionRule.get_key()` converts a dot-form `id`'s
+  dots back to slashes for frameworks whose remainder uses that shape,
+  before concatenating it onto the file-level hoisted prefix, reconstructing
+  the original MOF key. Frameworks whose `id` has no dots need no
+  conversion.
 - **Result schema**: `kompli-result.schema.json` has no per-rule `section`
   — `JUnitRenderer`/`TextRenderers` (and any external consumer, e.g.
   `tests/plan_run_test.sh` in the definitions generator) read `id` from the
@@ -265,7 +260,7 @@ carried by kompli itself:
   satisfy**: `DefinitionRule.get_uuid()` computes
   `UUID(sha256(full_key))` (the same formula `Rule.get_uuid()` uses) from
   `self.get_key()` (which reconstructs the full slash-form key via §11's
-  Framework A dot→slash handler). This means `compliancectl get mof`
+  dot→slash handler). This means `compliancectl get mof`
   sourcing from a
   committed definition still produces a byte-identical MOF
   `RuleId`/`PayloadKey`, even though neither is stored in the definition
