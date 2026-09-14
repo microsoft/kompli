@@ -25,9 +25,9 @@ namespace BenchmarkDefinition
 // canonical input format for both.
 //
 // Every rule in one file shares the same framework/distribution/
-// distributionVersion/benchmarkVersion prefix (see docs/payload-key-format.md
-// section 1/3) - hoisted once per file as `benchmarkInfo` below, rather than
-// repeated in every rule's payload key as before.
+// distributionVersion/benchmarkVersion prefix - hoisted once per file as
+// `benchmarkInfo` below, rather than repeated in every rule's payload key
+// as before.
 using BenchmarkIO::Resource;
 
 // A fully parsed benchmark-definition file: its stable name, its file-level
@@ -49,7 +49,7 @@ struct BenchmarkDocument
     //   resourceID   <- rule.title
     //   id           <- rule.id (verbatim, opaque, unique within this file -
     //                   kompli's sole per-rule identifier, no separate ruleId
-    //                   field - see docs/payload-key-format.md section 2/6/12)
+    //                   field)
     //   procedure    <- rule.payload serialized as compact JSON (the ComplianceEngine
     //                   parses plain JSON directly; see Engine::SetProcedure)
     //   hasInitAudit <- true (every rule carries an init object)
@@ -63,10 +63,9 @@ struct BenchmarkDocument
 // framework/distribution/distributionVersion, metadata.annotations.
 // benchmarkVersion), and the fixed per-rule field set (ruleName, title, id,
 // payload). Rejects a document with a duplicate `id` across its rules (id
-// must be unique within one file - see docs/payload-key-format.md section
-// 5/6) and rejects malformed input. Consistent with the definition schema
-// (additionalProperties: true), unknown fields are ignored rather than
-// rejected.
+// must be unique within one file) and rejects malformed input. Consistent
+// with the definition schema (additionalProperties: true), unknown fields
+// are ignored rather than rejected.
 Result<BenchmarkDocument> ParseString(const std::string& json, OsConfigLogHandle logHandle);
 
 // Reads the whole document from a stream (stdin / tests), bounding the total

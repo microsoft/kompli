@@ -40,11 +40,10 @@ struct PlanRuleMode
 };
 
 // A parsed plan file's entry for one benchmark file (see docs/CLI.md's
-// "plan / run" section and docs/payload-key-format.md section 7 for the on-disk
+// "plan / run" section for the on-disk
 // JSON shape). Rules absent from `rules` are rules the plan author
 // deliberately left out; `run` skips them. Keyed by `id` (the rule's sole
-// per-rule identifier, unique within this one file) - see
-// docs/payload-key-format.md section 6/12.
+// per-rule identifier, unique within this one file).
 struct PlanBenchmark
 {
     std::string file;
@@ -55,8 +54,8 @@ struct PlanBenchmark
 
 // A parsed plan file: one or more benchmark entries. Each is independently
 // scoped (own file, own sha256, own rules map) so a single plan can mix
-// rules from multiple benchmark files (e.g. CIS + STIG) without copying rule
-// content - see docs/payload-key-format.md section 7. `run` hard-fails the whole
+// rules from multiple benchmark files (e.g. from two different frameworks)
+// without copying rule content. `run` hard-fails the whole
 // plan if any entry's file doesn't apply to the current host (no partial
 // results from a mismatched entry).
 struct Plan

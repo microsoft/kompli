@@ -378,8 +378,8 @@ int main(int argc, char* argv[])
 
     // `audit`/`remediate` process exactly one file (options.input, the same
     // mode for every rule); `run` processes every benchmark entry in the plan
-    // (docs/payload-key-format.md section 7 - a plan can mix rules from multiple
-    // files, e.g. CIS + STIG), each independently hash-checked and
+    // (a plan can mix rules from multiple
+    // files, e.g. from two different frameworks), each independently hash-checked and
     // applicability-checked, accumulating into one combined result.
     const size_t benchmarkCount = (Command::Run == options.command) ? plan.Value().benchmarks.size() : 1;
     for (size_t b = 0; b < benchmarkCount; ++b)
@@ -422,7 +422,7 @@ int main(int argc, char* argv[])
         }
         const auto& doc = docResult.Value();
 
-        // Validate applicability once per file (docs/payload-key-format.md section 5) -
+        // Validate applicability once per file -
         // every rule in one file shares the same distro/version prefix, so this
         // is the only check possible now that rules no longer carry their own
         // (see BenchmarkIO::Resource). A mismatch hard-fails the whole run: for
@@ -455,7 +455,7 @@ int main(int argc, char* argv[])
 
             // `audit`/`remediate` apply the same mode to every rule. `run`
             // looks the mode up per rule in this benchmark entry, keyed by
-            // id (docs/payload-key-format.md section 6/12) - a rule the plan
+            // id - a rule the plan
             // doesn't mention is one the plan author deliberately left out,
             // skip it entirely rather than guessing a mode.
             ToggleMode mode = (Command::Remediate == options.command) ? ToggleMode::Remediate : ToggleMode::Audit;

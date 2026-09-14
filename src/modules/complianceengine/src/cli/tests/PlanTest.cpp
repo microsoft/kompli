@@ -33,8 +33,7 @@ using ComplianceEngine::Kompli::ToggleMode;
 namespace
 {
 // A minimal, schema-valid benchmark definition with two rules, identified by
-// id "1.1.1.1" and "1.1.1.2" (the sole per-rule identifier now - see
-// docs/payload-key-format.md).
+// id "1.1.1.1" and "1.1.1.2" (the sole per-rule identifier now).
 const char* const kBenchmarkJson = R"({
   "apiVersion": "v1",
   "kind": "BenchmarkDefinition",

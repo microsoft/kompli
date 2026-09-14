@@ -166,7 +166,7 @@ TEST_F(BenchmarkInfoTest, FromMetadata_RejectsUnknownDistribution)
 TEST_F(BenchmarkInfoTest, FromMetadata_RejectsBenchmarkVersionWithoutVPrefix)
 {
     // Unlike Parse (which stays backward-compatible with existing MOF-sourced
-    // full payload keys, see docs/payload-key-format.md §8), FromMetadata is
+    // full payload keys), FromMetadata is
     // only used by the new (non-MOF) parsing path and requires the 'v' prefix.
     auto result = CISBenchmarkInfo::FromMetadata("cis", "ubuntu", "20.04", "1.0.0");
     ASSERT_FALSE(result.HasValue());

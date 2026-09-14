@@ -33,7 +33,7 @@
         },
         "labels": {
           "type": "object",
-          "description": "Selectable identity axes. framework/distribution/distributionVersion are the file-level payload-key prefix, hoisted once here rather than repeated per rule (see docs/payload-key-format.md) - required, shared by every rule in this file. Architecture-agnostic; the scanned host's arch is recorded in the kompli result, not here.",
+          "description": "Selectable identity axes. framework/distribution/distributionVersion are hoisted once here rather than repeated per rule - required, shared by every rule in this file. Architecture-agnostic; the scanned host's arch is recorded in the kompli result, not here.",
           "required": [
             "framework",
             "distribution",
@@ -60,7 +60,7 @@
         },
         "annotations": {
           "type": "object",
-          "description": "Non-selectable descriptive fields. benchmarkVersion is part of the file-level payload-key prefix (see docs/payload-key-format.md) - required, must start with 'v' (e.g. 'v2.0.0').",
+          "description": "Non-selectable descriptive fields. benchmarkVersion is required, must start with 'v' (e.g. 'v2.0.0').",
           "required": [
             "benchmarkVersion"
           ],
@@ -117,7 +117,7 @@
         },
         "id": {
           "type": "string",
-          "description": "The rule's sole externally-quoted identifier: the payload key remainder (opaque, framework-defined shape - e.g. '1.1.1.1' for CIS, 'SV-260469' for STIG). The file-level framework/distribution/distributionVersion/benchmarkVersion prefix lives once in metadata.labels/annotations, not repeated here. Unique within a benchmark; not parsed or transformed by kompli. There is no separate UUID ruleId field in this schema - the augmentation engine still computes one (UUID(sha256(full payload key))) for the MOF, but kompli's own definition/result no longer carries it (see docs/payload-key-format.md)."
+          "description": "The rule's sole externally-quoted identifier (opaque, framework-defined shape, e.g. '1.1.1.1'). The file-level framework/distribution/distributionVersion/benchmarkVersion prefix lives once in metadata.labels/annotations, not repeated here. Unique within a benchmark; not parsed or transformed by kompli. There is no separate ruleId field in this schema."
         },
         "tags": {
           "type": "array",

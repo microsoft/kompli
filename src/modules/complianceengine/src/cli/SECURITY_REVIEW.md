@@ -77,7 +77,7 @@ the schema-required `tags` / `metadata`. Consequences:
 
 - A file that would fail schema validation can still be executed by kompli.
 - `id` is kompli's sole per-rule identifier; there is no separate `section`
-  or `ruleId` field in this schema (see docs/payload-key-format.md §11/§12).
+  or `ruleId` field in this schema.
 
 **Planned:** `tags` and `metadata` consumption is intended in a follow-up PR.
 When that lands, decide whether the parser should also enforce their presence

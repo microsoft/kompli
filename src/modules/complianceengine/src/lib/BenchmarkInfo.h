@@ -59,7 +59,7 @@ struct CISBenchmarkInfo
     // the definition-file schema hoists these once per file rather than
     // repeating them in every rule's payload key. Unlike Parse(), this
     // requires benchmarkVersion to start with 'v' (mandated for all
-    // frameworks going forward, see docs/payload-key-format.md §1/§8).
+    // frameworks going forward).
     // section is left empty; the definition-file schema keeps section on
     // each rule instead.
     static Result<CISBenchmarkInfo> FromMetadata(const std::string& framework, const std::string& distribution, const std::string& distributionVersion,

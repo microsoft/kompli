@@ -346,7 +346,7 @@ Result<string> GeneratePlan(
         // Seed every rule at `audit` (never a mutating default) with its
         // parameters pre-filled from parameterMetadata's defaults (docs/CLI.md
         // "Parametrization"), keyed by id (the identifier guaranteed unique
-        // within this file - see docs/payload-key-format.md section 6/12).
+        // within this file).
         for (const auto& resource : doc.resources)
         {
             PlanRuleMode ruleMode{ToggleMode::Audit};

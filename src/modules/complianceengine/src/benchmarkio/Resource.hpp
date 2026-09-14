@@ -60,12 +60,9 @@ struct Resource
     std::string resourceID;
 
     // Stable, benchmark-agnostic rule identifier (the definition's `id`).
-    // Emitted in the canonical result JSON as `id`. Formerly paired with a
-    // separate UUID `ruleId` field for external conformance; that field has
-    // been dropped from kompli's own schema/result - it lives only in the
-    // MOF now (still reconstructible there: UUID(sha256(full payload key)),
-    // see docs/payload-key-format.md §12) - so this is the sole per-rule
-    // identifier kompli carries.
+    // Emitted in the canonical result JSON as `id`. There is no separate
+    // `ruleId` field in kompli's own schema/result - this is the sole
+    // per-rule identifier kompli carries.
     std::string id;
 
     // The rule payload serialized as JSON. Passed to the ComplianceEngine as the

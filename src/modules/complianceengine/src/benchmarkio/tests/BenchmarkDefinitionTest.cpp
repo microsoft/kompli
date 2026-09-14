@@ -23,9 +23,9 @@ using ComplianceEngine::BenchmarkDefinition::Resource;
 
 namespace
 {
-// A single, valid rule matching what the augmentation engine emits. The
+// A single, valid rule matching what the definitions generator emits. The
 // id is now the sole per-rule identifier (opaque remainder, doubling
-// as the human-facing identifier - see docs/payload-key-format.md); the
+// as the human-facing identifier); the
 // file-level framework/distribution/distributionVersion/benchmarkVersion
 // prefix is hoisted into metadata (see MakeDoc below).
 const char* const kValidRule = R"({
@@ -366,7 +366,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsMissingBenchmarkVersionAnnotation)
 TEST(BenchmarkDefinitionParserTest, RejectsBenchmarkVersionWithoutVPrefix)
 {
     // New (non-MOF-sourced) definitions must use a 'v'-prefixed benchmark
-    // version (see docs/payload-key-format.md §8); legacy MOF-sourced full
+    // version; legacy MOF-sourced full
     // payload keys parsed via CISBenchmarkInfo::Parse are unaffected.
     const std::string doc =
         MakeDocWithMetadata(R"({"name":"n","labels":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04"},"annotations":{"benchmarkVersion":"1.0.0"}})",
@@ -529,8 +529,8 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataMissingSeverity)
 
 TEST(BenchmarkDefinitionParserTest, RejectsDuplicateId)
 {
-    // kompli's plan/run rule-reference model (docs/CLI.md,
-    // docs/payload-key-format.md) requires a rule reference to be unambiguous
+    // kompli's plan/run rule-reference model (docs/cli.md) requires a rule
+    // reference to be unambiguous
     // within one file; two rules parsed from the same id must be
     // rejected rather than silently kept as separate entries with an
     // ambiguous reference.

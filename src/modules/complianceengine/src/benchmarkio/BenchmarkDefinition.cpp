@@ -298,11 +298,11 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
 
     Resource resource;
     resource.resourceID = std::move(title.Value());
-    // id is opaque here (see docs/payload-key-format.md §2): the file-level
+    // id is opaque here: the file-level
     // prefix lives once on BenchmarkDocument::benchmarkInfo, so this is just
     // the rule's remainder, stored verbatim - no parsing. It's kompli's sole
     // per-rule identifier - there is no separate ruleId field in this
-    // schema (see docs/payload-key-format.md §12).
+    // schema.
     resource.id = std::move(id.Value());
     resource.procedure = std::move(procedure.Value());
     resource.ruleName = std::move(ruleName.Value());
@@ -365,8 +365,7 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
     }
 
     // The file-level prefix (framework/distribution/distributionVersion/
-    // benchmarkVersion) is hoisted once here rather than repeated per rule -
-    // see docs/payload-key-format.md §3.
+    // benchmarkVersion) is hoisted once here rather than repeated per rule.
     auto* labels = json_object_get_object(metadata, "labels");
     if (nullptr == labels)
     {
@@ -426,7 +425,7 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
     doc.benchmarkInfo = std::move(benchmarkInfo.Value());
     doc.resources.reserve(ruleCount);
     // Rules already seen, keyed by id - the identifier guaranteed unique
-    // within one file (docs/payload-key-format.md §1/§6/§12); plan/run key
+    // within one file; plan/run key
     // on it directly, so a duplicate here would make a rule reference
     // ambiguous.
     std::set<string> seenIds;

@@ -84,7 +84,7 @@
         },
         "id": {
           "type": "string",
-          "description": "The rule's sole externally-quoted identifier: the payload key remainder (opaque, unique within the benchmark file it was evaluated from - e.g. '1.1.1.1' for CIS, 'SV-260469' for STIG - see docs/payload-key-format.md). No separate UUID ruleId field - that lives only in the MOF now, still reconstructible from this id (UUID(sha256(full payload key)))."
+          "description": "The rule's sole externally-quoted identifier (opaque, unique within the benchmark file it was evaluated from - e.g. '1.1.1.1'). No separate ruleId field in this schema."
         },
         "ruleName": {
           "type": "string",
