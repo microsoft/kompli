@@ -7,6 +7,7 @@
 #include "CommonContext.h"
 #include "Logging.h"
 
+#include <cstdlib>
 #include <ftw.h>
 #include <stdexcept>
 #include <unistd.h>
