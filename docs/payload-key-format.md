@@ -1,16 +1,18 @@
 # Payload key format
 
-This document is the spec for the `id` string every rule carries — its
-structure, what's guaranteed vs. opaque, and how the unified
-benchmark-definition file format and the MOF format diverge in how much of it
-each one stores. Cross-referenced from
+This document is the spec for the `id` string every rule carries in
+kompli's own benchmark-definition and result JSON — its structure, what's
+guaranteed vs. opaque, and how kompli's schema keeps it consistent across
+rules and files. Cross-referenced from
 [cli.md](cli.md#2-plan--run-per-rule-granularity) (plan/run key
 choice) and [architecture.md](architecture.md).
 
-**Terminology note**: "payload key" (this document's title term) refers to
-the full MOF-style string (prefix + remainder, §1). kompli's own JSON
-contracts (definition schema, result schema, `Resource`) store only the
-remainder, under the field name `id`.
+**Terminology note**: "payload key" (this document's title term) is the
+full `<framework>/<distribution>/<distributionVersion>/<benchmarkVersion>/<remainder>`
+string (§1) the MOF wire format carries in full — that format itself is the
+definitions generator's concern, not kompli's. kompli's own JSON contracts
+(definition schema, result schema, `Resource`) store only the remainder,
+under the field name `id`; the rest of this document is that contract.
 
 ## 1. Structure
 
@@ -39,12 +41,12 @@ would be fragile for any framework whose remainder shape doesn't happen to
 avoid the replaced character, and framework-conditional string surgery isn't
 something kompli's parser does.
 
-## 3. Unified definition file: hoisted prefix (kompli side only — see §10)
+## 3. Unified definition file: hoisted prefix
 
 **Schema**: the file-level prefix (framework / distribution /
 distributionVersion / benchmarkVersion) is stored **once** per file, not
-repeated in every rule's `id` (this is a kompli-side-only schema shape, not a
-MOF change — see §4):
+repeated in every rule's `id` (this is a kompli-side-only schema shape — the
+MOF format itself is unaffected):
 
 - `metadata.labels.framework` / `.distribution` / `.distributionVersion` and
   `metadata.annotations.benchmarkVersion` are **required** by the schema and
@@ -55,11 +57,10 @@ MOF change — see §4):
 - Each rule's `id` field stores **only the remainder** (segment 5+), not the
   full path.
 
-**Hard requirement**: `ruleId = UUID(sha256(payload_key))`
-(`common/rule.py`'s `get_uuid()`) must hash the **reconstructed full
-logical key** (prefix + remainder), not the trimmed stored string — the
-generator computes the full key in memory before serialization
-(`rule.get_key()`), independent of what gets written into the `id` JSON
+**Hard requirement**: `ruleId = UUID(sha256(payload_key))` must hash the
+**reconstructed full logical key** (prefix + remainder), not the trimmed
+stored string — the definitions generator computes the full key in memory
+before serialization, independent of what gets written into the `id` JSON
 field. Getting this wrong would change an already-GA'd framework's `ruleId`,
 which is ruled out once external consumers key off it.
 
@@ -68,26 +69,16 @@ which is ruled out once external consumers key off it.
 `CISBenchmarkInfo::FromMetadata` once per document). Once the prefix is
 hoisted, a rule's stored `id` (remainder-only) structurally no longer
 contains distro/version information, so a per-rule distro/version check is
-*impossible* for anything reading the JSON form. See §6 for why this doesn't
+*impossible* for anything reading the JSON form. See §5 for why this doesn't
 apply to the MOF/NRP path.
-
-## 4. MOF format is unchanged — hard constraint
-
-The hoisting in §3 applies **only** to the unified benchmark-definition JSON.
-The MOF format is explicitly **not** changing: each MOF resource instance
-keeps the **full, self-contained payload key**, exactly as before. The MOF
-generator (`mof.py` / equivalent) reconstructs the full key
-(prefix from the file's hoisted metadata + that rule's stored remainder) at
-MOF-generation time — the trimming in §3 is purely a JSON-storage
-optimization and must be fully transparent to every MOF consumer.
 
 ## 5. Applicability checking splits by scenario
 
-This split falls directly out of §3/§4: the JSON form loses per-rule
+This split falls directly out of §3: the JSON form loses per-rule
 distro/version data (by construction, once hoisted), while the MOF form keeps
-it (unchanged). The two consumers must therefore check applicability
-differently — this is the correct, permanent shape given each format's
-structure, not a stopgap:
+it (unchanged, since that format is untouched by §3's hoisting). The two
+consumers must therefore check applicability differently — this is the
+correct, permanent shape given each format's structure, not a stopgap:
 
 - **kompli CLI** (`audit`/`remediate`/`plan`/`run`, always operating over one
   whole definition file at a time): validates applicability **once per
@@ -178,25 +169,6 @@ the JSON schema and `FromMetadata` (§3).
 - Opening the `framework` segment (§1) to arbitrary framework strings for
   genuinely user-authored benchmarks.
 
-## 10. Definitions-generator-side work
-
-Everything in §2, §3, §5, §6, §7 needs a matching implementation on **both**
-sides: kompli (C++) and the definitions generator (Python,
-`tools/compliancectl/`):
-
-- `rule.py`'s `__get_payload_key()` emits a `v`-prefixed `benchmarkVersion`
-  segment for every framework (§8).
-- `benchmark_def.py`'s `metadata.annotations.benchmarkVersion` is sourced
-  from the payload key's own (already `v`-prefixed) 4th segment, not the raw
-  unprefixed XCCDF version string.
-- Each rule's `id` is trimmed to the remainder at generation time (§11 — the
-  *sole* per-rule identifier, not a redundant pair with a separate `section`
-  field).
-- `common/definition_source.py`'s `DefinitionRule`/`DefinitionBenchmark`
-  (the `compliancectl get mof` replay path) reconstruct the full MOF key
-  from the file-level hoisted metadata + the stored remainder, preserving
-  §4's MOF-format-unchanged constraint for that path too.
-
 ## 11. `id`: the sole per-rule identifier (no separate `section`)
 
 The definition file has no separate `section` field — `id` (§1) is the sole
@@ -214,24 +186,22 @@ framework-defined).
   `--enforce=<section>`) keep these names for continuity — renaming a
   public flag is a separate UX decision this format doesn't force — and
   match directly against `Resource::id`, with no translation step.
-- **Definitions generator**: `rule.py`'s `get_id()` (a framework-specific
-  remainder transform, e.g. a `/`→`.` replace for dot-form ids) is the sole
-  source `benchmark_def.py` uses for the serialized `id` field.
-- **MOF special-case handler**: the MOF format's `PayloadKey` stays
-  byte-identical to the slash-separated full key (§4) — unaffected for the
-  XCCDF-direct path (`XccdfRule.get_key()`/`__get_payload_key` build the
-  full slash-form key for `ruleId` hashing and MOF generation). The
-  definition-replay MOF path (`compliancectl get mof` sourcing from a
-  committed definition instead of XCCDF, via `common/definition_source.py`)
-  needs a handler: `DefinitionRule.get_key()` converts a dot-form `id`'s
-  dots back to slashes for frameworks whose remainder uses that shape,
-  before concatenating it onto the file-level hoisted prefix, reconstructing
-  the original MOF key. Frameworks whose `id` has no dots need no
-  conversion.
+- **Definitions generator**: a framework-specific remainder transform
+  (e.g. a `/`→`.` replace for dot-form ids) is the sole source for the
+  serialized `id` field.
+- **MOF special-case handling**: the MOF format's `PayloadKey` stays
+  byte-identical to the slash-separated full key — unaffected when
+  building directly from the original benchmark source, which already
+  builds the full slash-form key for `ruleId` hashing and MOF generation.
+  The definition-replay MOF path (reconstructing MOF from a committed
+  definition instead of the original source) needs a handler that converts
+  a dot-form `id`'s dots back to slashes for frameworks whose remainder uses
+  that shape, before concatenating it onto the file-level hoisted prefix,
+  reconstructing the original MOF key. Frameworks whose `id` has no dots
+  need no conversion.
 - **Result schema**: `kompli-result.schema.json` has no per-rule `section`
-  — `JUnitRenderer`/`TextRenderers` (and any external consumer, e.g.
-  `tests/plan_run_test.sh` in the definitions generator) read `id` from the
-  canonical result instead.
+  — `JUnitRenderer`/`TextRenderers` (and any external consumer) read `id`
+  from the canonical result instead.
 
 ## 12. `id`, not `ruleId`, in kompli's own schema
 
@@ -249,20 +219,17 @@ carried by kompli itself:
   `Plan.cpp`'s plan-file keying/parsing, `JUnitRenderer`, `TextRenderers`)
   uses `id`. The `TextStyle::Debug` renderer has no `(ruleId=...)` display
   segment, since the canonical result doesn't carry the field.
-- **Definitions generator**: `Rule.get_id()` (abstract, and every concrete
-  override — `XccdfRule`, `DefinitionRule`, test `MockRule`s) is the
-  identifier accessor. `benchmark_def.py` emits no `"ruleId"` key in
-  `rule_def`; its identifier key is `"id"`. `mof.py` and `policy.py`'s own
-  `rule.get_uuid()`/`"RuleId"`/`"ruleId"` usages (the MOF's `RuleId` DSC
-  property, the Azure Policy artifact's `ref["ruleId"]`) are separate from
-  kompli's own contract — those are MOF/Azure-Policy concerns.
+- **Definitions generator**: emits no `"ruleId"` key for a rule; its
+  identifier key is `"id"`. Its own MOF/Azure-Policy-facing outputs (the
+  MOF's `RuleId` DSC property, the Azure Policy artifact's `ruleId`
+  reference) are separate from kompli's own contract — those are
+  MOF/Azure-Policy concerns, not part of the JSON contract this document
+  specifies.
 - **Reconstructibility, the hard requirement this section exists to
-  satisfy**: `DefinitionRule.get_uuid()` computes
-  `UUID(sha256(full_key))` (the same formula `Rule.get_uuid()` uses) from
-  `self.get_key()` (which reconstructs the full slash-form key via §11's
-  dot→slash handler). This means `compliancectl get mof`
-  sourcing from a
-  committed definition still produces a byte-identical MOF
+  satisfy**: the definition-replay path computes `UUID(sha256(full_key))`
+  (the same formula used elsewhere) from the reconstructed full slash-form
+  key (via §11's dot→slash handler). This means MOF regenerated from a
+  committed definition still produces a byte-identical
   `RuleId`/`PayloadKey`, even though neither is stored in the definition
   file — both are derived on demand from `id` plus the file-level hoisted
   prefix (§3).
