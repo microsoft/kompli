@@ -181,7 +181,7 @@ scriptlets under `devops/rpm/` and `devops/debian/`.
 ## State directory
 
 `komplid` and the `kompli` CLI each use their own ephemeral per-invocation
-temp directory (`CliContext` creates a fresh `/tmp/...` directory, removed
+temp directory (`Cli::Context` creates a fresh `/tmp/...` directory, removed
 on exit) rather than a shared persistent state directory — the location
 must be chosen to avoid clashing with GuestConfiguration (the Azure
 Automanage Machine Configuration agent), which owns its own
@@ -238,7 +238,7 @@ directly.
     verbatim (see `Resource.hpp`), as the opaque remainder only (the
     hoisted file-level prefix lives on `BenchmarkDocument::benchmarkInfo`
     instead — see
-    [docs/payload-key-format.md §3](../../docs/payload-key-format.md#3-unified-definition-file-hoisted-prefix-kompli-side-only--see-10)).
+    [docs/payload-key-format.md §3](../../docs/payload-key-format.md#3-unified-definition-file-hoisted-prefix)).
 - **Connection scope: one connection per session, many sequential
   requests.** `Accept=yes` spawns one process per *connection*, not
   per request — so a whole benchmark run is one connection carrying many
