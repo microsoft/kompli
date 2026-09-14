@@ -26,23 +26,25 @@ TEST(JUnitRendererTest, EmptyRulesProduceEmptySuite)
 
 TEST(JUnitRendererTest, CompliantRuleIsBarePassingTestcase)
 {
-    const std::string json = R"({"rules":[{"id":"1.1","ruleName":"RuleA","status":"Compliant","indicators":[]}]})";
+    const std::string json = R"({"rules":[{"id":"1.1","title":"Rule A title","ruleName":"RuleA","status":"Compliant","indicators":[]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
-    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"1.1\" name=\"RuleA\"/>"));
+    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"1.1\" name=\"Rule A title\"/>"));
     EXPECT_FALSE(Contains(r.Value(), "<failure"));
     EXPECT_TRUE(Contains(r.Value(), "tests=\"1\" failures=\"0\""));
 }
 
 TEST(JUnitRendererTest, NonCompliantRuleHasFailureWithIndicatorBody)
 {
-    const std::string json = R"({"rules":[{"id":"2.3","ruleName":"RuleB","status":"NonCompliant",)"
+    const std::string json = R"({"rules":[{"id":"2.3","title":"Rule B title","ruleName":"RuleB","status":"NonCompliant",)"
                              R"("indicators":[{"procedure":"AuditFailure","status":"NonCompliant",)"
                              R"("indicators":[{"message":"bad thing","status":"NonCompliant"}]}]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
-    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"2.3\" name=\"RuleB\">"));
+    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"2.3\" name=\"Rule B title\">"));
     EXPECT_TRUE(Contains(r.Value(), "<failure message=\"Rule is non-compliant\" type=\"NonCompliant\">"));
+    // ruleName (the PascalCase engine name) moves into the body, not the name attribute.
+    EXPECT_TRUE(Contains(r.Value(), "Rule: RuleB"));
     EXPECT_TRUE(Contains(r.Value(), "Indicators:"));
     EXPECT_TRUE(Contains(r.Value(), "- AuditFailure [NonCompliant]"));
     EXPECT_TRUE(Contains(r.Value(), "- bad thing [NonCompliant]"));
@@ -74,7 +76,7 @@ TEST(JUnitRendererTest, ParametersAreRenderedWhenPresent)
 
 TEST(JUnitRendererTest, XmlSpecialCharsAreEscapedInAttributesAndBody)
 {
-    const std::string json = R"({"rules":[{"id":"1&1","ruleName":"A & B <c> \"d\"","status":"NonCompliant",)"
+    const std::string json = R"({"rules":[{"id":"1&1","title":"A & B <c> \"d\"","ruleName":"R","status":"NonCompliant",)"
                              R"("indicators":[{"message":"m<&>\"'","status":"NonCompliant"}]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
@@ -114,6 +116,40 @@ TEST(JUnitRendererTest, NotApplicableRuleIsSkipped)
     EXPECT_TRUE(Contains(r.Value(), "- n/a on this distro [NotApplicable]"));
     EXPECT_TRUE(Contains(r.Value(), "skipped=\"1\""));
     EXPECT_FALSE(Contains(r.Value(), "<failure"));
+}
+
+TEST(JUnitRendererTest, SkippedStatusRendersAsSkipped)
+{
+    // Forward-compat: kompli-cli-completion's still-pending `Skipped` status
+    // (see internal/kompli-cli-completion.md item 5) must not hard-error here.
+    const std::string json = R"({"rules":[{"id":"4.2","ruleName":"R","status":"Skipped","indicators":[]}]})";
+    auto r = RenderJUnit(json, "s");
+    ASSERT_TRUE(r.HasValue()) << r.Error().message;
+    EXPECT_TRUE(Contains(r.Value(), "<skipped message=\"Rule was skipped\">"));
+    EXPECT_TRUE(Contains(r.Value(), "skipped=\"1\""));
+    EXPECT_FALSE(Contains(r.Value(), "<failure"));
+}
+
+TEST(JUnitRendererTest, TagsAreRenderedAsTagsBlock)
+{
+    const std::string json = R"({"rules":[{"id":"1.1","ruleName":"R","status":"Compliant",)"
+                             R"("tags":["level:l1","severity:critical"],"indicators":[]}]})";
+    auto r = RenderJUnit(json, "s");
+    ASSERT_TRUE(r.HasValue()) << r.Error().message;
+    EXPECT_TRUE(Contains(r.Value(), "<tags>"));
+    EXPECT_TRUE(Contains(r.Value(), "<tag value=\"level:l1\"/>"));
+    EXPECT_TRUE(Contains(r.Value(), "<tag value=\"severity:critical\"/>"));
+    EXPECT_TRUE(Contains(r.Value(), "</tags>"));
+    // A Compliant rule with tags can no longer self-close its testcase.
+    EXPECT_TRUE(Contains(r.Value(), "</testcase>"));
+}
+
+TEST(JUnitRendererTest, AbsentTagsOmitTagsBlock)
+{
+    const std::string json = R"({"rules":[{"id":"1.1","ruleName":"R","status":"Compliant","indicators":[]}]})";
+    auto r = RenderJUnit(json, "s");
+    ASSERT_TRUE(r.HasValue()) << r.Error().message;
+    EXPECT_FALSE(Contains(r.Value(), "<tags>"));
 }
 
 TEST(JUnitRendererTest, InvalidJsonIsError)

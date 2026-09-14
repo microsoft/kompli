@@ -14,13 +14,20 @@ namespace Cli
 // Renders a canonical kompli result JSON (as emitted by `audit` / `remediate`)
 // into a JUnit XML document.
 //
-// - one <testcase classname=<section> name=<ruleName>> per rule,
+// - one <testcase classname=<id> name=<title>> per rule (`ruleName`, the
+//   PascalCase engine name, moves into the failure/skipped body instead),
 // - a <failure> only for NonCompliant rules (Compliant rules are bare
-//   passing <testcase/>),
-// - the failure body carries the rule's Parameters and Indicators, modelled on
-//   the augmentation engine's tests/reporting/junit.py.
+//   passing <testcase/>, unless they carry `tags` - see below),
+// - `NotApplicable`/`Skipped` rules render as <skipped>,
+// - a <tags> block (one <tag value=.../> per entry) mirrors the rule's
+//   `tags` array verbatim when non-empty; severity already travels as a
+//   `severity:<value>` tag, so no separate metadata-derived property is
+//   rendered,
+// - the failure/skipped body carries the rule's `ruleName`, Parameters, and
+//   Indicators, modelled on the augmentation engine's
+//   tests/reporting/junit.py.
 //
-// `section` is used verbatim as the classname; it is framework-agnostic (a
+// `id` is used verbatim as the classname; it is framework-agnostic (a
 // dotted CIS number or a STIG id), so the renderer makes no CIS-specific
 // assumptions. `suiteName` names the <testsuite>; the CLI does not know
 // which benchmark package it came from, so the caller supplies it.

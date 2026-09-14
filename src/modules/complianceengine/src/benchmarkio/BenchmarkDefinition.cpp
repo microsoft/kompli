@@ -184,6 +184,78 @@ Result<std::map<string, BenchmarkIO::ParameterMetadata>> ParseParameterMetadata(
     return result;
 }
 
+// Parses a rule's required `tags` array (flat "axis:value" strings - see
+// benchmark.schema.json). A missing/non-array field, or a non-string entry,
+// is a hard error, matching the schema's `required: [..., "tags"]`.
+Result<std::vector<string>> ParseTags(const JSON_Object* ruleObject, const string& context)
+{
+    const JSON_Value* value = json_object_get_value(ruleObject, "tags");
+    if (nullptr == value || json_value_get_type(value) != JSONArray)
+    {
+        return Error("Benchmark definition " + context + " is missing an array 'tags' field", EINVAL);
+    }
+    const JSON_Array* array = json_value_get_array(value);
+    const size_t count = json_array_get_count(array);
+    std::vector<string> tags;
+    tags.reserve(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        const char* tag = json_array_get_string(array, i);
+        if (nullptr == tag)
+        {
+            return Error("Benchmark definition " + context + " has a non-string 'tags' entry", EINVAL);
+        }
+        tags.emplace_back(tag);
+    }
+    return tags;
+}
+
+// Parses a rule's required `metadata` object (description/rationale/fixtext/
+// severity/references, all required strings - see benchmark.schema.json).
+Result<BenchmarkIO::Metadata> ParseMetadata(const JSON_Object* ruleObject, const string& context)
+{
+    const JSON_Object* metadataObject = json_object_get_object(ruleObject, "metadata");
+    if (nullptr == metadataObject)
+    {
+        return Error("Benchmark definition " + context + " is missing an object 'metadata' field", EINVAL);
+    }
+    const string metadataContext = context + ".metadata";
+
+    auto description = RequiredString(metadataObject, "description", metadataContext);
+    if (!description.HasValue())
+    {
+        return description.Error();
+    }
+    auto rationale = RequiredString(metadataObject, "rationale", metadataContext);
+    if (!rationale.HasValue())
+    {
+        return rationale.Error();
+    }
+    auto fixtext = RequiredString(metadataObject, "fixtext", metadataContext);
+    if (!fixtext.HasValue())
+    {
+        return fixtext.Error();
+    }
+    auto severity = RequiredString(metadataObject, "severity", metadataContext);
+    if (!severity.HasValue())
+    {
+        return severity.Error();
+    }
+    auto references = RequiredString(metadataObject, "references", metadataContext);
+    if (!references.HasValue())
+    {
+        return references.Error();
+    }
+
+    BenchmarkIO::Metadata metadata;
+    metadata.description = std::move(description.Value());
+    metadata.rationale = std::move(rationale.Value());
+    metadata.fixtext = std::move(fixtext.Value());
+    metadata.severity = std::move(severity.Value());
+    metadata.references = std::move(references.Value());
+    return metadata;
+}
+
 Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
 {
     const string context = "rule #" + std::to_string(index);
@@ -213,6 +285,16 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
     {
         return parameterMetadata.Error();
     }
+    auto tags = ParseTags(ruleObject, context);
+    if (!tags.HasValue())
+    {
+        return tags.Error();
+    }
+    auto metadata = ParseMetadata(ruleObject, context);
+    if (!metadata.HasValue())
+    {
+        return metadata.Error();
+    }
 
     Resource resource;
     resource.resourceID = std::move(title.Value());
@@ -224,6 +306,8 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
     resource.id = std::move(id.Value());
     resource.procedure = std::move(procedure.Value());
     resource.ruleName = std::move(ruleName.Value());
+    resource.tags = std::move(tags.Value());
+    resource.metadata = std::move(metadata.Value());
     // Every rule carries an init object.
     resource.hasInitAudit = true;
     // Definitions carry no desired object value; the payload is modelled as

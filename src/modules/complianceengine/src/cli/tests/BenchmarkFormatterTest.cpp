@@ -215,6 +215,42 @@ TEST(BenchmarkFormatterTest, AddEntryEmitsTitleIdRuleNameStatus)
     EXPECT_EQ(json_object_has_value(rule, "ruleId"), 0) << "ruleId must not be in kompli's own result";
 }
 
+TEST(BenchmarkFormatterTest, AddEntryEmitsTagsAndMetadata)
+{
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
+    ASSERT_TRUE(formatterResult.HasValue());
+    auto& formatter = formatterResult.Value();
+    auto entry = MakeResource("1.1.1", "1.1.1 Ensure something", "EnsureSomething");
+    entry.tags = {"level:l1", "severity:critical"};
+    entry.metadata.description = "desc";
+    entry.metadata.rationale = "rat";
+    entry.metadata.fixtext = "fix";
+    entry.metadata.severity = "critical";
+    entry.metadata.references = "ref";
+    ASSERT_FALSE(formatter.AddEntry(entry, Status::Compliant, "[]", {}).HasValue());
+    auto result = std::move(formatter).Finish(Status::Compliant);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+
+    ParsedJson doc(result.Value());
+    ASSERT_NE(doc.object, nullptr);
+    JSON_Object* rule = json_array_get_object(json_object_get_array(doc.object, "rules"), 0);
+    ASSERT_NE(rule, nullptr);
+
+    JSON_Array* tags = json_object_get_array(rule, "tags");
+    ASSERT_NE(tags, nullptr);
+    ASSERT_EQ(json_array_get_count(tags), 2u);
+    EXPECT_STREQ(json_array_get_string(tags, 0), "level:l1");
+    EXPECT_STREQ(json_array_get_string(tags, 1), "severity:critical");
+
+    JSON_Object* metadata = json_object_get_object(rule, "metadata");
+    ASSERT_NE(metadata, nullptr);
+    EXPECT_STREQ(json_object_get_string(metadata, "description"), "desc");
+    EXPECT_STREQ(json_object_get_string(metadata, "rationale"), "rat");
+    EXPECT_STREQ(json_object_get_string(metadata, "fixtext"), "fix");
+    EXPECT_STREQ(json_object_get_string(metadata, "severity"), "critical");
+    EXPECT_STREQ(json_object_get_string(metadata, "references"), "ref");
+}
+
 TEST(BenchmarkFormatterTest, IndicatorsPayloadIsEmbeddedVerbatim)
 {
     auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);

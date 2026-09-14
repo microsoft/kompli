@@ -7,11 +7,24 @@
 #include <Optional.h>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace ComplianceEngine
 {
 namespace BenchmarkIO
 {
+// A rule's `metadata` object (benchmark.schema.json's `$defs/rule.metadata`):
+// fixed, benchmark-agnostic descriptive fields. Framework-specific fields
+// belong in `tags`, never here.
+struct Metadata
+{
+    std::string description;
+    std::string rationale;
+    std::string fixtext;
+    std::string severity;
+    std::string references;
+};
+
 // One entry of a rule's `parameterMetadata` (docs/CLI.md "Parametrization"):
 // the UI/validation contract for one tunable parameter, keyed by name in
 // Resource::parameterMetadata. Mirrors benchmark.schema.json's
@@ -66,6 +79,15 @@ struct Resource
     // The ComplianceEngine rule name (the definition's `ruleName`), shared by the
     // procedure/init/audit/remediate object names the engine is driven with.
     std::string ruleName;
+
+    // Flat, sparse `axis:value` tags (the definition's `tags`, e.g.
+    // "level:l1", "severity:critical"). Emitted verbatim in the canonical
+    // result JSON as `tags`.
+    std::vector<std::string> tags;
+
+    // The rule's `metadata` (the definition's `metadata`). Emitted in the
+    // canonical result JSON as `metadata`.
+    Metadata metadata;
 
     // True when the rule carries an init object (always true for definitions).
     bool hasInitAudit = false;

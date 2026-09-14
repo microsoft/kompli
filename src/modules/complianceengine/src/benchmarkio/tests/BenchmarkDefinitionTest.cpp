@@ -119,6 +119,13 @@ TEST(BenchmarkDefinitionParserTest, ParsesValidDocument)
     // The procedure is the rule's payload serialized as plain JSON.
     EXPECT_NE(res.procedure.find("KernelModuleUnavailable"), std::string::npos);
     EXPECT_NE(res.procedure.find("cramfs"), std::string::npos);
+    ASSERT_EQ(res.tags.size(), 1u);
+    EXPECT_EQ(res.tags[0], "level:l1");
+    EXPECT_EQ(res.metadata.description, "d");
+    EXPECT_EQ(res.metadata.rationale, "r");
+    EXPECT_EQ(res.metadata.fixtext, "f");
+    EXPECT_EQ(res.metadata.severity, "Warning");
+    EXPECT_EQ(res.metadata.references, "x");
 }
 
 TEST(BenchmarkDefinitionParserTest, ParsesMultipleRulesInOrder)
@@ -147,6 +154,8 @@ TEST(BenchmarkDefinitionParserTest, IgnoresUnknownFields)
         "title": "1.1.1.1 Ensure cramfs kernel module is not available",
         "id": "1.1.1.1",
         "unexpected": "ignored",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {"X": {}}, "parameters": {}}
     })";
     auto result = ParseString(MakeDoc(std::string("[") + ruleWithExtras + "]"), nullptr);
@@ -171,6 +180,8 @@ TEST(BenchmarkDefinitionParserTest, ParsesParameterMetadataFields)
         "ruleName": "EnsureMountPoint",
         "title": "1.1.2.1.1 Ensure mount point",
         "id": "1.1.2.1.1",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {"X": {}}, "parameters": {"mountPoint": "/tmp"}},
         "parameterMetadata": {
             "mountPoint": {
@@ -206,6 +217,8 @@ TEST(BenchmarkDefinitionParserTest, ParsesMultipleParameterMetadataEntries)
         "ruleName": "EnsureMountPoint",
         "title": "1.1.2.1.2 Ensure mount point options",
         "id": "1.1.2.1.2",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {"X": {}}, "parameters": {"mountPoint": "/tmp", "requiredMountOptions": "nodev"}},
         "parameterMetadata": {
             "mountPoint": {"type": "string", "default": "/tmp"},
@@ -223,6 +236,8 @@ TEST(BenchmarkDefinitionParserTest, RejectsParameterMetadataNotAnObject)
         "ruleName": "EnsureMountPoint",
         "title": "1.1.2.1.1 Ensure mount point",
         "id": "1.1.2.1.1",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {"X": {}}, "parameters": {}},
         "parameterMetadata": "not-an-object"
     })";
@@ -236,6 +251,8 @@ TEST(BenchmarkDefinitionParserTest, RejectsParameterMetadataMissingDefault)
         "ruleName": "EnsureMountPoint",
         "title": "1.1.2.1.1 Ensure mount point",
         "id": "1.1.2.1.1",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {"X": {}}, "parameters": {}},
         "parameterMetadata": {"mountPoint": {"type": "string"}}
     })";
@@ -249,6 +266,8 @@ TEST(BenchmarkDefinitionParserTest, RejectsParameterMetadataEntryNotAnObject)
         "ruleName": "EnsureMountPoint",
         "title": "1.1.2.1.1 Ensure mount point",
         "id": "1.1.2.1.1",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {"X": {}}, "parameters": {}},
         "parameterMetadata": {"mountPoint": "not-an-object"}
     })";
@@ -445,6 +464,69 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingId)
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
 }
 
+TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingTags)
+{
+    const char* const rule = R"({
+        "ruleName": "R",
+        "title": "t",
+        "id": "1.1.1.1",
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleTagsNotAnArray)
+{
+    const char* const rule = R"({
+        "ruleName": "R",
+        "title": "t",
+        "id": "1.1.1.1",
+        "tags": "not-an-array",
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleNonStringTagEntry)
+{
+    const char* const rule = R"({
+        "ruleName": "R",
+        "title": "t",
+        "id": "1.1.1.1",
+        "tags": ["level:l1", 1],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingMetadata)
+{
+    const char* const rule = R"({
+        "ruleName": "R",
+        "title": "t",
+        "id": "1.1.1.1",
+        "tags": [],
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataMissingSeverity)
+{
+    const char* const rule = R"({
+        "ruleName": "R",
+        "title": "t",
+        "id": "1.1.1.1",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "references": "x"},
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
 TEST(BenchmarkDefinitionParserTest, RejectsDuplicateId)
 {
     // kompli's plan/run rule-reference model (docs/CLI.md,
@@ -456,12 +538,16 @@ TEST(BenchmarkDefinitionParserTest, RejectsDuplicateId)
         "ruleName": "RuleA",
         "title": "Rule A",
         "id": "1.1.1.1",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {}, "parameters": {}}
     })";
     const char* const ruleB = R"({
         "ruleName": "RuleB",
         "title": "Rule B, accidental duplicate id",
         "id": "1.1.1.1",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + ruleA + "," + ruleB + "]"), nullptr).HasValue());

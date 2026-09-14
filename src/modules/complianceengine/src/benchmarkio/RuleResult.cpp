@@ -60,6 +60,47 @@ Result<JsonWrapper> BuildRuleResultJson(
         return Error("Failed to set JSON status", ENOMEM);
     }
 
+    auto* tagsValue = json_value_init_array();
+    if (nullptr == tagsValue)
+    {
+        return Error("Failed to initialize tags JSON array", ENOMEM);
+    }
+    auto* tagsArray = json_value_get_array(tagsValue);
+    for (const auto& tag : entry.tags)
+    {
+        if (JSONSuccess != json_array_append_string(tagsArray, tag.c_str()))
+        {
+            json_value_free(tagsValue);
+            return Error("Failed to append tag value", ENOMEM);
+        }
+    }
+    if (JSONSuccess != json_object_set_value(object, "tags", tagsValue))
+    {
+        json_value_free(tagsValue);
+        return Error("Failed to set tags", ENOMEM);
+    }
+
+    auto* metadataValue = json_value_init_object();
+    if (nullptr == metadataValue)
+    {
+        return Error("Failed to initialize metadata JSON object", ENOMEM);
+    }
+    auto* metadataObject = json_value_get_object(metadataValue);
+    if (nullptr == metadataObject || JSONSuccess != json_object_set_string(metadataObject, "description", entry.metadata.description.c_str()) ||
+        JSONSuccess != json_object_set_string(metadataObject, "rationale", entry.metadata.rationale.c_str()) ||
+        JSONSuccess != json_object_set_string(metadataObject, "fixtext", entry.metadata.fixtext.c_str()) ||
+        JSONSuccess != json_object_set_string(metadataObject, "severity", entry.metadata.severity.c_str()) ||
+        JSONSuccess != json_object_set_string(metadataObject, "references", entry.metadata.references.c_str()))
+    {
+        json_value_free(metadataValue);
+        return Error("Failed to set metadata fields", ENOMEM);
+    }
+    if (JSONSuccess != json_object_set_value(object, "metadata", metadataValue))
+    {
+        json_value_free(metadataValue);
+        return Error("Failed to set metadata", ENOMEM);
+    }
+
     // Surface the effective parameters (payload defaults merged with any user
     // overrides) so callers can show them without decoding the procedure blob.
     auto* parametersValue = json_value_init_object();

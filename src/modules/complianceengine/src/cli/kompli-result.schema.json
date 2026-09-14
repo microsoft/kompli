@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "kompli Result",
-  "description": "Canonical result JSON emitted by `kompli audit` / `remediate`. This is the Phase 1 shape; per-rule `tags` and inline `metadata` are added when the unified benchmark-definition input lands (Phase 3), which is why additional properties are permitted at the top level and per rule.",
+  "description": "Canonical result JSON emitted by `kompli audit` / `remediate`. This is the Phase 3 shape: per-rule `tags` and inline `metadata` are echoed from the unified benchmark-definition input, alongside the Phase 1 fields.",
   "type": "object",
   "additionalProperties": true,
   "required": [
@@ -69,6 +69,8 @@
         "id",
         "ruleName",
         "status",
+        "tags",
+        "metadata",
         "parameters"
       ],
       "properties": {
@@ -92,6 +94,26 @@
           "type": "string",
           "enum": ["Compliant", "NonCompliant", "NotApplicable"],
           "description": "Per-rule status. Overall status is aggregated with the engine's allOf three-valued logic (CombineAllOf): NonCompliant dominates; otherwise NotApplicable propagates; otherwise Compliant."
+        },
+        "tags": {
+          "type": "array",
+          "description": "Flat, sparse 'axis:value' tags, echoed verbatim from the definition (e.g. 'level:l1', 'severity:critical').",
+          "items": {
+            "type": "string"
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Descriptive fields echoed verbatim from the definition.",
+          "additionalProperties": true,
+          "required": ["description", "rationale", "fixtext", "severity", "references"],
+          "properties": {
+            "description": { "type": "string" },
+            "rationale": { "type": "string" },
+            "fixtext": { "type": "string" },
+            "severity": { "type": "string" },
+            "references": { "type": "string" }
+          }
         },
         "parameters": {
           "type": "object",
