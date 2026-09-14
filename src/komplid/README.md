@@ -232,13 +232,11 @@ directly.
     information `id` doesn't already have, so nothing internal (wire
     requests, the plan file, the task registry, the audit cache) needs to
     reference it. kompli's own JSON contracts (definition schema, canonical
-    result schema, `Resource`) don't carry `ruleId` — see
-    [docs/payload-key-format.md §12](../../docs/payload-key-format.md#12-id-not-ruleid-in-komplis-own-schema).
+    result schema, `Resource`) don't carry `ruleId`.
     Only `id` is used internally. `BenchmarkIO::Resource` retains `id`
     verbatim (see `Resource.hpp`), as the opaque remainder only (the
     hoisted file-level prefix lives on `BenchmarkDocument::benchmarkInfo`
-    instead — see
-    [docs/payload-key-format.md §3](../../docs/payload-key-format.md#3-unified-definition-file-hoisted-prefix)).
+    instead).
 - **Connection scope: one connection per session, many sequential
   requests.** `Accept=yes` spawns one process per *connection*, not
   per request — so a whole benchmark run is one connection carrying many

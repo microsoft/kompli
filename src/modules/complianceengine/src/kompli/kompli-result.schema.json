@@ -83,11 +83,7 @@
         },
         "ruleId": {
           "type": "string",
-          "description": "Stable, benchmark-agnostic rule identifier (UUID derived from the payload key)."
-        },
-        "section": {
-          "type": "string",
-          "description": "Externally-quoted per-rule identifier (dotted CIS number or STIG id)."
+          "description": "The rule's sole externally-quoted identifier (opaque, unique within the benchmark file it was evaluated from - e.g. '1.1.1.1')."
         },
         "ruleName": {
           "type": "string",
