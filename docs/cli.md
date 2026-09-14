@@ -24,8 +24,8 @@ to stderr unconditionally (no `--log-file`; see
 [logging.md](logging.md) for the sink model and why the flag was removed).
 `plan`-only: repeatable
 `--audit=<section>` / `--remediate=<section>` / `--enforce=<section>`
-toggles (flag names kept for continuity with the payload-key-format's
-former `section` field, see §2), `-o/--output`.
+toggles (flag names kept for continuity with the former `section`
+field, see §2), `-o/--output`.
 `render`-only: `-f/--format {junit,nested-list,compact-list,debug}` (default
 `junit`), `--suite-name`. `list` takes no flags beyond the common ones -
 see §2.
@@ -42,13 +42,6 @@ way to scope and execute rules; a plan can still cover an entire file (every
 rule seeded at one mode) when that's what's wanted.
 
 ## 2. `plan` / `run`: per-rule granularity
-
-> **Payload key format, keying, and the hoisted-prefix definition-file schema
-> change are specified in [payload-key-format.md](payload-key-format.md)** —
-> this section covers the CLI-facing plan/run contract only; that document is
-> the canonical source for anything about the payload key string itself
-> (kompli's own JSON field for it is called `id` - see
-> [payload-key-format.md §12](payload-key-format.md#12-id-not-ruleid-in-komplis-own-schema)).
 
 ### Why
 
@@ -78,10 +71,8 @@ showing its parameters and their defaults — needed so a user knows what's
 available to override in a plan (see "Parametrization" under `plan` below).
 `id` is
 kompli's *sole* externally-quoted per-rule
-identifier — a separate `section` field used to exist but was eliminated
-(see [payload-key-format.md §11](payload-key-format.md#11-id-the-sole-per-rule-identifier-no-separate-section)),
-and the field itself was later renamed from `payloadKey` to `id` (see
-[payload-key-format.md §12](payload-key-format.md#12-id-not-ruleid-in-komplis-own-schema));
+identifier — a separate `section` field used to exist but was eliminated,
+and the field itself was later renamed from `payloadKey` to `id`;
 it's dot-form for some frameworks (e.g. `1.1.1.1`), and doubles as both the
 CLI-facing argument (`--audit=<section>` — flag name kept for continuity
 with the former `section` field) and the plan file's lookup key, with no
@@ -92,10 +83,8 @@ only guaranteed unique *within one benchmark-definition file*, not globally.
 Definitions-generator-produced files won't collide in
 practice, but kompli intends to support user-authored custom rule sets too,
 which can't be guaranteed unique against anything else on the system.
-[payload-key-format.md §7](payload-key-format.md#7-plan-format-mixing-rules-from-multiple-benchmark-files)
-documents the plan format that lets one plan reference *multiple*
-files' rules — each block is still independently scoped to its own file;
-there is no cross-file rule identity.
+See "Multiple definition files in one `plan`" below — each block is still
+independently scoped to its own file; there is no cross-file rule identity.
 
 ### `kompli plan <file>`
 
@@ -119,10 +108,9 @@ error (fail fast), matching the eager-validation principle in §4.
 
 **Plan file format** (JSON — kept lean, no new parser dependency; the
 codebase already leans on `parson` everywhere and this keeps it that way).
-One plan can span **multiple** benchmark files (see
-[payload-key-format.md §7](payload-key-format.md#7-plan-format-mixing-rules-from-multiple-benchmark-files)) —
-`kompli plan <file>...` is variadic (see "Multiple definition files in one
-`plan`" below): one or more definition files on
+One plan can span **multiple** benchmark files (see "Multiple definition
+files in one `plan`" below) —
+`kompli plan <file>...` is variadic: one or more definition files on
 the command line produce **one** plan with one `benchmarks[]` entry per file:
 
 ```jsonc
@@ -141,9 +129,7 @@ the command line produce **one** plan with one `benchmarks[]` entry per file:
 }
 ```
 
-Each `rules` map is keyed by `id` — now just the opaque remainder
-(segment 5+ of the full payload key, see
-[payload-key-format.md §1](payload-key-format.md#1-structure)),
+Each `rules` map is keyed by `id` — now just the opaque remainder,
 not the full `/<framework>/.../...` path, since the file-level prefix
 (framework/distribution/distributionVersion/benchmarkVersion) is hoisted into
 each `benchmarks[]` entry's referenced file metadata rather than repeated per
@@ -175,8 +161,7 @@ single file; `kompli plan <file1> <file2> ...` produces one plan whose
 `benchmarks` array has one entry per file, in argument order. This needs no
 new keyword (no `plan generate`/`plan derive`) because `plan` already *is*
 the "generate a plan from a definition" command — the runtime plan format
-already supports multiple `benchmarks[]` entries (see above,
-[payload-key-format.md §7](payload-key-format.md#7-plan-format-mixing-rules-from-multiple-benchmark-files)).
+already supports multiple `benchmarks[]` entries (see above).
 
 - **Duplicate files: hard error.** The same file path given twice
   (or two different paths that canonicalize to the same file) is rejected
@@ -185,8 +170,8 @@ already supports multiple `benchmarks[]` entries (see above,
 - **Cross-file benchmark-identity uniqueness: hard error.** Two
   *different* file paths are still rejected if they resolve to the same
   `(framework, distribution, distributionVersion, benchmarkVersion)` tuple
-  (each file's own hoisted metadata prefix, §1/§3 of
-  [payload-key-format.md](payload-key-format.md)) — that tuple identifies
+  (each file's own hoisted `framework`/`distribution`/`distributionVersion`/
+  `benchmarkVersion` metadata) — that tuple identifies
   *which benchmark* a file is, and §1's one-prefix-per-file invariant only
   guarantees uniqueness *inside* one file, not across several given to one
   `plan` invocation. Two files sharing a tuple are either the same benchmark
@@ -198,8 +183,7 @@ already supports multiple `benchmarks[]` entries (see above,
   *inside* a file, the other governs uniqueness of *which files* may appear
   together.
 - **The same check applies to `run` too.** `run`'s multi-`benchmarks[]`-block
-  execution (§2,
-  [payload-key-format.md §7](payload-key-format.md#7-plan-format-mixing-rules-from-multiple-benchmark-files))
+  execution (§2)
   must reject a hand-edited plan with two blocks pointing at files that
   share a `(framework, distribution, distributionVersion, benchmarkVersion)`
   tuple — `Main.cpp`'s `run` dispatch calls `CheckUniqueBenchmarkIdentities`
@@ -266,9 +250,8 @@ that capability into `kompli`/`komplid` too, not just GC).
 
 Executes a plan: for each `benchmarks[]` entry, re-resolves its `file` and
 re-checks its `sha256` against the plan's recorded hash, re-validates
-applicability **once for that file** against the current host (see
-[payload-key-format.md §5](payload-key-format.md#5-applicability-checking-splits-by-scenario)),
-then for each rule present in that block's `rules`, runs it in the specified
+applicability **once for that file** against the current host, then for
+each rule present in that block's `rules`, runs it in the specified
 mode. All blocks' results are combined into **one** canonical result
 document covering the whole plan.
 
@@ -281,9 +264,8 @@ document covering the whole plan.
   `run` fails immediately — it does **not** skip that block and continue with
   the rest. Rationale: partial results from a plan that silently dropped a
   mismatched benchmark would be misleading ("let's not mix too much,
-  otherwise we'd have to work with partial reports"). This resolves
-  [payload-key-format.md §7](payload-key-format.md#7-plan-format-mixing-rules-from-multiple-benchmark-files)'s
-  cross-distro-mixing question.
+  otherwise we'd have to work with partial reports"). This is the
+  resolution to the cross-distro-mixing question for multi-file plans.
 - **Duplicate benchmark identity across blocks: hard error.** Before
   evaluating any rule, `run` checks every block's already-resolved
   `CISBenchmarkInfo` and refuses the plan if two blocks
@@ -338,9 +320,7 @@ is out of scope here.
 ## 5. Rule-reference uniqueness
 
 A rule reference (`id`, which plan/run key on, and which is
-kompli's *sole* per-rule identifier — see
-[payload-key-format.md §12](payload-key-format.md#12-id-not-ruleid-in-komplis-own-schema))
-must be unambiguous within one file for any of the above to safely rely on
+kompli's *sole* per-rule identifier) must be unambiguous within one file for any of the above to safely rely on
 it. `BenchmarkDefinition::ParseString`/`ParseFile`
 (`src/modules/complianceengine/src/benchmarkio/BenchmarkDefinition.hpp`) must
 **reject** a document with a duplicate `id` across its rules, checked as each
