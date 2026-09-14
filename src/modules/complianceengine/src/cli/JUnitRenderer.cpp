@@ -10,7 +10,7 @@
 
 namespace ComplianceEngine
 {
-namespace Cli
+namespace Kompli
 {
 using std::string;
 
@@ -253,5 +253,5 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
     return out.str();
 }
 
-} // namespace Cli
+} // namespace Kompli
 } // namespace ComplianceEngine

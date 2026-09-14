@@ -19,7 +19,7 @@
 
 namespace ComplianceEngine
 {
-namespace Cli
+namespace Kompli
 {
 using std::string;
 
@@ -696,5 +696,5 @@ Result<string> ApplyParameterOverrides(const string& procedureJson, const std::m
     return result;
 }
 
-} // namespace Cli
+} // namespace Kompli
 } // namespace ComplianceEngine

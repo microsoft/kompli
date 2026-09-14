@@ -8,11 +8,11 @@
 #include <string>
 #include <vector>
 
-using ComplianceEngine::Cli::Command;
-using ComplianceEngine::Cli::Format;
-using ComplianceEngine::Cli::ParseCommandLine;
-using ComplianceEngine::Cli::PrintHelp;
-using ComplianceEngine::Cli::ToggleMode;
+using ComplianceEngine::Kompli::Command;
+using ComplianceEngine::Kompli::Format;
+using ComplianceEngine::Kompli::ParseCommandLine;
+using ComplianceEngine::Kompli::PrintHelp;
+using ComplianceEngine::Kompli::ToggleMode;
 
 namespace
 {

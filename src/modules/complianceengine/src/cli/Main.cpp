@@ -37,7 +37,7 @@
 
 using ComplianceEngine::Action;
 using ComplianceEngine::CISBenchmarkInfo;
-using ComplianceEngine::CliContext;
+using ComplianceEngine::Cli::Context;
 using ComplianceEngine::CombineAllOf;
 using ComplianceEngine::DistributionInfo;
 using ComplianceEngine::Engine;
@@ -48,20 +48,20 @@ using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 using ComplianceEngine::BenchmarkDefinition::ParseFile;
 using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
-using ComplianceEngine::Cli::ApplyParameterOverrides;
-using ComplianceEngine::Cli::CheckUniqueBenchmarkIdentities;
-using ComplianceEngine::Cli::Command;
-using ComplianceEngine::Cli::Format;
-using ComplianceEngine::Cli::GeneratePlan;
-using ComplianceEngine::Cli::Options;
-using ComplianceEngine::Cli::ParseCommandLine;
-using ComplianceEngine::Cli::ParsePlanFile;
-using ComplianceEngine::Cli::Plan;
-using ComplianceEngine::Cli::PrintHelp;
-using ComplianceEngine::Cli::RenderJUnit;
-using ComplianceEngine::Cli::RenderText;
-using ComplianceEngine::Cli::TextStyle;
-using ComplianceEngine::Cli::ToggleMode;
+using ComplianceEngine::Kompli::ApplyParameterOverrides;
+using ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities;
+using ComplianceEngine::Kompli::Command;
+using ComplianceEngine::Kompli::Format;
+using ComplianceEngine::Kompli::GeneratePlan;
+using ComplianceEngine::Kompli::Options;
+using ComplianceEngine::Kompli::ParseCommandLine;
+using ComplianceEngine::Kompli::ParsePlanFile;
+using ComplianceEngine::Kompli::Plan;
+using ComplianceEngine::Kompli::PrintHelp;
+using ComplianceEngine::Kompli::RenderJUnit;
+using ComplianceEngine::Kompli::RenderText;
+using ComplianceEngine::Kompli::TextStyle;
+using ComplianceEngine::Kompli::ToggleMode;
 using std::string;
 
 namespace
@@ -312,7 +312,7 @@ int main(int argc, char* argv[])
         OsConfigLogInfo(logHandle.get(), "Debug logging enabled");
     }
 
-    auto context = std::unique_ptr<CliContext>(new CliContext(logHandle.get()));
+    auto context = std::unique_ptr<Context>(new Context(logHandle.get()));
     // The Engine takes ownership of a PayloadFormatter and uses it polymorphically
     // to render each rule's indicators. Pass the JSON one explicitly: the
     // constructor's default is a DebugFormatter, whose text output could not be
@@ -393,7 +393,7 @@ int main(int argc, char* argv[])
         // only validated against the file as it existed at generation time.
         if (Command::Run == options.command)
         {
-            auto hashResult = ComplianceEngine::Cli::HashFile(benchmarkFile, logHandle.get());
+            auto hashResult = ComplianceEngine::Kompli::HashFile(benchmarkFile, logHandle.get());
             if (!hashResult.HasValue())
             {
                 OsConfigLogError(logHandle.get(), "Failed to hash benchmark file '%s': %s", benchmarkFile.c_str(), hashResult.Error().message.c_str());

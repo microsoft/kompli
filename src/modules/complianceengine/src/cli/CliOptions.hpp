@@ -8,7 +8,7 @@
 
 namespace ComplianceEngine
 {
-namespace Cli
+namespace Kompli
 {
 
 enum class Command
@@ -122,7 +122,7 @@ void PrintHelp(const std::string& programName);
 
 Result<Options> ParseCommandLine(int argc, char* argv[]);
 
-} // namespace Cli
+} // namespace Kompli
 } // namespace ComplianceEngine
 
 #endif // COMPLIANCE_ENGINE_CLI_CLI_OPTIONS_HPP

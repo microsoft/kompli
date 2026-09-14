@@ -17,7 +17,7 @@
 #include <version.h>
 
 using ComplianceEngine::Action;
-using ComplianceEngine::CliContext;
+using ComplianceEngine::Cli::Context;
 using ComplianceEngine::Error;
 using ComplianceEngine::IndicatorsTree;
 using ComplianceEngine::LuaEvaluator;
@@ -159,7 +159,7 @@ int main(int argc, char* argv[])
         OsConfigLogInfo(logHandle, "Debug logging enabled");
     }
 
-    auto context = std::unique_ptr<CliContext>(new CliContext(logHandle));
+    auto context = std::unique_ptr<Context>(new Context(logHandle));
     LuaEvaluator evaluator;
 
     ifstream file;

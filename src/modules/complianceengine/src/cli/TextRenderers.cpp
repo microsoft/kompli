@@ -10,7 +10,7 @@
 
 namespace ComplianceEngine
 {
-namespace Cli
+namespace Kompli
 {
 using std::string;
 
@@ -167,5 +167,5 @@ Result<string> RenderText(const string& canonicalJson, const TextStyle style)
     return out.str();
 }
 
-} // namespace Cli
+} // namespace Kompli
 } // namespace ComplianceEngine

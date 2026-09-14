@@ -9,7 +9,7 @@
 
 namespace ComplianceEngine
 {
-namespace Cli
+namespace Kompli
 {
 // Human-readable text presentations produced by the `render` subcommand from a
 // canonical result JSON (emitted by `audit` / `remediate`).
@@ -25,7 +25,7 @@ enum class TextStyle
 
 Result<std::string> RenderText(const std::string& canonicalJson, TextStyle style);
 
-} // namespace Cli
+} // namespace Kompli
 } // namespace ComplianceEngine
 
 #endif // COMPLIANCE_ENGINE_CLI_TEXT_RENDERERS_HPP

@@ -9,7 +9,7 @@
 
 namespace ComplianceEngine
 {
-namespace Cli
+namespace Kompli
 {
 // Renders a canonical kompli result JSON (as emitted by `audit` / `remediate`)
 // into a JUnit XML document.
@@ -33,7 +33,7 @@ namespace Cli
 // which benchmark package it came from, so the caller supplies it.
 Result<std::string> RenderJUnit(const std::string& canonicalJson, const std::string& suiteName);
 
-} // namespace Cli
+} // namespace Kompli
 } // namespace ComplianceEngine
 
 #endif // COMPLIANCE_ENGINE_CLI_JUNIT_RENDERER_HPP

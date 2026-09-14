@@ -15,7 +15,7 @@
 
 namespace ComplianceEngine
 {
-namespace Cli
+namespace Kompli
 {
 
 // A plan rule's resolved mode and parameters (docs/CLI.md "Parametrization").
@@ -114,6 +114,6 @@ Result<std::string> ApplyParameterOverrides(const std::string& procedureJson, co
 // message) with its already-parsed benchmarkInfo, in the order to check.
 Optional<Error> CheckUniqueBenchmarkIdentities(const std::vector<std::pair<std::string, CISBenchmarkInfo>>& benchmarks);
 
-} // namespace Cli
+} // namespace Kompli
 } // namespace ComplianceEngine
 #endif // COMPLIANCE_ENGINE_CLI_PLAN_HPP

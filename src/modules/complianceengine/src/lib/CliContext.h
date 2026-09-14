@@ -13,24 +13,26 @@
 
 namespace ComplianceEngine
 {
+namespace Cli
+{
 
 // Ephemeral, per-invocation Context: state lives in a freshly created temp
 // directory that is recursively removed on destruction. Used by short-lived,
 // no-platform-daemon consumers of the engine (the `kompli` CLI and the
 // lua-evaluator tool today).
-class CliContext : public CommonContext
+class Context : public CommonContext
 {
 public:
-    CliContext(OsConfigLogHandle log)
+    Context(OsConfigLogHandle log)
         : CommonContext(log, CreateTempDir())
     {
     }
-    CliContext(const CliContext&) = delete;
-    CliContext& operator=(const CliContext&) = delete;
-    CliContext(CliContext&&) = delete;
-    CliContext& operator=(CliContext&&) = delete;
+    Context(const Context&) = delete;
+    Context& operator=(const Context&) = delete;
+    Context(Context&&) = delete;
+    Context& operator=(Context&&) = delete;
 
-    ~CliContext() override
+    ~Context() override
     {
         const std::string statePath = GetStatePath();
         nftw(
@@ -55,11 +57,12 @@ private:
         char tmpl[] = "/tmp/kompli-cli.XXXXXX";
         if (mkdtemp(tmpl) == nullptr)
         {
-            throw std::runtime_error("CliContext: failed to create temporary state directory");
+            throw std::runtime_error("Cli::Context: failed to create temporary state directory");
         }
         return std::string(tmpl);
     }
 };
 
+} // namespace Cli
 } // namespace ComplianceEngine
 #endif // COMPLIANCEENGINE_CLICONTEXT_H

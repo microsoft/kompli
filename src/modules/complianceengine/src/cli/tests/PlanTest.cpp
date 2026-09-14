@@ -22,13 +22,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-using ComplianceEngine::Cli::ApplyParameterOverrides;
-using ComplianceEngine::Cli::GeneratePlan;
-using ComplianceEngine::Cli::HashFile;
-using ComplianceEngine::Cli::ParamOverride;
-using ComplianceEngine::Cli::ParsePlanFile;
-using ComplianceEngine::Cli::Toggle;
-using ComplianceEngine::Cli::ToggleMode;
+using ComplianceEngine::Kompli::ApplyParameterOverrides;
+using ComplianceEngine::Kompli::GeneratePlan;
+using ComplianceEngine::Kompli::HashFile;
+using ComplianceEngine::Kompli::ParamOverride;
+using ComplianceEngine::Kompli::ParsePlanFile;
+using ComplianceEngine::Kompli::Toggle;
+using ComplianceEngine::Kompli::ToggleMode;
 
 namespace
 {
@@ -508,7 +508,7 @@ TEST(CheckUniqueBenchmarkIdentitiesTest, AcceptsDistinctIdentities)
         {"stig_ubuntu24.04.benchmark.json", MakeInfo("stig", "ubuntu", "24.04", "v1.0.0")},
     };
 
-    auto result = ComplianceEngine::Cli::CheckUniqueBenchmarkIdentities(benchmarks);
+    auto result = ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities(benchmarks);
     EXPECT_FALSE(result.HasValue());
 }
 
@@ -519,7 +519,7 @@ TEST(CheckUniqueBenchmarkIdentitiesTest, RejectsDuplicateIdentity)
         {"cis_ubuntu24.04_copy.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v1.0.0")},
     };
 
-    auto result = ComplianceEngine::Cli::CheckUniqueBenchmarkIdentities(benchmarks);
+    auto result = ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities(benchmarks);
     ASSERT_TRUE(result.HasValue());
     EXPECT_NE(result.Value().message.find("cis_ubuntu24.04.benchmark.json"), std::string::npos);
     EXPECT_NE(result.Value().message.find("cis_ubuntu24.04_copy.benchmark.json"), std::string::npos);
@@ -532,6 +532,6 @@ TEST(CheckUniqueBenchmarkIdentitiesTest, DifferingBenchmarkVersionIsNotADuplicat
         {"cis_ubuntu24.04_v2.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v2.0.0")},
     };
 
-    auto result = ComplianceEngine::Cli::CheckUniqueBenchmarkIdentities(benchmarks);
+    auto result = ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities(benchmarks);
     EXPECT_FALSE(result.HasValue());
 }

@@ -7,37 +7,37 @@
 #include <gtest/gtest.h>
 #include <sys/stat.h>
 
-class CliContextTest : public ::testing::Test
+class ContextTest : public ::testing::Test
 {
 };
 
-TEST_F(CliContextTest, DirectoryCreatedOnConstruction)
+TEST_F(ContextTest, DirectoryCreatedOnConstruction)
 {
-    ComplianceEngine::CliContext ctx(nullptr);
+    ComplianceEngine::Cli::Context ctx(nullptr);
     struct stat st;
     ASSERT_EQ(0, stat(ctx.GetStatePath().c_str(), &st));
     EXPECT_TRUE(S_ISDIR(st.st_mode));
 }
 
-TEST_F(CliContextTest, DirectoryHasCorrectPrefix)
+TEST_F(ContextTest, DirectoryHasCorrectPrefix)
 {
-    ComplianceEngine::CliContext ctx(nullptr);
+    ComplianceEngine::Cli::Context ctx(nullptr);
     EXPECT_EQ(0u, ctx.GetStatePath().rfind("/tmp/kompli-cli.", 0));
 }
 
-TEST_F(CliContextTest, DirectoryPermissionsAre0700)
+TEST_F(ContextTest, DirectoryPermissionsAre0700)
 {
-    ComplianceEngine::CliContext ctx(nullptr);
+    ComplianceEngine::Cli::Context ctx(nullptr);
     struct stat st;
     ASSERT_EQ(0, stat(ctx.GetStatePath().c_str(), &st));
     EXPECT_EQ(static_cast<mode_t>(0700), st.st_mode & 0777);
 }
 
-TEST_F(CliContextTest, EmptyDirectoryRemovedOnDestruction)
+TEST_F(ContextTest, EmptyDirectoryRemovedOnDestruction)
 {
     std::string statePath;
     {
-        ComplianceEngine::CliContext ctx(nullptr);
+        ComplianceEngine::Cli::Context ctx(nullptr);
         statePath = ctx.GetStatePath();
         struct stat st;
         ASSERT_EQ(0, stat(statePath.c_str(), &st));
@@ -46,7 +46,7 @@ TEST_F(CliContextTest, EmptyDirectoryRemovedOnDestruction)
     EXPECT_NE(0, stat(statePath.c_str(), &st));
 }
 
-TEST_F(CliContextTest, RecursiveRemovalOnDestruction)
+TEST_F(ContextTest, RecursiveRemovalOnDestruction)
 {
     std::string statePath;
     std::string subDir;
@@ -54,7 +54,7 @@ TEST_F(CliContextTest, RecursiveRemovalOnDestruction)
     std::string nestedFile;
 
     {
-        ComplianceEngine::CliContext ctx(nullptr);
+        ComplianceEngine::Cli::Context ctx(nullptr);
         statePath = ctx.GetStatePath();
 
         subDir = statePath + "/subdir";
@@ -80,9 +80,9 @@ TEST_F(CliContextTest, RecursiveRemovalOnDestruction)
     EXPECT_NE(0, stat(statePath.c_str(), &st)) << "state directory itself should be removed";
 }
 
-TEST_F(CliContextTest, UniqueDirectoryPerInstance)
+TEST_F(ContextTest, UniqueDirectoryPerInstance)
 {
-    ComplianceEngine::CliContext ctx1(nullptr);
-    ComplianceEngine::CliContext ctx2(nullptr);
+    ComplianceEngine::Cli::Context ctx1(nullptr);
+    ComplianceEngine::Cli::Context ctx2(nullptr);
     EXPECT_NE(ctx1.GetStatePath(), ctx2.GetStatePath());
 }

@@ -29,7 +29,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-using ComplianceEngine::CliContext;
+using ComplianceEngine::Cli::Context;
 using ComplianceEngine::Engine;
 using ComplianceEngine::JsonFormatter;
 using ComplianceEngine::PayloadFormatter;
@@ -74,7 +74,7 @@ int main()
         return 1;
     }
 
-    auto context = std::unique_ptr<CliContext>(new CliContext(nullptr));
+    auto context = std::unique_ptr<Context>(new Context(nullptr));
     // Same as the kompli CLI: the Engine takes ownership of a PayloadFormatter
     // and uses it polymorphically to render each rule's indicators. The JSON
     // one is required here since the indicators become part of the

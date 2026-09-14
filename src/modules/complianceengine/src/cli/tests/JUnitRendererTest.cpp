@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 #include <string>
 
-using ComplianceEngine::Cli::RenderJUnit;
+using ComplianceEngine::Kompli::RenderJUnit;
 
 namespace
 {

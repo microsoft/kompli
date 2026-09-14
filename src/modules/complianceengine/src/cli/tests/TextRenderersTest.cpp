@@ -5,8 +5,8 @@
 #include <gtest/gtest.h>
 #include <string>
 
-using ComplianceEngine::Cli::RenderText;
-using ComplianceEngine::Cli::TextStyle;
+using ComplianceEngine::Kompli::RenderText;
+using ComplianceEngine::Kompli::TextStyle;
 
 namespace
 {
