@@ -144,6 +144,53 @@ TEST_F(EnsureFilesystemOptionTest, AuditRejectsNoncompliantLiveMountOptions)
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
 
+TEST_F(EnsureFilesystemOptionTest, MissingMountIsOptionalUnlessRequired)
+{
+    CreateTabs();
+    mContext.SetSpecialFilePath("/etc/mtab", mtabFile);
+    FilesystemMountOptionParams params;
+    params.mountpoint = "/tmp";
+    params.optionsSet = {{"noexec"}};
+    auto result = AuditFilesystemMountOption(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    params.requireMountpoint = true;
+    result = AuditFilesystemMountOption(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(EnsureFilesystemOptionTest, PatternChecksEverySelectedMount)
+{
+    CreateTabs();
+    mContext.SetSpecialFilePath("/etc/mtab", mtabFile);
+    FilesystemMountOptionParams params;
+    params.mountpoint = R"(.*\/home)";
+    params.mountpointIsPattern = true;
+    params.requireMountpoint = true;
+    params.optionsSet = {{"rw"}};
+    auto result = AuditFilesystemMountOption(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    std::ofstream mtab(mtabFile, std::ios::app);
+    mtab << "/dev/sda3 /other/home ext4 ro 0 0\n";
+    mtab.close();
+    result = AuditFilesystemMountOption(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(EnsureFilesystemOptionTest, InvalidMountPatternReturnsError)
+{
+    CreateTabs();
+    mContext.SetSpecialFilePath("/etc/mtab", mtabFile);
+    FilesystemMountOptionParams params;
+    params.mountpoint = "[";
+    params.mountpointIsPattern = true;
+    EXPECT_FALSE(AuditFilesystemMountOption(params, indicators, mContext).HasValue());
+    EXPECT_FALSE(RemediateFilesystemMountOption(params, indicators, mContext).HasValue());
+}
+
 TEST_F(EnsureFilesystemOptionTest, RemediateFilesystemMountOption)
 {
     CreateTabs();

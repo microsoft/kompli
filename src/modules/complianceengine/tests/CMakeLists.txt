@@ -9,6 +9,7 @@ include(GoogleTest)
 find_package(GTest CONFIG REQUIRED)
 
 set(PROCEDURES
+    procedures/AideAttributesTest.cpp
     procedures/AuditdRulesTest.cpp
     procedures/NoShellAccountsLockedTest.cpp
     procedures/ApparmorProfileStateTest.cpp
@@ -16,6 +17,7 @@ set(PROCEDURES
     procedures/ShellTimeoutTest.cpp
     procedures/DefaultUmaskTest.cpp
     procedures/FileExistsTest.cpp
+    procedures/FileSymlinkTargetTest.cpp
     procedures/FilePermissionsTest.cpp
     procedures/FilesystemMountOptionTest.cpp
     procedures/FirewalldZoneTargetsTest.cpp

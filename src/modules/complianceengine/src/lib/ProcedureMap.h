@@ -5,6 +5,7 @@
 #ifndef COMPLIANCEENGINE_PROCEDURE_MAP_H
 #define COMPLIANCEENGINE_PROCEDURE_MAP_H
 
+#include <AideAttributes.h>
 #include <ApparmorProfileState.h>
 #include <AuditdRules.h>
 #include <CommandOutputMatch.h>
@@ -13,6 +14,7 @@
 #include <FileExists.h>
 #include <FilePermissions.h>
 #include <FileRegexMatch.h>
+#include <FileSymlinkTarget.h>
 #include <FilesystemMountOption.h>
 #include <FirewallOpenPorts.h>
 #include <FirewalldZoneTargets.h>
@@ -270,6 +272,16 @@ inline const std::map<std::string, SystemdConfigValueOperator>& MapEnum<SystemdC
     return map;
 }
 
+// Defines the bindings for the AideAttributesParams structure.
+template <>
+struct Bindings<AideAttributesParams>
+{
+    using T = AideAttributesParams;
+    static constexpr size_t size = 3;
+    static const char* names[];
+    static constexpr auto members = std::make_tuple(&T::configPath, &T::filename, &T::attributes);
+};
+
 // Defines the bindings for the ApparmorProfileStateParams structure.
 template <>
 struct Bindings<ApparmorProfileStateParams>
@@ -335,9 +347,9 @@ template <>
 struct Bindings<FilePermissionsCollectionParams>
 {
     using T = FilePermissionsCollectionParams;
-    static constexpr size_t size = 8;
+    static constexpr size_t size = 15;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::directory, &T::recurse, &T::filePattern, &T::owner, &T::group, &T::permissions, &T::mask, &T::behavior);
+    static constexpr auto members = std::make_tuple(&T::directory, &T::recurse, &T::directoriesOnly, &T::allFileTypes, &T::excludeSymlinks, &T::excludeDirectories, &T::maximumUid, &T::maximumGid, &T::filePattern, &T::filePatternIsRegex, &T::owner, &T::group, &T::permissions, &T::mask, &T::behavior);
 };
 
 // Defines the bindings for the FileRegexMatchParams structure.
@@ -345,9 +357,19 @@ template <>
 struct Bindings<FileRegexMatchParams>
 {
     using T = FileRegexMatchParams;
-    static constexpr size_t size = 8;
+    static constexpr size_t size = 11;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::path, &T::filenamePattern, &T::matchOperation, &T::matchPattern, &T::stateOperation, &T::statePattern, &T::ignoreCase, &T::behavior);
+    static constexpr auto members = std::make_tuple(&T::path, &T::filenamePattern, &T::matchOperation, &T::matchPattern, &T::stateOperation, &T::statePattern, &T::minimumValue, &T::maximumValue, &T::allMatches, &T::ignoreCase, &T::behavior);
+};
+
+// Defines the bindings for the FileSymlinkTargetParams structure.
+template <>
+struct Bindings<FileSymlinkTargetParams>
+{
+    using T = FileSymlinkTargetParams;
+    static constexpr size_t size = 2;
+    static const char* names[];
+    static constexpr auto members = std::make_tuple(&T::filename, &T::targetPattern);
 };
 
 // Defines the bindings for the FilesystemMountOptionParams structure.
@@ -355,9 +377,9 @@ template <>
 struct Bindings<FilesystemMountOptionParams>
 {
     using T = FilesystemMountOptionParams;
-    static constexpr size_t size = 3;
+    static constexpr size_t size = 5;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::mountpoint, &T::optionsSet, &T::optionsNotSet);
+    static constexpr auto members = std::make_tuple(&T::mountpoint, &T::mountpointIsPattern, &T::requireMountpoint, &T::optionsSet, &T::optionsNotSet);
 };
 
 // Defines the bindings for the GsettingsValueParams structure.

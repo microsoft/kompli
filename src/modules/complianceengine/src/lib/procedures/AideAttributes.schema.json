@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "audit": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "AideAttributes"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "AideAttributes": {
+              "type": "object",
+              "required": [
+                "configPath",
+                "filename",
+                "attributes"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "configPath": {
+                  "type": "string",
+                  "description": "AIDE configuration file used to resolve effective selection rules"
+                },
+                "filename": {
+                  "type": "string",
+                  "description": "File whose canonical path is queried in the AIDE configuration"
+                },
+                "attributes": {
+                  "type": "string",
+                  "description": "Plus-separated attribute names that must all be enabled for the file"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "remediation": {
+      "anyOf": []
+    }
+  }
+}

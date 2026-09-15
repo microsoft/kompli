@@ -159,6 +159,34 @@ TEST_F(LoginDefsOptionTest, EncryptMethod_Equal_Compliant)
     EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(LoginDefsOptionTest, EncryptMethod_Equal_IgnoresCase)
+{
+    SetLoginDefsContent("ENCRYPT_METHOD yescrypt\n");
+
+    LoginDefsOptionParams params;
+    params.option = "ENCRYPT_METHOD";
+    params.value = "YESCRYPT";
+    params.comparison = ComparisonOperation::Equal;
+
+    auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(LoginDefsOptionTest, EncryptMethod_CaseFoldingPreservesHighBitBytes)
+{
+    SetLoginDefsContent("ENCRYPT_METHOD yescrypt\x80\n");
+
+    LoginDefsOptionParams params;
+    params.option = "ENCRYPT_METHOD";
+    params.value = "YESCRYPT\x80";
+    params.comparison = ComparisonOperation::Equal;
+
+    auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
 TEST_F(LoginDefsOptionTest, EncryptMethod_Equal_NonCompliant)
 {
     SetLoginDefsContent("ENCRYPT_METHOD MD5\n");

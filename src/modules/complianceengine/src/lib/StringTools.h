@@ -63,6 +63,9 @@ std::string StringOrEmpty(const char* s);
  */
 std::string TrimWhiteSpaces(const std::string& str);
 
+/// Convert to lowercase using the current C locale, safely handling unsigned byte values.
+std::string ToLower(std::string value);
+
 /**
  * @brief Safely converts a string to an integer.
  *

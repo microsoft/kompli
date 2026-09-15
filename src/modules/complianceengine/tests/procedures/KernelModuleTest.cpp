@@ -340,6 +340,38 @@ TEST_F(EnsureKernelModuleTest, UnderscoreModuleNameStillMatchesUnderscoreFilenam
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
 
+TEST_F(EnsureKernelModuleTest, UnderscoreNameMatchesDashFilename)
+{
+    CreateModulesTree(mContext, {"firewire-core.ko.xz"});
+    EXPECT_CALL(mContext, GetFileContents(::testing::StrEq(procModulesPath))).WillRepeatedly(::testing::Return(Result<std::string>(procModulesNegativeOutput)));
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr(modprobeCommand))).WillRepeatedly(::testing::Return(Result<std::string>(modprobeNothingOutput)));
+    KernelModuleUnavailableParams params;
+    params.moduleName = "firewire_core";
+    auto result = AuditKernelModuleUnavailable(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(EnsureKernelModuleTest, UnderscoreNameRequiresMaskForRunningDashModule)
+{
+    CreateModulesTree(mContext, {"firewire-core.ko.xz"});
+    EXPECT_CALL(mContext, GetFileContents(::testing::StrEq(procModulesPath))).WillRepeatedly(::testing::Return(Result<std::string>(procModulesNegativeOutput)));
+    const std::string blocked =
+        "black"
+        "list firewire-core\n";
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr(modprobeCommand)))
+        .WillOnce(::testing::Return(Result<std::string>(blocked)))
+        .WillOnce(::testing::Return(Result<std::string>(blocked + "install firewire-core /bin/false\n")));
+    KernelModuleUnavailableParams params;
+    params.moduleName = "firewire_core";
+    auto result = AuditKernelModuleUnavailable(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    result = AuditKernelModuleUnavailable(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
 TEST_F(EnsureKernelModuleTest, ExactDashFilenameStillMatches)
 {
     // When the .ko file itself uses dashes (unusual but possible), exact match still works

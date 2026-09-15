@@ -4,7 +4,6 @@
 #include <CommonUtils.h>
 #include <Evaluator.h>
 #include <StringTools.h>
-#include <algorithm>
 #include <sstream>
 
 namespace ComplianceEngine
@@ -123,17 +122,14 @@ Result<Status> AuditFirewalldZoneTargets(IndicatorsTree& indicators, ContextInte
         }
 
         // Check conditions matching the SCE script logic
-        std::string targetLower = target;
-        std::transform(targetLower.begin(), targetLower.end(), targetLower.begin(), [](unsigned char c) { return std::tolower(c); });
+        const auto targetLower = ToLower(target);
 
         if (target.empty() || targetLower == "accept")
         {
             return indicators.NonCompliant("Active zone: \"" + zone + "\" Target is: \"" + target + "\" for interfaces: \"" + interfaces + "\"");
         }
 
-        std::string permanentTargetLower = permanentTarget;
-        std::transform(permanentTargetLower.begin(), permanentTargetLower.end(), permanentTargetLower.begin(),
-            [](unsigned char c) { return std::tolower(c); });
+        const auto permanentTargetLower = ToLower(permanentTarget);
 
         if (targetLower != permanentTargetLower)
         {

@@ -8,6 +8,8 @@
 #include <StringTools.h>
 #include <Telemetry.h>
 #include <Users.h>
+#include <cctype>
+#include <cstring>
 #include <fstream>
 #include <fts.h>
 #include <iostream>
@@ -88,7 +90,8 @@ Result<std::vector<std::string>> GetRulesFromFilesAtPath(ContextInterface& conte
     }
 
     char* paths[] = {const_cast<char*>(directory.c_str()), nullptr};
-    FTS* fts = fts_open(paths, FTS_NOCHDIR | FTS_PHYSICAL, nullptr);
+    FTS* fts = fts_open(paths, FTS_NOCHDIR | FTS_PHYSICAL,
+        [](const FTSENT** left, const FTSENT** right) { return strverscmp((*left)->fts_name, (*right)->fts_name); });
     if (fts == nullptr)
     {
         OsConfigLogWarning(context.GetLogHandle(), "Failed to open %s directory", directory.c_str());
@@ -98,6 +101,11 @@ Result<std::vector<std::string>> GetRulesFromFilesAtPath(ContextInterface& conte
     FTSENT* ent = nullptr;
     while ((ent = fts_read(fts)) != nullptr)
     {
+        if (ent->fts_info == FTS_D && ent->fts_level > 0)
+        {
+            fts_set(fts, ent, FTS_SKIP);
+            continue;
+        }
         if (ent->fts_info == FTS_F)
         {
             std::string filename = ent->fts_name;
@@ -123,7 +131,15 @@ Result<std::vector<std::string>> GetRulesFromFilesAtPath(ContextInterface& conte
                     {
                         continue;
                     }
-                    rules.push_back(line);
+                    if (line.size() > 2 && line.compare(0, 2, "-A") == 0 && std::isspace(static_cast<unsigned char>(line[2])))
+                    {
+                        line[1] = 'a';
+                        rules.insert(rules.begin(), line);
+                    }
+                    else
+                    {
+                        rules.push_back(line);
+                    }
                 }
             }
         }
@@ -169,10 +185,31 @@ Result<std::string> FindSudoLogfile(ContextInterface& context)
     return Error("Sudo logfile setting not found", ENOENT);
 }
 
+bool IsDifferentRuleVariant(const std::string& rule, const std::vector<std::pair<regex, std::string>>& requiredRegexes)
+{
+    const std::vector<std::pair<std::string, regex>> variantOptions = {{"-F arch=", regex(R"(-F[[:space:]]+arch=)")}, {"-F exit=", regex(R"(-F[[:space:]]+exit=)")}};
+    for (const auto& req : requiredRegexes)
+    {
+        if (regex_search(rule, req.first))
+        {
+            continue;
+        }
+        for (const auto& variant : variantOptions)
+        {
+            if (req.second.find(variant.first) == 0 && regex_search(rule, variant.second))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 Status CheckRuleInList(const std::vector<std::string>& rules, const std::string& searchItem, const Optional<regex>& excludeRegex,
     const std::vector<std::pair<regex, std::string>>& requiredRegexes, ContextInterface& context, IndicatorsTree& indicators)
 {
     regex searchItemRegex;
+    regex suppressingActionRegex(R"(-a[[:space:]]+(never,exit|exit,never)([[:space:]]|$))", std::regex_constants::icase | std::regex_constants::extended);
     try
     {
         searchItemRegex = regex(searchItem);
@@ -183,9 +220,17 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
         OSConfigTelemetryStatusTrace("regex", EINVAL);
         return indicators.NonCompliant("Invalid searchItem regex: " + std::string(e.what()));
     }
+    std::vector<std::string> incompleteRules;
     for (const auto& rule : rules)
     {
-        if (!regex_search(rule, searchItemRegex))
+        smatch searchMatch;
+        if (!regex_search(rule, searchMatch, searchItemRegex))
+        {
+            continue;
+        }
+        const auto matchEnd = static_cast<size_t>(searchMatch.position() + searchMatch.length());
+        if (searchItem.find("-S ") != std::string::npos && matchEnd < rule.size() && !std::isspace(static_cast<unsigned char>(rule[matchEnd])) &&
+            (searchMatch.length() == 0 || !std::isspace(static_cast<unsigned char>(rule[matchEnd - 1]))))
         {
             continue;
         }
@@ -193,12 +238,20 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
         {
             continue;
         }
+        if (IsDifferentRuleVariant(rule, requiredRegexes))
+        {
+            continue;
+        }
+        if (regex_search(rule, suppressingActionRegex))
+        {
+            return indicators.NonCompliant("Rule '" + rule + "' suppresses auditing for '" + searchItem + "'");
+        }
         bool optionMissing = false;
         for (const auto& req : requiredRegexes)
         {
             if (!regex_search(rule, req.first))
             {
-                indicators.NonCompliant("Rule '" + rule + "' matching '" + searchItem + "' is missing required option " + req.second);
+                incompleteRules.push_back("Rule '" + rule + "' matching '" + searchItem + "' is missing required option " + req.second);
                 optionMissing = true;
                 break;
             }
@@ -207,6 +260,10 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
         {
             return indicators.Compliant("Rule '" + rule + "' matching '" + searchItem + "' found  and is properly configured");
         }
+    }
+    for (const auto& incompleteRule : incompleteRules)
+    {
+        indicators.NonCompliant(incompleteRule);
     }
     return indicators.NonCompliant("Rule not found " + searchItem);
 }
@@ -276,7 +333,7 @@ Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree&
         std::string syscall;
         while (std::getline(ss, syscall, ','))
         {
-            std::string searchItem = "-S ([^ \\t]+,)*" + syscall + "(,[^ \\t]+)*";
+            std::string searchItem = "-S ([^[:space:]]+,)*" + syscall + "(,[^[:space:]]+)*([[:space:]]|$)";
             auto runningResult = CheckRuleInList(runningRules, searchItem, excludeOption, requiredOptions, context, indicators);
             if (runningResult != Status::Compliant)
             {
