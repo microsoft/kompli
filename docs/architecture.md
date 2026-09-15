@@ -29,19 +29,16 @@ src/
   common/
     commonutils/        Shared OS utility functions
     logging/             File, console, and syslog logging sinks
-    mpiclient/          MPI REST API client
     parson/             Vendored JSON parser
     telemetry/          Telemetry support
   komplid/              kompli daemon: synchronous JSONL audit/remediate over UDS
   modules/
     complianceengine/   ComplianceEngine module and tests
       src/lib/          Core engine, evaluator, procedures, Lua integration
-      src/so/           Module shared-object entry point
       src/benchmarkio/  Benchmark-definition parsing + input-file security (shared by kompli and komplid)
       src/kompli/       kompli CLI tool
       src/lua-evaluator/ Lua evaluator tool
       tests/            Unit tests
-    inc/                Module interface headers (Mmi.h)
     mim/                ComplianceEngine MIM definition
     schema/             MIM validation schema
   tests/
@@ -58,9 +55,13 @@ Kompli supports two integration scenarios that share the same ComplianceEngine m
 A third scenario, **`komplid`** (a native, systemd-managed daemon sharing the same ComplianceEngine core), runs a synchronous audit/remediate subset; see §3 and [src/komplid/README.md](../src/komplid/README.md) for its design.
 
 All three scenarios ultimately drive the same `Engine` through the same
-per-rule MMI calls (`MmiSet`/`MmiGet`, §3.1) — they differ only in what sits in
-front of it (a GC-driven MOF file, a benchmark-definition file, or a JSONL
-request):
+typed, stateless per-rule API (`PrepareRule`/`Audit`/`Remediate`, §3.1) — they
+differ only in what sits in front of it (a GC-driven MOF file, a
+benchmark-definition file, or a JSONL request). `kompli` CLI and `komplid`
+call this API directly, in-process; the NRP/MC adapter translates the
+MOF-driven `Procedure`/`Init`/`Reported`/`Desired` object values (§5.2) into
+the same typed calls at its own boundary, so the MOF wire format stays
+unchanged while nothing downstream of it speaks the legacy MMI protocol:
 
 ```mermaid
 flowchart TB
@@ -69,13 +70,11 @@ flowchart TB
         CLI["kompli CLI"]
         Daemon["komplid (synchronous audit/remediate)"]
     end
-    MMI["MMI: MmiSet / MmiGet\n(per-rule interface, §3.1)"]
-    Engine["Engine (complianceenginelib)"]
+    Engine["Engine: PrepareRule / Audit / Remediate\n(typed per-rule API, §3.1)"]
 
-    NRP -->|ComplianceMmiSet/Get| MMI
-    CLI -->|engine.MmiSet/MmiGet| MMI
-    Daemon -->|engine.MmiSet/MmiGet, synchronous| MMI
-    MMI --> Engine
+    NRP -->|translates MOF object values| Engine
+    CLI -->|direct calls| Engine
+    Daemon -->|direct calls, synchronous| Engine
 ```
 
 # 3. kompli Agent
@@ -98,8 +97,8 @@ Kompli will be able to run as a standalone daemon that can evaluate policy given
 > `result`/`error` response envelopes). Slow rules respond with a task ID
 > instead of blocking, backed by a SQLite task registry/audit-result cache
 > (see
-> [src/komplid/README.md](../src/komplid/README.md#long-running-rules-background-tasks)
-> for the design). `komplid` always
+> [src/komplid/README.md](../src/komplid/README.md#long-running-rules-background-tasks)).
+> `komplid` always
 > runs as root; passthrough clients only need membership in
 > a new `kompli` system group, with no fallback to standalone (root-required)
 > execution if the daemon is unreachable (see
@@ -129,8 +128,8 @@ sequenceDiagram
 The JSONL request/response schema is per-rule (see
 [src/komplid/README.md](../src/komplid/README.md#wire-protocol) for the
 full schema): one request per rule, many sequential requests per
-connection. The background-task extension below (a slow rule deferring to a
-task instead of blocking) is a separate design layer:
+connection. The background-task extension below lets a slow rule defer to a
+task instead of blocking:
 
 ```mermaid
 sequenceDiagram
@@ -150,156 +149,56 @@ sequenceDiagram
     komplid-->>Client: unsolicited: task done, result
 ```
 
-**Note on MMI**: MMI (§3.1 below) is *not* being removed. It remains
-the per-rule interface underneath every scenario in §2.2 —
-`kompli`'s `Engine` class calls it directly (`Engine::MmiSet`/`Engine::MmiGet`,
-§4.2), and the NRP/MC adapter's `ComplianceMmiSet`/`ComplianceMmiGet` wrap it
-(§5.1). It is "legacy" only in the sense that it's inherited from OSConfig
-rather than designed for `komplid`'s JSONL protocol — there is no plan
-to replace it. What *is* being dropped is the old OSConfig platform daemon and
-its MPI/HTTP-over-UDS transport (formerly documented here as "kompli
-Management Platform"): that daemon has been removed from this fork, and
-`komplid`'s JSONL protocol is its replacement, not a peer to it.
+**Note on the Engine API**: `kompli`'s `Engine` class does not speak the
+OSConfig-era MMI protocol (`MmiOpen`/`MmiSet`/`MmiGet`/`MmiClose` against an
+opaque handle, with rule identity threaded through string `objectName`
+prefixes). It exposes a typed, stateless per-rule API instead (§3.1):
+preparing a rule's procedure payload produces an immutable value, and
+auditing/remediating that rule takes it plus explicit parameter overrides as
+arguments, with no mutable per-session rule database to carry stale state
+between calls. `kompli` CLI and `komplid` call this API directly (§4.2); the
+NRP/MC adapter (§5.1) translates the MOF wire format's legacy
+`Procedure`/`Init`/`Reported`/`Desired` object values into the same calls at
+its own boundary, so the MOF contract stays byte-identical to existing GC
+consumers.
 
-MPI's code footprint remains, though: [OsConfigResource.c](../src/adapters/mc/OsConfigResource.c)
-still calls into `mpiclient` (`CallMpiOpen`/`CallMpiSet`/`CallMpiGet`) for
-non-Compliance (ASB-style) components — dead code in practice, since no
-platform daemon exists to answer those calls and kompli's own Compliance
-component uses direct MMI (§5.1) instead. It is left untouched (no functional
-reason to touch it) and is a candidate for a future cleanup pass, tracked
-here rather than acted on.
+The old OSConfig platform daemon and its MPI/HTTP-over-UDS transport (formerly
+documented here as "kompli Management Platform") has been removed from this
+fork; `komplid`'s JSONL protocol is its replacement, not a peer to it. Its
+remaining code footprint — [OsConfigResource.c](../src/adapters/mc/OsConfigResource.c)'s
+calls into `mpiclient` (`CallMpiOpen`/`CallMpiSet`/`CallMpiGet`) for
+non-Compliance (ASB-style) components — is retired alongside the rest of the
+MMI protocol, since no platform daemon exists to answer those calls either.
 
-## 3.1. MMI
+## 3.1. Engine API
 
-The kompli library implements MMI resource [OsConfigResource.c](../src/adapters/mc/OsConfigResource.c) using [Baseline.c](../src/adapters/mc/complianceengine/Baseline.c), which is used as entry point for MMI module in this case only [ComplianceEngineModule.c](../src/modules/complianceengine/src/so/ComplianceEngineModule.c)
+`kompli`'s `Engine` class (`src/modules/complianceengine/src/lib/Engine.{h,cpp}`)
+exposes a typed, stateless per-rule API — no object-name strings, no opaque
+session handles, and no mutable per-invocation rule database. It replaces the
+inherited OSConfig MMI protocol (`MmiOpen`/`MmiSet`/`MmiGet`/`MmiClose`
+against an `MMI_HANDLE`, with rule identity encoded into string `objectName`
+prefixes such as `procedure{RuleName}`).
 
-The MMI transports the json object payloads of settings for the module.
+- **`PrepareRule(ruleName, procedurePayload)`** — parses a rule's audit and
+  optional remediation procedure snippets plus its parameter defaults, and
+  returns an immutable `PreparedRule` value. This has no side effect on the
+  `Engine` itself — nothing is stored in a shared session map.
+- **`Audit(preparedRule, overrides)`** — runs the audit procedure for the
+  given prepared rule with the supplied parameter overrides, and returns a
+  typed `AuditResult` (a structured status, not a string to parse for a
+  `PASS` prefix).
+- **`Remediate(preparedRule, overrides)`** — runs the remediation procedure
+  for the given prepared rule with the supplied parameter overrides, and
+  returns a typed `Status`.
 
-In general, any process can load a module and communicate to it over the MMI.
-
-The MMI is a simple C API and includes the calls described in this section.
-
-The MMI header file is [src/modules/inc/Mmi.h](../src/modules/inc/Mmi.h)
-
-## 3.2. MmiGetInfo
-
-MmiGetInfo returns information about the module to help the client to correctly identify it. MmiGetInfo may be called at any time and is typically called immediately after the module is loaded by the client, before MmiOpen. MmiGetInfo must succeed called at any time while the module is loaded.
-
-MmiGetInfo takes as input argument the name of the client (the module use that name to identify the caller, same as passed to MmiOpen) and returns via output arguments a JSON payload and size of payload in bytes plus MMI_OK if success, NULL and respectively 0 as payloadSizeBytes plus an error code if failure, same as MmiGet. The caller must free the memory for payload calling MmiFree.
-
-```C
-// Not null terminated, UTF-8, JSON formatted string
-typedef char MMI_JSON_STRING;
-
-int MmiGetInfo(
-    const char clientName,
-    MMI_JSON_STRING payload,
-    int payloadSizeBytes);
-```
-
-The following values can be present in the JSON payload response. The values not marked (optional) are mandatory. Optional values that are implemented are required to follow the following guideline:
-
-Field | Type | Description
------|-----|-----
-Name | String | Name of the module
-Description | String | Short description of the module
-Manufacturer | String | Name of the module manufacturer
-VersionMajor | Integer | Major (first) version number of the module
-VersionMinor | Integer |  Minor (second) version number of the module
-VersionPatch | Integer | (optional) Patch (third) version number of the module
-VersionTweak | Integer | (optional) Tweak (fourth) version number of the module
-VersionInfo | String | Short description of the version of the module
-Components | List of strings | The names of the components supported by the module, same as used for the componentName argument for MmiGet and MmiSet. Modules are required to support at least one component.
-Lifetime | Enumeration of integers | One of the following values: 0 (Undefined), 1 (Long life/keep loaded): the module requires to be kept loaded by the client for as long as possible (for example when the module needs to monitor another component or Hardware), 2 (Short life): the module can be loaded and unloaded often, for example unloaded after a period of inactivity and re-loaded when a new request arrives
-LicenseUri | String | (optional) URI path for license of the module
-ProjectUri | String | (optional) URI path for the module project
-UserAccount | Integer | (optional) The Linux UID of the user account the module needs to run as. One of the UIDs in the local /etc/passwd. 0 is root. Note that UIDs can change (be moved). Root (0) is default.
-
-In addition to the values in the above table the module manufacturer can add their own values.
-
-A JSON schema of the MmiGetInfo payload response is at [MmiGetInfo JSON schema](../src/modules/schema/mmi-get-info.schema.json)
-
-## 3.3. MmiOpen
-
-MmiOpen starts a new client session with the module. MmiOpen receives as an input argument the name of the client (the module use that name to identify the caller) and the maximum size in bytes for object payload values supported by the client (0 if unlimited). On success, MmiOpen returns a newly created handle to identify this session. The handle is a module-specific opaque handle (where the module can hide a C structure or C++ class that identifies the current session) to be used for subsequent calls. On failure, MmiOpen returns NULL.
-
-```C
-typedef void* MMI_HANDLE;
-
-MMI_HANDLE MmiOpen(
-    const char* clientName,
-    const unsigned int maxPayloadSizeBytes);
-```
-
-## 3.4. MmiClose
-
-MmiClose ends a client session with the module. MmiClose receives as an input argument the handle returned by a previous MmiOpen call. No further calls with that handle can be made after this call.
-
-```C
-void MmiClose(MMI_HANDLE clientSession);
-```
-
-## 3.5. MmiSet
-
-MmiSet function is called with the value of of ProcedureObjectName as the objectName parameter and the value of ProcedureObjectValue as the payload parameter.
-
-This call sets up dynamic procedures for audit and, optionally, remediation. It also determines the list of parameters applicable to the procedure with their default values.
-ProcedureObjectName as the objectName parameter and the value of ProcedureObjectValue as the payload parameter.
-
-
-```C
-int MmiSet(
-    MMI_HANDLE clientSession,
-    const char* componentName,
-    const char* objectName,
-    const MMI_JSON_STRING payload,
-    const int payloadSizeBytes);
-```
-
-On completion MmiSet returns MMI_OK (0) if success or an error code defined in errno.h.
-
-```C
-// Plus any error codes from errno.h
-#define MMI_OK 0
-```
-
-The payload argument contains a JSON formatted, not null terminated UTF-8 string, that contains one or multiple values in the following format:
-
-- Integer payload example: ```"123"```
-- String payload example: ```"This is a test"```
-- Boolean payload example: ```"true"```
-- Complex payload example combining all the above as fields into same object payload: ```"{"valueOne":123,"valueTwo":"This is a test.","valueThree":true}"``` where "valueOne", "valueTwo" and "valueThree" are the respective field names.
-
-Kompli will not attempt to parse and validate the payload and payloadSizeBytes arguments. It is the responsability of the respective Module to do this and return errors if appropriate. Modules must also validate the clientSession, componentName and objectName arguments against invalid values.
-
-The maximum size of payload will be limited to the size specified via MmiOpen if that's a non-zero value (0 meaning unlimited).
-
-MmiSet may be called with the same payload several times. Kompli must be able to handle these calls either by reapplying the desired payload or detect when the respective desired configuration was already applied and in that case return MMI_OK without reapplying the payload and without logging errors.
-
-## 3.6. MmiGet
-
-MmiGet takes as input arguments a handle returned by MmiOpen, the name of the Component, the name of the Object, and returns via output arguments the reported Object payload formatted as JSON (same format as for MmiSet), the size of value size and MMI_OK if success, NULL, 0 and an error code defined in errno.h if failure. On success, the caller requests the module to free the memory for the JSON payload with MmiFree.
-
-The objectName and payload must must match a reported. There can only be one single MIM Object per MmiGet call.
-
-```C
-int MmiGet(
-    MMI_HANDLE clientSession,
-    const char* componentName,
-    const char* objectName,
-    MMI_JSON_STRING* payload,
-    int* payloadSizeBytes);
-```
-
-
-## 3.7. MmiFree
-
-Frees memory allocated by Module for the payload returned to MmiGetInfo and MmiGet:
-
-```C
-void MmiFree(MMI_JSON_STRING payload);
-```
-
+Because each call takes the rule (and its overrides) explicitly as an
+argument, there is no stale rule state to leak between invocations, and no
+handle lifecycle (`MmiOpen`/`MmiClose`) to manage. `kompli` CLI and `komplid`
+call this API in-process (§4.2); the NRP/MC adapter translates the MOF wire
+format's `Procedure`/`Init`/`Reported`/`Desired` object values into the same
+calls at its own boundary (§5.1, §5.3), so the MOF contract stays
+byte-identical while nothing downstream of the adapter speaks the legacy MMI
+protocol.
 
 # 4. kompli Management Modules
 
@@ -307,23 +206,27 @@ void MmiFree(MMI_JSON_STRING payload);
 
 The ComplianceEngine module (`src/modules/complianceengine/`) evaluates security compliance rules using recursive JSON payloads with logical combinators (`allOf`, `anyOf`, `not`), built-in C++ procedures, and Lua scripts. It is implemented as a dynamically linked shared object (`.so`) and exposes a single MIM component: `Compliance`.
 
-The MIM definition is at `src/modules/schema/mim.schema.json`.
+The MIM definition is at `src/modules/schema/mim.schema.json`. The four verbs
+below map directly onto the `Engine` API (§3.1); on the NRP path they arrive
+as the MOF-encoded `Procedure`/`Init`/`Reported`/`Desired` object values
+(§5.2), translated by the adapter (§5.1) into the same calls that `kompli`
+CLI and `komplid` make directly.
 
 ### Procedure entries (`procedure{RuleName}`)
 
-Desired objects (`MmiSet`). The value is a base64-encoded JSON object containing audit and optional remediation procedure snippets, plus a `parameters` map of supported parameters and their default values. The engine decodes the payload, stores the procedure definition, and records the default parameter values for the rule.
+Maps to `Engine::PrepareRule`. The value is a base64-encoded JSON object containing audit and optional remediation procedure snippets, plus a `parameters` map of supported parameters and their default values. The engine decodes the payload and returns an immutable `PreparedRule` carrying the procedure definition and default parameter values for the rule.
 
 ### Init entries (`init{RuleName}`)
 
-Desired objects (`MmiSet`). The value is a human-readable, space-separated key-value string (e.g. `PKG_NAME=cron`). Used to supply user-defined parameter overrides that apply when the audit procedure runs. The engine associates the provided values with the parameters registered by the matching procedure entry.
+Supplies the parameter overrides passed to `Engine::Audit` alongside the `PreparedRule`. The value is a human-readable, space-separated key-value string (e.g. `PKG_NAME=cron`) used to override the parameters registered by the matching procedure entry.
 
 ### Remediate entries (`remediate{RuleName}`)
 
-Desired objects (`MmiSet`). Same key-value format as init entries. Triggers execution of the remediation procedure for the rule with the supplied parameter values.
+Maps to `Engine::Remediate`. Same key-value format as init entries, passed to `Remediate` as the parameter overrides. Triggers execution of the remediation procedure for the rule with the supplied parameter values.
 
 ### Audit entries (`audit{RuleName}`)
 
-Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns a string that begins with `PASS` on success or contains a descriptive log on failure.
+Maps to `Engine::Audit`. Triggers execution of the audit procedure and returns a typed `AuditResult`; the NRP adapter renders it as a string beginning with `PASS` on success or a descriptive log on failure to preserve the existing MOF-reported-value contract.
 
 ## 4.2. kompli CLI Mode
 
@@ -352,11 +255,9 @@ See [cli.md §2](cli.md#2-plan--run-per-rule-granularity) for `plan`/`run`'s ful
 
 `kompli run` executes a plan file produced by `kompli plan` (see [cli.md §2](cli.md#2-plan--run-per-rule-granularity)): for each rule listed in the plan, in the mode the plan assigns it (`audit`/`remediate`/the reserved `enforce`), `kompli`:
 
-1. **Registers the procedure** — calls `engine.MmiSet("procedure" + ruleName, procedurePayload)` to load the audit/remediation definition and its default parameter values.
-2. **Audit mode**
-   - If parameter overrides are present, calls `engine.MmiSet("init" + ruleName, initPayload)`.
-   - Calls `engine.MmiGet("audit" + ruleName)` to execute the audit and collect the result.
-3. **Remediate mode** — calls `engine.MmiSet("remediate" + ruleName, desiredPayload)` to execute the remediation procedure.
+1. **Prepares the rule** — calls `engine.PrepareRule(ruleName, procedurePayload)` to load the audit/remediation definition and its default parameter values, getting back a `PreparedRule`.
+2. **Audit mode** — calls `engine.Audit(preparedRule, overrides)`, passing any parameter overrides directly, to execute the audit and collect the result.
+3. **Remediate mode** — calls `engine.Remediate(preparedRule, overrides)` to execute the remediation procedure with the supplied parameter values.
 
 ```mermaid
 sequenceDiagram
@@ -367,15 +268,14 @@ sequenceDiagram
     User->>CLI: kompli run plan.json
     CLI->>CLI: ParsePlanFile
     loop each rule in the plan
-        CLI->>Engine: MmiSet("procedure"+ruleName, payload)
+        CLI->>Engine: PrepareRule(ruleName, payload)
         alt mode: audit
-            CLI->>Engine: MmiSet("init"+ruleName, overrides)
-            CLI->>Engine: MmiGet("audit"+ruleName)
+            CLI->>Engine: Audit(preparedRule, overrides)
         else mode: remediate
-            CLI->>Engine: MmiSet("remediate"+ruleName, payload)
+            CLI->>Engine: Remediate(preparedRule, overrides)
         end
     end
-    Engine-->>CLI: per-rule PASS / failure log
+    Engine-->>CLI: per-rule AuditResult / Status
     CLI-->>User: canonical result JSON
 ```
 
@@ -408,9 +308,9 @@ Using MC and the kompli Universal NRP, we can create Azure Policies that automat
 
 The NRP scenario uses a standalone shared library (`src/adapters/mc/complianceengine/`) bundled in a policy package. The GC worker dynamically loads the library periodically and uses the `OsConfigResource` class as its interface.
 
-The adapter implements `ComplianceMmiSet` and `ComplianceMmiGet` functions, which follow the same C interface as the existing `AsbMmiSet`/`AsbMmiGet` functions. `OsConfigResource.c` selects the appropriate function set at library-load time based on `ComponentName`, so both ASB and Compliance rules can coexist in the same package without changes to the GC worker.
+The adapter implements `ComplianceMmiSet` and `ComplianceMmiGet` functions, which follow the same C interface as the existing `AsbMmiSet`/`AsbMmiGet` functions — this is the GC-facing contract, and it stays unchanged. `OsConfigResource.c` selects the appropriate function set at library-load time based on `ComponentName`, so both ASB and Compliance rules can coexist in the same package without changes to the GC worker. Internally, the Compliance function set translates each call's MOF-encoded object name and value into the typed `Engine` API (§3.1, §5.3) rather than passing the object name through to a generic per-rule protocol.
 
-Direct MMI calls are used (no MPI communication) to match the existing ASB implementation and avoid introducing additional IPC complexity for this critical path.
+Direct in-process calls are used (no MPI communication) to match the existing ASB implementation and avoid introducing additional IPC complexity for this critical path.
 
 ## 5.2. MOF File Structure
 
@@ -437,12 +337,16 @@ instance of OsConfigResource as $OsConfigResource0ref {
 
 ## 5.3. NRP Control Flow
 
-For each MOF resource instance the GC worker drives the following sequence:
+For each MOF resource instance the GC worker drives the following sequence.
+The MOF fields (§5.2) are unchanged, so the GC worker still issues four
+separate calls; the adapter buffers the parameter overrides from the Init
+call and passes them to `Engine::Audit` together with the subsequent Audit
+call, collapsing the two into a single typed call:
 
-1. **Procedure setup** — `ComplianceMmiSet(ProcedureObjectName, ProcedureObjectValue)` registers the audit/remediation procedures and their default parameter values.
-2. **Init (audit parameters)** — `ComplianceMmiSet(InitObjectName, DesiredObjectValue)` applies user-provided parameter overrides that are used during the audit.
-3. **Audit** — `ComplianceMmiGet(ReportedObjectName)` executes the audit procedure and returns the result (`PASS` or a descriptive failure log).
-4. **Remediation** — `ComplianceMmiSet(DesiredObjectName, DesiredObjectValue)` executes the remediation procedure with the user-provided parameter values.
+1. **Procedure setup** — `ComplianceMmiSet(ProcedureObjectName, ProcedureObjectValue)` calls `Engine::PrepareRule` to register the audit/remediation procedures and their default parameter values.
+2. **Init (audit parameters)** — `ComplianceMmiSet(InitObjectName, DesiredObjectValue)` buffers the user-provided parameter overrides at the adapter, to be used by the next step.
+3. **Audit** — `ComplianceMmiGet(ReportedObjectName)` calls `Engine::Audit` with the buffered overrides, and returns the result (`PASS` or a descriptive failure log).
+4. **Remediation** — `ComplianceMmiSet(DesiredObjectName, DesiredObjectValue)` calls `Engine::Remediate` with the user-provided parameter values.
 
 ```mermaid
 sequenceDiagram
@@ -450,13 +354,13 @@ sequenceDiagram
     participant Adapter as OsConfigResource.c
     participant Engine
     GC->>Adapter: ComplianceMmiSet(ProcedureObjectName, payload)
-    Adapter->>Engine: MmiSet("procedure"+ruleName)
+    Adapter->>Engine: PrepareRule(ruleName, payload)
     GC->>Adapter: ComplianceMmiSet(InitObjectName, DesiredObjectValue)
-    Adapter->>Engine: MmiSet("init"+ruleName)
+    Adapter->>Adapter: buffer overrides
     GC->>Adapter: ComplianceMmiGet(ReportedObjectName)
-    Adapter->>Engine: MmiGet("audit"+ruleName)
-    Engine-->>Adapter: PASS / failure log
-    Adapter-->>GC: reported value
+    Adapter->>Engine: Audit(preparedRule, overrides)
+    Engine-->>Adapter: AuditResult
+    Adapter-->>GC: PASS / failure log (reported value)
     GC->>Adapter: ComplianceMmiSet(DesiredObjectName, DesiredObjectValue)
-    Adapter->>Engine: MmiSet("remediate"+ruleName)
+    Adapter->>Engine: Remediate(preparedRule, overrides)
 ```
