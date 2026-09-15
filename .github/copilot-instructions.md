@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-Kompli is a Linux security compliance engine derived from Azure OSConfig. The repository keeps the ComplianceEngine module and the direct dependencies needed to build, test, package, and fuzz that module.
+kompli is a Linux security compliance engine derived from Azure OSConfig. The repository keeps the ComplianceEngine module and the direct dependencies needed to build, test, package, and fuzz that module.
 
 The code is written in C11/C++11, uses CMake and vcpkg, and targets Linux only.
 

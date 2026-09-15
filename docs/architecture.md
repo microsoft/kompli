@@ -1,13 +1,13 @@
-Kompli - North Star Architecture
+kompli - North Star Architecture
 ========================================
 
 # 1. Introduction
 
-Kompli is a modular security configuration stack for Linux. Kompli supports management over Azure and Azure Portal and local CLI.
+kompli is a modular security configuration stack for Linux. kompli supports management over Azure and Azure Portal and local CLI.
 
 This document describes the North Star architecture of this project. Its prime target is to guide the people who develop kompli. The doc can be also useful to anyone who is interested to learn about this project.
 
-Kompli design principles are the following:
+kompli design principles are the following:
 
 - Policy evaluator engine.
 - Modular architecture.
@@ -47,7 +47,7 @@ src/
 
 ## 2.2. Scenarios
 
-Kompli supports two integration scenarios that share the same ComplianceEngine module:
+kompli supports two integration scenarios that share the same ComplianceEngine module:
 
 - **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The definitions generator produces MOF files that drive audit and remediation per rule.
 - **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/kompli/`) that reads a benchmark-definition JSON file (supplied on disk as a required positional filename argument; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
@@ -79,7 +79,7 @@ flowchart TB
 
 # 3. kompli Agent
 
-Kompli will be able to run as a standalone daemon that can evaluate policy given requests from external sources.
+kompli will be able to run as a standalone daemon that can evaluate policy given requests from external sources.
 
 > The concrete name for this daemon is **`komplid`**. Its build-graph location
 > is [src/komplid/](../src/komplid/README.md), which runs a

@@ -1,6 +1,6 @@
 # Introduction
 
-Kompli is a modular security compliance stack for Linux devices. Kompli supports multi-authority device management over Azure and Azure Portal/CLI (via Azure Policy), GitOps, as well as local management. For more information on kompli see [Architecture](docs/architecture.md).
+kompli is a modular security compliance stack for Linux devices. kompli supports multi-authority device management over Azure and Azure Portal/CLI (via Azure Policy), GitOps, as well as local management. For more information on kompli see [Architecture](docs/architecture.md).
 
 # Code of conduct
 

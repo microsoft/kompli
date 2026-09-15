@@ -15,7 +15,7 @@ configuration agent? **No log file is opened by path in any of them.**
 
 | Scenario | What it is | Sink |
 |----------|-----------|------|
-| **Standalone** | an operator runs the `kompli` CLI (`audit`/`remediate`/`render`) directly | **stderr** |
+| **Standalone** | an operator runs the `kompli` CLI (`plan`/`run`/`render`/`list`) directly | **stderr** |
 | **komplid** (daemon) | the systemd socket-activated service (`src/komplid/`) | **stderr** — its unit routes stderr to the journal |
 | **Passthrough** | the configuration agent invokes the `kompli` binary on demand (a request “passed through” to a fresh invocation) | **system log** via `syslog(3)` |
 | **NRP** (Machine Configuration) | the `.so` adapter (`OsConfigResource.c` / `ComplianceEngineModule.c`) loaded **in-process** by the GC worker | **system log** via `syslog(3)` |
