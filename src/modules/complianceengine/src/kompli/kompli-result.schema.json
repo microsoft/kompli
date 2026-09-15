@@ -6,7 +6,6 @@
   "additionalProperties": true,
   "required": [
     "timestamp",
-    "action",
     "host",
     "rules",
     "durationMs",
@@ -16,11 +15,6 @@
     "timestamp": {
       "type": "string",
       "description": "ISO 8601 UTC time the run started."
-    },
-    "action": {
-      "type": "string",
-      "enum": ["Audit", "Remediation"],
-      "description": "Which operation produced the result."
     },
     "host": {
       "type": "object",
@@ -92,8 +86,13 @@
         },
         "status": {
           "type": "string",
-          "enum": ["Compliant", "NonCompliant", "NotApplicable"],
-          "description": "Per-rule status. Overall status is aggregated with the engine's allOf three-valued logic (CombineAllOf): NonCompliant dominates; otherwise NotApplicable propagates; otherwise Compliant."
+          "enum": ["Compliant", "NonCompliant", "NotApplicable", "Skipped"],
+          "description": "Per-rule status. Overall status is aggregated with the engine's allOf three-valued logic (CombineAllOf) over the non-Skipped rules: NonCompliant dominates; otherwise NotApplicable propagates; otherwise Compliant. Skipped: the rule exists in the benchmark-definition file but had no entry in the plan `run` executed - it was never evaluated."
+        },
+        "action": {
+          "type": "string",
+          "enum": ["Audit", "Remediation"],
+          "description": "Which operation produced this rule's result. Absent when status is \"Skipped\" (the rule was never executed, so no operation applies). A single `run` can mix modes across rules, so this is per-rule rather than a single result-wide value."
         },
         "tags": {
           "type": "array",

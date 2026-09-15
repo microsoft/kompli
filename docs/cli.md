@@ -34,7 +34,7 @@ see §2.
 argument (the benchmark-definition file for `plan`/`list`, the plan file for
 `run`); a missing path or `-` is a hard error — stdin is deliberately
 unsupported for definitions (see the input-hardening posture in
-`src/modules/complianceengine/src/cli/THREAT_MODEL.md`). `render` is a
+`src/modules/complianceengine/src/kompli/THREAT_MODEL.md`). `render` is a
 root-free, pure transformation and does accept stdin.
 
 There is no whole-file, single-mode command — `plan`+`run` (§2) is the only

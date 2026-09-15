@@ -34,7 +34,7 @@ BenchmarkFormatter::BenchmarkFormatter(DistributionInfo distributionInfo)
 {
 }
 
-Result<BenchmarkFormatter> BenchmarkFormatter::Begin(DistributionInfo distributionInfo, const Action action)
+Result<BenchmarkFormatter> BenchmarkFormatter::Begin(DistributionInfo distributionInfo)
 {
     BenchmarkFormatter formatter(std::move(distributionInfo));
 
@@ -56,11 +56,6 @@ Result<BenchmarkFormatter> BenchmarkFormatter::Begin(DistributionInfo distributi
     if (JSONSuccess != json_object_set_string(object, "timestamp", ToISODatetime(system_clock::now()).c_str()))
     {
         return Error("Failed to set timestamp", ENOMEM);
-    }
-
-    if (JSONSuccess != json_object_set_string(object, "action", action == Action::Audit ? "Audit" : "Remediation"))
-    {
-        return Error("Failed to set action", ENOMEM);
     }
 
     const auto arch = std::to_string(formatter.mDistributionInfo.architecture);
@@ -99,15 +94,28 @@ Result<BenchmarkFormatter> BenchmarkFormatter::Begin(DistributionInfo distributi
 }
 
 Optional<Error> BenchmarkFormatter::AddEntry(const BenchmarkIO::Resource& entry, const Status status, const string& payload,
-    const std::map<std::string, std::string>& parameters) &
+    const std::map<std::string, std::string>& parameters, const Action action) &
 {
-    auto resultWrapper = BenchmarkIO::BuildRuleResultJson(entry, status, payload, parameters);
+    auto resultWrapper = BenchmarkIO::BuildRuleResultJson(entry, status, payload, parameters, action);
     if (!resultWrapper.HasValue())
     {
         return resultWrapper.Error();
     }
-    auto result = std::move(resultWrapper.Value());
+    return AppendRuleJson(std::move(resultWrapper.Value()));
+}
 
+Optional<Error> BenchmarkFormatter::AddSkippedEntry(const BenchmarkIO::Resource& entry, const std::map<std::string, std::string>& parameters) &
+{
+    auto resultWrapper = BenchmarkIO::BuildSkippedRuleResultJson(entry, parameters);
+    if (!resultWrapper.HasValue())
+    {
+        return resultWrapper.Error();
+    }
+    return AppendRuleJson(std::move(resultWrapper.Value()));
+}
+
+Optional<Error> BenchmarkFormatter::AppendRuleJson(JsonWrapper rule) &
+{
     auto* object = json_value_get_object(mJson.get());
     if (nullptr == object)
     {
@@ -119,7 +127,7 @@ Optional<Error> BenchmarkFormatter::AddEntry(const BenchmarkIO::Resource& entry,
         return Error("Failed to get JSON array", ENOMEM);
     }
 
-    if (JSONSuccess != json_array_append_value(array, result.release()))
+    if (JSONSuccess != json_array_append_value(array, rule.release()))
     {
         return Error("Failed to append JSON value", ENOMEM);
     }

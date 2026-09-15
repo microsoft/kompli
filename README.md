@@ -26,7 +26,7 @@ src/
 └── modules/complianceengine/       ComplianceEngine module
     ├── src/lib/                    Core engine, procedures, Lua evaluator
     ├── src/benchmarkio/            Benchmark-definition parsing + input-file security (shared by kompli and komplid)
-    ├── src/cli/                    kompli CLI tool
+    ├── src/kompli/                 kompli CLI tool
     └── tests/                      GTest suite
 ```
 

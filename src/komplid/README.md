@@ -33,7 +33,7 @@ covers, and the open design questions still ahead.
   ([src/modules/complianceengine/src/benchmarkio](../modules/complianceengine/src/benchmarkio))
   — the same benchmark-definition parsing and root-safe input-file checks
   used by the `kompli` CLI
-  ([src/modules/complianceengine/src/cli](../modules/complianceengine/src/cli)) —
+  ([src/modules/complianceengine/src/kompli](../modules/complianceengine/src/kompli)) —
   rather than duplicating that logic.
 - Benchmark definitions are read from a fixed, non-configurable
   `/etc/kompli/definitions` (see `Main.cpp`) — deliberately not overridable
@@ -131,7 +131,7 @@ unconditionally — standard daemon behavior.
 
 The shared logging library's `OpenLog()`-based TOCTOU gap (see
 the former "Residual TOCTOU" note in
-`src/modules/complianceengine/src/cli/THREAT_MODEL.md`) is closed by
+`src/modules/complianceengine/src/kompli/THREAT_MODEL.md`) is closed by
 elimination rather than by a descriptor-based rework — the `kompli` CLI has
 no `--log-file` flag (the only consumer of that path), and the NRP module
 logs to `syslog(3)` instead of a fixed-path `OpenLog()`.

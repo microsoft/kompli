@@ -38,7 +38,7 @@ src/
       src/lib/          Core engine, evaluator, procedures, Lua integration
       src/so/           Module shared-object entry point
       src/benchmarkio/  Benchmark-definition parsing + input-file security (shared by kompli and komplid)
-      src/cli/          kompli CLI tool
+      src/kompli/       kompli CLI tool
       src/lua-evaluator/ Lua evaluator tool
       tests/            Unit tests
     inc/                Module interface headers (Mmi.h)
@@ -53,7 +53,7 @@ src/
 Kompli supports two integration scenarios that share the same ComplianceEngine module:
 
 - **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The definitions generator produces MOF files that drive audit and remediation per rule.
-- **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/cli/`) that reads a benchmark-definition JSON file (supplied on disk as a required positional filename argument; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
+- **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/kompli/`) that reads a benchmark-definition JSON file (supplied on disk as a required positional filename argument; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
 
 A third scenario, **`komplid`** (a native, systemd-managed daemon sharing the same ComplianceEngine core), runs a synchronous audit/remediate subset; see §3 and [src/komplid/README.md](../src/komplid/README.md) for its design.
 
@@ -327,7 +327,7 @@ Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns 
 
 ## 4.2. kompli CLI Mode
 
-`kompli` (`src/modules/complianceengine/src/cli/`) is a standalone CLI tool that reads a benchmark-definition JSON file and drives the engine directly — no platform daemon, MPI, or RC/DC files are involved. Benchmark-definition parsing and the root-safe input-file checks live in the sibling `src/modules/complianceengine/src/benchmarkio/` library so `komplid` can reuse them later without depending on CLI-only presentation code.
+`kompli` (`src/modules/complianceengine/src/kompli/`) is a standalone CLI tool that reads a benchmark-definition JSON file and drives the engine directly — no platform daemon, MPI, or RC/DC files are involved. Benchmark-definition parsing and the root-safe input-file checks live in the sibling `src/modules/complianceengine/src/benchmarkio/` library so `komplid` can reuse them later without depending on CLI-only presentation code.
 
 See [cli.md](cli.md) for the target design contract (subcommands, flags, the `plan`/`run` per-rule model, plan file format) — this section only summarizes the CLI's shape.
 

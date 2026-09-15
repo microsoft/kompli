@@ -72,12 +72,12 @@ std::string GenerateResult()
     distInfo.distribution = LinuxDistribution::Ubuntu;
     distInfo.architecture = Architecture::x86_64;
     distInfo.version = "24.04";
-    auto formatterResult = BenchmarkFormatter::Begin(distInfo, Action::Audit);
+    auto formatterResult = BenchmarkFormatter::Begin(distInfo);
     EXPECT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
-    EXPECT_FALSE(formatter.AddEntry(MakeResource("1.1", "1.1 First", "First"), Status::Compliant, "[]", {}).HasValue());
+    EXPECT_FALSE(formatter.AddEntry(MakeResource("1.1", "1.1 First", "First"), Status::Compliant, "[]", {}, Action::Audit).HasValue());
     const std::map<std::string, std::string> params{{"mask", "0600"}};
-    EXPECT_FALSE(formatter.AddEntry(MakeResource("1.2", "1.2 Second", "Second"), Status::NonCompliant, "[]", params).HasValue());
+    EXPECT_FALSE(formatter.AddEntry(MakeResource("1.2", "1.2 Second", "Second"), Status::NonCompliant, "[]", params, Action::Remediate).HasValue());
     auto result = std::move(formatter).Finish(Status::NonCompliant);
     EXPECT_TRUE(result.HasValue());
     return result.HasValue() ? result.Value() : std::string();
@@ -131,10 +131,47 @@ TEST(KompliResultSchemaTest, GeneratedResultSatisfiesSchemaRequiredFields)
         ExpectAllRequiredPresent(json_array_get_object(rules, i), ruleRequired, "rule[" + std::to_string(i) + "]");
     }
 
-    // action must be one of the schema's enum values.
-    const char* action = json_object_get_string(resultObject, "action");
-    ASSERT_NE(action, nullptr);
-    EXPECT_STREQ(action, "Audit");
+    // Each rule's action must be one of the schema's enum values and match
+    // the mode it was generated with (action is per-rule, not top-level).
+    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 0), "action"), "Audit");
+    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 1), "action"), "Remediation");
+
+    json_value_free(result);
+    json_value_free(schema);
+}
+
+TEST(KompliResultSchemaTest, SkippedRuleSatisfiesSchemaRequiredFields)
+{
+    JSON_Value* schema = json_parse_string(ReadFile(KOMPLI_RESULT_SCHEMA_PATH).c_str());
+    ASSERT_NE(schema, nullptr);
+    JSON_Object* schemaObject = json_value_get_object(schema);
+    ASSERT_NE(schemaObject, nullptr);
+
+    ComplianceEngine::DistributionInfo distInfo;
+    distInfo.distribution = LinuxDistribution::Ubuntu;
+    distInfo.architecture = Architecture::x86_64;
+    distInfo.version = "24.04";
+    auto formatterResult = BenchmarkFormatter::Begin(distInfo);
+    ASSERT_TRUE(formatterResult.HasValue());
+    auto& formatter = formatterResult.Value();
+    ASSERT_FALSE(formatter.AddSkippedEntry(MakeResource("1.1", "1.1 First", "First"), {}).HasValue());
+    auto resultString = std::move(formatter).Finish(Status::Compliant);
+    ASSERT_TRUE(resultString.HasValue());
+
+    JSON_Value* result = json_parse_string(resultString.Value().c_str());
+    ASSERT_NE(result, nullptr) << "generated result is not valid JSON";
+    JSON_Object* resultObject = json_value_get_object(result);
+    ASSERT_NE(resultObject, nullptr);
+
+    const JSON_Array* ruleRequired = json_object_dotget_array(schemaObject, "$defs.rule.required");
+    JSON_Array* rules = json_object_get_array(resultObject, "rules");
+    ASSERT_NE(rules, nullptr);
+    ASSERT_EQ(json_array_get_count(rules), 1u);
+    ExpectAllRequiredPresent(json_array_get_object(rules, 0), ruleRequired, "skipped rule");
+
+    JSON_Object* rule = json_array_get_object(rules, 0);
+    EXPECT_STREQ(json_object_get_string(rule, "status"), "Skipped");
+    EXPECT_EQ(json_object_has_value(rule, "action"), 0) << "a Skipped entry must not carry an action";
 
     json_value_free(result);
     json_value_free(schema);

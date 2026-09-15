@@ -110,7 +110,7 @@ passthrough, where kompli is launched by the agent rather than an interactive sh
 ## Security outcome — the residual TOCTOU closed by *elimination*
 
 The former residual TOCTOU (previously documented in
-`src/modules/complianceengine/src/cli/THREAT_MODEL.md`): `OpenLog()` is path-only
+`src/modules/complianceengine/src/kompli/THREAT_MODEL.md`): `OpenLog()` is path-only
 and `TrimLog()` re-opens the path on every rotation, leaving a check-to-use window
 on the operator-supplied `--log-file`. The mitigation to date (require a
 root-owned, non-writable parent) only *narrowed* it — removing the flag
@@ -172,44 +172,34 @@ roadmap. The only remaining `OpenLog(path)` consumers are fixed, root-owned path
   `load_osconfig_logfile` regex-parses the old
   `[timestamp][LEVEL][file:line] [OsConfigResource] …` prefix out of
   `/var/log/osconfig_nrp.log` to compute per-rule `duration_seconds` for the
-  JUnit report (`reporting/junit.py`). That file is never written now, and
-  `syslog(3)` doesn't carry the same prefix even if the harness were pointed at
-  `journalctl -t kompli` instead, so this per-rule timing enrichment is broken.
-  Impact is cosmetic only — `duration_seconds` is set nowhere else, so the
-  OSConfig/kompli approach's rules just report `time="0.0"` in JUnit XML like
-  every other approach already does; nothing else reads this field. Left
-  broken for now pending a decision on whether to rework it against journalctl
-  or drop it (see
-  [../../docs/unified-definitions/feature.md](../../docs/unified-definitions/feature.md)
-  Open questions).
-  - **Constraint for any `journalctl` rework (2026-09-11 review):** reading
-    the *system* journal (where the NRP module's syslog records land) needs
-    either root or `systemd-journal` group membership — it's gated by the
-    journal files' group ownership (`root:systemd-journal`, mode `2750`), not
-    by which UID emitted the record. In this repo's test harness the *only*
-    place that's already guaranteed to have root is `run_osconfig.sh` itself
-    (`[[ ${EUID} -ne 0 ]] && invalid_args …`, invoked via
-    `runtime_exec --elevate`) — the same script that used to
-    copy out `/var/log/osconfig_nrp.log`. A rework must call `journalctl -t
-    kompli` **there** and store its output as a plain-text artifact (mirroring
-    the existing `gc_agent.log`/`gc_worker.log` capture), so the downstream
-    Python reporting stage (`osconfig_logfile.py`/`accumulate.py`) keeps only
-    reading an already-extracted file, exactly as it does today. If a rework
-    instead had the Python side invoke `journalctl` itself, it would newly
-    require the *developer's own account* to be root or in
-    `systemd-journal` wherever `accumulate.py` runs (including on a bare
-    developer machine, once local conformance runs land) — that is a
-    regression from today's sudo-free reporting stage and must be avoided.
-    Also note journal entries from concurrent/repeated runs interleave with
-    no per-run file boundary; scope the `journalctl` query with `--since`/
-    `--until` around the run (the harness already brackets NRP execution with
-    `profiling_start`/`profiling_stop`) rather than assuming a single
-    contiguous block.
+  JUnit report (`reporting/junit.py`). **Resolved (2026-09-15):** reworked
+  against `journalctl -t kompli` instead — `run_osconfig.sh` now brackets the
+  NRP run with a journal cursor (`journalctl -n0 --show-cursor` before,
+  `--after-cursor` after) and stores `journalctl -t kompli --after-cursor=…
+  -o json` (JSONL, one object per entry with a precise
+  `__REALTIME_TIMESTAMP`) as the artifact
+  `log/osconfig_nrp_journal.jsonl`, replacing the old
+  `/var/log/osconfig_nrp.log` copy. `osconfig_logfile.py` parses that JSONL
+  instead of the old prefixed-text format — the `MESSAGE` field still carries
+  the same `[OsConfigResource...]` literal text (only the
+  `[timestamp][LEVEL][file:line]` wrapper, added solely by the file/console
+  sinks, is gone), so the same sequential-diff algorithm (first `Load` marks
+  the start, each subsequent `Test` line's timestamp diffed against the
+  previous one) carries over unchanged. Cursor-bracketing (rather than
+  `--since`/`--until` wall-clock bounds) avoids the concurrent-run
+  correlation problem raised below. Stays sudo-free on a bare developer
+  machine: `journalctl` only runs inside `run_osconfig.sh`, which already
+  requires root unconditionally for unrelated reasons (OMI/GC agent
+  install), and only its already-extracted JSONL artifact is read downstream
+  by `osconfig_logfile.py`/`accumulate.py` — those never invoke `journalctl`
+  themselves.
 
 ## Supersedes
+
+
 
 - The "descriptor-based rework" **roadmap item** in `src/komplid/README.md` (§ Logging)
   — replaced by *eliminate the operator path*.
 - The "Residual TOCTOU" note in
-  `src/modules/complianceengine/src/cli/THREAT_MODEL.md` — resolved by removal; that
+  `src/modules/complianceengine/src/kompli/THREAT_MODEL.md` — resolved by removal; that
   note (and the `--log-file` mentions in `docs/cli.md`) are updated to match.

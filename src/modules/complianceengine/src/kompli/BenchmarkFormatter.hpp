@@ -25,7 +25,7 @@ namespace BenchmarkFormatters
 class BenchmarkFormatter
 {
 public:
-    static Result<BenchmarkFormatter> Begin(DistributionInfo distributionInfo, Action action);
+    static Result<BenchmarkFormatter> Begin(DistributionInfo distributionInfo);
 
     ~BenchmarkFormatter() = default;
     BenchmarkFormatter(const BenchmarkFormatter&) = delete;
@@ -33,12 +33,19 @@ public:
     BenchmarkFormatter(BenchmarkFormatter&&) = default;
     BenchmarkFormatter& operator=(BenchmarkFormatter&&) = default;
 
-    Optional<Error> AddEntry(const BenchmarkIO::Resource& entry, Status status, const std::string& payload, const std::map<std::string, std::string>& parameters) &;
+    Optional<Error> AddEntry(
+        const BenchmarkIO::Resource& entry, Status status, const std::string& payload, const std::map<std::string, std::string>& parameters, Action action) &;
+    // A rule present in the benchmark file but never executed (e.g. absent
+    // from a `run` plan's rules map) - see RuleResult.hpp's
+    // BuildSkippedRuleResultJson.
+    Optional<Error> AddSkippedEntry(const BenchmarkIO::Resource& entry, const std::map<std::string, std::string>& parameters) &;
     Result<std::string> Finish(Status status) &&;
 
 private:
     static std::string ToISODatetime(const std::chrono::system_clock::time_point& tp);
     explicit BenchmarkFormatter(DistributionInfo distributionInfo);
+
+    Optional<Error> AppendRuleJson(JsonWrapper rule) &;
 
     std::chrono::time_point<std::chrono::steady_clock> mBegin;
     DistributionInfo mDistributionInfo;

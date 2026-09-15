@@ -89,7 +89,7 @@ struct ParsedJson
 
 TEST(BenchmarkFormatterTest, EnvelopeContainsRequiredTopLevelFields)
 {
-    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
     auto result = std::move(formatter).Finish(Status::Compliant);
@@ -105,7 +105,9 @@ TEST(BenchmarkFormatterTest, EnvelopeContainsRequiredTopLevelFields)
         ASSERT_NE(ts, nullptr);
         EXPECT_TRUE(regex_match(ts, regex(R"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)"))) << "timestamp not ISO 8601 UTC: " << ts;
     }
-    EXPECT_STREQ(json_object_get_string(doc.object, "action"), "Audit");
+    // `action` is per-rule now (a single `run` can mix audit/remediate across
+    // rules), not a top-level field - see AddEntryEmitsPerRuleAction below.
+    EXPECT_EQ(json_object_has_value(doc.object, "action"), 0) << "action must not be a top-level field";
     EXPECT_EQ(json_value_get_type(json_object_get_value(doc.object, "host")), JSONObject);
     EXPECT_EQ(json_value_get_type(json_object_get_value(doc.object, "rules")), JSONArray);
     EXPECT_STREQ(json_object_get_string(doc.object, "status"), "Compliant");
@@ -117,25 +119,30 @@ TEST(BenchmarkFormatterTest, EnvelopeContainsRequiredTopLevelFields)
     EXPECT_EQ(json_object_has_value(doc.object, "module"), 0);
 }
 
-TEST(BenchmarkFormatterTest, RemediationActionIsLabelled)
+TEST(BenchmarkFormatterTest, AddEntryEmitsPerRuleAction)
 {
-    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Remediate);
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
+    ASSERT_FALSE(formatter.AddEntry(MakeResource("1.1", "1.1 Audit rule", "AuditRule"), Status::Compliant, "[]", {}, Action::Audit).HasValue());
+    ASSERT_FALSE(
+        formatter.AddEntry(MakeResource("1.2", "1.2 Remediate rule", "RemediateRule"), Status::NonCompliant, "[]", {}, Action::Remediate).HasValue());
     auto result = std::move(formatter).Finish(Status::NonCompliant);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
 
     ParsedJson doc(result.Value());
     ASSERT_NE(doc.object, nullptr);
-    EXPECT_STREQ(json_object_get_string(doc.object, "action"), "Remediation");
-    EXPECT_STREQ(json_object_get_string(doc.object, "status"), "NonCompliant");
+    JSON_Array* rules = json_object_get_array(doc.object, "rules");
+    ASSERT_EQ(json_array_get_count(rules), 2u);
+    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 0), "action"), "Audit");
+    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 1), "action"), "Remediation");
 }
 
 TEST(BenchmarkFormatterTest, HostBlockHasNoExtraFields)
 {
     // host has additionalProperties:false in the schema — verify only the three
     // declared fields are present.
-    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
     auto result = std::move(formatter).Finish(Status::Compliant);
@@ -153,7 +160,7 @@ TEST(BenchmarkFormatterTest, HostBlockHasNoExtraFields)
 
 TEST(BenchmarkFormatterTest, NotApplicableOverallStatusIsLabelled)
 {
-    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
     auto result = std::move(formatter).Finish(Status::NotApplicable);
@@ -170,7 +177,7 @@ TEST(BenchmarkFormatterTest, HostBlockIsPopulatedFromDistributionInfo)
     distInfo.distribution = LinuxDistribution::Ubuntu;
     distInfo.architecture = Architecture::x86_64;
     distInfo.version = "22.04";
-    auto formatterResult = BenchmarkFormatter::Begin(distInfo, Action::Audit);
+    auto formatterResult = BenchmarkFormatter::Begin(distInfo);
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
     auto result = std::move(formatter).Finish(Status::Compliant);
@@ -187,11 +194,11 @@ TEST(BenchmarkFormatterTest, HostBlockIsPopulatedFromDistributionInfo)
 
 TEST(BenchmarkFormatterTest, AddEntryEmitsTitleIdRuleNameStatus)
 {
-    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
     auto entry = MakeResource("1.1.1", "1.1.1 Ensure something", "EnsureSomething");
-    ASSERT_FALSE(formatter.AddEntry(entry, Status::Compliant, "[]", {}).HasValue());
+    ASSERT_FALSE(formatter.AddEntry(entry, Status::Compliant, "[]", {}, Action::Audit).HasValue());
     auto result = std::move(formatter).Finish(Status::Compliant);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
 
@@ -217,7 +224,7 @@ TEST(BenchmarkFormatterTest, AddEntryEmitsTitleIdRuleNameStatus)
 
 TEST(BenchmarkFormatterTest, AddEntryEmitsTagsAndMetadata)
 {
-    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
     auto entry = MakeResource("1.1.1", "1.1.1 Ensure something", "EnsureSomething");
@@ -227,7 +234,7 @@ TEST(BenchmarkFormatterTest, AddEntryEmitsTagsAndMetadata)
     entry.metadata.fixtext = "fix";
     entry.metadata.severity = "critical";
     entry.metadata.references = "ref";
-    ASSERT_FALSE(formatter.AddEntry(entry, Status::Compliant, "[]", {}).HasValue());
+    ASSERT_FALSE(formatter.AddEntry(entry, Status::Compliant, "[]", {}, Action::Audit).HasValue());
     auto result = std::move(formatter).Finish(Status::Compliant);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
 
@@ -253,12 +260,12 @@ TEST(BenchmarkFormatterTest, AddEntryEmitsTagsAndMetadata)
 
 TEST(BenchmarkFormatterTest, IndicatorsPayloadIsEmbeddedVerbatim)
 {
-    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
     auto entry = MakeResource("2.3", "2.3 Rule", "Rule");
     const std::string indicators = R"([{"message":"checked /etc/passwd","status":"Compliant"}])";
-    ASSERT_FALSE(formatter.AddEntry(entry, Status::Compliant, indicators, {}).HasValue());
+    ASSERT_FALSE(formatter.AddEntry(entry, Status::Compliant, indicators, {}, Action::Audit).HasValue());
     auto result = std::move(formatter).Finish(Status::Compliant);
     ASSERT_TRUE(result.HasValue());
 
@@ -277,11 +284,11 @@ TEST(BenchmarkFormatterTest, IndicatorsPayloadIsEmbeddedVerbatim)
 
 TEST(BenchmarkFormatterTest, NonCompliantEntryIsLabelled)
 {
-    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
     auto entry = MakeResource("3.1", "3.1 Rule", "Rule");
-    ASSERT_FALSE(formatter.AddEntry(entry, Status::NonCompliant, "[]", {}).HasValue());
+    ASSERT_FALSE(formatter.AddEntry(entry, Status::NonCompliant, "[]", {}, Action::Audit).HasValue());
     auto result = std::move(formatter).Finish(Status::NonCompliant);
     ASSERT_TRUE(result.HasValue());
 
@@ -293,11 +300,11 @@ TEST(BenchmarkFormatterTest, NonCompliantEntryIsLabelled)
 
 TEST(BenchmarkFormatterTest, NotApplicableEntryIsLabelled)
 {
-    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
     auto entry = MakeResource("4.1", "4.1 Rule", "Rule");
-    ASSERT_FALSE(formatter.AddEntry(entry, Status::NotApplicable, "[]", {}).HasValue());
+    ASSERT_FALSE(formatter.AddEntry(entry, Status::NotApplicable, "[]", {}, Action::Audit).HasValue());
     auto result = std::move(formatter).Finish(Status::Compliant);
     ASSERT_TRUE(result.HasValue());
 
@@ -307,13 +314,44 @@ TEST(BenchmarkFormatterTest, NotApplicableEntryIsLabelled)
     EXPECT_STREQ(json_object_get_string(rule, "status"), "NotApplicable");
 }
 
-TEST(BenchmarkFormatterTest, MultipleEntriesArePreservedInOrder)
+TEST(BenchmarkFormatterTest, SkippedEntryIsLabelledAndCarriesNoAction)
 {
-    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
-    ASSERT_FALSE(formatter.AddEntry(MakeResource("1.1", "1.1 First", "First"), Status::Compliant, "[]", {}).HasValue());
-    ASSERT_FALSE(formatter.AddEntry(MakeResource("1.2", "1.2 Second", "Second"), Status::NonCompliant, "[]", {}).HasValue());
+    auto entry = MakeResource("5.1", "5.1 Rule", "Rule");
+    entry.tags = {"level:l1"};
+    ASSERT_FALSE(formatter.AddSkippedEntry(entry, {}).HasValue());
+    auto result = std::move(formatter).Finish(Status::Compliant);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+
+    ParsedJson doc(result.Value());
+    ASSERT_NE(doc.object, nullptr);
+    JSON_Array* rules = json_object_get_array(doc.object, "rules");
+    ASSERT_EQ(json_array_get_count(rules), 1u);
+    JSON_Object* rule = json_array_get_object(rules, 0);
+    ASSERT_NE(rule, nullptr);
+
+    EXPECT_STREQ(json_object_get_string(rule, "id"), "5.1");
+    EXPECT_STREQ(json_object_get_string(rule, "status"), "Skipped");
+    // No action applies - the rule was never executed.
+    EXPECT_EQ(json_object_has_value(rule, "action"), 0) << "a Skipped entry must not carry an action";
+    EXPECT_EQ(json_value_get_type(json_object_get_value(rule, "indicators")), JSONArray);
+    EXPECT_EQ(json_array_get_count(json_object_get_array(rule, "indicators")), 0u);
+    EXPECT_EQ(json_value_get_type(json_object_get_value(rule, "parameters")), JSONObject);
+    JSON_Array* tags = json_object_get_array(rule, "tags");
+    ASSERT_NE(tags, nullptr);
+    ASSERT_EQ(json_array_get_count(tags), 1u);
+    EXPECT_STREQ(json_array_get_string(tags, 0), "level:l1");
+}
+
+TEST(BenchmarkFormatterTest, MultipleEntriesArePreservedInOrder)
+{
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
+    ASSERT_TRUE(formatterResult.HasValue());
+    auto& formatter = formatterResult.Value();
+    ASSERT_FALSE(formatter.AddEntry(MakeResource("1.1", "1.1 First", "First"), Status::Compliant, "[]", {}, Action::Audit).HasValue());
+    ASSERT_FALSE(formatter.AddEntry(MakeResource("1.2", "1.2 Second", "Second"), Status::NonCompliant, "[]", {}, Action::Audit).HasValue());
     auto result = std::move(formatter).Finish(Status::NonCompliant);
     ASSERT_TRUE(result.HasValue());
 
@@ -327,31 +365,31 @@ TEST(BenchmarkFormatterTest, MultipleEntriesArePreservedInOrder)
 
 TEST(BenchmarkFormatterTest, AddEntryRejectsNonArrayPayload)
 {
-    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
     auto entry = MakeResource("1.1", "1.1 Rule", "Rule");
     // A JSON object (not an array) must be rejected.
-    EXPECT_TRUE(formatter.AddEntry(entry, Status::Compliant, "{}", {}).HasValue());
+    EXPECT_TRUE(formatter.AddEntry(entry, Status::Compliant, "{}", {}, Action::Audit).HasValue());
 }
 
 TEST(BenchmarkFormatterTest, AddEntryRejectsMalformedPayload)
 {
-    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
     auto entry = MakeResource("1.1", "1.1 Rule", "Rule");
-    EXPECT_TRUE(formatter.AddEntry(entry, Status::Compliant, "not json", {}).HasValue());
+    EXPECT_TRUE(formatter.AddEntry(entry, Status::Compliant, "not json", {}, Action::Audit).HasValue());
 }
 
 TEST(BenchmarkFormatterTest, EffectiveParametersAreEmitted)
 {
-    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution(), Action::Audit);
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
     auto entry = MakeResource("1.1", "1.1 Rule", "Rule");
     const std::map<std::string, std::string> params{{"mask", "0600"}, {"owner", "root"}};
-    ASSERT_FALSE(formatter.AddEntry(entry, Status::Compliant, "[]", params).HasValue());
+    ASSERT_FALSE(formatter.AddEntry(entry, Status::Compliant, "[]", params, Action::Audit).HasValue());
     auto result = std::move(formatter).Finish(Status::Compliant);
     ASSERT_TRUE(result.HasValue());
 
@@ -364,3 +402,4 @@ TEST(BenchmarkFormatterTest, EffectiveParametersAreEmitted)
     EXPECT_STREQ(json_object_get_string(p, "mask"), "0600");
     EXPECT_STREQ(json_object_get_string(p, "owner"), "root");
 }
+

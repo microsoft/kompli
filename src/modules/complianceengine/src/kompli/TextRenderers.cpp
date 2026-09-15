@@ -120,7 +120,6 @@ Result<string> RenderText(const string& canonicalJson, const TextStyle style)
     }
 
     std::ostringstream out;
-    out << "Action: " << StringOrEmpty(json_object_get_string(rootObject, "action")) << "\n";
     out << "Timestamp: " << StringOrEmpty(json_object_get_string(rootObject, "timestamp")) << "\n";
     out << "Rules:\n";
 

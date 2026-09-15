@@ -336,31 +336,8 @@ int main(int argc, char* argv[])
     // formatter builds the result envelope; the engine is separately given a
     // JSON payload formatter (at its construction, above) to render each rule's
     // indicators. Presentation is the `render` subcommand's job.
-    //
-    // `run` can mix audit/remediate per rule; the result schema doesn't have a
-    // per-rule action field yet (tracked in docs/CLI.md), so the top-level
-    // action is a best-effort summary: Remediation if any benchmark entry
-    // remediates any rule, Audit otherwise.
-    Action topLevelAction = Action::Audit;
-    if (Command::Remediate == options.command)
-    {
-        topLevelAction = Action::Remediate;
-    }
-    else if (Command::Run == options.command)
-    {
-        for (const auto& benchmark : plan.Value().benchmarks)
-        {
-            for (const auto& rule : benchmark.rules)
-            {
-                if (ToggleMode::Remediate == rule.second.mode)
-                {
-                    topLevelAction = Action::Remediate;
-                }
-            }
-        }
-    }
     const auto& distributionInfo = engine.GetDistributionInfo().Value();
-    auto formatterResult = BenchmarkFormatter::Begin(distributionInfo, topLevelAction);
+    auto formatterResult = BenchmarkFormatter::Begin(distributionInfo);
     if (!formatterResult.HasValue())
     {
         OsConfigLogError(logHandle.get(), "Failed to begin formatted output: %s", formatterResult.Error().message.c_str());
@@ -471,6 +448,16 @@ int main(int argc, char* argv[])
                 if (it == rules.end())
                 {
                     OsConfigLogDebug(logHandle.get(), "Skipping entry %s: not present in the plan", entry.resourceID.c_str());
+                    auto skipError = benchmarkFormatter.AddSkippedEntry(entry, {});
+                    if (skipError)
+                    {
+                        OsConfigLogError(logHandle.get(), "Failed to add skipped entry to JSON formatter: %s", skipError.Value().message.c_str());
+                        if (!options.continueOnError)
+                        {
+                            return 1;
+                        }
+                        hasError = true;
+                    }
                     continue;
                 }
                 mode = it->second.mode;
@@ -494,6 +481,11 @@ int main(int argc, char* argv[])
 
             // The rule is selected for evaluation (past the section filter / plan lookup).
             ++evaluatedRules;
+
+            // Per-rule action for the result JSON (docs/CLI.md section 3): `run`
+            // can mix audit/remediate across rules, so this is derived from each
+            // rule's own resolved mode rather than a single result-wide value.
+            const Action ruleAction = (ToggleMode::Remediate == mode) ? Action::Remediate : Action::Audit;
 
             auto procedureResult = engine.MmiSet((string("procedure") + entry.ruleName).c_str(), procedure);
             if (!procedureResult.HasValue())
@@ -542,7 +534,7 @@ int main(int argc, char* argv[])
                         continue;
                     }
 
-                    auto error = benchmarkFormatter.AddEntry(entry, result.Value().status, result.Value().payload, engine.GetParameters(entry.ruleName));
+                    auto error = benchmarkFormatter.AddEntry(entry, result.Value().status, result.Value().payload, engine.GetParameters(entry.ruleName), ruleAction);
                     if (error)
                     {
                         OsConfigLogError(logHandle.get(), "Failed to add entry to JSON formatter: %s", error.Value().message.c_str());
@@ -580,7 +572,7 @@ int main(int argc, char* argv[])
                         continue;
                     }
 
-                    auto error = benchmarkFormatter.AddEntry(entry, result.Value(), "[]", engine.GetParameters(entry.ruleName));
+                    auto error = benchmarkFormatter.AddEntry(entry, result.Value(), "[]", engine.GetParameters(entry.ruleName), ruleAction);
                     if (error)
                     {
                         OsConfigLogError(logHandle.get(), "Failed to add entry to JSON formatter: %s", error.Value().message.c_str());
