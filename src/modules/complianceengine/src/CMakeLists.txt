@@ -6,7 +6,7 @@ add_subdirectory(so)
 
 if (BUILD_KOMPLI_CLI)
     add_subdirectory(benchmarkio)
-    add_subdirectory(cli)
+    add_subdirectory(kompli)
     if(BUILD_TESTS)
         add_subdirectory(lua-evaluator)
     endif(BUILD_TESTS)

@@ -83,7 +83,7 @@ src/modules/complianceengine/
   src/lib/              Core engine, evaluator, procedures, and Lua integration
   src/so/               Module shared-object entry point
   src/benchmarkio/      Benchmark-definition parsing + input-file security
-  src/cli/              kompli CLI tool
+  src/kompli/           kompli CLI tool
   src/lua-evaluator/    Lua evaluator tool
   tests/                Unit tests
 ```

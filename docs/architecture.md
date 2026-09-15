@@ -37,7 +37,7 @@ src/
       src/lib/          Core engine, evaluator, procedures, Lua integration
       src/so/           Module shared-object entry point
       src/benchmarkio/  Benchmark-definition parsing + input-file security
-      src/cli/          kompli CLI tool
+      src/kompli/       kompli CLI tool
       src/lua-evaluator/ Lua evaluator tool
       tests/            Unit tests
     inc/                Module interface headers (Mmi.h)
@@ -52,7 +52,7 @@ src/
 Kompli supports two integration scenarios that share the same ComplianceEngine module:
 
 - **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The augmentation engine generates MOF files that drive audit and remediation per rule.
-- **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/cli/`) that reads a benchmark-definition JSON file (supplied on disk as a required positional filename argument; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
+- **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/kompli/`) that reads a benchmark-definition JSON file (supplied on disk as a required positional filename argument; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
 
 # 3. kompli Agent
 
@@ -279,7 +279,7 @@ Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns 
 
 ## 5.3. kompli CLI Mode
 
-The kompli CLI (`src/modules/complianceengine/src/cli/`) is a standalone CLI tool that reads a MOF file and drives the engine directly — no platform daemon, MPI, or RC/DC files are involved.
+The kompli CLI (`src/modules/complianceengine/src/kompli/`) is a standalone CLI tool that reads a MOF file and drives the engine directly — no platform daemon, MPI, or RC/DC files are involved.
 
 ### Input
 
