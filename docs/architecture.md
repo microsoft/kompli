@@ -279,38 +279,45 @@ Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns 
 
 ## 5.3. kompli CLI Mode
 
-The kompli CLI (`src/modules/complianceengine/src/kompli/`) is a standalone CLI tool that reads a MOF file and drives the engine directly — no platform daemon, MPI, or RC/DC files are involved.
+The kompli CLI (`src/modules/complianceengine/src/kompli/`) is a standalone CLI
+tool that reads a benchmark-definition JSON file and drives the engine directly
+— no platform daemon, MPI, or RC/DC files are involved.
 
 ### Input
 
-kompli accepts a MOF file via `--input <path>` or from stdin. Input is capped at 8 MB and 100 000 MOF entries to guard against malformed or hostile input when running as root.
+`audit` / `remediate` require the benchmark-definition JSON file as a required
+positional filename argument; `ParseCommandLine` rejects a missing path or `-`
+outright, so stdin is not supported for definitions. Input is capped at 8 MB
+and 100 000 rules to guard against malformed or hostile input when running as
+root.
 
 ### Per-entry execution
 
-For each `OsConfigResource` instance in the MOF file, kompli:
+For each rule parsed from the benchmark-definition file, kompli:
 
-1. **Registers the procedure** — calls `engine.MmiSet("procedure" + ruleName, procedurePayload)` to load the base64-encoded audit/remediation definition and its default parameter values.
-2. **Audit path**
-   - If an init payload is present, calls `engine.MmiSet("init" + ruleName, initPayload)` to apply user-provided parameter overrides.
-   - Calls `engine.MmiGet("audit" + ruleName)` to execute the audit and collect the result.
+1. **Registers the procedure** — calls `engine.MmiSet("procedure" + ruleName, procedurePayload)` to load the plain-JSON audit/remediation definition and its default parameter values.
+2. **Audit path** — calls `engine.MmiSet("init" + ruleName, initPayload)` with an empty JSON object (rules carry no desired-object override in this format), then calls `engine.MmiGet("audit" + ruleName)` to execute the audit and collect the result.
 3. **Remediate path** — calls `engine.MmiSet("remediate" + ruleName, desiredPayload)` to execute the remediation procedure.
+
+`audit` / `remediate` always emit the canonical result JSON; `render` (below)
+turns that JSON into one of the presentation formats.
 
 ### Output formats
 
-Results are written to stdout in the format selected by `--format`:
+`render` writes to stdout in the format selected by `--format` (default `junit`):
 
 | Format | Description |
 |---|---|
-| `json` (default) | Machine-readable JSON array of rule results |
+| `junit` (default) | JUnit XML, one `<testcase>` per rule |
 | `nested-list` | Human-readable hierarchical text |
 | `compact-list` | Single-line-per-rule text |
 | `debug` | Verbose diagnostic output |
 
 ### Security controls
 
-- `umask(0077)` is set at startup to restrict file-creation permissions.
-- The `--input` path is checked for path traversal and a writable parent directory before the file is opened.
-- The `--log` path is validated to refuse symlinks and attacker-writable locations before the log handle is opened.
+- The process umask is tightened to at least `S_IRWXG | S_IRWXO` at startup (preserving any stricter inherited mask), restricting file-creation permissions.
+- The positional benchmark-definition filename is checked for path traversal and a writable parent directory, then opened with `O_NOFOLLOW`, before it is read.
+- The `--log-file` path is validated to refuse symlinks and attacker-writable locations before the log handle is opened.
 
 # 6. kompli Universal Native Resource Provider (NRP)
 
