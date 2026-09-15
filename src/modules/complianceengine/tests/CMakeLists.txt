@@ -10,6 +10,7 @@ find_package(GTest CONFIG REQUIRED)
 
 set(PROCEDURES
     procedures/AideAttributesTest.cpp
+    procedures/AksCommandTest.cpp
     procedures/AuditdRulesTest.cpp
     procedures/NoShellAccountsLockedTest.cpp
     procedures/ApparmorProfileStateTest.cpp
