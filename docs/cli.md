@@ -298,16 +298,16 @@ repeat) rather than only via repeatable flags — kept in the design so the
 plan format doesn't need to change to support an interactive editor for it
 later.
 
-## 3. Result schema changes this implies
+## 3. Result schema changes this implies — Implemented
 
-`kompli-result.schema.json`'s current shape has a **top-level** `action`
-field (`Audit`/`Remediation`) applying to the whole result. Once one `run`
-invocation can mix modes across rules, that has to move to per-rule (each
-rule's own action), the same conclusion reached independently for `komplid`'s
-wire protocol — the CLI's own output and the daemon's output should converge
-on the same per-rule shape rather than diverging again. A new `Skipped`
-status value (§2) is also needed for a rule present in a benchmark file but
-absent from a plan's `rules` map.
+`kompli-result.schema.json`'s `action` field moved from the **top-level**
+envelope to **per-rule** (`$defs/rule`): once one `run` invocation can mix
+modes across rules, a single result-wide `action` can't describe it, the same
+conclusion reached independently for `komplid`'s wire protocol — the CLI's own
+output and the daemon's output converge on the same per-rule shape.
+`action` is absent on a rule whose `status` is `Skipped` (a rule present in
+the benchmark file but absent from a `run` plan's `rules` map, so never
+executed - a new `status` enum value, see §2).
 
 ## 4. Validation timing
 
@@ -333,9 +333,6 @@ protocol needs to identify a rule by `id`.
 
 Not yet resolved by this contract:
 
-- **Per-rule `action` field + `Skipped` status** (§2, §3) — needs a
-  `kompli-result.schema.json` change plus `JUnitRenderer`/`TextRenderers`
-  updates.
 - **`kompli list <file> --rule=<id>` detail view** (§2) — exact flag/output
   not finalized.
 - **Plan file JSON schema** — premature to write until the plan format
