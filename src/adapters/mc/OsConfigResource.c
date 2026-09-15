@@ -197,6 +197,7 @@ void MI_CALL OsConfigResource_Load(
     *self = NULL;
 
     LogInfo(context, GetLog(), "[OsConfigResource] Load (PID: %d)", getpid());
+    BaselineMmiLoad();
 
     MI_Context_PostResult(context, MI_RESULT_OK);
 }
@@ -208,6 +209,7 @@ void MI_CALL OsConfigResource_Unload(
     MI_UNREFERENCED_PARAMETER(self);
 
     LogInfo(context, GetLog(), "[OsConfigResource] Unload (PID: %d)", getpid());
+    BaselineMmiUnload();
 
     MI_Context_PostResult(context, MI_RESULT_OK);
 }

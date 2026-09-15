@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 
 #include <ListValidShells.h>
-#include <Telemetry.h>
 #include <fstream>
 
 namespace ComplianceEngine
@@ -18,7 +17,6 @@ Result<set<string>> ListValidShells(ContextInterface& context)
     if (!shellsFile.is_open())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to open %s file", etcShellsPath);
-        OSConfigTelemetryStatusTrace("fopen", EINVAL);
         return Error(std::string("Failed to open ") + etcShellsPath + " file", EINVAL);
     }
 
