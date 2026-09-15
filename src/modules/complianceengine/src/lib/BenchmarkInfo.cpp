@@ -106,7 +106,7 @@ Result<CISBenchmarkInfo> CISBenchmarkInfo::Parse(const string& payloadKey)
 
 bool CISBenchmarkInfo::Match(const DistributionInfo& distributionInfo) const
 {
-    if (distributionInfo.distribution != distribution)
+    if (distributionInfo.distribution != distribution && distribution != LinuxDistribution::Any)
     {
         return false;
     }
