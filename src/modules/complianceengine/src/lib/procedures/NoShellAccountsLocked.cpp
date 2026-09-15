@@ -8,7 +8,6 @@
 #include <Result.h>
 #include <Telemetry.h>
 #include <Users.h>
-#include <UsersIterator.h>
 #include <set>
 #include <shadow.h>
 
@@ -54,24 +53,24 @@ Result<Status> AuditNoShellAccountsLocked(const NoShellAccountsLockedParams& par
         }
     }
 
-    auto users = UsersRange::Make(context.GetSpecialFilePath("/etc/passwd"), context.GetLogHandle());
+    auto users = context.GetAccountDatabase().GetUsers();
     if (!users.HasValue())
     {
         return users.Error();
     }
 
-    for (const auto& user : users.Value())
+    for (const auto& user : *users.Value())
     {
-        const auto shell = string(user.pw_shell);
+        const auto& shell = user.shell;
         const auto it = validShells->find(shell);
         if (it != validShells->end())
         {
-            OsConfigLogDebug(context.GetLogHandle(), "User '%s' has a valid shell '%s'", user.pw_name, user.pw_shell);
+            OsConfigLogDebug(context.GetLogHandle(), "User '%s' has a valid shell '%s'", user.name.c_str(), user.shell.c_str());
             continue;
         }
 
-        OsConfigLogDebug(context.GetLogHandle(), "User '%s' does not have a valid shell: '%s'", user.pw_name, user.pw_shell);
-        if (0 == strcmp(user.pw_name, "root"))
+        OsConfigLogDebug(context.GetLogHandle(), "User '%s' does not have a valid shell: '%s'", user.name.c_str(), user.shell.c_str());
+        if (user.name == "root")
         {
             continue;
         }
@@ -80,7 +79,7 @@ Result<Status> AuditNoShellAccountsLocked(const NoShellAccountsLockedParams& par
         assert(params.skipInvalidShells.HasValue());
         if (params.skipInvalidShells.Value())
         {
-            OsConfigLogDebug(context.GetLogHandle(), "Skip User '%s' as it's does not have valid shell %s", user.pw_name, user.pw_shell);
+            OsConfigLogDebug(context.GetLogHandle(), "Skip User '%s' as it's does not have valid shell %s", user.name.c_str(), user.shell.c_str());
             shouldSkip = true;
         }
 
@@ -88,9 +87,9 @@ Result<Status> AuditNoShellAccountsLocked(const NoShellAccountsLockedParams& par
         {
             for (const auto& excludeUser : params.excludeUsers->items)
             {
-                if (0 == strcmp(user.pw_name, excludeUser.c_str()))
+                if (user.name == excludeUser)
                 {
-                    OsConfigLogDebug(context.GetLogHandle(), "Skip User '%s' as it's on exclude list ", user.pw_name);
+                    OsConfigLogDebug(context.GetLogHandle(), "Skip User '%s' as it's on exclude list ", user.name.c_str());
                     shouldSkip = true;
                     break;
                 }
@@ -102,20 +101,19 @@ Result<Status> AuditNoShellAccountsLocked(const NoShellAccountsLockedParams& par
         }
         if (params.skipBelowUidMin && uidMin.HasValue())
         {
-            if (user.pw_uid < uidMin.Value())
+            if (user.uid < uidMin.Value())
             {
-                OsConfigLogDebug(context.GetLogHandle(), "Skip User '%s' as it's id %d is lower than UID_MIN %d", user.pw_name, user.pw_uid, uidMin.Value());
+                OsConfigLogDebug(context.GetLogHandle(), "Skip User '%s' as it's id %d is lower than UID_MIN %d", user.name.c_str(), user.uid, uidMin.Value());
                 continue;
             }
         }
 
-        if (lockedUsers.find(user.pw_name) == lockedUsers.end())
+        if (lockedUsers.find(user.name) == lockedUsers.end())
         {
-            return indicators.NonCompliant(string("User ") + std::to_string(user.pw_uid) +
-                                           " does not have a valid shell, but the account is not locked");
+            return indicators.NonCompliant(string("User ") + std::to_string(user.uid) + " does not have a valid shell, but the account is not locked");
         }
 
-        indicators.Compliant(string("User ") + std::to_string(user.pw_uid) + " does not have a valid shell, but the account is locked");
+        indicators.Compliant(string("User ") + std::to_string(user.uid) + " does not have a valid shell, but the account is locked");
     }
 
     return indicators.Compliant("All non-root users without a login shell are locked");

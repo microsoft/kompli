@@ -4,6 +4,7 @@
 #ifndef COMPLIANCEENGINE_CONTEXTINTERFACE_H
 #define COMPLIANCEENGINE_CONTEXTINTERFACE_H
 
+#include "AccountDatabase.h"
 #include "FilesystemScanner.h"
 #include "Logging.h"
 #include "Result.h"
@@ -24,7 +25,16 @@ struct InterfaceInfo
 class ContextInterface
 {
 public:
+    ContextInterface();
     virtual ~ContextInterface() = 0;
+    ContextInterface(const ContextInterface&) = delete;
+    ContextInterface& operator=(const ContextInterface&) = delete;
+
+    AccountDatabase& GetAccountDatabase()
+    {
+        return mAccountDatabase;
+    }
+
     virtual Result<std::string> ExecuteCommand(const std::string& cmd) const = 0;
     virtual Result<std::string> GetFileContents(const std::string& filePath) const = 0;
 
@@ -47,6 +57,9 @@ public:
 
     // Returns the path to be used for storing state.
     virtual std::string GetStatePath() const = 0;
+
+private:
+    AccountDatabase mAccountDatabase;
 };
 } // namespace ComplianceEngine
 #endif // COMPLIANCEENGINE_CONTEXT_H

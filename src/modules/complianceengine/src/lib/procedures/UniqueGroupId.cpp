@@ -3,7 +3,6 @@
 
 #include <CommonUtils.h>
 #include <Evaluator.h>
-#include <GroupsIterator.h>
 #include <StringTools.h>
 #include <UniqueGroupId.h>
 #include <vector>
@@ -18,20 +17,20 @@ Result<Status> AuditUniqueGroupId(const UniqueGroupIdParams& params, IndicatorsT
 {
     bool hasGid = false;
 
-    auto groups = GroupsRange::Make(context.GetSpecialFilePath("/etc/group"), context.GetLogHandle());
+    auto groups = context.GetAccountDatabase().GetGroups();
     if (!groups.HasValue())
     {
         return groups.Error();
     }
 
-    for (const auto& item : groups.Value())
+    for (const auto& item : *groups.Value())
     {
-        if (params.gid.HasValue() && item.gr_gid == static_cast<decltype(item.gr_gid)>(params.gid.Value()))
+        if (params.gid.HasValue() && item.gid == static_cast<decltype(item.gid)>(params.gid.Value()))
         {
-            if (item.gr_name != params.groupName)
+            if (item.name != params.groupName)
             {
-                OsConfigLogDebug(context.GetLogHandle(), "Group '%s' has GID %d, but expected '%s'.", item.gr_name, item.gr_gid, params.groupName.c_str());
-                return indicators.NonCompliant("A group other than '" + params.groupName + "' has GID " + std::to_string(item.gr_gid));
+                OsConfigLogDebug(context.GetLogHandle(), "Group '%s' has GID %d, but expected '%s'.", item.name.c_str(), item.gid, params.groupName.c_str());
+                return indicators.NonCompliant("A group other than '" + params.groupName + "' has GID " + std::to_string(item.gid));
             }
 
             hasGid = true;

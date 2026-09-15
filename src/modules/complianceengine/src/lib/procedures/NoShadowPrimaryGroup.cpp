@@ -4,32 +4,32 @@
 #include <Evaluator.h>
 #include <NoShadowPrimaryGroup.h>
 #include <Result.h>
-#include <UsersIterator.h>
-#include <grp.h>
 
 namespace ComplianceEngine
 {
 Result<Status> AuditNoShadowPrimaryGroup(IndicatorsTree& indicators, ContextInterface& context)
 {
-    UNUSED(context);
-
-    struct group* shadow = getgrnam("shadow");
-    if (nullptr == shadow)
+    auto shadow = context.GetAccountDatabase().FindGroupByName("shadow");
+    if (!shadow.HasValue())
+    {
+        return shadow.Error();
+    }
+    if (nullptr == shadow.Value())
     {
         return Error("Group 'shadow' not found", EINVAL);
     }
 
-    auto users = UsersRange::Make(context.GetLogHandle());
+    auto users = context.GetAccountDatabase().GetUsers();
     if (!users.HasValue())
     {
         return users.Error();
     }
 
-    for (const auto& pwd : users.Value())
+    for (const auto& user : *users.Value())
     {
-        if (shadow->gr_gid == pwd.pw_gid)
+        if (shadow.Value()->gid == user.gid)
         {
-            return indicators.NonCompliant("User's '" + std::string(pwd.pw_name) + "' primary group is 'shadow'");
+            return indicators.NonCompliant("User's '" + user.name + "' primary group is 'shadow'");
         }
     }
 

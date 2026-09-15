@@ -6,7 +6,6 @@
 #include <Result.h>
 #include <Telemetry.h>
 #include <UserHomeDirectoryPermissions.h>
-#include <UsersIterator.h>
 #include <fcntl.h>
 #include <fstream>
 #include <grp.h>
@@ -35,62 +34,64 @@ Result<Status> AuditUserHomeDirectoryPermissions(IndicatorsTree& indicators, Con
     }
 
     auto result = Status::Compliant;
-    auto users = UsersRange::Make(context.GetLogHandle());
+    auto users = context.GetAccountDatabase().GetUsers();
     if (!users.HasValue())
     {
         return users.Error();
     }
 
-    for (const auto& pwd : users.Value())
+    for (const auto& user : *users.Value())
     {
-        const auto shell = string(pwd.pw_shell);
-        const auto it = validShells->find(shell);
+        const auto it = validShells->find(user.shell);
         if (it == validShells->end())
         {
-            OsConfigLogDebug(context.GetLogHandle(), "User '%s' has shell '%s' not listed in /etc/shells", pwd.pw_name, pwd.pw_shell);
+            OsConfigLogDebug(context.GetLogHandle(), "User '%s' has shell '%s' not listed in /etc/shells", user.name.c_str(), user.shell.c_str());
             continue;
         }
 
         struct stat st;
-        if (0 != stat(pwd.pw_dir, &st))
+        if (0 != stat(user.homeDirectory.c_str(), &st))
         {
             int status = errno;
             if (status == ENOENT)
             {
-                OsConfigLogDebug(context.GetLogHandle(), "User '%s' has home directory '%s' which does not exist", pwd.pw_name, pwd.pw_dir);
-                result = indicators.NonCompliant(std::string("User's '") + pwd.pw_name + "' home directory '" + pwd.pw_dir + "' does not exist");
+                OsConfigLogDebug(context.GetLogHandle(), "User '%s' has home directory '%s' which does not exist", user.name.c_str(), user.homeDirectory.c_str());
+                result = indicators.NonCompliant("User's '" + user.name + "' home directory '" + user.homeDirectory + "' does not exist");
                 continue;
             }
             else
             {
-                OsConfigLogError(context.GetLogHandle(), "Failed to stat home directory '%s' for user '%s': %s", pwd.pw_dir, pwd.pw_name, strerror(status));
+                OsConfigLogError(context.GetLogHandle(), "Failed to stat home directory '%s' for user '%s': %s", user.homeDirectory.c_str(),
+                    user.name.c_str(), strerror(status));
                 OSConfigTelemetryStatusTrace("stat", status);
                 return Error(string("Failed to stat home directory: ") + strerror(status), status);
             }
         }
 
-        const auto* group = getgrgid(pwd.pw_gid);
-        if (nullptr == group)
+        auto group = context.GetAccountDatabase().FindGroupById(user.gid);
+        if (!group.HasValue())
         {
-            OsConfigLogError(context.GetLogHandle(), "Failed to get group for user '%s': %s", pwd.pw_name, strerror(errno));
-            OSConfigTelemetryStatusTrace("getgrgid", errno);
-            return Error(string("Failed to get group for user: ") + strerror(errno), errno);
+            return group.Error();
+        }
+        if (nullptr == group.Value())
+        {
+            return Error("Failed to get group for user '" + user.name + "'", ENOENT);
         }
 
-        auto pwdPattern = Pattern::Make(pwd.pw_name);
+        auto pwdPattern = Pattern::Make(user.name);
         if (!pwdPattern.HasValue())
         {
             return pwdPattern.Error();
         }
 
-        auto groupPattern = Pattern::Make(group->gr_name);
+        auto groupPattern = Pattern::Make(group.Value()->name);
         if (!groupPattern.HasValue())
         {
             return groupPattern.Error();
         }
 
         FilePermissionsParams params;
-        params.path = pwd.pw_dir;
+        params.path = user.homeDirectory;
         params.mask = 027;
         params.owner = {{std::move(pwdPattern.Value())}};
         params.group = {{std::move(groupPattern.Value())}};
@@ -98,8 +99,8 @@ Result<Status> AuditUserHomeDirectoryPermissions(IndicatorsTree& indicators, Con
         auto subResult = AuditFilePermissions(params, indicators, context);
         if (!subResult.HasValue())
         {
-            OsConfigLogError(context.GetLogHandle(), "Failed to check permissions for home directory '%s' for user '%s': %s", pwd.pw_dir, pwd.pw_name,
-                subResult.Error().message.c_str());
+            OsConfigLogError(context.GetLogHandle(), "Failed to check permissions for home directory '%s' for user '%s': %s",
+                user.homeDirectory.c_str(), user.name.c_str(), subResult.Error().message.c_str());
             OSConfigTelemetryStatusTrace("AuditFilePermissions", subResult.Error().code);
             return subResult;
         }
@@ -108,8 +109,9 @@ Result<Status> AuditUserHomeDirectoryPermissions(IndicatorsTree& indicators, Con
 
         if (subResult.Value() == Status::NonCompliant)
         {
-            OsConfigLogInfo(context.GetLogHandle(), "User '%s' has home directory '%s' with incorrect permissions", pwd.pw_name, pwd.pw_dir);
-            indicators.NonCompliant(std::string("User's '") + pwd.pw_name + "' home directory '" + pwd.pw_dir + "' has incorrect permissions");
+            OsConfigLogInfo(context.GetLogHandle(), "User '%s' has home directory '%s' with incorrect permissions", user.name.c_str(),
+                user.homeDirectory.c_str());
+            indicators.NonCompliant("User's '" + user.name + "' home directory '" + user.homeDirectory + "' has incorrect permissions");
             result = Status::NonCompliant;
         }
     }
@@ -127,68 +129,72 @@ Result<Status> RemediateUserHomeDirectoryPermissions(IndicatorsTree& indicators,
     }
 
     auto result = Status::Compliant;
-    auto users = UsersRange::Make(context.GetLogHandle());
+    auto users = context.GetAccountDatabase().GetUsers();
     if (!users.HasValue())
     {
         return users.Error();
     }
 
-    for (const auto& pwd : users.Value())
+    for (const auto& user : *users.Value())
     {
-        const auto shell = string(pwd.pw_shell);
-        const auto it = validShells->find(shell);
+        const auto it = validShells->find(user.shell);
         if (it == validShells->end())
         {
-            OsConfigLogDebug(context.GetLogHandle(), "User '%s' has shell '%s' not in /etc/shells", pwd.pw_name, pwd.pw_shell);
+            OsConfigLogDebug(context.GetLogHandle(), "User '%s' has shell '%s' not in /etc/shells", user.name.c_str(), user.shell.c_str());
             continue;
         }
 
         struct stat st;
-        if (stat(pwd.pw_dir, &st) != 0)
+        if (stat(user.homeDirectory.c_str(), &st) != 0)
         {
             int status = errno;
-            OsConfigLogDebug(context.GetLogHandle(), "stat failed for home directory '%s' for user '%s': %s", pwd.pw_dir, pwd.pw_name, strerror(status));
+            OsConfigLogDebug(context.GetLogHandle(), "stat failed for home directory '%s' for user '%s': %s", user.homeDirectory.c_str(),
+                user.name.c_str(), strerror(status));
             if (status == ENOENT)
             {
                 // Home directory does not exist, so we need to create it
-                if (0 != mkdir(pwd.pw_dir, 0750))
+                if (0 != mkdir(user.homeDirectory.c_str(), 0750))
                 {
                     status = errno;
-                    OsConfigLogError(context.GetLogHandle(), "Failed to create home directory '%s' for user '%s': %s", pwd.pw_dir, pwd.pw_name, strerror(status));
+                    OsConfigLogError(context.GetLogHandle(), "Failed to create home directory '%s' for user '%s': %s", user.homeDirectory.c_str(),
+                        user.name.c_str(), strerror(status));
                     OSConfigTelemetryStatusTrace("mkdir", status);
                     return Error(string("Failed to create home directory: ") + strerror(status), status);
                 }
             }
             else
             {
-                OsConfigLogError(context.GetLogHandle(), "Failed to stat home directory '%s' for user '%s': %s", pwd.pw_dir, pwd.pw_name, strerror(status));
+                OsConfigLogError(context.GetLogHandle(), "Failed to stat home directory '%s' for user '%s': %s", user.homeDirectory.c_str(),
+                    user.name.c_str(), strerror(status));
                 OSConfigTelemetryStatusTrace("stat", status);
                 return Error(string("Failed to stat home directory: ") + strerror(status), status);
             }
         }
 
-        const auto* group = getgrgid(pwd.pw_gid);
-        if (nullptr == group)
+        auto group = context.GetAccountDatabase().FindGroupById(user.gid);
+        if (!group.HasValue())
         {
-            OsConfigLogError(context.GetLogHandle(), "Failed to get group for user '%s': %s", pwd.pw_name, strerror(errno));
-            OSConfigTelemetryStatusTrace("getgrgid", errno);
-            return Error(string("Failed to get group for user: ") + strerror(errno), errno);
+            return group.Error();
+        }
+        if (nullptr == group.Value())
+        {
+            return Error("Failed to get group for user '" + user.name + "'", ENOENT);
         }
 
-        auto pwdPattern = Pattern::Make(pwd.pw_name);
+        auto pwdPattern = Pattern::Make(user.name);
         if (!pwdPattern.HasValue())
         {
             return pwdPattern.Error();
         }
 
-        auto groupPattern = Pattern::Make(group->gr_name);
+        auto groupPattern = Pattern::Make(group.Value()->name);
         if (!groupPattern.HasValue())
         {
             return groupPattern.Error();
         }
 
         FilePermissionsParams params;
-        params.path = pwd.pw_dir;
+        params.path = user.homeDirectory;
         params.mask = 027;
         params.owner = {{std::move(pwdPattern.Value())}};
         params.group = {{std::move(groupPattern.Value())}};
@@ -196,8 +202,8 @@ Result<Status> RemediateUserHomeDirectoryPermissions(IndicatorsTree& indicators,
         auto subResult = RemediateFilePermissions(params, indicators, context);
         if (!subResult.HasValue())
         {
-            OsConfigLogError(context.GetLogHandle(), "Failed to remediate permissions for home directory '%s' for user '%s': %s", pwd.pw_dir,
-                pwd.pw_name, subResult.Error().message.c_str());
+            OsConfigLogError(context.GetLogHandle(), "Failed to remediate permissions for home directory '%s' for user '%s': %s",
+                user.homeDirectory.c_str(), user.name.c_str(), subResult.Error().message.c_str());
             OSConfigTelemetryStatusTrace("RemediateEnsureFilePermissionsHelper", subResult.Error().code);
             result = Status::NonCompliant;
         }

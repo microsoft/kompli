@@ -6,7 +6,6 @@
 #include <Result.h>
 #include <StringTools.h>
 #include <Telemetry.h>
-#include <UsersIterator.h>
 #include <fstream>
 #include <set>
 #include <shadow.h>
@@ -115,40 +114,40 @@ Result<Status> AuditSystemAccountShell(IndicatorsTree& indicators, ContextInterf
         return minUID.Error();
     }
 
-    auto users = UsersRange::Make(context.GetSpecialFilePath("/etc/passwd"), context.GetLogHandle());
+    auto users = context.GetAccountDatabase().GetUsers();
     if (!users.HasValue())
     {
         return users.Error();
     }
 
-    for (const auto& user : users.Value())
+    for (const auto& user : *users.Value())
     {
-        OsConfigLogInfo(context.GetLogHandle(), "User: %s, UID: %d, shell: %s, min: %d", user.pw_name, user.pw_uid, user.pw_shell, minUID.Value());
-        if (user.pw_uid >= minUID.Value())
+        OsConfigLogInfo(context.GetLogHandle(), "User: %s, UID: %d, shell: %s, min: %d", user.name.c_str(), user.uid, user.shell.c_str(), minUID.Value());
+        if (user.uid >= minUID.Value())
         {
             continue;
         }
 
-        OsConfigLogInfo(context.GetLogHandle(), "User: %s, UID: %d, shell: %s", user.pw_name, user.pw_uid, user.pw_shell);
-        if (allowlistedAccounts.end() != allowlistedAccounts.find(user.pw_name))
+        OsConfigLogInfo(context.GetLogHandle(), "User: %s, UID: %d, shell: %s", user.name.c_str(), user.uid, user.shell.c_str());
+        if (allowlistedAccounts.end() != allowlistedAccounts.find(user.name))
         {
             // Skip allowlisted account
-            OsConfigLogDebug(context.GetLogHandle(), "Skipping allowlisted account '%s'", user.pw_name);
+            OsConfigLogDebug(context.GetLogHandle(), "Skipping allowlisted account '%s'", user.name.c_str());
             continue;
         }
 
-        OsConfigLogInfo(context.GetLogHandle(), "User: %s, UID: %d, shell: %s", user.pw_name, user.pw_uid, user.pw_shell);
-        const auto shell = string(user.pw_shell);
+        OsConfigLogInfo(context.GetLogHandle(), "User: %s, UID: %d, shell: %s", user.name.c_str(), user.uid, user.shell.c_str());
+        const auto& shell = user.shell;
         const auto it = validShells->find(shell);
         if (it != validShells->end())
         {
-            OsConfigLogInfo(context.GetLogHandle(), "System user %d has a valid login shell '%s'", user.pw_uid, user.pw_shell);
-            return indicators.NonCompliant(string("System user ") + std::to_string(user.pw_uid) + " has a valid login shell");
+            OsConfigLogInfo(context.GetLogHandle(), "System user %d has a valid login shell '%s'", user.uid, user.shell.c_str());
+            return indicators.NonCompliant(string("System user ") + std::to_string(user.uid) + " has a valid login shell");
         }
 
-        OsConfigLogInfo(context.GetLogHandle(), "User: %s, UID: %d, shell: %s", user.pw_name, user.pw_uid, user.pw_shell);
-        OsConfigLogDebug(context.GetLogHandle(), "System user %d does not have a valid login shell: '%s'", user.pw_uid, user.pw_shell);
-        indicators.Compliant(string("System user ") + std::to_string(user.pw_uid) + " does not have a valid login shell");
+        OsConfigLogInfo(context.GetLogHandle(), "User: %s, UID: %d, shell: %s", user.name.c_str(), user.uid, user.shell.c_str());
+        OsConfigLogDebug(context.GetLogHandle(), "System user %d does not have a valid login shell: '%s'", user.uid, user.shell.c_str());
+        indicators.Compliant(string("System user ") + std::to_string(user.uid) + " does not have a valid login shell");
     }
 
     return Status::Compliant;

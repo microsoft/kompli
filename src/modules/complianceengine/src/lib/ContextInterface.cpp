@@ -5,6 +5,11 @@
 
 namespace ComplianceEngine
 {
+ContextInterface::ContextInterface()
+    : mAccountDatabase(*this)
+{
+}
+
 // Provide a definition for the virtual destructor
 ContextInterface::~ContextInterface() = default;
 } // namespace ComplianceEngine

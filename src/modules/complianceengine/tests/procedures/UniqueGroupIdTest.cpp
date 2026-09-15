@@ -49,91 +49,54 @@ protected:
         }
     }
 
-    string CreateTestGroupFile(string groupName, Optional<string> password, Optional<int> gid = Optional<int>(), Optional<string> users = Optional<string>())
+    ComplianceEngine::GroupRecord CreateTestGroup(string groupName, Optional<string> password, Optional<int> gid = Optional<int>(),
+        Optional<string> users = Optional<string>())
     {
-        auto content = std::move(groupName);
-        content += ":" + (password.HasValue() ? password.Value() : "");
-        content += ":" + (gid.HasValue() ? std::to_string(gid.Value()) : "");
-        content += ":" + (users.HasValue() ? users.Value() : "");
-
-        return CreateTestGroupFile(std::move(content));
-    }
-
-    string CreateTestGroupFile(string content)
-    {
-        string shadowFilePath = mTempDir + "/group";
-        std::ofstream shadowFile(shadowFilePath);
-        if (!shadowFile.is_open())
-        {
-            OsConfigLogError(mContext.GetLogHandle(), "Failed to create test shadow file %s: %s", shadowFilePath.c_str(), strerror(errno));
-            return string();
-        }
-        shadowFile << std::move(content);
-        shadowFile.close();
-        return shadowFilePath;
-    }
-
-    void RemoveTestShadowFile(const string& shadowFilePath)
-    {
-        if (shadowFilePath.empty())
-        {
-            return;
-        }
-
-        if (0 != remove(shadowFilePath.c_str()))
-        {
-            OsConfigLogError(mContext.GetLogHandle(), "Failed to remove test shadow file %s: %s", shadowFilePath.c_str(), strerror(errno));
-        }
+        UNUSED(password);
+        UNUSED(users);
+        return {std::move(groupName), static_cast<gid_t>(gid.ValueOr(0))};
     }
 };
 
 TEST_F(EnsureGroupIsOnlyGroupWithTest, EmptyFile)
 {
-    auto path = CreateTestGroupFile("");
+    mContext.SetAccountDatabaseRecords({}, {});
     UniqueGroupIdParams params;
     params.groupName = "foo";
     params.gid = 8888;
-    mContext.SetSpecialFilePath("/etc/group", path);
     auto result = AuditUniqueGroupId(params, mIndicators, mContext);
-    RemoveTestShadowFile(path);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
 
 TEST_F(EnsureGroupIsOnlyGroupWithTest, NoParameter)
 {
-    auto path = CreateTestGroupFile(string("foo"), string("x"), 8888);
+    mContext.SetAccountDatabaseRecords({}, {CreateTestGroup(string("foo"), string("x"), 8888)});
     UniqueGroupIdParams params;
     params.groupName = "foo";
-    mContext.SetSpecialFilePath("/etc/group", path);
     auto result = AuditUniqueGroupId(params, mIndicators, mContext);
-    RemoveTestShadowFile(path);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
 TEST_F(EnsureGroupIsOnlyGroupWithTest, SingleGID)
 {
-    auto path = CreateTestGroupFile(string("foo"), string("x"), 8888);
+    mContext.SetAccountDatabaseRecords({}, {CreateTestGroup(string("foo"), string("x"), 8888)});
     UniqueGroupIdParams params;
     params.groupName = "foo";
     params.gid = 8888;
-    mContext.SetSpecialFilePath("/etc/group", path);
     auto result = AuditUniqueGroupId(params, mIndicators, mContext);
-    RemoveTestShadowFile(path);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
 TEST_F(EnsureGroupIsOnlyGroupWithTest, DuplicatedGID)
 {
-    auto path = CreateTestGroupFile("foo:x:8888:\nbar:x:8888:");
+    mContext.SetAccountDatabaseRecords({}, {{"foo", 8888}, {"bar", 8888}});
     UniqueGroupIdParams params;
     params.groupName = "foo";
     params.gid = 8888;
-    mContext.SetSpecialFilePath("/etc/group", path);
     auto result = AuditUniqueGroupId(params, mIndicators, mContext);
-    RemoveTestShadowFile(path);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
