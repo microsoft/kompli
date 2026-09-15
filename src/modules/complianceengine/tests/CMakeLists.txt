@@ -60,7 +60,7 @@ foreach(proc ${GLOBBED_PROCEDURES})
 endforeach()
 
 add_executable(complianceenginetests
-    AssessorContextTest.cpp
+    CliContextTest.cpp
     Base64Test.cpp
     BenchmarkInfoTest.cpp
     BindingsTest.cpp

@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include <AssessorContext.h>
+#include <CliContext.h>
 #include <CommonContext.h>
 #include <Logging.h>
 #include <LuaEvaluator.h>
@@ -17,7 +17,6 @@
 #include <version.h>
 
 using ComplianceEngine::Action;
-using ComplianceEngine::AssessorContext;
 using ComplianceEngine::Error;
 using ComplianceEngine::IndicatorsTree;
 using ComplianceEngine::LuaEvaluator;
@@ -26,6 +25,7 @@ using ComplianceEngine::Optional;
 using ComplianceEngine::PayloadFormatter;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
+using ComplianceEngine::Cli::Context;
 using std::ifstream;
 using std::istream;
 using std::string;
@@ -139,7 +139,7 @@ int main(int argc, char* argv[])
 
     if (Command::Version == options.command)
     {
-        std::cout << "Compliance Engine Assessor\nVersion: " << KOMPLI_VERSION << "\n";
+        std::cout << "ComplianceEngine Lua Evaluator\nVersion: " << KOMPLI_VERSION << "\n";
         return 0;
     }
 
@@ -159,7 +159,7 @@ int main(int argc, char* argv[])
         OsConfigLogInfo(logHandle, "Debug logging enabled");
     }
 
-    auto context = std::unique_ptr<AssessorContext>(new AssessorContext(logHandle));
+    auto context = std::unique_ptr<Context>(new Context(logHandle));
     LuaEvaluator evaluator;
 
     ifstream file;

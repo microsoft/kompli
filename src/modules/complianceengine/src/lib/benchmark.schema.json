@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Unified benchmark-definition file",
-  "description": "One native definition file per benchmark, as a Kubernetes-style resource (apiVersion / kind / metadata / spec) consistent with the other compliancectl data files. Carries identity + inline rule payloads + generic metadata + flat axis:value tags. Produced by the Compliance Augmentation Engine and consumed by the compliance-engine-assessor as its input (replacing the MOF, which is retained only for Machine Configuration).",
+  "description": "One native definition file per benchmark, as a Kubernetes-style resource (apiVersion / kind / metadata / spec) consistent with the other compliancectl data files. Carries identity + inline rule payloads + generic metadata + flat axis:value tags. Produced by the Compliance Augmentation Engine and consumed by kompli as its input (replacing the MOF, which is retained only for Machine Configuration).",
   "type": "object",
   "additionalProperties": true,
   "required": [
@@ -33,7 +33,7 @@
         },
         "labels": {
           "type": "object",
-          "description": "Selectable identity axes (framework, os, distribution, distributionVersion, ...). Architecture-agnostic; the scanned host's arch is recorded in the assessor result, not here.",
+          "description": "Selectable identity axes (framework, os, distribution, distributionVersion, ...). Architecture-agnostic; the scanned host's arch is recorded in the kompli result, not here.",
           "additionalProperties": {
             "type": "string"
           }

@@ -446,7 +446,7 @@ TEST_F(BenchmarkInfoTest, Match_AzureLinux4_DoesNotMatchAzureLinux3)
 }
 
 // When the distribution IDs differ, Match must return false regardless of the
-// version glob. This is the branch the assessor relies on to skip a benchmark
+// version glob. This is the branch kompli relies on to skip a benchmark
 // that targets a different OS than the one it is running on.
 TEST_F(BenchmarkInfoTest, Match_DistributionMismatch)
 {
