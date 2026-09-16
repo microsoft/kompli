@@ -12,11 +12,13 @@
 // It has to be removed and forgotten after we abandon support
 // for older GCC versions.
 
+#ifndef USE_REGEX_FALLBACK
 #if __cplusplus >= 201103L && ((__cplusplus >= 201402L) || (defined(_GLIBCXX_REGEX_DFS_QUANTIFIERS_LIMIT) || defined(_GLIBCXX_REGEX_STATE_LIMIT) ||    \
                                                                (defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE > 4)))
 #define USE_REGEX_FALLBACK 0
 #else
 #define USE_REGEX_FALLBACK 1
+#endif
 #endif
 
 #if USE_REGEX_FALLBACK == 0

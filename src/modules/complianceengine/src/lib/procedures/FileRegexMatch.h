@@ -63,6 +63,12 @@ struct FileRegexMatchParams
     /// Require every line selected by matchPattern to satisfy the state and numeric constraints; otherwise accept any passing line
     Optional<bool> allMatches = false;
 
+    /// Match against the complete file and evaluate each non-overlapping match as a selected object
+    Optional<bool> wholeFile = false;
+
+    /// Require no selected object to satisfy the state and numeric constraints
+    Optional<bool> noneMatches = false;
+
     /// Determine whether a match or state should ignore case sensitivity 'matchPattern' and 'statePattern' or none when empty'
     /// pattern: ^(matchPattern\sstatePattern|matchPattern|statePattern)$
     Optional<IgnoreCase> ignoreCase;

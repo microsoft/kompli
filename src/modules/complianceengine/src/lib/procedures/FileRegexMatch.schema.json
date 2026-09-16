@@ -57,6 +57,14 @@
                   "type": "string",
                   "description": "Require every line selected by matchPattern to satisfy the state and numeric constraints; otherwise accept any passing line"
                 },
+                "wholeFile": {
+                  "type": "string",
+                  "description": "Match against the complete file and evaluate each non-overlapping match as a selected object"
+                },
+                "noneMatches": {
+                  "type": "string",
+                  "description": "Require no selected object to satisfy the state and numeric constraints"
+                },
                 "ignoreCase": {
                   "type": "string",
                   "description": "Determine whether a match or state should ignore case sensitivity 'matchPattern' and 'statePattern' or none when empty'",
