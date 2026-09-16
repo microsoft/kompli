@@ -34,9 +34,8 @@ protected:
     void SetUp() override
     {
         mIndicators.Push("EnsureAccountsWithoutShellAreLocked");
-        auto filename = CreateTestPasswdFile("testuser", "x", "/bin/bash");
-        mContext.SetSpecialFilePath("/etc/passwd", filename);
-        filename = mContext.MakeTempfile("# comment\n/bin/bash\n/bin/nologin");
+        mContext.SetAccountDatabaseRecords({CreateTestUser("testuser", "/bin/bash")});
+        auto filename = mContext.MakeTempfile("# comment\n/bin/bash\n/bin/nologin");
         mContext.SetSpecialFilePath("/etc/shells", filename);
     }
 
@@ -58,20 +57,9 @@ protected:
         return mContext.MakeTempfile(std::move(content));
     }
 
-    string CreatePasswordEntry(string username, string password, string shell)
+    ComplianceEngine::UserRecord CreateTestUser(string username, string shell)
     {
-        auto content = std::move(username);
-        content += ":" + password;
-        content += ":" + std::to_string(9999);
-        content += ":" + std::to_string(9999);
-        content += ":::";
-        content += shell;
-        return content;
-    }
-    string CreateTestPasswdFile(string username, string password, string shell)
-    {
-        auto content = CreatePasswordEntry(username, password, shell);
-        return mContext.MakeTempfile(std::move(content));
+        return {std::move(username), 9999, 9999, "", std::move(shell)};
     }
 };
 
@@ -83,10 +71,10 @@ TEST_F(EnsureAccountsWithoutShellAreLockedTest, NoEtcShadowFile)
     ASSERT_FALSE(result.HasValue());
 }
 
-TEST_F(EnsureAccountsWithoutShellAreLockedTest, NoEtcPasswdFile)
+TEST_F(EnsureAccountsWithoutShellAreLockedTest, AccountDatabaseError)
 {
-    mContext.SetSpecialFilePath("/etc/shadow", "/tmp/somenonexistentfilename");
-    mContext.SetSpecialFilePath("/etc/passwd", "/tmp/somenonexistentfilename");
+    mContext.SetSpecialFilePath("/etc/shadow", CreateTestShadowFile("testuser", "$y$"));
+    mContext.SetAccountDatabaseError(Error("NSS enumeration failed", EIO));
     NoShellAccountsLockedParams params;
     auto result = AuditNoShellAccountsLocked(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
@@ -105,9 +93,7 @@ TEST_F(EnsureAccountsWithoutShellAreLockedTest, ValidShell_RegularPassword)
 
 TEST_F(EnsureAccountsWithoutShellAreLockedTest, ValidShell_NoPassword)
 {
-    auto filename = CreateTestPasswdFile("testuser", "x", "/bin/bash");
-    mContext.SetSpecialFilePath("/etc/passwd", filename);
-    filename = CreateTestShadowFile("testuser", "");
+    auto filename = CreateTestShadowFile("testuser", "");
     mContext.SetSpecialFilePath("/etc/shadow", filename);
     NoShellAccountsLockedParams params;
     auto result = AuditNoShellAccountsLocked(params, mIndicators, mContext);
@@ -139,8 +125,7 @@ TEST_F(EnsureAccountsWithoutShellAreLockedTest, InvalidShell_RegularPassword)
 {
     auto filename = CreateTestShadowFile("testuser", "$y$");
     mContext.SetSpecialFilePath("/etc/shadow", filename);
-    filename = CreateTestPasswdFile("testuser", "$y$", "/bin/x");
-    mContext.SetSpecialFilePath("/etc/passwd", filename);
+    mContext.SetAccountDatabaseRecords({CreateTestUser("testuser", "/bin/x")});
     NoShellAccountsLockedParams params;
     auto result = AuditNoShellAccountsLocked(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
@@ -156,8 +141,7 @@ TEST_F(EnsureAccountsWithoutShellAreLockedTest, InvalidShell_NoPassword)
 {
     auto filename = CreateTestShadowFile("testuser", "");
     mContext.SetSpecialFilePath("/etc/shadow", filename);
-    filename = CreateTestPasswdFile("testuser", "$y$", "/bin/x");
-    mContext.SetSpecialFilePath("/etc/passwd", filename);
+    mContext.SetAccountDatabaseRecords({CreateTestUser("testuser", "/bin/x")});
     NoShellAccountsLockedParams params;
     auto result = AuditNoShellAccountsLocked(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
@@ -173,8 +157,7 @@ TEST_F(EnsureAccountsWithoutShellAreLockedTest, InvalidShell_LockedUser_1)
 {
     auto filename = CreateTestShadowFile("testuser", "!");
     mContext.SetSpecialFilePath("/etc/shadow", filename);
-    filename = CreateTestPasswdFile("testuser", "$y$", "/bin/x");
-    mContext.SetSpecialFilePath("/etc/passwd", filename);
+    mContext.SetAccountDatabaseRecords({CreateTestUser("testuser", "/bin/x")});
     NoShellAccountsLockedParams params;
     auto result = AuditNoShellAccountsLocked(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
@@ -191,8 +174,7 @@ TEST_F(EnsureAccountsWithoutShellAreLockedTest, IngnoreInvalidShellUnlockedUser)
 {
     auto filename = CreateTestShadowFile("testuser", "*");
     mContext.SetSpecialFilePath("/etc/shadow", filename);
-    filename = CreateTestPasswdFile("testuser", "$y$", "/bin/x");
-    mContext.SetSpecialFilePath("/etc/passwd", filename);
+    mContext.SetAccountDatabaseRecords({CreateTestUser("testuser", "/bin/x")});
     NoShellAccountsLockedParams params;
     params.skipInvalidShells = true;
     auto result = AuditNoShellAccountsLocked(params, mIndicators, mContext);
@@ -209,8 +191,7 @@ TEST_F(EnsureAccountsWithoutShellAreLockedTest, InvalidShell_LockedUser_2)
 {
     auto filename = CreateTestShadowFile("testuser", "*");
     mContext.SetSpecialFilePath("/etc/shadow", filename);
-    filename = CreateTestPasswdFile("testuser", "$y$", "/bin/x");
-    mContext.SetSpecialFilePath("/etc/passwd", filename);
+    mContext.SetAccountDatabaseRecords({CreateTestUser("testuser", "/bin/x")});
     NoShellAccountsLockedParams params;
     auto result = AuditNoShellAccountsLocked(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
@@ -227,8 +208,7 @@ TEST_F(EnsureAccountsWithoutShellAreLockedTest, SkipBelowUidMin_GetUidMinError)
 {
     auto filename = CreateTestShadowFile("testuser", "*");
     mContext.SetSpecialFilePath("/etc/shadow", filename);
-    filename = CreateTestPasswdFile("testuser", "$y$", "/bin/x");
-    mContext.SetSpecialFilePath("/etc/passwd", filename);
+    mContext.SetAccountDatabaseRecords({CreateTestUser("testuser", "/bin/x")});
     EXPECT_CALL(mContext, GetFileContents(cLoginDefsPath)).WillOnce(Return(Result<string>(Error("Failed to load file contents"))));
     NoShellAccountsLockedParams params;
     params.skipBelowUidMin = true;
@@ -247,8 +227,7 @@ TEST_F(EnsureAccountsWithoutShellAreLockedTest, SkipBelowUidMin_NoIUidMin)
 {
     auto filename = CreateTestShadowFile("testuser", "*");
     mContext.SetSpecialFilePath("/etc/shadow", filename);
-    filename = CreateTestPasswdFile("testuser", "$y$", "/bin/x");
-    mContext.SetSpecialFilePath("/etc/passwd", filename);
+    mContext.SetAccountDatabaseRecords({CreateTestUser("testuser", "/bin/x")});
     EXPECT_CALL(mContext, GetFileContents(cLoginDefsPath)).WillOnce(Return(Result<string>("# EMPTY FILE")));
     NoShellAccountsLockedParams params;
     params.skipBelowUidMin = true;
@@ -267,8 +246,7 @@ TEST_F(EnsureAccountsWithoutShellAreLockedTest, SkipBelowUidMin)
 {
     auto filename = CreateTestShadowFile("testuser", "$y$");
     mContext.SetSpecialFilePath("/etc/shadow", filename);
-    filename = CreateTestPasswdFile("testuser", "$y$", "/bin/x");
-    mContext.SetSpecialFilePath("/etc/passwd", filename);
+    mContext.SetAccountDatabaseRecords({CreateTestUser("testuser", "/bin/x")});
     EXPECT_CALL(mContext, GetFileContents(cLoginDefsPath)).WillOnce(Return(Result<string>("UID_MIN 10001")));
     NoShellAccountsLockedParams params;
     params.skipBelowUidMin = true;
@@ -286,8 +264,7 @@ TEST_F(EnsureAccountsWithoutShellAreLockedTest, SkipTestUser)
 {
     auto filename = CreateTestShadowFile("testuser", "$y$");
     mContext.SetSpecialFilePath("/etc/shadow", filename);
-    filename = CreateTestPasswdFile("testuser", "$y$", "/bin/x");
-    mContext.SetSpecialFilePath("/etc/passwd", filename);
+    mContext.SetAccountDatabaseRecords({CreateTestUser("testuser", "/bin/x")});
     NoShellAccountsLockedParams params;
     params.excludeUsers = {{"testuser"}};
     auto result = AuditNoShellAccountsLocked(params, mIndicators, mContext);
@@ -309,12 +286,7 @@ TEST_F(EnsureAccountsWithoutShellAreLockedTest, ExcludeTwoUsers)
     auto filename = mContext.MakeTempfile(std::move(content));
     mContext.SetSpecialFilePath("/etc/shadow", filename);
 
-    // filename = CreateTestPasswdFile("user1", "$y$", "/bin/x");
-    user1 = CreatePasswordEntry("u,ser1", "$y$", "/bin/x");
-    user2 = CreatePasswordEntry("us,er2", "$y$", "/bin/x");
-    content = user1 + "\n" + user2;
-    filename = mContext.MakeTempfile(std::move(content));
-    mContext.SetSpecialFilePath("/etc/passwd", filename);
+    mContext.SetAccountDatabaseRecords({CreateTestUser("u,ser1", "/bin/x"), CreateTestUser("us,er2", "/bin/x")});
 
     NoShellAccountsLockedParams params;
     params.excludeUsers = {{"u,ser1", "us,er2"}};

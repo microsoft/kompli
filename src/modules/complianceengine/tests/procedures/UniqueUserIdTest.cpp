@@ -48,124 +48,75 @@ protected:
         }
     }
 
-    string CreateTestPasswdFile(string username, Optional<string> password, Optional<int> uid = Optional<int>(), Optional<int> gid = Optional<int>(),
-        Optional<string> home = Optional<string>(), Optional<string> shell = Optional<string>())
+    ComplianceEngine::UserRecord CreateTestUser(string username, Optional<string> password, Optional<int> uid = Optional<int>(),
+        Optional<int> gid = Optional<int>(), Optional<string> home = Optional<string>(), Optional<string> shell = Optional<string>())
     {
-        auto content = std::move(username);
-        content += ":" + (password.HasValue() ? password.Value() : "");
-        content += ":" + (uid.HasValue() ? std::to_string(uid.Value()) : "");
-        content += ":" + (gid.HasValue() ? std::to_string(gid.Value()) : "");
-        content += ":" + (home.HasValue() ? home.Value() : "");
-        content += ":" + (shell.HasValue() ? shell.Value() : "");
-
-        return CreateTestPasswdFile(std::move(content));
-    }
-
-    string CreateTestPasswdFile(string content)
-    {
-        string shadowFilePath = mTempDir + "/passwd";
-        std::ofstream shadowFile(shadowFilePath);
-        if (!shadowFile.is_open())
-        {
-            OsConfigLogError(mContext.GetLogHandle(), "Failed to create test shadow file %s: %s", shadowFilePath.c_str(), strerror(errno));
-            return string();
-        }
-        shadowFile << std::move(content);
-        shadowFile.close();
-        return shadowFilePath;
-    }
-
-    void RemoveTestShadowFile(const string& shadowFilePath)
-    {
-        if (shadowFilePath.empty())
-        {
-            return;
-        }
-
-        if (0 != remove(shadowFilePath.c_str()))
-        {
-            OsConfigLogError(mContext.GetLogHandle(), "Failed to remove test shadow file %s: %s", shadowFilePath.c_str(), strerror(errno));
-        }
+        UNUSED(password);
+        return {std::move(username), static_cast<uid_t>(uid.ValueOr(0)), static_cast<gid_t>(gid.ValueOr(0)), home.ValueOr(""), shell.ValueOr("")};
     }
 };
 
 TEST_F(EnsureUserIsOnlyAccountWithTest, NoParameter)
 {
-    auto path = CreateTestPasswdFile(string("foo"), string("x"), 8888, 1000, string("/home/foo"), string("/bin/bash"));
+    mContext.SetAccountDatabaseRecords({CreateTestUser(string("foo"), string("x"), 8888, 1000, string("/home/foo"), string("/bin/bash"))});
     UniqueUserIdParams params;
     params.username = "foo";
-    mContext.SetSpecialFilePath("/etc/passwd", path);
     auto result = AuditUniqueUserId(params, mIndicators, mContext);
-    RemoveTestShadowFile(path);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
 TEST_F(EnsureUserIsOnlyAccountWithTest, EmptyFile)
 {
-    auto path = CreateTestPasswdFile("");
+    mContext.SetAccountDatabaseRecords({});
     UniqueUserIdParams params;
     params.username = "foo";
     params.uid = 8888;
-    mContext.SetSpecialFilePath("/etc/passwd", path);
     auto result = AuditUniqueUserId(params, mIndicators, mContext);
-    RemoveTestShadowFile(path);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
 
 TEST_F(EnsureUserIsOnlyAccountWithTest, SingleUID)
 {
-    auto path = CreateTestPasswdFile("foo:x:8888:9999:/home/foo:/bin/bash");
+    mContext.SetAccountDatabaseRecords({{"foo", 8888, 9999, "/home/foo", "/bin/bash"}});
     UniqueUserIdParams params;
     params.username = "foo";
     params.uid = 8888;
-    mContext.SetSpecialFilePath("/etc/passwd", path);
     auto result = AuditUniqueUserId(params, mIndicators, mContext);
-    RemoveTestShadowFile(path);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
 TEST_F(EnsureUserIsOnlyAccountWithTest, DuplicatedUID)
 {
-    auto path = CreateTestPasswdFile(
-        "foo:x:8888:9999:/home/foo:/bin/bash\n"
-        "bar:x:8888:9999:/home/bar:/bin/bash");
+    mContext.SetAccountDatabaseRecords({{"foo", 8888, 9999, "/home/foo", "/bin/bash"}, {"bar", 8888, 9999, "/home/bar", "/bin/bash"}});
     UniqueUserIdParams params;
     params.username = "foo";
     params.uid = 8888;
-    mContext.SetSpecialFilePath("/etc/passwd", path);
     auto result = AuditUniqueUserId(params, mIndicators, mContext);
-    RemoveTestShadowFile(path);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
 
 TEST_F(EnsureUserIsOnlyAccountWithTest, SingleGID)
 {
-    auto path = CreateTestPasswdFile("foo:x:8888:9999:/home/foo:/bin/bash");
+    mContext.SetAccountDatabaseRecords({{"foo", 8888, 9999, "/home/foo", "/bin/bash"}});
     UniqueUserIdParams params;
     params.username = "foo";
     params.gid = 9999;
-    mContext.SetSpecialFilePath("/etc/passwd", path);
     auto result = AuditUniqueUserId(params, mIndicators, mContext);
-    RemoveTestShadowFile(path);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
 TEST_F(EnsureUserIsOnlyAccountWithTest, DuplicatedGID)
 {
-    auto path = CreateTestPasswdFile(
-        "foo:x:8888:9999:/home/foo:/bin/bash\n"
-        "bar:x:8888:9999:/home/bar:/bin/bash");
+    mContext.SetAccountDatabaseRecords({{"foo", 8888, 9999, "/home/foo", "/bin/bash"}, {"bar", 8888, 9999, "/home/bar", "/bin/bash"}});
     UniqueUserIdParams params;
     params.username = "foo";
     params.gid = 9999;
-    mContext.SetSpecialFilePath("/etc/passwd", path);
     auto result = AuditUniqueUserId(params, mIndicators, mContext);
-    RemoveTestShadowFile(path);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }

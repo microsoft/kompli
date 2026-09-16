@@ -9,7 +9,6 @@
 #include <LogFilePermissions.h>
 #include <Result.h>
 #include <Telemetry.h>
-#include <UsersIterator.h>
 #include <fnmatch.h>
 #include <map>
 #include <pwd.h>
@@ -67,22 +66,20 @@ Result<DaemonUidSet> BuildDaemonUidSet(ContextInterface& context)
         return validShells.Error();
     }
 
-    auto users = UsersRange::Make(context.GetSpecialFilePath("/etc/passwd"), context.GetLogHandle());
+    auto users = context.GetAccountDatabase().GetUsers();
     if (!users.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to enumerate users: %s", users.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("UsersRange", users.Error().code);
+        OSConfigTelemetryStatusTrace("AccountDatabase", users.Error().code);
         return users.Error();
     }
 
     DaemonUidSet daemonUids;
-    for (const auto& user : users.Value())
+    for (const auto& user : *users.Value())
     {
-        const std::string name = (user.pw_name != nullptr) ? user.pw_name : std::string();
-        const std::string shell = (user.pw_shell != nullptr) ? user.pw_shell : std::string();
-        if (name == "root" || validShells.Value().find(shell) == validShells.Value().end())
+        if (user.name == "root" || validShells.Value().find(user.shell) == validShells.Value().end())
         {
-            daemonUids.insert(user.pw_uid);
+            daemonUids.insert(user.uid);
         }
     }
 

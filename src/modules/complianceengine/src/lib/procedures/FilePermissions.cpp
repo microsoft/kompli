@@ -256,8 +256,12 @@ Result<Status> AuditFilePermissions(const FilePermissionsParams& params, Indicat
 
     if (params.owner.HasValue())
     {
-        const passwd* pwd = getpwuid(statbuf.st_uid);
-        if (nullptr == pwd)
+        auto user = context.GetAccountDatabase().FindUserById(statbuf.st_uid);
+        if (!user.HasValue())
+        {
+            return user.Error();
+        }
+        if (nullptr == user.Value())
         {
             OsConfigLogDebug(log, "No user with UID %d", statbuf.st_uid);
             return indicators.NonCompliant("No user with uid " + std::to_string(statbuf.st_uid));
@@ -265,22 +269,23 @@ Result<Status> AuditFilePermissions(const FilePermissionsParams& params, Indicat
         bool ownerOk = false;
         for (const auto& owner : params.owner->items)
         {
-            if (owner.GetPattern() == pwd->pw_name)
+            if (owner.GetPattern() == user.Value()->name)
             {
-                OsConfigLogDebug(log, "Matched owner '%s' to '%s'", owner.GetPattern().c_str(), pwd->pw_name);
+                OsConfigLogDebug(log, "Matched owner '%s' to '%s'", owner.GetPattern().c_str(), user.Value()->name.c_str());
                 ownerOk = true;
                 break;
             }
         }
         if (!ownerOk)
         {
-            OsConfigLogDebug(log, "Invalid '%s' owner - is '%s' should be '%s'", params.path.c_str(), pwd->pw_name, params.owner->ToString().c_str());
-            return indicators.NonCompliant("Invalid owner on '" + params.path + "' - is '" + std::string(pwd->pw_name) + "' should be '" +
+            OsConfigLogDebug(log, "Invalid '%s' owner - is '%s' should be '%s'", params.path.c_str(), user.Value()->name.c_str(),
+                params.owner->ToString().c_str());
+            return indicators.NonCompliant("Invalid owner on '" + params.path + "' - is '" + user.Value()->name + "' should be '" +
                                            params.owner->ToString() + "'");
         }
         else
         {
-            OsConfigLogDebug(log, "Matched owner '%s' to '%s'", params.owner->ToString().c_str(), pwd->pw_name);
+            OsConfigLogDebug(log, "Matched owner '%s' to '%s'", params.owner->ToString().c_str(), user.Value()->name.c_str());
         }
 
         indicators.Compliant(params.path + " owner matches expected value '" + params.owner->ToString() + "'");
@@ -288,8 +293,12 @@ Result<Status> AuditFilePermissions(const FilePermissionsParams& params, Indicat
 
     if (params.group.HasValue())
     {
-        group* grp = getgrgid(statbuf.st_gid);
-        if (nullptr == grp)
+        auto groupRecord = context.GetAccountDatabase().FindGroupById(statbuf.st_gid);
+        if (!groupRecord.HasValue())
+        {
+            return groupRecord.Error();
+        }
+        if (nullptr == groupRecord.Value())
         {
             OsConfigLogDebug(log, "No group with GID %d", statbuf.st_gid);
             return indicators.NonCompliant("No group with gid " + std::to_string(statbuf.st_gid));
@@ -297,22 +306,23 @@ Result<Status> AuditFilePermissions(const FilePermissionsParams& params, Indicat
         bool groupOk = false;
         for (const auto& group : params.group->items)
         {
-            if (group.GetPattern() == grp->gr_name)
+            if (group.GetPattern() == groupRecord.Value()->name)
             {
-                OsConfigLogDebug(log, "Matched group '%s' to '%s'", group.GetPattern().c_str(), grp->gr_name);
+                OsConfigLogDebug(log, "Matched group '%s' to '%s'", group.GetPattern().c_str(), groupRecord.Value()->name.c_str());
                 groupOk = true;
                 break;
             }
         }
         if (!groupOk)
         {
-            OsConfigLogDebug(log, "Invalid group on '%s' - is '%s' should be '%s'", params.path.c_str(), grp->gr_name, params.group->ToString().c_str());
-            return indicators.NonCompliant("Invalid group on '" + params.path + "' - is '" + std::string(grp->gr_name) + "' should be '" +
+            OsConfigLogDebug(log, "Invalid group on '%s' - is '%s' should be '%s'", params.path.c_str(), groupRecord.Value()->name.c_str(),
+                params.group->ToString().c_str());
+            return indicators.NonCompliant("Invalid group on '" + params.path + "' - is '" + groupRecord.Value()->name + "' should be '" +
                                            params.group->ToString() + "'");
         }
         else
         {
-            OsConfigLogDebug(log, "Matched group '%s' to '%s'", params.group->ToString().c_str(), grp->gr_name);
+            OsConfigLogDebug(log, "Matched group '%s' to '%s'", params.group->ToString().c_str(), groupRecord.Value()->name.c_str());
         }
 
         indicators.Compliant(params.path + " group matches expected value '" + params.group->ToString() + "'");
@@ -432,12 +442,16 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
         }
 
         bool ownerOk = false;
-        const struct passwd* pwd = getpwuid(statbuf.st_uid);
+        auto currentUser = context.GetAccountDatabase().FindUserById(statbuf.st_uid);
+        if (!currentUser.HasValue())
+        {
+            return currentUser.Error();
+        }
         for (const auto& owner : params.owner->items)
         {
-            if ((nullptr != pwd) && (owner.GetPattern() == pwd->pw_name))
+            if ((nullptr != currentUser.Value()) && (owner.GetPattern() == currentUser.Value()->name))
             {
-                OsConfigLogDebug(log, "Matched owner '%s' to '%s'", params.owner->ToString().c_str(), pwd->pw_name);
+                OsConfigLogDebug(log, "Matched owner '%s' to '%s'", params.owner->ToString().c_str(), currentUser.Value()->name.c_str());
                 ownerOk = true;
                 break;
             }
@@ -445,20 +459,24 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
         if (!ownerOk)
         {
             const auto& firstOwner = params.owner->items.front();
-            pwd = getpwnam(firstOwner.GetPattern().c_str());
-            if (pwd == nullptr)
+            auto requestedUser = context.GetAccountDatabase().FindUserByName(firstOwner.GetPattern());
+            if (!requestedUser.HasValue())
+            {
+                return requestedUser.Error();
+            }
+            if (requestedUser.Value() == nullptr)
             {
                 OsConfigLogDebug(log, "No user with name %s", firstOwner.GetPattern().c_str());
                 return indicators.NonCompliant("No user with name " + firstOwner.GetPattern());
             }
-            uid = pwd->pw_uid;
+            uid = requestedUser.Value()->uid;
             if (uid != statbuf.st_uid)
             {
                 ownership_changed = true;
             }
             else
             {
-                OsConfigLogDebug(log, "Matched owner '%s' to '%s'", params.owner->ToString().c_str(), pwd->pw_name);
+                OsConfigLogDebug(log, "Matched owner '%s' to '%s'", params.owner->ToString().c_str(), requestedUser.Value()->name.c_str());
             }
         }
     }
@@ -470,13 +488,17 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
             return Error("Empty list of groups provided", EINVAL);
         }
 
-        const struct group* grp = getgrgid(statbuf.st_gid);
+        auto currentGroup = context.GetAccountDatabase().FindGroupById(statbuf.st_gid);
+        if (!currentGroup.HasValue())
+        {
+            return currentGroup.Error();
+        }
         bool groupOk = false;
         for (const auto& group : params.group->items)
         {
-            if ((nullptr != grp) && (group.GetPattern() == grp->gr_name))
+            if ((nullptr != currentGroup.Value()) && (group.GetPattern() == currentGroup.Value()->name))
             {
-                OsConfigLogDebug(log, "Matched group '%s' to '%s'", group.GetPattern().c_str(), grp->gr_name);
+                OsConfigLogDebug(log, "Matched group '%s' to '%s'", group.GetPattern().c_str(), currentGroup.Value()->name.c_str());
                 groupOk = true;
                 break;
             }
@@ -484,20 +506,24 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
         if (!groupOk)
         {
             const auto& firstGroup = params.group->items.front();
-            grp = getgrnam(firstGroup.GetPattern().c_str());
-            if (grp == nullptr)
+            auto requestedGroup = context.GetAccountDatabase().FindGroupByName(firstGroup.GetPattern());
+            if (!requestedGroup.HasValue())
+            {
+                return requestedGroup.Error();
+            }
+            if (requestedGroup.Value() == nullptr)
             {
                 OsConfigLogDebug(log, "No group with GID %d", statbuf.st_gid);
                 return indicators.NonCompliant("No group with gid " + std::to_string(statbuf.st_gid));
             }
-            gid = grp->gr_gid;
+            gid = requestedGroup.Value()->gid;
             if (gid != statbuf.st_gid)
             {
                 ownership_changed = true;
             }
             else
             {
-                OsConfigLogDebug(log, "Matched group '%s' to '%s'", params.group->ToString().c_str(), grp->gr_name);
+                OsConfigLogDebug(log, "Matched group '%s' to '%s'", params.group->ToString().c_str(), requestedGroup.Value()->name.c_str());
             }
         }
     }

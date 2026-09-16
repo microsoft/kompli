@@ -3,7 +3,6 @@
 
 #include <CommonUtils.h>
 #include <UniqueUserId.h>
-#include <UsersIterator.h>
 #include <shadow.h>
 #include <vector>
 
@@ -18,31 +17,31 @@ Result<Status> AuditUniqueUserId(const UniqueUserIdParams& params, IndicatorsTre
     bool hasUid = false;
     bool hasGid = false;
 
-    auto users = UsersRange::Make(context.GetSpecialFilePath("/etc/passwd"), context.GetLogHandle());
+    auto users = context.GetAccountDatabase().GetUsers();
     if (!users.HasValue())
     {
         return users.Error();
     }
 
-    for (const auto& item : users.Value())
+    for (const auto& item : *users.Value())
     {
-        if (params.uid.HasValue() && item.pw_uid == static_cast<decltype(item.pw_uid)>(params.uid.Value()))
+        if (params.uid.HasValue() && item.uid == static_cast<decltype(item.uid)>(params.uid.Value()))
         {
-            if (item.pw_name != params.username)
+            if (item.name != params.username)
             {
-                OsConfigLogDebug(context.GetLogHandle(), "User '%s' has UID %d, but expected '%s'.", item.pw_name, item.pw_uid, params.username.c_str());
-                return indicators.NonCompliant("A user other than '" + params.username + "' has UID " + std::to_string(item.pw_uid));
+                OsConfigLogDebug(context.GetLogHandle(), "User '%s' has UID %d, but expected '%s'.", item.name.c_str(), item.uid, params.username.c_str());
+                return indicators.NonCompliant("A user other than '" + params.username + "' has UID " + std::to_string(item.uid));
             }
 
             hasUid = true;
         }
 
-        if (params.gid.HasValue() && item.pw_gid == static_cast<decltype(item.pw_uid)>(params.gid.Value()))
+        if (params.gid.HasValue() && item.gid == static_cast<decltype(item.uid)>(params.gid.Value()))
         {
-            if (item.pw_name != params.username)
+            if (item.name != params.username)
             {
-                OsConfigLogDebug(context.GetLogHandle(), "User '%s' has GID %d, but expected '%s'.", item.pw_name, item.pw_gid, params.username.c_str());
-                return indicators.NonCompliant("A user other than '" + params.username + "' has GID " + std::to_string(item.pw_gid));
+                OsConfigLogDebug(context.GetLogHandle(), "User '%s' has GID %d, but expected '%s'.", item.name.c_str(), item.gid, params.username.c_str());
+                return indicators.NonCompliant("A user other than '" + params.username + "' has GID " + std::to_string(item.gid));
             }
 
             hasGid = true;

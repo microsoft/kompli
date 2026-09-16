@@ -153,6 +153,19 @@ struct MockContext : public ComplianceEngine::ContextInterface
         mSpecialFilesMap[path] = overridden;
     }
 
+    void SetAccountDatabaseRecords(std::vector<ComplianceEngine::UserRecord> users, std::vector<ComplianceEngine::GroupRecord> groups = {})
+    {
+        ComplianceEngine::AccountDatabaseRecords records;
+        records.users = std::move(users);
+        records.groups = std::move(groups);
+        GetAccountDatabase().SetLoaderForTesting([records]() { return records; });
+    }
+
+    void SetAccountDatabaseError(ComplianceEngine::Error error)
+    {
+        GetAccountDatabase().SetLoaderForTesting([error]() { return error; });
+    }
+
     ComplianceEngine::FilesystemScanner& GetFilesystemScanner() override
     {
         return *mFsScannerp;

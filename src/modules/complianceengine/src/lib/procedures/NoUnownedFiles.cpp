@@ -2,16 +2,14 @@
 // Licensed under the MIT License.
 //
 // NoUnownedFiles: Fails if any file in the scanned filesystem snapshot has a UID
-// that is not present in /etc/passwd (as enumerated by UsersIterator). Stops at
+// that is not present in the context's account database. Stops at
 // the first unowned file (early exit) and returns NonCompliant. If all files
 // are owned by known UIDs, returns Compliant.
 
 #include <CommonUtils.h>
 #include <Evaluator.h>
 #include <FilesystemScanner.h>
-#include <GroupsIterator.h>
 #include <NoUnownedFiles.h>
-#include <UsersIterator.h>
 #include <fnmatch.h>
 #include <set>
 #include <sys/stat.h>
@@ -25,24 +23,24 @@ Result<Status> AuditNoUnownedFiles(IndicatorsTree& indicators, ContextInterface&
     const std::vector<std::string> ommited_paths = {"/run/*", "/proc/*", "*/containerd/*", "*/kubelet/*", "/sys/fs/cgroup/memory/*", "/var/*/private/*"};
     // Build set of known uids and gids
     std::set<uid_t> knownUids;
-    auto usersRange = UsersRange::Make(context.GetSpecialFilePath("/etc/passwd"), context.GetLogHandle());
+    auto usersRange = context.GetAccountDatabase().GetUsers();
     if (!usersRange.HasValue())
     {
         return usersRange.Error();
     }
-    for (const auto& pw : usersRange.Value())
+    for (const auto& user : *usersRange.Value())
     {
-        knownUids.insert(pw.pw_uid);
+        knownUids.insert(user.uid);
     }
     std::set<uid_t> knownGids;
-    auto groupsRange = GroupsRange::Make(context.GetSpecialFilePath("/etc/group"), context.GetLogHandle());
+    auto groupsRange = context.GetAccountDatabase().GetGroups();
     if (!groupsRange.HasValue())
     {
         return groupsRange.Error();
     }
-    for (const auto& gr : groupsRange.Value())
+    for (const auto& group : *groupsRange.Value())
     {
-        knownGids.insert(gr.gr_gid);
+        knownGids.insert(group.gid);
     }
 
     // Get filesystem snapshot

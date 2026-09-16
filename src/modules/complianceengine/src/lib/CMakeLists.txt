@@ -158,6 +158,7 @@ add_custom_target(complianceengineschema
 set_property(TARGET complianceengineschema PROPERTY OUTPUT ComplianceEngineSchema.zip)
 
 add_library(complianceenginelib STATIC
+    AccountDatabase.cpp
     Base64.cpp
     BenchmarkInfo.cpp
     BindingParsers.cpp
@@ -170,7 +171,6 @@ add_library(complianceenginelib STATIC
     FileTreeWalk.cpp
     GuestConfigurationContext.cpp
     FilesystemScanner.cpp
-    GroupsIterator.cpp
     Indicators.cpp
     JsonWrapper.cpp
     KernelModuleTools.cpp
@@ -186,7 +186,6 @@ add_library(complianceenginelib STATIC
     StringTools.cpp
     SystemdCatConfig.cpp
     Users.cpp
-    UsersIterator.cpp
     ${PROCEDURES}
     )
 

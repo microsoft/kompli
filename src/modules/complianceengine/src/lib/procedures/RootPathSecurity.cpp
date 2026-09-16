@@ -63,8 +63,12 @@ Result<Status> AuditRootPathSecurity(IndicatorsTree& indicators, ContextInterfac
         struct stat statbuf;
         if (stat(path.c_str(), &statbuf) == 0 && S_ISDIR(statbuf.st_mode))
         {
-            auto owner = getpwuid(statbuf.st_uid);
-            if (!owner || std::string(owner->pw_name) != "root")
+            auto owner = context.GetAccountDatabase().FindUserById(statbuf.st_uid);
+            if (!owner.HasValue())
+            {
+                return owner.Error();
+            }
+            if (!owner.Value() || owner.Value()->name != "root")
             {
                 return indicators.NonCompliant("Directory '" + path + "' from root's PATH is not owned by root");
             }

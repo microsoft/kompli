@@ -18,7 +18,6 @@ enum class OSType
 // Defines the Linux distribution, e.g., Ubuntu, CentOS
 enum class LinuxDistribution
 {
-    Any,
     Ubuntu,
     Centos,
     RHEL,

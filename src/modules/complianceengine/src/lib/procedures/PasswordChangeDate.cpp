@@ -6,7 +6,6 @@
 #include <PasswordChangeDate.h>
 #include <PasswordEntriesIterator.h>
 #include <Regex.h>
-#include <pwd.h>
 #include <shadow.h>
 #include <vector>
 
@@ -38,10 +37,14 @@ Result<Status> AuditPasswordChangeDate(IndicatorsTree& indicators, ContextInterf
         OsConfigLogDebug(context.GetLogHandle(), "User %s has a password change date in the future: %ld", item.sp_namp, item.sp_lstchg);
         if (invalidUsersCount < maxInvalidUsers)
         {
-            const auto* pwd = getpwnam(item.sp_namp);
-            if (pwd)
+            auto user = context.GetAccountDatabase().FindUserByName(item.sp_namp);
+            if (!user.HasValue())
             {
-                indicators.NonCompliant("User " + std::to_string(pwd->pw_uid) + " has a password change date in the future");
+                return user.Error();
+            }
+            if (user.Value())
+            {
+                indicators.NonCompliant("User " + std::to_string(user.Value()->uid) + " has a password change date in the future");
             }
             else
             {
