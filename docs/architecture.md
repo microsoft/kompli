@@ -298,6 +298,45 @@ sequenceDiagram
 - The positional benchmark-definition filename is checked for path traversal and a writable parent directory, then opened with `O_NOFOLLOW`, before it is read.
 - kompli logs to stderr unconditionally; there is no `--log-file` flag (removed — see [logging.md](logging.md) for the sink model and why the operator-supplied log path was eliminated rather than hardened).
 
+### Definition versioning & compatibility
+
+A benchmark-definition file carries **three independent version axes**, each
+answering a different question and consumed by a different layer:
+
+| Field | Axis | Consumer | Comparison |
+|---|---|---|---|
+| `apiVersion` | file **format** (envelope shape) | the parser | exact / allowlist |
+| `version` (semver) | **content** revision for a fixed format + identity | `plan`/`run` | semver **range** |
+| `benchmarkVersion` | **upstream** CIS/STIG version | identity tuple | exact (identity) |
+
+- **`apiVersion` — format gate.** The parser validates `apiVersion` against a
+  supported set and **rejects** an unknown format rather than parsing it
+  best-effort. A JSON-schema change that reshapes the on-disk format bumps
+  `apiVersion`. kompli may accept a
+  **bounded window** of `apiVersion`s so a definitions package can lag the
+  installed kompli during an upgrade.
+- **`version` — content semver, what plans pin.** A plan records each
+  benchmark's `version` plus a `versionConstraint` (default **caret** `^`,
+  "same major"). At `run`, kompli resolves the on-disk definition's `version`:
+  if it satisfies the constraint (a patch/minor update — e.g. an
+  admin-applied security fix), the run proceeds **transparently**; if not (a
+  **major** bump), the run **hard-errors** and asks the user to review and
+  regenerate the plan. This is what lets `/etc/kompli/definitions/` be auto-updated without invalidating every
+  pinned plan on each bugfix.
+- **`benchmarkVersion` — upstream identity.** Part of the identity tuple
+  `(framework, distribution, distributionVersion, benchmarkVersion)`; a change
+  here is a **different benchmark** (re-plan by design — already a cross-version
+  hard error), not a compatible update.
+
+**Bump semantics.** MAJOR = a change that could invalidate or silently alter a
+plan-referenced rule (rule `id` removed/renamed, parameter removed/renamed or
+`validationRegex` tightened, a rule's semantics redefined); MINOR = additive
+(new rule, new optional parameter); PATCH = a behavior-preserving payload fix.
+The definitions generator enforces the mechanically-detectable **floor** and the
+author **declares** the ceiling (a payload change is ≥ PATCH, justified in
+review), since a bugfix and a semantic redefinition both read as "the payload
+changed".
+
 # 5. kompli Universal Native Resource Provider (NRP)
 
 The kompli Universal Native Resource Provider (NRP) Adapter links kompli to the [Azure Automanage Machine Configuration (MC)](https://learn.microsoft.com/en-us/azure/governance/machine-configuration/).
