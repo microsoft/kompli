@@ -702,6 +702,23 @@ TEST_F(FileRegexMatchTest, Audit_FilenamePattern_8)
     EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(FileRegexMatchTest, Audit_FilenamePatternSuffix)
+{
+    const string filename = string(mTempdir) + "/example.repo";
+    mTempfiles.push_back(filename);
+    std::ofstream(filename) << "setting=true";
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex(R"(\.repo$)");
+    params.filenameSearch = true;
+    params.matchPattern = R"(^setting=true$)";
+
+    const auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+}
+
 TEST_F(FileRegexMatchTest, Audit_RepositoryChecksIgnoreUnselectedFiles)
 {
     MakeTempfile("[base]\nname=Base\ngpgcheck=1\n");
@@ -733,6 +750,24 @@ TEST_F(FileRegexMatchTest, Audit_RepositoryChecksIgnoreUnselectedFiles)
         ASSERT_TRUE(result.HasValue());
         EXPECT_EQ(Status::NonCompliant, result.Value());
     }
+}
+
+TEST_F(FileRegexMatchTest, Audit_ExactFilenameDoesNotSelectBackup)
+{
+    const string filename = string(mTempdir) + "/shadow";
+    const string backup = filename + "-";
+    mTempfiles.insert(mTempfiles.end(), {filename, backup});
+    std::ofstream(filename) << "root:!";
+    std::ofstream(backup) << "root:unlocked";
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex("shadow");
+    params.matchPattern = R"(^root:(!|\*|!!))";
+
+    const auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
 }
 
 TEST_F(FileRegexMatchTest, Audit_TestPattern)

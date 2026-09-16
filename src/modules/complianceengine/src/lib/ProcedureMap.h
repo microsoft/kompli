@@ -357,9 +357,9 @@ template <>
 struct Bindings<FileRegexMatchParams>
 {
     using T = FileRegexMatchParams;
-    static constexpr size_t size = 13;
+    static constexpr size_t size = 14;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::path, &T::filenamePattern, &T::matchOperation, &T::matchPattern, &T::stateOperation, &T::statePattern, &T::minimumValue, &T::maximumValue, &T::allMatches, &T::wholeFile, &T::noneMatches, &T::ignoreCase, &T::behavior);
+    static constexpr auto members = std::make_tuple(&T::path, &T::filenamePattern, &T::filenameSearch, &T::matchOperation, &T::matchPattern, &T::stateOperation, &T::statePattern, &T::minimumValue, &T::maximumValue, &T::allMatches, &T::wholeFile, &T::noneMatches, &T::ignoreCase, &T::behavior);
 };
 
 // Defines the bindings for the FileSymlinkTargetParams structure.

@@ -32,8 +32,8 @@ const char* Bindings<FilePermissionsParams>::names[] = {"path", "owner", "group"
 // FilePermissions.h:82
 const char* Bindings<FilePermissionsCollectionParams>::names[] = {"directory", "recurse", "directoriesOnly", "allFileTypes", "excludeSymlinks", "excludeDirectories", "maximumUid", "maximumGid", "filePattern", "filePatternIsRegex", "owner", "group", "permissions", "mask", "behavior"};
 
-// FileRegexMatch.h:79
-const char* Bindings<FileRegexMatchParams>::names[] = {"path", "filenamePattern", "matchOperation", "matchPattern", "stateOperation", "statePattern", "minimumValue", "maximumValue", "allMatches", "wholeFile", "noneMatches", "ignoreCase", "behavior"};
+// FileRegexMatch.h:82
+const char* Bindings<FileRegexMatchParams>::names[] = {"path", "filenamePattern", "filenameSearch", "matchOperation", "matchPattern", "stateOperation", "statePattern", "minimumValue", "maximumValue", "allMatches", "wholeFile", "noneMatches", "ignoreCase", "behavior"};
 
 // FileSymlinkTarget.h:15
 const char* Bindings<FileSymlinkTargetParams>::names[] = {"filename", "targetPattern"};

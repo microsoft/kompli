@@ -347,7 +347,9 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
             }
         }
 
-        if (!regex_match(entry->d_name, params.filenamePattern))
+        const bool filenameMatches =
+            params.filenameSearch.Value() ? regex_search(entry->d_name, params.filenamePattern) : regex_match(entry->d_name, params.filenamePattern);
+        if (!filenameMatches)
         {
             OsConfigLogDebug(context.GetLogHandle(), "Ignoring file '%s' in directory '%s'", entry->d_name, params.path.c_str());
             continue;

@@ -40,6 +40,9 @@ struct FileRegexMatchParams
     /// A pattern to match file names in the provided path
     regex filenamePattern;
 
+    /// Search file names for filenamePattern instead of requiring a complete match
+    Optional<bool> filenameSearch = false;
+
     /// Operation to perform on the file contents
     /// pattern: ^pattern match$
     Optional<Operation> matchOperation = Operation::Match;
