@@ -43,7 +43,6 @@ struct Options
 {
     bool verbose = false;
     bool debug = false;
-    Optional<string> logFile;
     Command command = Command::Help;
     Optional<std::string> input;
 };
@@ -56,7 +55,6 @@ void PrintHelp(const std::string& programName)
     std::cout << "\t-V, --version\tShow software version and exit.\n";
     std::cout << "\t-v, --verbose\tRun in verbose mode.\n";
     std::cout << "\t-d, --debug\tRun in debug mode.\n";
-    std::cout << "\t-l, --log-file\tSpecify a log file. Default: print log entries to standard error.\n";
     std::cout << "\n";
     std::cout << "Positional arguments:\n";
     std::cout << "\tfilename\tProcess the specified Lua source file. Optional: if skipped or the value is -, the program reads standard input\n";
@@ -65,9 +63,9 @@ void PrintHelp(const std::string& programName)
 // Command line parser using getopt_long
 Result<Options> ParseCommandLine(const int argc, char* argv[])
 {
-    const auto* short_opts = "hVvdl";
+    const auto* short_opts = "hVvd";
     const option long_opts[] = {{"help", no_argument, nullptr, 'h'}, {"version", no_argument, nullptr, 'V'}, {"verbose", no_argument, nullptr, 'v'},
-        {"debug", no_argument, nullptr, 'd'}, {"log-file", required_argument, nullptr, 'l'}, {nullptr, 0, nullptr, 0}};
+        {"debug", no_argument, nullptr, 'd'}, {nullptr, 0, nullptr, 0}};
 
     auto result = Options{};
     int opt = getopt_long(argc, argv, short_opts, long_opts, nullptr);
@@ -86,9 +84,6 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
                 break;
             case 'd':
                 result.debug = true;
-                break;
-            case 'l':
-                result.logFile = std::string(optarg);
                 break;
             default:
                 return Error("Unknown option.");
@@ -143,23 +138,27 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    auto logHandle = options.logFile.HasValue() ? OpenLog(options.logFile->c_str(), nullptr) : nullptr;
-    SetConsoleLoggingEnabled(nullptr == logHandle);
-    auto logGuard = std::unique_ptr<OsConfigLogHandle, void (*)(OsConfigLogHandle*)>(&logHandle, CloseLog);
+    // Logs to stderr unconditionally (no --log-file; matches kompli's CLI -
+    // see docs/logging.md). A null log handle routes OsConfigLog* through
+    // the console sink.
+    std::unique_ptr<OsConfigLog, void (*)(OsConfigLog*)> logHandle(nullptr, [](OsConfigLog* h) {
+        OsConfigLogHandle tmp = h;
+        CloseLog(&tmp);
+    });
 
     if (options.verbose)
     {
         SetLoggingLevel(LoggingLevel::LoggingLevelInformational);
-        OsConfigLogInfo(logHandle, "Verbose logging enabled");
+        OsConfigLogInfo(logHandle.get(), "Verbose logging enabled");
     }
 
     if (options.debug)
     {
         SetLoggingLevel(LoggingLevel::LoggingLevelDebug);
-        OsConfigLogInfo(logHandle, "Debug logging enabled");
+        OsConfigLogInfo(logHandle.get(), "Debug logging enabled");
     }
 
-    auto context = std::unique_ptr<Context>(new Context(logHandle));
+    auto context = std::unique_ptr<Context>(new Context(logHandle.get()));
     LuaEvaluator evaluator;
 
     ifstream file;
@@ -169,7 +168,7 @@ int main(int argc, char* argv[])
         file.open(options.input.Value());
         if (!file.is_open())
         {
-            OsConfigLogError(logHandle, "Failed to open input file: %s", options.input->c_str());
+            OsConfigLogError(logHandle.get(), "Failed to open input file: %s", options.input->c_str());
             OSConfigTelemetryStatusTrace("fopen", errno);
             return 1;
         }
@@ -183,7 +182,7 @@ int main(int argc, char* argv[])
     auto result = evaluator.Evaluate(script, indicators, *context, Action::Audit);
     if (!result.HasValue())
     {
-        OsConfigLogError(logHandle, "Failed to evaluate script: %s", result.Error().message.c_str());
+        OsConfigLogError(logHandle.get(), "Failed to evaluate script: %s", result.Error().message.c_str());
         OSConfigTelemetryStatusTrace("Evaluate", result.Error().code);
         std::cerr << "Error: " << result.Error().message << std::endl;
         return 1;
@@ -194,7 +193,7 @@ int main(int argc, char* argv[])
     auto formattingResult = formatter.Format(indicators);
     if (!formattingResult.HasValue())
     {
-        OsConfigLogError(logHandle, "Failed to format indicators: %s", formattingResult.Error().message.c_str());
+        OsConfigLogError(logHandle.get(), "Failed to format indicators: %s", formattingResult.Error().message.c_str());
         OSConfigTelemetryStatusTrace("Format", formattingResult.Error().code);
         std::cerr << "Error: " << formattingResult.Error().message << std::endl;
         return 1;
