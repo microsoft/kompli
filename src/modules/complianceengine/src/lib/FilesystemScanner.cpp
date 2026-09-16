@@ -3,6 +3,7 @@
 
 #include "FilesystemScanner.h"
 
+#include "FileLock.hpp"
 #include "Optional.h"
 
 #include <algorithm>
@@ -26,86 +27,6 @@
 
 namespace ComplianceEngine
 {
-namespace
-{
-
-class FileLock
-{
-public:
-    // Factory: attempts to create and acquire an exclusive non-blocking lock.
-    // Returns Error if the file cannot be opened or the lock cannot be acquired.
-    static Result<FileLock> Make(const std::string& path)
-    {
-        FileLock fl(path);
-        fl.m_fd = ::open(path.c_str(), O_RDWR | O_CREAT, 0644);
-        if (fl.m_fd < 0)
-        {
-            return ComplianceEngine::Error("failed to open lock file");
-        }
-        if (::flock(fl.m_fd, LOCK_EX | LOCK_NB) != 0)
-        {
-            ::close(fl.m_fd);
-            fl.m_fd = -1;
-            return ComplianceEngine::Error("another process holds lock");
-        }
-        if (::ftruncate(fl.m_fd, 0) == 0)
-        {
-            char pidBuf[64];
-            int len = std::snprintf(pidBuf, sizeof(pidBuf), "%ld\n", (long)::getpid());
-            if (len > 0)
-            {
-                (void)::write(fl.m_fd, pidBuf, static_cast<size_t>(len));
-                ::lseek(fl.m_fd, 0, SEEK_SET);
-            }
-        }
-        return Result<FileLock>(std::move(fl));
-    }
-
-    ~FileLock()
-    {
-        if (m_fd >= 0)
-        {
-            ::flock(m_fd, LOCK_UN);
-            ::close(m_fd);
-            m_fd = -1;
-        }
-    }
-
-    FileLock(const FileLock&) = delete;
-    FileLock& operator=(const FileLock&) = delete;
-    FileLock(FileLock&& other) noexcept
-        : m_path(std::move(other.m_path)),
-          m_fd(other.m_fd)
-    {
-        other.m_fd = -1;
-    }
-    FileLock& operator=(FileLock&& other) noexcept
-    {
-        if (this != &other)
-        {
-            if (m_fd >= 0)
-            {
-                ::flock(m_fd, LOCK_UN);
-                ::close(m_fd);
-            }
-            m_path = std::move(other.m_path);
-            m_fd = other.m_fd;
-            other.m_fd = -1;
-        }
-        return *this;
-    }
-
-private:
-    explicit FileLock(const std::string& path)
-        : m_path(path)
-    {
-    }
-    std::string m_path;
-    int m_fd = -1;
-};
-
-} // anonymous namespace
-
 static void ScanDirRecursive(const std::string& dir, dev_t rootDev, std::map<std::string, FilesystemScanner::FSEntry>& entries);
 void BackgroundScan(const std::string& root, const std::string& cachePath, const std::string& lockPath);
 

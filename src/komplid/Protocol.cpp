@@ -41,10 +41,12 @@ Result<string> RequiredString(const JSON_Object* object, const char* key)
     }
     return string(value);
 }
+} // namespace
 
 // Serializes `value` and returns one line (no trailing newline) - the shared
-// tail of BuildResultResponse/BuildErrorResponse.
-Result<string> Serialize(const JsonWrapper& value)
+// tail of every Build*Response function below, and reused by BackgroundWorker
+// to persist a raw result into the task registry.
+Result<string> SerializeJson(const JsonWrapper& value)
 {
     char* serialized = json_serialize_to_string(value.get());
     if (nullptr == serialized)
@@ -55,7 +57,6 @@ Result<string> Serialize(const JsonWrapper& value)
     json_free_serialized_string(serialized);
     return line;
 }
-} // namespace
 
 string ExtractRequestId(const string& line)
 {
@@ -149,7 +150,53 @@ Result<Request> ParseRequest(const string& line)
         }
     }
 
+    if (json_object_has_value_of_type(object, "forceRefresh", JSONBoolean))
+    {
+        request.forceRefresh = (0 != json_object_get_boolean(object, "forceRefresh"));
+    }
+
     return request;
+}
+
+bool IsTaskQuery(const string& line)
+{
+    auto jsonResult = JsonWrapper::FromString(line);
+    if (!jsonResult.HasValue())
+    {
+        return false;
+    }
+    const auto* object = json_value_get_object(jsonResult.Value().get());
+    return (nullptr != object) && json_object_has_value_of_type(object, "checkTask", JSONString);
+}
+
+Result<TaskQuery> ParseTaskQuery(const string& line)
+{
+    auto jsonResult = JsonWrapper::FromString(line);
+    if (!jsonResult.HasValue())
+    {
+        return Error("Request line is not valid JSON", EINVAL);
+    }
+    const auto* object = json_value_get_object(jsonResult.Value().get());
+    if (nullptr == object)
+    {
+        return Error("Request must be a JSON object", EINVAL);
+    }
+
+    auto requestId = RequiredString(object, "requestId");
+    if (!requestId.HasValue())
+    {
+        return requestId.Error();
+    }
+    auto taskId = RequiredString(object, "checkTask");
+    if (!taskId.HasValue())
+    {
+        return taskId.Error();
+    }
+
+    TaskQuery query;
+    query.requestId = requestId.Value();
+    query.taskId = taskId.Value();
+    return query;
 }
 
 const char* ToString(ErrorCode code)
@@ -168,6 +215,10 @@ const char* ToString(ErrorCode code)
             return "benchmark_not_applicable";
         case ErrorCode::Unauthorized:
             return "unauthorized";
+        case ErrorCode::UnknownTask:
+            return "unknown_task";
+        case ErrorCode::RemediationInProgress:
+            return "remediation_in_progress";
         case ErrorCode::InternalError:
         default:
             return "internal_error";
@@ -195,7 +246,7 @@ Result<string> BuildResultResponse(const string& requestId, JsonWrapper result)
         return Error("Failed to build response envelope", ENOMEM);
     }
 
-    return Serialize(envelope);
+    return SerializeJson(envelope);
 }
 
 Result<string> BuildErrorResponse(const string& requestId, ErrorCode code, const string& message)
@@ -220,7 +271,81 @@ Result<string> BuildErrorResponse(const string& requestId, ErrorCode code, const
         return Error("Failed to build error response", ENOMEM);
     }
 
-    return Serialize(envelope);
+    return SerializeJson(envelope);
+}
+
+Result<string> BuildTaskResponse(const string& requestId, const string& taskId)
+{
+    auto envelopeResult = JsonWrapper::MakeObject();
+    if (!envelopeResult.HasValue())
+    {
+        return Error("Failed to build task response", ENOMEM);
+    }
+    auto envelope = std::move(envelopeResult.Value());
+    auto* object = json_value_get_object(envelope.get());
+    if (nullptr == object)
+    {
+        return Error("Failed to build task response", ENOMEM);
+    }
+
+    if (JSONSuccess != json_object_set_string(object, "type", "task") ||
+        JSONSuccess != json_object_set_string(object, "requestId", requestId.c_str()) ||
+        JSONSuccess != json_object_set_string(object, "taskId", taskId.c_str()))
+    {
+        return Error("Failed to build task response", ENOMEM);
+    }
+
+    return SerializeJson(envelope);
+}
+
+Result<string> BuildTaskResultResponse(const string& requestId, const string& taskId, JsonWrapper result)
+{
+    auto envelopeResult = JsonWrapper::MakeObject();
+    if (!envelopeResult.HasValue())
+    {
+        return Error("Failed to build taskResult response", ENOMEM);
+    }
+    auto envelope = std::move(envelopeResult.Value());
+    auto* object = json_value_get_object(envelope.get());
+    if (nullptr == object)
+    {
+        return Error("Failed to build taskResult response", ENOMEM);
+    }
+
+    if (JSONSuccess != json_object_set_string(object, "type", "taskResult") ||
+        JSONSuccess != json_object_set_string(object, "requestId", requestId.c_str()) ||
+        JSONSuccess != json_object_set_string(object, "taskId", taskId.c_str()) ||
+        JSONSuccess != json_object_set_value(object, "result", result.release()))
+    {
+        return Error("Failed to build taskResult response", ENOMEM);
+    }
+
+    return SerializeJson(envelope);
+}
+
+Result<string> BuildTaskStatusResponse(const string& requestId, const string& taskId, const string& status)
+{
+    auto envelopeResult = JsonWrapper::MakeObject();
+    if (!envelopeResult.HasValue())
+    {
+        return Error("Failed to build taskStatus response", ENOMEM);
+    }
+    auto envelope = std::move(envelopeResult.Value());
+    auto* object = json_value_get_object(envelope.get());
+    if (nullptr == object)
+    {
+        return Error("Failed to build taskStatus response", ENOMEM);
+    }
+
+    if (JSONSuccess != json_object_set_string(object, "type", "taskStatus") ||
+        JSONSuccess != json_object_set_string(object, "requestId", requestId.c_str()) ||
+        JSONSuccess != json_object_set_string(object, "taskId", taskId.c_str()) ||
+        JSONSuccess != json_object_set_string(object, "status", status.c_str()))
+    {
+        return Error("Failed to build taskStatus response", ENOMEM);
+    }
+
+    return SerializeJson(envelope);
 }
 
 } // namespace Komplid

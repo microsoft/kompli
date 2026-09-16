@@ -167,6 +167,7 @@ add_library(complianceenginelib STATIC
     DistributionInfo.cpp
     Engine.cpp
     Evaluator.cpp
+    FileLock.cpp
     FileTreeWalk.cpp
     GuestConfigurationContext.cpp
     FilesystemScanner.cpp

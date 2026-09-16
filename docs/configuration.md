@@ -19,9 +19,10 @@ placement, ownership, and the security invariants around it are fixed by
 
 ## Format
 
-- **JSON**, parsed with the same `nlohmann/json` already used across
-  `benchmarkio`/`Engine`. No new config-format parser is introduced in front of
-  the root daemon (mirrors the wire-protocol decision to avoid an HTTP layer).
+- **JSON**, parsed with `parson` (the same JSON library the wire protocol
+  itself uses - see `Protocol.cpp` - and every other JSON-handling piece of
+  `komplid`). No new config-format parser, or a second JSON library, is
+  introduced in front of the root daemon.
 - **Versioned envelope** for forward compatibility:
 
   ```json
@@ -52,35 +53,16 @@ must be rejected here and reconsidered as an ADR instead.
 
 ### `v1`
 
-The initial `v1` schema defines only the envelope (`apiVersion`, `kind`) — no
-behavioral keys are defined yet. Keys are added below as their design
-settles.
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `auditCache.ttlSeconds` | integer, `>= 0` | `300` | How long a cached `audit` result is served without re-evaluating the rule (see "Result caching" in [src/komplid/README.md](../src/komplid/README.md#result-caching)). `0` disables caching. Global only — not yet per-rule/benchmark. A request-level override to force a fresh evaluation exists too, but as a wire-protocol field (`forceRefresh` on the request itself, not a config key — see the README link above). |
+| `backgroundTasks.rules` | array of strings | `[]` | The static opt-in list of rule ids that run in the background instead of synchronously (see "Long-running rules: background tasks" in [src/komplid/README.md](../src/komplid/README.md#long-running-rules-background-tasks)). Empty by default — no rule backgrounds until an operator opts it in here. |
 
-### Anticipated keys (not yet defined)
-
-These are **reserved** for direction, not yet defined. Names,
-shapes, and defaults are provisional until the design settles.
-
-- **Background tasks.** The static list of slow rules/procedures that opt
-  into backgrounding (everything else runs synchronously):
-
-  ```jsonc
-  {
-    "backgroundTasks": {
-      "rules": []          // provisional: rule ids or procedure names, TBD
-    }
-  }
-  ```
-
-- **Audit-result cache.** The audit-cache time-to-live and related knobs:
-
-  ```jsonc
-  {
-    "auditCache": {
-      "ttlSeconds": 0      // provisional: default value TBD
-    }
-  }
-  ```
-
-Each anticipated block moves into the `v1` schema (with a stabilized default
-and validation rules) once its design settles.
+```jsonc
+{
+  "apiVersion": "v1",
+  "kind": "KompliConfig",
+  "auditCache": { "ttlSeconds": 300 },
+  "backgroundTasks": { "rules": [] }
+}
+```

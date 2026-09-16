@@ -3,20 +3,28 @@
 
 # The kompli daemon (komplid). See README.md for status: the JSONL wire
 # protocol runs synchronous audit/remediate through the same Engine the
-# `kompli` CLI uses; background tasks, result caching and a persistent task
-# registry are not implemented yet. Gated by -DBUILD_KOMPLID (default ON) so
-# it can be turned off for builds that don't want it.
+# `kompli` CLI uses, plus an opt-in SQLite-backed background-task/audit-cache
+# registry (TaskRegistry) for rules listed in kompli.conf's
+# backgroundTasks.rules. Gated by -DBUILD_KOMPLID (default ON) so it can be
+# turned off for builds that don't want it.
 project(komplid)
 set(lib_name komplid-lib)
 
-# Library: wire protocol + peer auth + request dispatch. Split out from the
-# binary so unit tests can link the same object code as the shipping daemon
-# without rebuilding it or duplicating sources (mirrors cli/CMakeLists.txt's
+set(VCPKG_PACKAGES_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+find_package(unofficial-sqlite3 REQUIRED NO_DEFAULT_PATH PATHS ${VCPKG_PACKAGES_DIR})
+
+# Library: wire protocol + peer auth + request dispatch + task/cache
+# registry + background-task forking. Split out from the binary so unit
+# tests can link the same object code as the shipping daemon without
+# rebuilding it or duplicating sources (mirrors cli/CMakeLists.txt's
 # kompli-cli-lib split).
 add_library(${lib_name} STATIC
+    BackgroundWorker.cpp
+    Config.cpp
     PeerAuth.cpp
     Protocol.cpp
     RequestHandler.cpp
+    TaskRegistry.cpp
 )
 target_include_directories(${lib_name} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -26,6 +34,7 @@ target_link_libraries(${lib_name} PUBLIC
     parsonlib
     complianceenginelib
     benchmarkio
+    unofficial::sqlite3::sqlite3
 )
 
 add_executable(komplid Main.cpp)

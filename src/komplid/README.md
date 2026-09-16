@@ -21,9 +21,10 @@ covers, and the open design questions still ahead.
 - `enforce` mode is a reserved value that parses but is rejected with
   `unsupported_mode` (see §3 of
   [docs/architecture.md](../../docs/architecture.md)) — no execution backend
-  exists for it. Background tasks / the SQLite task registry, result
-  caching, and `--passthrough` forwarding are separate design layers,
-  described below.
+  exists for it. Background tasks and the SQLite task/audit-cache registry
+  (M-15/M-16) are implemented and opt-in (empty by default - see
+  "Long-running rules" and "Result caching" below); `--passthrough`
+  forwarding (M-14) is not implemented yet.
 
 ## Linkage & configuration (see [docs/architecture.md](../../docs/architecture.md))
 
@@ -195,7 +196,10 @@ an earlier one wrote. `komplid` uses its own root-only state path
 — see [docs/configuration.md](../../docs/configuration.md) — chosen under
 `/var/lib/komplid/` rather than `/var/lib/GuestConfig` to avoid clashing
 with GuestConfiguration; the `kompli` CLI has no need to read or write it
-directly.
+directly. The same directory also holds `/var/lib/komplid/remediation.lock`
+(`root:root`, created on demand), the cross-process lock serializing
+`remediate` across every `komplid` process — see "Remediation locking" in
+"Long-running rules" below.
 
 ## Wire protocol
 
@@ -242,11 +246,9 @@ directly.
   per request — so a whole benchmark run is one connection carrying many
   sequential per-rule request/response pairs, not one connection per rule
   (which would mean hundreds of fork/execs for a large benchmark).
-- **Response envelope: a starter draft.** Every response (not just
-  successful rule results) needs a common shape so a client can tell them
-  apart, including asynchronous task-completion pushes interleaved with
-  ordinary responses on the same connection. Draft, not finalized — a real
-  JSON schema comes later, once this settles (tracked as a TODO):
+- **Response envelope: implemented.** Every response (not just successful
+  rule results) shares `{type, requestId}`; shape beyond that depends on
+  `type` (`Protocol.hpp`/`.cpp`):
 
   ```jsonc
   // Request: requestId is client-assigned (e.g. an incrementing counter),
@@ -254,89 +256,96 @@ directly.
   // push) back to the request that triggered it. parameters is optional -
   // omitted or empty means "use this rule's defaults" (see docs/cli.md's
   // "Parametrization" section - kompli/komplid fold in the parameter
-  // overrides GC/NRP already supports, via the plan file).
-  { "requestId": "1", "benchmark": "ubuntu24.04", "id": "...", "mode": "audit", "parameters": {} }
+  // overrides GC/NRP already supports, via the plan file). forceRefresh
+  // bypasses the audit-result cache for this one request (see "Result
+  // caching" below).
+  { "requestId": "1", "benchmark": "ubuntu24.04", "id": "...", "mode": "audit", "parameters": {}, "forceRefresh": false }
+  // A "check task" query - the alternative request shape (see "Long-running
+  // rules" below):
+  { "requestId": "2", "checkTask": "<taskId>" }
 
   // Responses all share {type, requestId}; shape beyond that depends on type:
   { "type": "result",     "requestId": "1", "result": { /* canonical per-rule result */ } }
   { "type": "task",       "requestId": "1", "taskId": "..." }              // ack: running in background
-  { "type": "taskResult", "requestId": "1", "taskId": "...", "result": {} } // async push when done
-  { "type": "taskStatus", "requestId": "1", "taskId": "...", "status": "pending"|"running"|"done" } // reply to a "check task" request
+  { "type": "taskResult", "requestId": "1", "taskId": "...", "result": {} } // async push (or checkTask reply) when done
+  { "type": "taskStatus", "requestId": "1", "taskId": "...", "status": "running" } // checkTask reply while still running
   { "type": "error",      "requestId": "1", "code": "...", "message": "..." }
   ```
 
   The `error` type is what a malformed request, an unknown `benchmark`, an
-  `id` that fails server-side revalidation, or an internal failure
+  `id` that fails server-side revalidation, an unknown `checkTask` id, a
+  remediation collision (`remediation_in_progress`), or an internal failure
   produces — distinct from a rule that ran fine and reported `NonCompliant`,
-  which is a normal `result`, not an error. Exact `code` taxonomy: an open
-  question, tracked alongside the rest of this envelope.
-- **Message schema.** The request shape (`requestId`, `benchmark`, `id`,
-  `mode`, optional `parameters`) and the `result`/`error` response envelopes
-  above are specified in `Protocol.hpp`/`.cpp`. The
-  `task`/`taskResult`/`taskStatus` envelope types remain a draft, pending
-  the background-tasks design settling (see "Long-running rules" below).
+  which is a normal `result`, not an error. Full `code` taxonomy:
+  `Protocol.hpp`'s `ErrorCode` enum.
+- **Message schema: implemented.** The request shape (`requestId`,
+  `benchmark`, `id`, `mode`, optional `parameters`/`forceRefresh`), the
+  `checkTask` query shape, and every response envelope type above
+  (`result`/`error`/`task`/`taskResult`/`taskStatus`) are specified and
+  unit-tested in `Protocol.hpp`/`.cpp` /
+  `komplid/tests/ProtocolTest.cpp`.
 
 ## Long-running rules: background tasks
 
 Some rules are slow (e.g. a cold package-manager query or filesystem scan).
 Rather than block the connection for the duration, a slow rule's response can
 be a task ID instead of an immediate result, with the actual work continuing
-in the background:
+in the background. **Implemented (M-15)** - `TaskRegistry.hpp`/`.cpp`,
+`BackgroundWorker.hpp`/`.cpp`:
 
 - **Precedent, not a new mechanism.** `FilesystemScanner::BackgroundScan()`
   (`src/modules/complianceengine/src/lib/FilesystemScanner.cpp`) forks a
   child to do slow work independently of the parent's lifetime, writing its
-  result via lock + atomic rename. The task model generalizes this existing
-  pattern rather than inventing a new one.
-- **Task registry: the SQLite database above** (`task_id`, rule, mode,
-  status, result, timestamps). Required because the process that later polls
+  result via lock + atomic rename. `BackgroundWorker` follows the same
+  fork-and-detach shape, persisting its outcome to the task registry instead
+  of a cache file. The `FileLock` it (and the remediation lock below) uses
+  was extracted out of `FilesystemScanner.cpp` into a shared
+  `ComplianceEngine::FileLock` for exactly this reuse.
+- **Task registry: the SQLite database above** (`tasks` table: `task_id`,
+  `benchmark`, `rule_id`, `mode`, `parameters_key`, `status`, `result_json`,
+  `error_message`, timestamps). Required because the process that later polls
   or reconnects for a task's result is very likely a *different* forked
-  `komplid` instance than the one that started it.
-- **Which rules become tasks: leaning toward a static map, not a runtime
-  watchdog.** Proposed direction (not fully settled): rather than a generic
-  wall-clock timeout wrapping every rule, maintain a curated,
-  compile-time/config-time list of rules or procedures already known to be
-  slow (e.g. `PackageInstalled` on a cold cache, filesystem-scan-dependent
-  procedures) that opt into backgrounding; everything else runs
-  synchronously by default.
-- **Duplicate concurrent requests: attach to the existing task.** If a
-  request for the same `(benchmark, id, mode)` arrives
-  while a task for it is already in flight, attach the new request to the
-  existing task (return/correlate to its `taskId`) rather than starting a
-  second one — avoids redundant work, and for `remediate` specifically avoids
-  re-opening the "must not run concurrently" problem the remediation lock
-  exists to close. **Open question**: this is
-  exactly where parametrization (see `docs/cli.md`) bites — rules can be
-  parametrized, so two requests for the same `(benchmark, id, mode)`
-  could carry *different* `parameters`, in which case they are not actually
-  the same request and naively attaching would be wrong. Dedup needs to
-  compare `parameters` too, not just `(benchmark, id, mode)` — needs
-  its own design pass, not solved here.
-- **Delivery: push while connected, pull if not.** The connection-owning
-  process forks the background worker, then keeps servicing that same
-  connection — reading further rule requests *and* watching for its own
-  child's completion — via `select()` on the client socket together with a
-  way to detect child completion (e.g. `SIGCHLD` / a self-pipe), rather than
-  simple timed polling. When a background task finishes, it pushes an
-  unsolicited `taskResult` line (see the envelope draft above) down the same
-  connection, interleaved with ordinary responses. If the client disconnected
-  before that happened, the detached child still finishes and persists its
-  result to the registry; a later connection (the same client or a different
-  one) retrieves it with a "check task `<id>`" request against the same
-  registry.
-- **Remediation locking still applies.** A backgrounded `remediate`/`enforce`
-  task still has to take the cross-process remediation lock (the planned
-  `FileLock` extraction — see the concurrency notes on remediation
-  serialization) for its duration; backgrounding a task doesn't relax that
-  requirement.
-- **Not yet decided**: task expiry/cleanup policy, and how `enforce`'s
-  fundamentally different lifecycle (start/keep-running/stop, not
-  start/finish) maps onto this same task concept — plausible that it reuses
-  the mechanism (a task that stays "running" until explicitly stopped instead
-  of reaching a terminal state), but that needs its own design pass before
-  committing to it.
+  `komplid` instance than the one that started it. Each background worker
+  opens its **own** SQLite connection to the same file after forking, rather
+  than sharing the parent's — SQLite connections are not fork-safe.
+- **Which rules become tasks: a static, config-driven list.** `kompli.conf`'s
+  `backgroundTasks.rules` (see
+  [docs/configuration.md](../../docs/configuration.md)) — empty by default,
+  so nothing backgrounds until an operator opts a rule id in. No generic
+  wall-clock timeout/watchdog exists; this is a deliberate, curated list.
+- **Duplicate concurrent requests: attach to the existing task, keyed
+  including `parameters`.** Decided: if a request for the same
+  `(benchmark, id, mode, parameters)` arrives while a task for it is already
+  `Running`, the existing `taskId` is returned (`TaskRegistry::
+  FindInFlightTask`) rather than starting a redundant duplicate - different
+  `parameters` always starts a separate task, since two parameterizations of
+  the same rule can legitimately produce different results.
+- **Delivery: push while connected, pull if not.** `Main.cpp`'s connection
+  loop uses `select()` on the client socket together with a self-pipe fed by
+  a `SIGCHLD` handler (async-signal-safe: the handler only writes one byte)
+  to detect a background child's completion without blocking new requests on
+  the same connection. On completion, it reads the (now-updated) task row
+  and pushes an unsolicited `taskResult`/`error` line down the connection. If
+  the client disconnected first, the detached child still finishes and
+  persists its result to the registry; a later connection (the same client or
+  a different one) retrieves it with `{"requestId":"...","checkTask":"<id>"}`.
+- **Remediation locking: implemented, shared with the synchronous path.** A
+  backgrounded `remediate` takes a **blocking** exclusive lock on
+  `/var/lib/komplid/remediation.lock` (nothing better to do than wait its
+  turn); the synchronous path takes the same lock **non-blocking** and fails
+  fast with `remediation_in_progress` rather than proceeding unserialized.
+  Both paths share the one lock file, so a foreground and a background
+  `remediate` can never run concurrently.
+- **Cleanup: an opportunistic startup sweep.** Each `komplid` process calls
+  `TaskRegistry::CleanupOldTasks` once at startup, dropping `Done`/`Failed`
+  rows older than a fixed 24h (not yet configurable).
+- **Not yet decided**: how `enforce`'s fundamentally different lifecycle
+  (start/keep-running/stop, not start/finish) maps onto this same task
+  concept — out of scope until M-17 gets its own design pass.
 
 ## Result caching
+
+**Implemented (M-16)**, in `TaskRegistry`'s `audit_cache` table:
 
 - **Audit results only.** `remediate` and `enforce` always execute
   for real and are never served from a cache — the caller needs confirmation
@@ -347,14 +356,17 @@ in the background:
   parameter overrides (e.g. checking for a different package name) can
   legitimately produce different results, so they must not share a cache
   entry. Storing the last audit result and its timestamp.
-- **Behavior**: an audit request checks the cached entry's age against a
-  (configurable) TTL. Within the TTL, return the cached result immediately
-  without re-evaluating. Once expired, drop the entry and re-evaluate system
-  state as normal.
-- **Invalidation on remediation.** A successful `remediate` for a rule must
-  invalidate (or overwrite) that rule's cached audit entry — otherwise a
-  subsequent audit could report stale `NonCompliant` for up to the TTL window
-  *after* the rule was actually fixed, which is worse than not caching at all.
-- **Not yet decided**: the default TTL value, the exact request-level knob to
-  force a fresh evaluation (bypassing the cache), and whether the TTL is
-  global or configurable per rule/benchmark.
+- **Behavior**: an audit request checks the cached entry's age against
+  `kompli.conf`'s `auditCache.ttlSeconds` (default 300s, global — see
+  [docs/configuration.md](../../docs/configuration.md); `0` disables
+  caching). Within the TTL, return the cached result immediately without
+  re-evaluating. Once expired, the entry is dropped and the rule is
+  re-evaluated as normal. A request-level `forceRefresh: true` field bypasses
+  the cache for that one request, regardless of the entry's age.
+- **Invalidation on remediation.** A successful `remediate` invalidates every
+  cached audit entry for that rule id, across all `parameters` variants (not
+  just the one just remediated with) — otherwise a subsequent audit could
+  report stale `NonCompliant` for up to the TTL window *after* the rule was
+  actually fixed, which is worse than not caching at all.
+- **Not yet decided**: a per-rule/per-benchmark TTL override (today it's
+  global only).

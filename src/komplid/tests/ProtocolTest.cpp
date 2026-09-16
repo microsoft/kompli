@@ -177,7 +177,55 @@ TEST(ErrorCodeToStringTest, MapsEveryCode)
     EXPECT_STREQ("unsupported_mode", ToString(ErrorCode::UnsupportedMode));
     EXPECT_STREQ("benchmark_not_applicable", ToString(ErrorCode::BenchmarkNotApplicable));
     EXPECT_STREQ("unauthorized", ToString(ErrorCode::Unauthorized));
+    EXPECT_STREQ("unknown_task", ToString(ErrorCode::UnknownTask));
+    EXPECT_STREQ("remediation_in_progress", ToString(ErrorCode::RemediationInProgress));
     EXPECT_STREQ("internal_error", ToString(ErrorCode::InternalError));
+}
+
+// --- forceRefresh ---
+
+TEST(ParseRequestTest, ParsesForceRefreshTrue)
+{
+    auto result = ParseRequest(R"({"requestId":"r1","benchmark":"b","id":"1.1","mode":"audit","forceRefresh":true})");
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_TRUE(result.Value().forceRefresh);
+}
+
+TEST(ParseRequestTest, DefaultsForceRefreshToFalse)
+{
+    auto result = ParseRequest(R"({"requestId":"r1","benchmark":"b","id":"1.1","mode":"audit"})");
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_FALSE(result.Value().forceRefresh);
+}
+
+// --- IsTaskQuery / ParseTaskQuery ---
+
+TEST(TaskQueryTest, IsTaskQueryTrueForCheckTaskField)
+{
+    EXPECT_TRUE(IsTaskQuery(R"({"requestId":"r1","checkTask":"abc123"})"));
+}
+
+TEST(TaskQueryTest, IsTaskQueryFalseForOrdinaryRequest)
+{
+    EXPECT_FALSE(IsTaskQuery(R"({"requestId":"r1","benchmark":"b","id":"1.1","mode":"audit"})"));
+}
+
+TEST(TaskQueryTest, IsTaskQueryFalseForMalformedJson)
+{
+    EXPECT_FALSE(IsTaskQuery("not json"));
+}
+
+TEST(TaskQueryTest, ParsesValidTaskQuery)
+{
+    auto result = ParseTaskQuery(R"({"requestId":"r1","checkTask":"abc123"})");
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ("r1", result.Value().requestId);
+    EXPECT_EQ("abc123", result.Value().taskId);
+}
+
+TEST(TaskQueryTest, RejectsMissingCheckTask)
+{
+    EXPECT_FALSE(ParseTaskQuery(R"({"requestId":"r1"})").HasValue());
 }
 
 // --- BuildResultResponse ---
@@ -237,6 +285,50 @@ TEST(BuildErrorResponseTest, AllowsEmptyRequestId)
     ParsedJson parsed(responseResult.Value());
     ASSERT_NE(nullptr, parsed.object);
     EXPECT_STREQ("", json_object_get_string(parsed.object, "requestId"));
+}
+
+// --- BuildTaskResponse / BuildTaskResultResponse / BuildTaskStatusResponse ---
+
+TEST(BuildTaskResponseTest, ContainsTypeRequestIdAndTaskId)
+{
+    auto responseResult = BuildTaskResponse("r1", "task-abc");
+    ASSERT_TRUE(responseResult.HasValue());
+
+    ParsedJson parsed(responseResult.Value());
+    ASSERT_NE(nullptr, parsed.object);
+    EXPECT_STREQ("task", json_object_get_string(parsed.object, "type"));
+    EXPECT_STREQ("r1", json_object_get_string(parsed.object, "requestId"));
+    EXPECT_STREQ("task-abc", json_object_get_string(parsed.object, "taskId"));
+}
+
+TEST(BuildTaskResultResponseTest, EmbedsResultTaskIdAndType)
+{
+    auto resultJsonResult = JsonWrapper::MakeObject();
+    ASSERT_TRUE(resultJsonResult.HasValue());
+    auto* resultObject = json_value_get_object(resultJsonResult.Value().get());
+    ASSERT_EQ(JSONSuccess, json_object_set_string(resultObject, "status", "compliant"));
+
+    auto responseResult = BuildTaskResultResponse("r1", "task-abc", std::move(resultJsonResult.Value()));
+    ASSERT_TRUE(responseResult.HasValue());
+
+    ParsedJson parsed(responseResult.Value());
+    ASSERT_NE(nullptr, parsed.object);
+    EXPECT_STREQ("taskResult", json_object_get_string(parsed.object, "type"));
+    EXPECT_STREQ("task-abc", json_object_get_string(parsed.object, "taskId"));
+    const JSON_Object* embedded = json_object_get_object(parsed.object, "result");
+    ASSERT_NE(nullptr, embedded);
+    EXPECT_STREQ("compliant", json_object_get_string(embedded, "status"));
+}
+
+TEST(BuildTaskStatusResponseTest, ContainsStatus)
+{
+    auto responseResult = BuildTaskStatusResponse("r1", "task-abc", "running");
+    ASSERT_TRUE(responseResult.HasValue());
+
+    ParsedJson parsed(responseResult.Value());
+    ASSERT_NE(nullptr, parsed.object);
+    EXPECT_STREQ("taskStatus", json_object_get_string(parsed.object, "type"));
+    EXPECT_STREQ("running", json_object_get_string(parsed.object, "status"));
 }
 
 } // namespace Komplid
