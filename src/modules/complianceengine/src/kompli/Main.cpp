@@ -92,7 +92,7 @@ Result<string> ReadAllBounded(std::istream& stream, std::size_t cap)
 
 // Renders a canonical result JSON (read from stdin or a file) into the format
 // selected on the `render` subcommand. Runs without root and touches no system
-// state, so it needs none of the definition input hardening `audit`/`remediate` apply.
+// state, so it needs none of the definition input hardening `run` applies.
 int RunRender(const Options& options)
 {
     Result<string> jsonResult = Error("uninitialized");
@@ -251,44 +251,42 @@ int main(int argc, char* argv[])
 
     // `run` resolves and validates its plan file before anything else needs a
     // log handle or the engine, so do that first and carry the parsed plan
-    // (and the benchmark file path it points at) forward.
-    Optional<Plan> plan;
-    if (Command::Run == options.command)
+    // (and the benchmark file path it points at) forward. `run` is the only
+    // command reaching this point (help/version/render/plan/list all
+    // dispatch and return above), so parsing it is unconditional.
+    auto planResult = ParsePlanFile(options.input, nullptr);
+    if (!planResult.HasValue())
     {
-        auto planResult = ParsePlanFile(options.input, nullptr);
-        if (!planResult.HasValue())
-        {
-            std::cerr << "Error: failed to parse plan file: " << planResult.Error().message << std::endl;
-            return 1;
-        }
-        plan = std::move(planResult.Value());
+        std::cerr << "Error: failed to parse plan file: " << planResult.Error().message << std::endl;
+        return 1;
+    }
+    Plan plan = std::move(planResult.Value());
 
-        // Reject a plan whose blocks don't all resolve to distinct benchmark
-        // identities, before evaluating any rule (fail fast) - two blocks
-        // pointing at files that share a (framework, distribution,
-        // distributionVersion, benchmarkVersion) tuple are ambiguous, not a
-        // case to silently pick one and continue (docs/CLI.md section 8.1).
-        // This re-reads each benchmark file up front (a nullptr log handle is
-        // fine here, same as ParsePlanFile above); the per-block loop below
-        // parses it again once log handle / applicability checks are ready.
-        std::vector<std::pair<string, CISBenchmarkInfo>> identities;
-        identities.reserve(plan.Value().benchmarks.size());
-        for (const auto& benchmark : plan.Value().benchmarks)
+    // Reject a plan whose blocks don't all resolve to distinct benchmark
+    // identities, before evaluating any rule (fail fast) - two blocks
+    // pointing at files that share a (framework, distribution,
+    // distributionVersion, benchmarkVersion) tuple are ambiguous, not a
+    // case to silently pick one and continue (docs/CLI.md section 8.1).
+    // This re-reads each benchmark file up front (a nullptr log handle is
+    // fine here, same as ParsePlanFile above); the per-block loop below
+    // parses it again once log handle / applicability checks are ready.
+    std::vector<std::pair<string, CISBenchmarkInfo>> identities;
+    identities.reserve(plan.benchmarks.size());
+    for (const auto& benchmark : plan.benchmarks)
+    {
+        auto identityDocResult = ParseFile(benchmark.file, nullptr);
+        if (!identityDocResult.HasValue())
         {
-            auto identityDocResult = ParseFile(benchmark.file, nullptr);
-            if (!identityDocResult.HasValue())
-            {
-                std::cerr << "Error: failed to parse benchmark definition input: " << identityDocResult.Error().message << std::endl;
-                return 1;
-            }
-            identities.emplace_back(benchmark.file, identityDocResult.Value().benchmarkInfo);
-        }
-        auto duplicateIdentityError = CheckUniqueBenchmarkIdentities(identities);
-        if (duplicateIdentityError.HasValue())
-        {
-            std::cerr << "Error: refusing to run plan: " << duplicateIdentityError.Value().message << std::endl;
+            std::cerr << "Error: failed to parse benchmark definition input: " << identityDocResult.Error().message << std::endl;
             return 1;
         }
+        identities.emplace_back(benchmark.file, identityDocResult.Value().benchmarkInfo);
+    }
+    auto duplicateIdentityError = CheckUniqueBenchmarkIdentities(identities);
+    if (duplicateIdentityError.HasValue())
+    {
+        std::cerr << "Error: refusing to run plan: " << duplicateIdentityError.Value().message << std::endl;
+        return 1;
     }
 
     // The CLI logs to stderr unconditionally (no `--log-file`; see
@@ -332,9 +330,9 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    // `audit` / `remediate` / `run` always emit the canonical JSON. The benchmark
-    // formatter builds the result envelope; the engine is separately given a
-    // JSON payload formatter (at its construction, above) to render each rule's
+    // `run` always emits the canonical JSON. The benchmark formatter builds
+    // the result envelope; the engine is separately given a JSON payload
+    // formatter (at its construction, above) to render each rule's
     // indicators. Presentation is the `render` subcommand's job.
     const auto& distributionInfo = engine.GetDistributionInfo().Value();
     auto formatterResult = BenchmarkFormatter::Begin(distributionInfo);
@@ -347,41 +345,36 @@ int main(int argc, char* argv[])
 
     auto status = Status::Compliant;
     bool hasError = false;
-    // Rules that passed the section filter and were evaluated. The Compliant seed
-    // is the CombineAllOf identity; when nothing runs it would misreport a
-    // benchmark that checked nothing, so a terminal override maps that case to
+    // Rules that were evaluated. The Compliant seed is the CombineAllOf
+    // identity; when nothing runs it would misreport a benchmark that
+    // checked nothing, so a terminal override maps that case to
     // NotApplicable below.
     size_t evaluatedRules = 0;
 
-    // `audit`/`remediate` process exactly one file (options.input, the same
-    // mode for every rule); `run` processes every benchmark entry in the plan
-    // (a plan can mix rules from multiple
-    // files, e.g. from two different frameworks), each independently hash-checked and
-    // applicability-checked, accumulating into one combined result.
-    const size_t benchmarkCount = (Command::Run == options.command) ? plan.Value().benchmarks.size() : 1;
-    for (size_t b = 0; b < benchmarkCount; ++b)
+    // `run` processes every benchmark entry in the plan (a plan can mix rules
+    // from multiple files, e.g. from two different frameworks), each
+    // independently hash-checked and applicability-checked, accumulating
+    // into one combined result.
+    for (size_t b = 0; b < plan.benchmarks.size(); ++b)
     {
-        const string& benchmarkFile = (Command::Run == options.command) ? plan.Value().benchmarks[b].file : options.input;
+        const string& benchmarkFile = plan.benchmarks[b].file;
 
-        // `run` re-checks each benchmark file's hash against the one recorded
-        // when the plan was generated - belt-and-suspenders against drift
-        // between plan generation and execution (see docs/CLI.md section 2's TOCTOU
+        // Re-check each benchmark file's hash against the one recorded when
+        // the plan was generated - belt-and-suspenders against drift between
+        // plan generation and execution (see docs/CLI.md section 2's TOCTOU
         // note). A mismatch is a hard error: the plan's rule references were
         // only validated against the file as it existed at generation time.
-        if (Command::Run == options.command)
+        auto hashResult = ComplianceEngine::Kompli::HashFile(benchmarkFile, logHandle.get());
+        if (!hashResult.HasValue())
         {
-            auto hashResult = ComplianceEngine::Kompli::HashFile(benchmarkFile, logHandle.get());
-            if (!hashResult.HasValue())
-            {
-                OsConfigLogError(logHandle.get(), "Failed to hash benchmark file '%s': %s", benchmarkFile.c_str(), hashResult.Error().message.c_str());
-                return 1;
-            }
-            if (hashResult.Value() != plan.Value().benchmarks[b].sha256)
-            {
-                OsConfigLogError(logHandle.get(),
-                    "Refusing to run plan: benchmark file '%s' has changed since the plan was generated (sha256 mismatch).", benchmarkFile.c_str());
-                return 1;
-            }
+            OsConfigLogError(logHandle.get(), "Failed to hash benchmark file '%s': %s", benchmarkFile.c_str(), hashResult.Error().message.c_str());
+            return 1;
+        }
+        if (hashResult.Value() != plan.benchmarks[b].sha256)
+        {
+            OsConfigLogError(logHandle.get(),
+                "Refusing to run plan: benchmark file '%s' has changed since the plan was generated (sha256 mismatch).", benchmarkFile.c_str());
+            return 1;
         }
 
         // Parse the input as a benchmark-definition document. Definition input is a
@@ -402,10 +395,10 @@ int main(int argc, char* argv[])
         // Validate applicability once per file -
         // every rule in one file shares the same distro/version prefix, so this
         // is the only check possible now that rules no longer carry their own
-        // (see BenchmarkIO::Resource). A mismatch hard-fails the whole run: for
-        // `run`, mixing a mismatched benchmark entry into an otherwise-valid
-        // plan is treated as an authoring mistake, not something to silently
-        // skip and report a partial result for.
+        // (see BenchmarkIO::Resource). A mismatch hard-fails the whole run:
+        // mixing a mismatched benchmark entry into an otherwise-valid plan is
+        // treated as an authoring mistake, not something to silently skip and
+        // report a partial result for.
         if (!doc.benchmarkInfo.Match(distributionInfo))
         {
             OsConfigLogError(logHandle.get(), "Aborting on benchmark '%s': not applicable for the current distribution", benchmarkFile.c_str());
@@ -420,66 +413,49 @@ int main(int argc, char* argv[])
 
         for (const auto& entry : doc.resources)
         {
-            if (options.section.HasValue())
+            // The mode is looked up per rule in this benchmark entry, keyed
+            // by id - a rule the plan doesn't mention is one the plan author
+            // deliberately left out, skip it entirely rather than guessing a
+            // mode.
+            const auto& rules = plan.benchmarks[b].rules;
+            const auto it = rules.find(entry.id);
+            if (it == rules.end())
             {
-                if (entry.id.find(options.section.Value()) != 0)
+                OsConfigLogDebug(logHandle.get(), "Skipping entry %s: not present in the plan", entry.resourceID.c_str());
+                auto skipError = benchmarkFormatter.AddSkippedEntry(entry, {});
+                if (skipError)
                 {
-                    OsConfigLogDebug(logHandle.get(), "Skipping entry %s as it does not match section %s", entry.resourceID.c_str(),
-                        options.section.Value().c_str());
-                    continue;
+                    OsConfigLogError(logHandle.get(), "Failed to add skipped entry to JSON formatter: %s", skipError.Value().message.c_str());
+                    if (!options.continueOnError)
+                    {
+                        return 1;
+                    }
+                    hasError = true;
                 }
+                continue;
             }
-
-            // `audit`/`remediate` apply the same mode to every rule. `run`
-            // looks the mode up per rule in this benchmark entry, keyed by
-            // id - a rule the plan
-            // doesn't mention is one the plan author deliberately left out,
-            // skip it entirely rather than guessing a mode.
-            ToggleMode mode = (Command::Remediate == options.command) ? ToggleMode::Remediate : ToggleMode::Audit;
-            // `run` only: the plan's pre-filled/overridden parameter values
-            // for this rule (docs/CLI.md "Parametrization"), threaded into
-            // the procedure below. Empty for `audit`/`remediate`, which
-            // always execute a rule's own baked-in defaults unchanged.
+            const ToggleMode mode = it->second.mode;
+            // The plan's pre-filled/overridden parameter values for this rule
+            // (docs/CLI.md "Parametrization"), threaded into the procedure below.
             std::string procedure = entry.procedure;
-            if (Command::Run == options.command)
+            if (!it->second.parameters.empty())
             {
-                const auto& rules = plan.Value().benchmarks[b].rules;
-                const auto it = rules.find(entry.id);
-                if (it == rules.end())
+                auto overrideResult = ApplyParameterOverrides(entry.procedure, it->second.parameters);
+                if (!overrideResult.HasValue())
                 {
-                    OsConfigLogDebug(logHandle.get(), "Skipping entry %s: not present in the plan", entry.resourceID.c_str());
-                    auto skipError = benchmarkFormatter.AddSkippedEntry(entry, {});
-                    if (skipError)
+                    OsConfigLogError(logHandle.get(), "Failed to apply plan parameters for %s: %s", entry.resourceID.c_str(),
+                        overrideResult.Error().message.c_str());
+                    if (!options.continueOnError)
                     {
-                        OsConfigLogError(logHandle.get(), "Failed to add skipped entry to JSON formatter: %s", skipError.Value().message.c_str());
-                        if (!options.continueOnError)
-                        {
-                            return 1;
-                        }
-                        hasError = true;
+                        return 1;
                     }
+                    hasError = true;
                     continue;
                 }
-                mode = it->second.mode;
-                if (!it->second.parameters.empty())
-                {
-                    auto overrideResult = ApplyParameterOverrides(entry.procedure, it->second.parameters);
-                    if (!overrideResult.HasValue())
-                    {
-                        OsConfigLogError(logHandle.get(), "Failed to apply plan parameters for %s: %s", entry.resourceID.c_str(),
-                            overrideResult.Error().message.c_str());
-                        if (!options.continueOnError)
-                        {
-                            return 1;
-                        }
-                        hasError = true;
-                        continue;
-                    }
-                    procedure = std::move(overrideResult.Value());
-                }
+                procedure = std::move(overrideResult.Value());
             }
 
-            // The rule is selected for evaluation (past the section filter / plan lookup).
+            // The rule is selected for evaluation (past the plan lookup).
             ++evaluatedRules;
 
             // Per-rule action for the result JSON (docs/CLI.md section 3): `run`
@@ -609,9 +585,9 @@ int main(int argc, char* argv[])
         }
     }
 
-    // A benchmark that evaluated no rules (an empty definition, or a section
-    // filter that matched nothing) checked nothing; report NotApplicable rather
-    // than a misleading Compliant. This is a terminal override, deliberately not
+    // A benchmark that evaluated no rules (a plan with an empty rules map for
+    // this file) checked nothing; report NotApplicable rather than a
+    // misleading Compliant. This is a terminal override, deliberately not
     // folded through CombineAllOf, whose NotApplicable is absorbing and would
     // otherwise poison any non-empty run if used as the seed.
     if (0 == evaluatedRules)

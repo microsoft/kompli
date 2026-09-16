@@ -15,8 +15,6 @@ enum class Command
 {
     Help,
     Version,
-    Audit,
-    Remediate,
     Render,
     // Generates a plan file for a benchmark-definition file (see docs/CLI.md).
     Plan,
@@ -26,8 +24,8 @@ enum class Command
     List
 };
 
-// Presentation formats produced by the `render` subcommand. `audit` / `remediate`
-// no longer select a format: they always emit the canonical JSON, which `render`
+// Presentation formats produced by the `render` subcommand. `run` doesn't
+// select a format itself: it always emits the canonical JSON, which `render`
 // turns into one of these.
 enum class Format
 {
@@ -99,7 +97,6 @@ struct Options
     // contract) populates this with a single entry; `input` above is left
     // empty for `plan`.
     std::vector<std::string> inputs;
-    Optional<std::string> section;
     // `render` only: the JUnit <testsuite name>. The CLI does not know which
     // benchmark package it came from, so the caller supplies this.
     Optional<std::string> suiteName;

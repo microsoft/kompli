@@ -18,8 +18,6 @@ void PrintHelp(const std::string& programName)
 {
     std::cout << "Usage: " + programName + " [options] <command> [filename...]\n\n";
     std::cout << "Commands:\n";
-    std::cout << "\taudit\t\tEvaluate a benchmark and emit the canonical result JSON.\n";
-    std::cout << "\tremediate\tRemediate a benchmark and emit the canonical result JSON.\n";
     std::cout << "\trender\t\tRender a canonical result JSON into a presentation format.\n";
     std::cout << "\tplan\t\tGenerate a plan file selecting a mode (audit/remediate/enforce) per rule, from one or more files.\n";
     std::cout << "\trun\t\tExecute a plan file, emit the canonical result JSON.\n";
@@ -31,12 +29,9 @@ void PrintHelp(const std::string& programName)
     std::cout << "\t-v, --verbose\tRun in verbose mode.\n";
     std::cout << "\t-d, --debug\tRun in debug mode.\n";
     std::cout << "\n";
-    std::cout << "audit / remediate / run options:\n";
+    std::cout << "run options:\n";
     std::cout << "\t-e, --continue-on-error\tSkip rules that fail due to engine errors and continue processing. Returns 1 if any error occurred.\n";
-    std::cout << "\t-s, --section\tProcess only specific sections. Default: process all available rules. Not valid for 'run' (the plan already selects "
-                 "rules).\n";
-    std::cout << "\tfilename\tProcess the specified benchmark-definition JSON file ('run': a plan file). Required: the file must be supplied on disk; "
-                 "stdin ('-') is not supported for definitions.\n";
+    std::cout << "\tfilename\tThe plan file to execute. Required: the file must be supplied on disk; stdin ('-') is not supported for definitions.\n";
     std::cout << "\n";
     std::cout << "plan options:\n";
     std::cout << "\tfilename...\tOne or more benchmark-definition JSON files; one plan spanning all of them.\n";
@@ -82,13 +77,12 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
     optind = 1;
 #endif
 
-    const auto* short_opts = "hVvdes:f:o:";
+    const auto* short_opts = "hVvdef:o:";
     const option long_opts[] = {{"help", no_argument, nullptr, 'h'}, {"version", no_argument, nullptr, 'V'}, {"verbose", no_argument, nullptr, 'v'},
-        {"debug", no_argument, nullptr, 'd'}, {"continue-on-error", no_argument, nullptr, 'e'},
-        {"section", required_argument, nullptr, 's'}, {"format", required_argument, nullptr, 'f'}, {"output", required_argument, nullptr, 'o'},
-        {"suite-name", required_argument, nullptr, kSuiteNameOpt}, {"audit", required_argument, nullptr, kAuditOpt},
-        {"remediate", required_argument, nullptr, kRemediateOpt}, {"enforce", required_argument, nullptr, kEnforceOpt},
-        {"param", required_argument, nullptr, kParamOpt}, {nullptr, 0, nullptr, 0}};
+        {"debug", no_argument, nullptr, 'd'}, {"continue-on-error", no_argument, nullptr, 'e'}, {"format", required_argument, nullptr, 'f'},
+        {"output", required_argument, nullptr, 'o'}, {"suite-name", required_argument, nullptr, kSuiteNameOpt},
+        {"audit", required_argument, nullptr, kAuditOpt}, {"remediate", required_argument, nullptr, kRemediateOpt},
+        {"enforce", required_argument, nullptr, kEnforceOpt}, {"param", required_argument, nullptr, kParamOpt}, {nullptr, 0, nullptr, 0}};
 
     auto result = Options{};
     int opt = getopt_long(argc, argv, short_opts, long_opts, nullptr);
@@ -110,13 +104,6 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
                 break;
             case 'e':
                 result.continueOnError = true;
-                break;
-            case 's':
-                if (optarg[0] == '\0')
-                {
-                    return Error("Section must not be empty.");
-                }
-                result.section = std::string(optarg);
                 break;
             case 'f': {
                 if (optarg[0] == '\0')
@@ -204,15 +191,7 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
     if (optind < argc)
     {
         const std::string arg = argv[optind];
-        if (arg == "audit")
-        {
-            result.command = Command::Audit;
-        }
-        else if (arg == "remediate")
-        {
-            result.command = Command::Remediate;
-        }
-        else if (arg == "render")
+        if (arg == "render")
         {
             result.command = Command::Render;
         }
@@ -230,13 +209,13 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
         }
         else
         {
-            return Error("Invalid command: '" + arg + "'. Must be 'audit', 'remediate', 'render', 'plan', 'run' or 'list'.");
+            return Error("Invalid command: '" + arg + "'. Must be 'render', 'plan', 'run' or 'list'.");
         }
         ++optind;
     }
     else
     {
-        return Error("Missing required command: 'audit', 'remediate', 'render', 'plan', 'run' or 'list'.");
+        return Error("Missing required command: 'render', 'plan', 'run' or 'list'.");
     }
 
     // Input filename(s). `plan` is variadic (one or more files, docs/CLI.md
@@ -266,15 +245,11 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
     }
 
     // Cross-option validation: keep each subcommand's flags scoped to what it
-    // actually uses (audit/remediate/run's canonical-JSON surface stays free of
-    // presentation flags; render stays free of scan flags; plan's toggles/output
-    // stay off every other subcommand).
+    // actually uses (run's canonical-JSON surface stays free of presentation
+    // flags; render stays free of scan flags; plan's toggles/output stay off
+    // every other subcommand).
     if (Command::Render == result.command)
     {
-        if (result.section.HasValue())
-        {
-            return Error("--section is not valid for the 'render' subcommand.");
-        }
         // Default the renderer when none was supplied.
         if (!result.format.HasValue())
         {
@@ -285,7 +260,7 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
     {
         if (result.format.HasValue())
         {
-            return Error("--format is only valid for the 'render' subcommand; 'audit', 'remediate', 'plan' and 'run' don't use it.");
+            return Error("--format is only valid for the 'render' subcommand; 'plan' and 'run' don't use it.");
         }
         if (result.suiteName.HasValue())
         {
@@ -294,10 +269,6 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
 
         if (Command::Plan == result.command)
         {
-            if (result.section.HasValue())
-            {
-                return Error("--section is not valid for 'plan'; select rules with --audit=/--remediate=/--enforce= instead.");
-            }
             if (result.continueOnError)
             {
                 return Error("--continue-on-error is not valid for 'plan'; it doesn't execute anything.");
@@ -317,28 +288,17 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
             {
                 return Error("--output is only valid for 'plan'.");
             }
-            if (Command::Run == result.command && result.section.HasValue())
+            if (Command::List == result.command && result.continueOnError)
             {
-                return Error("--section is not valid for 'run'; the plan file already selects rules.");
-            }
-            if (Command::List == result.command)
-            {
-                if (result.section.HasValue())
-                {
-                    return Error("--section is not valid for 'list'; it enumerates every rule in the file.");
-                }
-                if (result.continueOnError)
-                {
-                    return Error("--continue-on-error is not valid for 'list'; it doesn't execute anything.");
-                }
+                return Error("--continue-on-error is not valid for 'list'; it doesn't execute anything.");
             }
         }
 
-        // audit/remediate/run/list require a single on-disk file as the
-        // positional argument (the benchmark definition for audit/remediate/
-        // list, the plan file for run); `plan` requires at least one
-        // (docs/CLI.md section 8.1). stdin ('-') is deliberately rejected so
-        // the input-hardening checks cannot be bypassed by piping data in.
+        // run/list require a single on-disk file as the positional argument
+        // (the benchmark definition for list, the plan file for run); `plan`
+        // requires at least one (docs/CLI.md section 8.1). stdin ('-') is
+        // deliberately rejected so the input-hardening checks cannot be
+        // bypassed by piping data in.
         if (Command::Plan == result.command)
         {
             if (result.inputs.empty())
@@ -355,7 +315,7 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
         }
         else if (result.input.empty() || result.input == "-")
         {
-            return Error("A file argument is required for 'audit', 'remediate', 'run' and 'list'; stdin ('-') is not supported.");
+            return Error("A file argument is required for 'run' and 'list'; stdin ('-') is not supported.");
         }
     }
 
