@@ -124,7 +124,7 @@ set (CMAKE_CXX_STANDARD 11)
 
 set(MAJOR_VERSION "1" CACHE STRING "Major version")
 set(MINOR_VERSION "0" CACHE STRING "Minor version")
-set(PATCH_VERSION "5" CACHE STRING "Patch version")
+set(PATCH_VERSION "6" CACHE STRING "Patch version")
 
 # External Projects
 set(ONEDS_CPP_SDK_VERSION "v3.9.309.1" CACHE STRING "1DS CPP SDK version")
@@ -197,11 +197,35 @@ set(CMAKE_PROJECT_VERSION_PATCH ${PATCH_VERSION})
 
 find_package(Git QUIET)
 
-if(TWEAK_VERSION)
-    set(CMAKE_PROJECT_VERSION_TWEAK "${TWEAK_VERSION}")
+# ADR-0010 (unified-definitions/docs): the Kompli binary, native packages, and
+# NuGet package must report exactly the same SemVer 2.0 release identity -
+# bare X.Y.Z for an official signed build, X.Y.Z-unofficial.<BuildId>
+# otherwise. A caller opts in by setting KOMPLI_OFFICIAL_BUILD and/or
+# KOMPLI_BUILD_ID. Native packaging (CPack Debian/RPM,
+# kompli/.github/workflows/package-build.yml) has not migrated to this scheme
+# yet, so a caller that sets neither keeps today's MAJOR.MINOR.PATCH.TWEAK
+# behavior unchanged.
+option(KOMPLI_OFFICIAL_BUILD "Build an official, signed Kompli release (bare X.Y.Z, no build-id suffix)" OFF)
+set(KOMPLI_BUILD_ID "" CACHE STRING "CI build identifier for an unofficial Kompli build (ADR-0010 X.Y.Z-unofficial.<id>)")
+
+set(KompliReleaseCore "${CMAKE_PROJECT_VERSION_MAJOR}.${CMAKE_PROJECT_VERSION_MINOR}.${CMAKE_PROJECT_VERSION_PATCH}")
+
+if(KOMPLI_OFFICIAL_BUILD OR KOMPLI_BUILD_ID)
+    set(KompliUsesAdr0010Versioning ON)
+    if(KOMPLI_OFFICIAL_BUILD)
+        set(KompliVersionString "${KompliReleaseCore}")
+    else()
+        set(KompliVersionString "${KompliReleaseCore}-unofficial.${KOMPLI_BUILD_ID}")
+    endif()
 else()
-    string(TIMESTAMP _timestamp "%Y%m%d")
-    set(CMAKE_PROJECT_VERSION_TWEAK "${_timestamp}")
+    set(KompliUsesAdr0010Versioning OFF)
+    if(TWEAK_VERSION)
+        set(CMAKE_PROJECT_VERSION_TWEAK "${TWEAK_VERSION}")
+    else()
+        string(TIMESTAMP _timestamp "%Y%m%d")
+        set(CMAKE_PROJECT_VERSION_TWEAK "${_timestamp}")
+    endif()
+    set(KompliVersionString "${KompliReleaseCore}.${CMAKE_PROJECT_VERSION_TWEAK}")
 endif()
 
 execute_process(COMMAND git rev-parse --short HEAD
@@ -217,12 +241,21 @@ set(KompliProjectVendor "Microsoft")
 set(KompliProjectEmail "kompli@microsoft.com")
 set(KompliProjectUrl "https://github.com/microsoft/kompli/")
 set(KompliHashAlgorithm "SHA256")
-set(KompliVersionString ${CMAKE_PROJECT_VERSION_MAJOR}.${CMAKE_PROJECT_VERSION_MINOR}.${CMAKE_PROJECT_VERSION_PATCH}.${CMAKE_PROJECT_VERSION_TWEAK})
 set(KompliVersionStringFull "${KompliVersionString}-g${GIT_COMMIT_ID}")
+if(KompliUsesAdr0010Versioning)
+    # Source SHA is separate provenance under ADR-0010, never folded into the version.
+    set(KompliReportedVersion "${KompliVersionString}")
+else()
+    set(KompliReportedVersion "${KompliVersionStringFull}")
+endif()
 set(KompliRootBinaryDir ${CMAKE_BINARY_DIR})
 
-message(STATUS "${KompliProjectName} v${KompliVersionString}")
+message(STATUS "${KompliProjectName} v${KompliVersionString} (reported: ${KompliReportedVersion})")
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/templates/version.h.in" "${CMAKE_CURRENT_SOURCE_DIR}/../src/common/commonutils/version.h" @ONLY)
+
+# Plain-text sidecar so CI can read the exact Kompli release version without
+# parsing the generated C++ header (ADR-0010: packaging consumes this value).
+file(WRITE "${CMAKE_BINARY_DIR}/kompli_version.txt" "${KompliVersionString}\n")
 
 # GNUInstallPaths CMAKE_INSTALL_SYSCONFDIR for Debian and Mariner is /usr/etc, change to /etc
 message(STATUS "Setting CMAKE_INSTALL_SYSCONFDIR to /etc")

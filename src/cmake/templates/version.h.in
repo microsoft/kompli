@@ -5,6 +5,7 @@
 #ifndef VERSION_H
 #define VERSION_H
 
-#define KOMPLI_VERSION "@KompliVersionStringFull@"
+#define KOMPLI_VERSION "@KompliReportedVersion@"
+#define KOMPLI_SOURCE_SHA "@GIT_COMMIT_ID@"
 
 #endif // VERSION_H
