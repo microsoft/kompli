@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 //
-// Tests for kompli plan/run: HashFile, GeneratePlan, ParsePlanFile.
+// Tests for kompli plan/run: GeneratePlan, ParsePlanFile.
 //
-// GeneratePlan/ParsePlanFile/HashFile apply the same file input-hardening
+// GeneratePlan/ParsePlanFile apply the same file input-hardening
 // posture as benchmark-definition parsing (root-owned file, root-owned
 // non-writable parent directory - see benchmarkio/InputSecurity.hpp). Files
 // are created inside a per-test mkdtemp() tree managed by MockContext, mirroring
@@ -24,7 +24,6 @@
 
 using ComplianceEngine::Kompli::ApplyParameterOverrides;
 using ComplianceEngine::Kompli::GeneratePlan;
-using ComplianceEngine::Kompli::HashFile;
 using ComplianceEngine::Kompli::ParamOverride;
 using ComplianceEngine::Kompli::ParsePlanFile;
 using ComplianceEngine::Kompli::Toggle;
@@ -136,9 +135,6 @@ protected:
     MockContext mCtx;
 };
 
-class HashFileTest : public PlanFixture
-{
-};
 class GeneratePlanTest : public PlanFixture
 {
 };
@@ -146,52 +142,6 @@ class ParsePlanFileTest : public PlanFixture
 {
 };
 } // namespace
-
-TEST_F(HashFileTest, ComputesKnownSha256)
-{
-    if (::geteuid() != 0)
-    {
-        GTEST_SKIP() << "chown requires root";
-    }
-    const std::string path = MakeVerifiedFile("hash_dir", "content.txt", "hello-kompli-plan");
-
-    auto result = HashFile(path, nullptr);
-    ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    EXPECT_EQ(result.Value(), "e5c27f78fc7d6c3799ca25a9f562e9bd1a7d04b538f63f9de705146b7d5777c0");
-}
-
-TEST_F(HashFileTest, DifferentContentProducesDifferentHash)
-{
-    if (::geteuid() != 0)
-    {
-        GTEST_SKIP() << "chown requires root";
-    }
-    const std::string pathA = MakeVerifiedFile("hash_dir_a", "content.txt", "content-a");
-    const std::string pathB = MakeVerifiedFile("hash_dir_b", "content.txt", "content-b");
-
-    auto resultA = HashFile(pathA, nullptr);
-    auto resultB = HashFile(pathB, nullptr);
-    ASSERT_TRUE(resultA.HasValue());
-    ASSERT_TRUE(resultB.HasValue());
-    EXPECT_NE(resultA.Value(), resultB.Value());
-}
-
-TEST_F(HashFileTest, RefusesNonRootOwnedFile)
-{
-    // No root/chown involved: in a normal (non-root) test run the freshly
-    // created directory/file are owned by the invoking user, which
-    // OpenVerifiedInput must refuse.
-    if (::geteuid() == 0)
-    {
-        GTEST_SKIP() << "already root; this test needs a non-root-owned file";
-    }
-    const std::string dir = MakeSubdir("plain_dir");
-    const std::string path = dir + "/content.txt";
-    ASSERT_TRUE(WriteFile(path, "hello"));
-
-    auto result = HashFile(path, nullptr);
-    EXPECT_FALSE(result.HasValue());
-}
 
 TEST_F(GeneratePlanTest, SeedsEveryRuleAtAudit)
 {
@@ -271,7 +221,7 @@ TEST_F(ParsePlanFileTest, ParsesValidPlan)
         GTEST_SKIP() << "chown requires root";
     }
     const char* const planJson = R"({
-      "benchmarks": [{"file": "/etc/kompli/definitions/x.benchmark.json", "name": "x", "sha256": "abc123", "rules": {
+      "benchmarks": [{"file": "/etc/kompli/definitions/x.benchmark.json", "name": "x", "rules": {
         "1/1/1/1": {"mode": "audit", "parameters": {}},
         "1/1/1/2": {"mode": "remediate", "parameters": {}}
       }}]
@@ -284,7 +234,6 @@ TEST_F(ParsePlanFileTest, ParsesValidPlan)
     const auto& benchmark = result.Value().benchmarks[0];
     EXPECT_EQ(benchmark.file, "/etc/kompli/definitions/x.benchmark.json");
     EXPECT_EQ(benchmark.name, "x");
-    EXPECT_EQ(benchmark.sha256, "abc123");
     ASSERT_EQ(benchmark.rules.size(), 2u);
     EXPECT_EQ(benchmark.rules.at("1/1/1/1").mode, ToggleMode::Audit);
     EXPECT_EQ(benchmark.rules.at("1/1/1/2").mode, ToggleMode::Remediate);
@@ -297,7 +246,7 @@ TEST_F(ParsePlanFileTest, ParsesRuleParameters)
         GTEST_SKIP() << "chown requires root";
     }
     const char* const planJson = R"({
-      "benchmarks": [{"file": "/etc/kompli/definitions/x.benchmark.json", "name": "x", "sha256": "abc123", "rules": {
+      "benchmarks": [{"file": "/etc/kompli/definitions/x.benchmark.json", "name": "x", "rules": {
         "1.1.1.1": {"mode": "audit", "parameters": {"mountPoint": "/tmp"}}
       }}]
     })";
@@ -444,8 +393,8 @@ TEST_F(ParsePlanFileTest, ParsesMultipleBenchmarkEntries)
     }
     const char* const planJson = R"({
       "benchmarks": [
-        {"file": "/etc/kompli/definitions/cis.benchmark.json", "name": "cis", "sha256": "abc", "rules": {"1/1/1/1": {"mode": "audit", "parameters": {}}}},
-        {"file": "/etc/kompli/definitions/stig.benchmark.json", "name": "stig", "sha256": "def", "rules": {"SV-1": {"mode": "remediate", "parameters": {}}}}
+        {"file": "/etc/kompli/definitions/cis.benchmark.json", "name": "cis", "rules": {"1/1/1/1": {"mode": "audit", "parameters": {}}}},
+        {"file": "/etc/kompli/definitions/stig.benchmark.json", "name": "stig", "rules": {"SV-1": {"mode": "remediate", "parameters": {}}}}
       ]
     })";
     const std::string path = MakeVerifiedFile("parse_plan_dir_multi", "plan.json", planJson);
@@ -465,7 +414,7 @@ TEST_F(ParsePlanFileTest, RejectsInvalidMode)
         GTEST_SKIP() << "chown requires root";
     }
     const char* const planJson = R"({
-      "benchmarks": [{"file": "x.json", "name": "x", "sha256": "abc", "rules": {"1/1/1/1": {"mode": "bogus", "parameters": {}}}}]
+      "benchmarks": [{"file": "x.json", "name": "x", "rules": {"1/1/1/1": {"mode": "bogus", "parameters": {}}}}]
     })";
     const std::string path = MakeVerifiedFile("parse_plan_dir3", "plan.json", planJson);
 
@@ -481,7 +430,7 @@ TEST_F(ParsePlanFileTest, RefusesNonRootOwnedFile)
     }
     const std::string dir = MakeSubdir("plain_plan_dir");
     const std::string path = dir + "/plan.json";
-    ASSERT_TRUE(WriteFile(path, R"({"benchmarks":[{"file":"x","name":"x","sha256":"a","rules":{}}]})"));
+    ASSERT_TRUE(WriteFile(path, R"({"benchmarks":[{"file":"x","name":"x","rules":{}}]})"));
 
     auto result = ParsePlanFile(path, nullptr);
     EXPECT_FALSE(result.HasValue());

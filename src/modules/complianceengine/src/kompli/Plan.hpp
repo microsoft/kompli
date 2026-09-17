@@ -48,12 +48,11 @@ struct PlanBenchmark
 {
     std::string file;
     std::string name;
-    std::string sha256;
     std::map<std::string, PlanRuleMode> rules;
 };
 
 // A parsed plan file: one or more benchmark entries. Each is independently
-// scoped (own file, own sha256, own rules map) so a single plan can mix
+// scoped (own file, own rules map) so a single plan can mix
 // rules from multiple benchmark files (e.g. from two different frameworks)
 // without copying rule content. `run` hard-fails the whole
 // plan if any entry's file doesn't apply to the current host (no partial
@@ -62,12 +61,6 @@ struct Plan
 {
     std::vector<PlanBenchmark> benchmarks;
 };
-
-// Computes the SHA-256 of a file's contents, hex-encoded lowercase. Applies
-// the same input-hardening posture as benchmark-definition reads (path
-// traversal / writable-parent-dir / O_NOFOLLOW / ownership checks) before
-// hashing, since this reads root-run input.
-Result<std::string> HashFile(const std::string& path, OsConfigLogHandle logHandle);
 
 // Generates a plan spanning one or more `benchmarkFiles`, in argument order
 // (docs/CLI.md section 8.1): every rule in every file is seeded at `audit`,

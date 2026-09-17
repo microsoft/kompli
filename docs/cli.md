@@ -119,7 +119,6 @@ the command line produce **one** plan with one `benchmarks[]` entry per file:
     {
       "file": "ubuntu24.04.benchmark.json",
       "name": "ubuntu24.04",     // from the definition's metadata.name
-      "sha256": "<hash of the file at plan-generation time>",
       "rules": {
         "1.1.1.1": { "mode": "audit", "parameters": { "PKG_NAME": "cramfs" } },
         "1.1.2": { "mode": "remediate", "parameters": {} }
@@ -142,11 +141,10 @@ rule's `parameterMetadata` defaults at plan-generation time and can be
 overridden by hand-editing the plan or via `--param=` (see "Parametrization"
 below).
 
-- Each block's `sha256` lets `run` detect that its benchmark file changed
-  since the plan was generated (same integrity-verification spirit as the
-  existing `InputSecurity` file-hardening checks elsewhere in this codebase,
-  applied to a different threat: drift between planning and execution, not
-  tampering).
+- Checksum validation of the benchmark file is deliberately **not** kompli's
+  job — that's the package manager's/admin's responsibility for whatever
+  delivers definitions to `/etc/kompli/definitions/` (see ADR-0008). Plans
+  therefore pin a benchmark by `file`, not by content hash.
 - Plans are meant to be hand-editable afterward. A rule manually **removed**
   from a block's `rules` map is not an error — it's how a user narrows a plan
   down. A whole `benchmarks[]` entry can be removed the same way.
@@ -249,16 +247,11 @@ that capability into `kompli`/`komplid` too, not just GC).
 ### `kompli run <plan-file>`
 
 Executes a plan: for each `benchmarks[]` entry, re-resolves its `file` and
-re-checks its `sha256` against the plan's recorded hash, re-validates
-applicability **once for that file** against the current host, then for
-each rule present in that block's `rules`, runs it in the specified
+re-validates applicability **once for that file** against the current host,
+then for each rule present in that block's `rules`, runs it in the specified
 mode. All blocks' results are combined into **one** canonical result
 document covering the whole plan.
 
-- **Severity: hard error**, per block. A `sha256` mismatch aborts
-  the run rather than warning and continuing — the plan's rule references
-  were only validated against the file as it existed at generation time, so
-  proceeding on a changed file would run against unvalidated content.
 - **Cross-distro/version mismatch: hard error, whole run aborts.**
   If any block's file doesn't match the current host's distribution/version,
   `run` fails immediately — it does **not** skip that block and continue with

@@ -13,8 +13,6 @@
 #include <cstdlib>
 #include <ext/stdio_filebuf.h>
 #include <istream>
-#include <memory>
-#include <openssl/evp.h>
 #include <parson.h>
 
 namespace ComplianceEngine
@@ -25,11 +23,6 @@ using std::string;
 
 namespace
 {
-// Upper bound on the number of bytes read while hashing a benchmark-definition
-// file. Matches BenchmarkDefinition's own input cap (the same files are hashed
-// here that are parsed there).
-constexpr std::size_t kMaxHashInputBytes = static_cast<std::size_t>(8) * 1024 * 1024;
-
 // Upper bound on a plan file's size. Plans are tiny (one small object per
 // rule); generous but bounds memory for a hostile input while running as root.
 constexpr std::size_t kMaxPlanInputBytes = static_cast<std::size_t>(8) * 1024 * 1024;
@@ -83,66 +76,6 @@ Result<int> OpenVerified(const string& path, OsConfigLogHandle logHandle)
 }
 } // anonymous namespace
 
-Result<string> HashFile(const string& path, OsConfigLogHandle logHandle)
-{
-    auto fdResult = OpenVerified(path, logHandle);
-    if (!fdResult.HasValue())
-    {
-        return fdResult.Error();
-    }
-
-    // stdio_filebuf takes ownership of the verified fd and closes it on destruction.
-    __gnu_cxx::stdio_filebuf<char> buffer(fdResult.Value(), std::ios_base::in);
-    std::istream stream(&buffer);
-
-    std::unique_ptr<EVP_MD_CTX, void (*)(EVP_MD_CTX*)> ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
-    if (nullptr == ctx)
-    {
-        return Error("Failed to allocate SHA-256 context", ENOMEM);
-    }
-    if (1 != EVP_DigestInit_ex(ctx.get(), EVP_sha256(), nullptr))
-    {
-        return Error("Failed to initialize SHA-256 digest", EIO);
-    }
-
-    char readBuffer[64 * 1024];
-    std::size_t total = 0;
-    while (stream.read(readBuffer, sizeof(readBuffer)) || stream.gcount() > 0)
-    {
-        const auto n = static_cast<std::size_t>(stream.gcount());
-        total += n;
-        if (total > kMaxHashInputBytes)
-        {
-            return Error("File exceeds the maximum size of " + std::to_string(kMaxHashInputBytes) + " bytes for hashing", EFBIG);
-        }
-        if (1 != EVP_DigestUpdate(ctx.get(), readBuffer, n))
-        {
-            return Error("Failed to update SHA-256 digest", EIO);
-        }
-    }
-    if (stream.bad())
-    {
-        return Error("I/O error while hashing '" + path + "'", EIO);
-    }
-
-    unsigned char digest[EVP_MAX_MD_SIZE];
-    unsigned int digestLen = 0;
-    if (1 != EVP_DigestFinal_ex(ctx.get(), digest, &digestLen))
-    {
-        return Error("Failed to finalize SHA-256 digest", EIO);
-    }
-
-    static const char* const hex = "0123456789abcdef";
-    string result;
-    result.reserve(static_cast<std::size_t>(digestLen) * 2);
-    for (unsigned int i = 0; i < digestLen; ++i)
-    {
-        result.push_back(hex[(digest[i] >> 4) & 0xF]);
-        result.push_back(hex[digest[i] & 0xF]);
-    }
-    return result;
-}
-
 namespace
 {
 // Splits off the final path component (the part after the last '/', or the
@@ -155,13 +88,13 @@ string BaseName(const string& path)
     return (string::npos == slash) ? path : path.substr(slash + 1);
 }
 
-// Builds one `benchmarks[]` entry's JSON value: `file`/`name`/`sha256` plus a
+// Builds one `benchmarks[]` entry's JSON value: `file`/`name` plus a
 // `rules` object with one entry per (id -> mode/parameters) in `rules`. On
 // failure the caller owns nothing (any partial allocation is freed here); on
 // success the caller owns the returned value and must free it if it isn't
 // subsequently handed to a parent JSON container (matching parson's
 // ownership-transfer convention, e.g. json_array_append_value).
-Result<JSON_Value*> BuildBenchmarkEntry(const string& benchmarkFile, const string& name, const string& sha256, const std::map<string, PlanRuleMode>& rules)
+Result<JSON_Value*> BuildBenchmarkEntry(const string& benchmarkFile, const string& name, const std::map<string, PlanRuleMode>& rules)
 {
     auto* benchmarkValue = json_value_init_object();
     if (nullptr == benchmarkValue)
@@ -170,8 +103,7 @@ Result<JSON_Value*> BuildBenchmarkEntry(const string& benchmarkFile, const strin
     }
     auto* benchmarkObject = json_value_get_object(benchmarkValue);
     if (nullptr == benchmarkObject || JSONSuccess != json_object_set_string(benchmarkObject, "file", benchmarkFile.c_str()) ||
-        JSONSuccess != json_object_set_string(benchmarkObject, "name", name.c_str()) ||
-        JSONSuccess != json_object_set_string(benchmarkObject, "sha256", sha256.c_str()))
+        JSONSuccess != json_object_set_string(benchmarkObject, "name", name.c_str()))
     {
         json_value_free(benchmarkValue);
         return Error("Failed to set plan benchmark fields", ENOMEM);
@@ -252,7 +184,6 @@ struct ParsedBenchmarkFile
 {
     string file;
     string name;
-    string sha256;
     std::map<string, PlanRuleMode> rules;
     // Every rules[] key's parameterMetadata, kept alongside for `--param=`
     // validation (name exists, value matches validationRegex) - see
@@ -332,17 +263,11 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
         {
             return docResult.Error();
         }
-        auto hashResult = HashFile(file, logHandle);
-        if (!hashResult.HasValue())
-        {
-            return hashResult.Error();
-        }
         const auto& doc = docResult.Value();
 
         ParsedBenchmarkFile parsed;
         parsed.file = file;
         parsed.name = doc.name;
-        parsed.sha256 = hashResult.Value();
         // Seed every rule at `audit` (never a mutating default) with its
         // parameters pre-filled from parameterMetadata's defaults (docs/CLI.md
         // "Parametrization"), keyed by id (the identifier guaranteed unique
@@ -463,7 +388,7 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
 
     for (const auto& parsed : parsedFiles)
     {
-        auto entryResult = BuildBenchmarkEntry(parsed.file, parsed.name, parsed.sha256, parsed.rules);
+        auto entryResult = BuildBenchmarkEntry(parsed.file, parsed.name, parsed.rules);
         if (!entryResult.HasValue())
         {
             json_value_free(benchmarksValue);
@@ -564,13 +489,6 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
 
         const char* name = json_object_get_string(benchmarkObject, "name");
         benchmark.name = (nullptr != name) ? string(name) : string();
-
-        const char* sha256 = json_object_get_string(benchmarkObject, "sha256");
-        if (nullptr == sha256 || sha256[0] == '\0')
-        {
-            return Error("Plan file's '" + context + ".sha256' is missing or empty", EINVAL);
-        }
-        benchmark.sha256 = sha256;
 
         auto* rulesObject = json_object_get_object(benchmarkObject, "rules");
         if (nullptr == rulesObject)

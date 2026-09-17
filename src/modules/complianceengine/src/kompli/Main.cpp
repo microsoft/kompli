@@ -353,29 +353,12 @@ int main(int argc, char* argv[])
 
     // `run` processes every benchmark entry in the plan (a plan can mix rules
     // from multiple files, e.g. from two different frameworks), each
-    // independently hash-checked and applicability-checked, accumulating
-    // into one combined result.
+    // independently applicability-checked, accumulating into one combined
+    // result. Content-drift protection between plan and run is out of
+    // kompli's scope (ADR-0008) - not a byte-hash pin here.
     for (size_t b = 0; b < plan.benchmarks.size(); ++b)
     {
         const string& benchmarkFile = plan.benchmarks[b].file;
-
-        // Re-check each benchmark file's hash against the one recorded when
-        // the plan was generated - belt-and-suspenders against drift between
-        // plan generation and execution (see docs/CLI.md section 2's TOCTOU
-        // note). A mismatch is a hard error: the plan's rule references were
-        // only validated against the file as it existed at generation time.
-        auto hashResult = ComplianceEngine::Kompli::HashFile(benchmarkFile, logHandle.get());
-        if (!hashResult.HasValue())
-        {
-            OsConfigLogError(logHandle.get(), "Failed to hash benchmark file '%s': %s", benchmarkFile.c_str(), hashResult.Error().message.c_str());
-            return 1;
-        }
-        if (hashResult.Value() != plan.benchmarks[b].sha256)
-        {
-            OsConfigLogError(logHandle.get(), "Refusing to run plan: benchmark file '%s' has changed since the plan was generated (sha256 mismatch).",
-                benchmarkFile.c_str());
-            return 1;
-        }
 
         // Parse the input as a benchmark-definition document. Definition input is a
         // required positional file argument (enforced in ParseCommandLine); the
