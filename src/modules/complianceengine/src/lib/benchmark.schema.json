@@ -81,9 +81,15 @@
       "type": "object",
       "additionalProperties": true,
       "required": [
+        "version",
         "rules"
       ],
       "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "description": "Semantic version (MAJOR.MINOR.PATCH) of this definition's *content* - independent of apiVersion (file format) and metadata.annotations.benchmarkVersion (upstream framework version). A plan pins a version range against this field."
+        },
         "rules": {
           "type": "array",
           "description": "One entry per rule in the selected benchmark.",
