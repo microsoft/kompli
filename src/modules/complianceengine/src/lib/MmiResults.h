@@ -17,7 +17,7 @@ enum class Status
 
 // Combines two statuses under allOf (conjunction) three-valued logic, matching
 // Evaluator::EvaluateList(ListAction::AllOf): NonCompliant dominates, then
-// NotApplicable is sticky, then Compliant. Used by the assessor to aggregate
+// NotApplicable is sticky, then Compliant. Used by kompli to aggregate
 // independent per-rule results into an overall benchmark status the same way the
 // engine aggregates a rule's allOf sub-results.
 inline Status CombineAllOf(Status a, Status b) noexcept

@@ -8,7 +8,6 @@
 #
 # Files checked:
 #   src/modules/complianceengine/src/**/*.{h,hpp,c,cpp}
-#   src/compliance-engine-assessor/**/*.{h,hpp,c,cpp}
 #   src/common/telemetry/**/*.{h,hpp,c,cpp}
 
 set -euo pipefail
@@ -18,7 +17,7 @@ readonly REPO_ROOT="$(env -u GIT_DIR git -C "$HOOK_DIR" rev-parse --show-topleve
 # shellcheck source=common.sh
 source "$HOOK_DIR/common.sh"
 
-readonly PATTERN='^(src/modules/complianceengine/src|src/compliance-engine-assessor|src/common/telemetry)/.*\.(h|hpp|c|cpp)$'
+readonly PATTERN='^(src/modules/complianceengine/src|src/common/telemetry)/.*\.(h|hpp|c|cpp)$'
 
 mapfile -t FILES < <(filter_files "$PATTERN" "$@")
 [[ ${#FILES[@]} -eq 0 ]] && exit 0
