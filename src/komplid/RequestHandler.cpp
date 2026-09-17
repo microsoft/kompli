@@ -403,4 +403,3 @@ Optional<RequestHandler::SpawnedTask> RequestHandler::TakeLastSpawnedTask()
 }
 
 } // namespace Komplid
-

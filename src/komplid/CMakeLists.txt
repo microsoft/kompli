@@ -60,4 +60,3 @@ install(FILES komplid.socket komplid@.service DESTINATION ${SYSTEMD_UNIT_DIR})
 if (BUILD_TESTS)
     add_subdirectory(tests)
 endif()
-

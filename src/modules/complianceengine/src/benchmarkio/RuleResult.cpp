@@ -104,8 +104,8 @@ Optional<Error> FillCommonRuleFields(JSON_Object* object, const Resource& entry,
 }
 } // namespace
 
-Result<JsonWrapper> BuildRuleResultJson(
-    const Resource& entry, const Status status, const string& indicatorsPayload, const std::map<string, string>& parameters, const Action action)
+Result<JsonWrapper> BuildRuleResultJson(const Resource& entry, const Status status, const string& indicatorsPayload,
+    const std::map<string, string>& parameters, const Action action)
 {
     auto resultWrapper = JsonWrapper::MakeObject();
     if (!resultWrapper.HasValue())

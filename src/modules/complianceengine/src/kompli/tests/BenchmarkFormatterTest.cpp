@@ -125,8 +125,7 @@ TEST(BenchmarkFormatterTest, AddEntryEmitsPerRuleAction)
     ASSERT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
     ASSERT_FALSE(formatter.AddEntry(MakeResource("1.1", "1.1 Audit rule", "AuditRule"), Status::Compliant, "[]", {}, Action::Audit).HasValue());
-    ASSERT_FALSE(
-        formatter.AddEntry(MakeResource("1.2", "1.2 Remediate rule", "RemediateRule"), Status::NonCompliant, "[]", {}, Action::Remediate).HasValue());
+    ASSERT_FALSE(formatter.AddEntry(MakeResource("1.2", "1.2 Remediate rule", "RemediateRule"), Status::NonCompliant, "[]", {}, Action::Remediate).HasValue());
     auto result = std::move(formatter).Finish(Status::NonCompliant);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
 
@@ -402,4 +401,3 @@ TEST(BenchmarkFormatterTest, EffectiveParametersAreEmitted)
     EXPECT_STREQ(json_object_get_string(p, "mask"), "0600");
     EXPECT_STREQ(json_object_get_string(p, "owner"), "root");
 }
-

@@ -491,8 +491,7 @@ namespace
 {
 // No filesystem/root needed: CheckUniqueBenchmarkIdentities operates purely
 // on already-parsed CISBenchmarkInfo values.
-ComplianceEngine::CISBenchmarkInfo MakeInfo(const std::string& framework, const std::string& distribution, const std::string& version,
-    const std::string& benchmarkVersion)
+ComplianceEngine::CISBenchmarkInfo MakeInfo(const std::string& framework, const std::string& distribution, const std::string& version, const std::string& benchmarkVersion)
 {
     auto result = ComplianceEngine::CISBenchmarkInfo::FromMetadata(framework, distribution, version, benchmarkVersion);
     EXPECT_TRUE(result.HasValue()) << result.Error().message;

@@ -294,8 +294,8 @@ Result<ResolvedRuleRef> ResolveRuleRef(std::vector<ParsedBenchmarkFile>& parsedF
 }
 } // anonymous namespace
 
-Result<string> GeneratePlan(
-    const std::vector<string>& benchmarkFiles, const std::vector<Toggle>& toggles, const std::vector<ParamOverride>& paramOverrides, OsConfigLogHandle logHandle)
+Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std::vector<Toggle>& toggles,
+    const std::vector<ParamOverride>& paramOverrides, OsConfigLogHandle logHandle)
 {
     if (benchmarkFiles.empty())
     {
@@ -428,9 +428,9 @@ Result<string> GeneratePlan(
                 const regex pattern(paramIt->second.validationRegex.Value(), std::regex_constants::ECMAScript);
                 if (!regex_match(paramOverride.value, pattern))
                 {
-                    return Error(paramIt->second.validationFailedMessage.HasValue()
-                            ? paramIt->second.validationFailedMessage.Value()
-                            : ("Value '" + paramOverride.value + "' for parameter '" + paramOverride.name + "' does not match its required pattern"),
+                    return Error(paramIt->second.validationFailedMessage.HasValue() ?
+                                     paramIt->second.validationFailedMessage.Value() :
+                                     ("Value '" + paramOverride.value + "' for parameter '" + paramOverride.name + "' does not match its required pattern"),
                         EINVAL);
                 }
             }
@@ -617,8 +617,7 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
                     const char* paramValue = json_object_get_string(parametersObject, paramName);
                     if (nullptr == paramValue)
                     {
-                        return Error(
-                            "Plan file's '" + context + "' rule '" + string(id) + "' parameter '" + string(paramName) + "' is not a string", EINVAL);
+                        return Error("Plan file's '" + context + "' rule '" + string(id) + "' parameter '" + string(paramName) + "' is not a string", EINVAL);
                     }
                     ruleMode.parameters[paramName] = paramValue;
                 }
@@ -645,7 +644,7 @@ Optional<Error> CheckUniqueBenchmarkIdentities(const std::vector<std::pair<strin
         if (it != seen.end())
         {
             return Error("Benchmark files '" + it->second + "' and '" + entry.first +
-                    "' share the same (framework, distribution, distributionVersion, benchmarkVersion) identity '" + identity + "'",
+                             "' share the same (framework, distribution, distributionVersion, benchmarkVersion) identity '" + identity + "'",
                 EINVAL);
         }
         seen.emplace(identity, entry.first);

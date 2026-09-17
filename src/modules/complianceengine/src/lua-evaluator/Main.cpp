@@ -17,7 +17,6 @@
 #include <version.h>
 
 using ComplianceEngine::Action;
-using ComplianceEngine::Cli::Context;
 using ComplianceEngine::Error;
 using ComplianceEngine::IndicatorsTree;
 using ComplianceEngine::LuaEvaluator;
@@ -26,6 +25,7 @@ using ComplianceEngine::Optional;
 using ComplianceEngine::PayloadFormatter;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
+using ComplianceEngine::Cli::Context;
 using std::ifstream;
 using std::istream;
 using std::string;

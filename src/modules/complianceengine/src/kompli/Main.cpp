@@ -37,7 +37,6 @@
 
 using ComplianceEngine::Action;
 using ComplianceEngine::CISBenchmarkInfo;
-using ComplianceEngine::Cli::Context;
 using ComplianceEngine::CombineAllOf;
 using ComplianceEngine::DistributionInfo;
 using ComplianceEngine::Engine;
@@ -48,6 +47,7 @@ using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 using ComplianceEngine::BenchmarkDefinition::ParseFile;
 using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
+using ComplianceEngine::Cli::Context;
 using ComplianceEngine::Kompli::ApplyParameterOverrides;
 using ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities;
 using ComplianceEngine::Kompli::Command;
@@ -372,8 +372,8 @@ int main(int argc, char* argv[])
         }
         if (hashResult.Value() != plan.benchmarks[b].sha256)
         {
-            OsConfigLogError(logHandle.get(),
-                "Refusing to run plan: benchmark file '%s' has changed since the plan was generated (sha256 mismatch).", benchmarkFile.c_str());
+            OsConfigLogError(logHandle.get(), "Refusing to run plan: benchmark file '%s' has changed since the plan was generated (sha256 mismatch).",
+                benchmarkFile.c_str());
             return 1;
         }
 

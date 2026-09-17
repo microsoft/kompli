@@ -156,4 +156,3 @@ private:
 } // namespace Komplid
 
 #endif // KOMPLID_REQUEST_HANDLER_HPP
-

@@ -33,8 +33,8 @@ public:
     BenchmarkFormatter(BenchmarkFormatter&&) = default;
     BenchmarkFormatter& operator=(BenchmarkFormatter&&) = default;
 
-    Optional<Error> AddEntry(
-        const BenchmarkIO::Resource& entry, Status status, const std::string& payload, const std::map<std::string, std::string>& parameters, Action action) &;
+    Optional<Error> AddEntry(const BenchmarkIO::Resource& entry, Status status, const std::string& payload,
+        const std::map<std::string, std::string>& parameters, Action action) &;
     // A rule present in the benchmark file but never executed (e.g. absent
     // from a `run` plan's rules map) - see RuleResult.hpp's
     // BuildSkippedRuleResultJson.
