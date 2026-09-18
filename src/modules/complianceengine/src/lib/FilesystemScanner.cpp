@@ -21,6 +21,8 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 
@@ -107,7 +109,26 @@ private:
 } // anonymous namespace
 
 static void ScanDirRecursive(const std::string& dir, dev_t rootDev, std::map<std::string, FilesystemScanner::FSEntry>& entries);
-void BackgroundScan(const std::string& root, const std::string& cachePath, const std::string& lockPath);
+pid_t BackgroundScan(const std::string& root, const std::string& cachePath, const std::string& lockPath);
+
+static void CloseInheritedFileDescriptors()
+{
+#ifdef SYS_close_range
+    if (::syscall(SYS_close_range, 0U, UINT_MAX, 0U) == 0)
+    {
+        return;
+    }
+#endif
+    long maxFileDescriptor = ::sysconf(_SC_OPEN_MAX);
+    if (maxFileDescriptor < 0)
+    {
+        maxFileDescriptor = 1024;
+    }
+    for (int fileDescriptor = 0; fileDescriptor < maxFileDescriptor; ++fileDescriptor)
+    {
+        ::close(fileDescriptor);
+    }
+}
 
 FilesystemScanner::FilesystemScanner(std::string rootDir, std::string cachePath, std::string lockPath, time_t softTimeoutSeconds,
     time_t hardTimeoutSeconds, time_t waitTimeoutSeconds)
@@ -253,16 +274,34 @@ static void ScanDirRecursive(const std::string& dir, dev_t rootDev, std::map<std
     }
 }
 
-void BackgroundScan(const std::string& root, const std::string& cachePath, const std::string& lockPath)
+pid_t BackgroundScan(const std::string& root, const std::string& cachePath, const std::string& lockPath)
 {
     std::string tmpPath = cachePath + ".tmp";
     pid_t pid = ::fork();
     if (pid < 0)
     {
-        return;
+        return pid;
     }
     if (pid == 0)
     {
+        if (::setsid() < 0)
+        {
+            _exit(1);
+        }
+
+        pid_t scannerPid = ::fork();
+        if (scannerPid < 0)
+        {
+            _exit(1);
+        }
+        if (scannerPid > 0)
+        {
+            _exit(0);
+        }
+
+        CloseInheritedFileDescriptors();
+        (void)::chdir("/");
+
         auto lockResult = FileLock::Make(lockPath);
         if (!lockResult.HasValue())
         {
@@ -315,6 +354,13 @@ void BackgroundScan(const std::string& root, const std::string& cachePath, const
         ::rename(tmpPath.c_str(), cachePath.c_str());
         _exit(0);
     }
+
+    pid_t waitResult = -1;
+    do
+    {
+        waitResult = ::waitpid(pid, nullptr, 0);
+    } while ((waitResult < 0) && (errno == EINTR));
+    return pid;
 }
 
 bool FilesystemScanner::LoadCache()
