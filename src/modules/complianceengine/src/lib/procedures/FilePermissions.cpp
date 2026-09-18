@@ -5,7 +5,6 @@
 #include <Evaluator.h>
 #include <FilePermissions.h>
 #include <Regex.h>
-#include <Telemetry.h>
 #include <fcntl.h>
 #include <fnmatch.h>
 #include <fts.h>
@@ -138,7 +137,6 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
                     if (!result.HasValue())
                     {
                         OsConfigLogError(log, "Error processing permissions for '%s'", fileName);
-                        OSConfigTelemetryStatusTrace(isRemediation ? "RemediateFilePermissions" : "AuditFilePermissions", result.Error().code);
                         return result;
                     }
 
@@ -243,7 +241,6 @@ Result<Status> AuditFilePermissions(const FilePermissionsParams& params, Indicat
         }
 
         OsConfigLogError(log, "Stat error %s (%d)", strerror(status), status);
-        OSConfigTelemetryStatusTrace("stat", status);
         return Error("Stat error '" + std::string(strerror(status)) + "'", status);
     }
 
@@ -321,7 +318,6 @@ Result<Status> AuditFilePermissions(const FilePermissionsParams& params, Indicat
     if ((params.permissions.HasValue() && params.mask.HasValue()) && (0 != (params.permissions.Value() & params.mask.Value())))
     {
         OsConfigLogError(log, "Invalid permissions and mask - same bits set in both");
-        OSConfigTelemetryStatusTrace("permissions", EINVAL);
         return Error("Invalid permissions and mask - same bits set in both");
     }
     if (params.permissions.HasValue())
@@ -384,7 +380,6 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
         }
 
         OsConfigLogError(log, "Open error %s (%d)", strerror(status), status);
-        OSConfigTelemetryStatusTrace("open", status);
         return Error("Open error '" + std::string(strerror(status)) + "'", status);
     }
     // RAII: ensure the descriptor is closed on every return path below.
@@ -406,7 +401,6 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
     {
         const int status = errno;
         OsConfigLogError(log, "Stat error %s (%d)", strerror(status), status);
-        OSConfigTelemetryStatusTrace("stat", status);
         return Error("Stat error '" + std::string(strerror(status)) + "'", status);
     }
 
@@ -417,7 +411,6 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
     if (S_ISLNK(statbuf.st_mode))
     {
         OsConfigLogError(log, "Refusing to remediate '%s': it is a symbolic link", params.path.c_str());
-        OSConfigTelemetryStatusTrace("symlink", EPERM);
         return indicators.NonCompliant("Refusing to remediate symbolic link '" + params.path + "'");
     }
 
@@ -510,7 +503,6 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
         {
             int status = errno;
             OsConfigLogError(log, "Chown error %s (%d)", strerror(status), status);
-            OSConfigTelemetryStatusTrace("chown", status);
             return Error(std::string("Chown error: ") + strerror(status), status);
         }
 
@@ -531,7 +523,6 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
     if ((params.permissions.HasValue() && params.mask.HasValue()) && (0 != (params.permissions.Value() & params.mask.Value())))
     {
         OsConfigLogError(log, "Invalid permissions and mask - same bits set in both");
-        OSConfigTelemetryStatusTrace("permissions", EINVAL);
         return Error("Invalid permissions and mask - same bits set in both", EINVAL);
     }
     if (new_perms != statbuf.st_mode)
@@ -544,7 +535,6 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
         {
             int status = errno;
             OsConfigLogError(log, "Chmod error %s (%d)", strerror(status), status);
-            OSConfigTelemetryStatusTrace("chmod", status);
             return Error(std::string("Chmod error: ") + strerror(status), status);
         }
 

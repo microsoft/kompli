@@ -10,7 +10,6 @@
 
 #include <CommonUtils.h>
 #include <Result.h>
-#include <Telemetry.h>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -79,7 +78,6 @@ Result<Status> LuaEvaluator::Evaluate(const string& script, IndicatorsTree& indi
             error += lua_tostring(L, -1);
         }
         OsConfigLogError(log, "%s", error.c_str());
-        OSConfigTelemetryStatusTrace("luaL_loadstring", -1);
         lua_pop(L, 1);
         return Error(error);
     }
@@ -91,7 +89,6 @@ Result<Status> LuaEvaluator::Evaluate(const string& script, IndicatorsTree& indi
         if (!upvalueName)
         {
             OsConfigLogError(log, "Could not set restricted Lua environment");
-            OSConfigTelemetryStatusTrace("lua_setupvalue", -1);
             lua_pop(L, 1);
             lua_settop(L, 0);
             return Error("Could not set restricted Lua environment");
@@ -106,7 +103,6 @@ Result<Status> LuaEvaluator::Evaluate(const string& script, IndicatorsTree& indi
         lua_pop(L, 1);
         lua_settop(L, 0);
         OsConfigLogError(log, "Restricted Lua environment not found");
-        OSConfigTelemetryStatusTrace("lua_getfield", -1);
         return Error("Restricted Lua environment not found");
     }
 
@@ -119,7 +115,6 @@ Result<Status> LuaEvaluator::Evaluate(const string& script, IndicatorsTree& indi
             error += lua_tostring(L, -1);
         }
         OsConfigLogError(log, "%s", error.c_str());
-        OSConfigTelemetryStatusTrace("lua_pcall", result);
         luaL_traceback(L, L, NULL, 1);
         const char* traceback = lua_tostring(L, -1);
         if (traceback)
@@ -138,7 +133,6 @@ Result<Status> LuaEvaluator::Evaluate(const string& script, IndicatorsTree& indi
     {
         lua_settop(L, 0);
         OsConfigLogError(log, "Lua script did not return a value");
-        OSConfigTelemetryStatusTrace("lua_gettop", -1);
         return Error("Lua script did not return a value");
     }
 
@@ -303,7 +297,6 @@ int LuaEvaluator::LuaProcedureWrapper(lua_State* L)
     if (!lua_isstring(L, -1))
     {
         OsConfigLogError(log, "Failed to get procedure name from upvalue");
-        OSConfigTelemetryStatusTrace("lua_upvalueindex", -1);
         lua_pushstring(L, "Failed to get procedure name from upvalue");
         lua_error(L);
         return 0;
@@ -314,7 +307,6 @@ int LuaEvaluator::LuaProcedureWrapper(lua_State* L)
     if ((callContext->action != ComplianceEngine::Action::Remediate) && (procedureName.substr(0, 9) == "Remediate"))
     {
         OsConfigLogError(log, "Remediation not allowed in audit mode");
-        OSConfigTelemetryStatusTrace("action", EPERM);
         lua_pushstring(L, "Remediation not allowed in audit mode");
         lua_error(L);
         return 0;
@@ -324,7 +316,6 @@ int LuaEvaluator::LuaProcedureWrapper(lua_State* L)
     if (!lua_islightuserdata(L, -1))
     {
         OsConfigLogError(log, "Failed to get function pointer from upvalue");
-        OSConfigTelemetryStatusTrace("lua_islightuserdata", -1);
         lua_pushstring(L, "Failed to get function pointer from upvalue");
         lua_error(L);
         return 0;
@@ -335,7 +326,6 @@ int LuaEvaluator::LuaProcedureWrapper(lua_State* L)
     if (!actionFunc)
     {
         OsConfigLogError(log, "No function for procedure %s", procedureName.c_str());
-        OSConfigTelemetryStatusTrace("actionFunc", ENOENT);
         lua_pushstring(L, ("No function for procedure: " + procedureName).c_str());
         lua_error(L);
         return 0;
