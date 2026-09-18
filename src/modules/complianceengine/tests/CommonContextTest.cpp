@@ -30,6 +30,21 @@ TEST_F(CommonContextTest, ExecuteCommand_Success)
     EXPECT_NE(result.Value().find("test"), std::string::npos);
 }
 
+TEST_F(CommonContextTest, ExecuteCommand_EmptyOutput)
+{
+    ComplianceEngine::CommonContext context(nullptr, "/tmp");
+    for (const std::string command : {"true", "if false; then echo unused; fi"})
+    {
+        SCOPED_TRACE(command);
+        const auto result = context.ExecuteCommand(command);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_TRUE(result.Value().empty());
+    }
+    const auto failure = context.ExecuteCommand("exit 7");
+    ASSERT_FALSE(failure.HasValue());
+    EXPECT_EQ(failure.Error().code, 7);
+}
+
 TEST_F(CommonContextTest, ExecuteCommand_Failure)
 {
     ComplianceEngine::CommonContext ctx(nullptr, "/tmp");

@@ -391,6 +391,8 @@ public:
 
 private:
     friend bool regexSearch(const std::string& s, MatchResults& m, const Regex& r);
+    friend bool regexSearch(std::string::const_iterator begin, std::string::const_iterator end, MatchResults& match, const Regex& pattern,
+        std::regex_constants::match_flag_type flags);
     friend bool regexMatch(const std::string& s, MatchResults& m, const Regex& r);
     MatchResults(std::string target, std::unique_ptr<regmatch_t[]> matches, std::size_t size)
         : mTarget(std::move(target)),
@@ -411,6 +413,70 @@ inline bool regexSearch(const std::string& s, MatchResults& m, const Regex& r)
     auto result = (0 == regexec(r.preg.get(), s.c_str(), size, matches.get(), 0));
     m = MatchResults(s, std::move(matches), result ? size : 0);
     return result;
+}
+
+inline bool regexSearch(std::string::const_iterator begin, std::string::const_iterator end, MatchResults& match, const Regex& pattern,
+    std::regex_constants::match_flag_type flags = std::regex_constants::match_default)
+{
+    const bool previousAvailable = flags & std::regex_constants::match_prev_avail;
+    std::string target(previousAvailable ? begin - 1 : begin, end);
+    const regoff_t initialOffset = previousAvailable ? 1 : 0;
+    regoff_t offset = initialOffset;
+    const auto size = pattern.preg->re_nsub + 1;
+    auto matches = std::unique_ptr<regmatch_t[]>(new regmatch_t[size]);
+    int executionFlags = REG_STARTEND;
+    if (previousAvailable || (flags & std::regex_constants::match_not_bol))
+    {
+        executionFlags |= REG_NOTBOL;
+    }
+    if (flags & std::regex_constants::match_not_eol)
+    {
+        executionFlags |= REG_NOTEOL;
+    }
+
+    bool found = false;
+    while (offset <= static_cast<regoff_t>(target.size()))
+    {
+        matches[0].rm_so = offset;
+        matches[0].rm_eo = static_cast<regoff_t>(target.size());
+        if (regexec(pattern.preg.get(), target.c_str(), size, matches.get(), executionFlags) != 0)
+        {
+            break;
+        }
+        if ((flags & std::regex_constants::match_continuous) && matches[0].rm_so != initialOffset)
+        {
+            break;
+        }
+        if ((flags & std::regex_constants::match_not_null) && matches[0].rm_so == matches[0].rm_eo)
+        {
+            if (flags & std::regex_constants::match_continuous)
+            {
+                break;
+            }
+            offset = matches[0].rm_eo + 1;
+            continue;
+        }
+        found = true;
+        break;
+    }
+
+    if (previousAvailable)
+    {
+        target.erase(0, 1);
+        if (found)
+        {
+            for (std::size_t index = 0; index < size; ++index)
+            {
+                if (matches[index].rm_so != -1)
+                {
+                    --matches[index].rm_so;
+                    --matches[index].rm_eo;
+                }
+            }
+        }
+    }
+    match = MatchResults(std::move(target), std::move(matches), found ? size : 0);
+    return found;
 }
 
 inline bool regexMatch(const std::string& s, const Regex& r)

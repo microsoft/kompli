@@ -121,6 +121,77 @@ TEST_F(AuditdRulesCheckTest, OverridePathWithMatchingFileRuleIsCompliant)
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(AuditdRulesCheckTest, TimeChangeSyscallsAcceptAnyNonemptyKey)
+{
+    const std::string directory = MakeTempDir();
+    ASSERT_FALSE(directory.empty());
+    const std::string filename = directory + "/sys.rules";
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", directory);
+    AuditdRulesParams params;
+    params.searchItem = "-S adjtimex,settimeofday,clock_settime";
+    params.requiredOptions.items = {"-F arch=b32",
+        "^-a[ \t]+(always,exit|exit,always)[ \t]+-F[ \t]+arch=b32[ \t]+-S[ \t]+[a-zA-Z0-9_,]+([ \t]+-S[ \t]+[a-zA-Z0-9_,]+)*[ \t]+(-F[ \t]+key=|-k[ "
+        "\t]+)[^ \t]+[ \t]*$"};
+    const std::vector<std::pair<std::string, Status>> cases = {
+        {"-a always,exit -F arch=b32 -S execve,settimeofday,adjtimex,init_module,clock_settime,clock_adjtime,finit_module,execveat -F key=auoms\n", Status::Compliant},
+        {"-a always,exit -F arch=b32 -S adjtimex,settimeofday,clock_settime -k site-audit\n", Status::Compliant},
+        {"-a always,exit -F arch=b32 -S adjtimex,settimeofday,clock_settime\n", Status::NonCompliant},
+        {"-a always,exit -F arch=b32 -S adjtimex,settimeofday,clock_settime -k \n", Status::NonCompliant},
+        {"-a always,exit -F arch=b32 -S adjtimex,settimeofday -k auoms\n", Status::NonCompliant},
+        {"-a always,exit -F arch=b32 -S adjtimex,settimeofday,clock_settime -C uid!=euid -F key=auoms\n", Status::NonCompliant},
+        {"-a always,exit -F arch=b32 -S adjtimex,settimeofday,clock_settime -F auid>=1000 -F auid!=-1 -F key=auoms\n", Status::NonCompliant},
+        {"-a exit,always\t-F arch=b32  -S adjtimex -S settimeofday,clock_settime\t-k site-audit\n", Status::Compliant},
+    };
+    for (const auto& entry : cases)
+    {
+        SCOPED_TRACE(entry.first);
+        WriteFile(filename, entry.first);
+        EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(entry.first)));
+        const auto result = AuditAuditdRules(params, indicators, mContext);
+        EXPECT_TRUE(result.HasValue());
+        if (result.HasValue())
+        {
+            EXPECT_EQ(entry.second, result.Value());
+        }
+    }
+    RemoveFile(filename);
+    RemoveDir(directory);
+}
+
+TEST_F(AuditdRulesCheckTest, SyscallFieldLayoutUsesRuntimeUidMin)
+{
+    const std::string directory = MakeTempDir();
+    ASSERT_FALSE(directory.empty());
+    const std::string filename = directory + "/sys.rules";
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", directory);
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillRepeatedly(Return(Result<std::string>("UID_MIN 500\n")));
+    AuditdRulesParams params;
+    params.searchItem = "-S init_module";
+    params.requiredOptions.items = {"-F arch=b64",
+        "^-a[ \t]+(always,exit|exit,always)[ \t]+-F[ \t]+arch=b64[ \t]+-S[ \t]+[a-zA-Z0-9_,]+[ \t]+"
+        "(-F[ \t]+auid>=1000[ \t]+-F[ \t]+auid!=(unset|-1|4294967295)|-F[ \t]+auid!=(unset|-1|4294967295)[ \t]+-F[ \t]+auid>=1000)"
+        "[ \t]+(-F[ \t]+key=|-k[ \t]+)[^ \t]+[ \t]*$"};
+    const std::vector<std::pair<std::string, Status>> cases = {
+        {"-F auid>=500 -F auid!=-1 -F key=auoms", Status::Compliant},
+        {"-F auid!=unset -F auid>=500 -k alternate", Status::Compliant},
+        {"-F auid>=1000 -F auid!=-1 -F key=auoms", Status::NonCompliant},
+        {"-C uid!=euid -F auid>=500 -F auid!=-1 -F key=auoms", Status::NonCompliant},
+        {"-F key=auoms -F auid>=500 -F auid!=-1", Status::NonCompliant},
+    };
+    for (const auto& entry : cases)
+    {
+        SCOPED_TRACE(entry.first);
+        const std::string rule = "-a always,exit -F arch=b64 -S execve,init_module " + entry.first + "\n";
+        WriteFile(filename, rule);
+        EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(rule)));
+        const auto result = AuditAuditdRules(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(entry.second, result.Value());
+    }
+    RemoveFile(filename);
+    RemoveDir(directory);
+}
+
 // Test: override path where running has rule but files do not -> NonCompliant
 TEST_F(AuditdRulesCheckTest, OverridePathMissingFileRuleIsNonCompliant)
 {

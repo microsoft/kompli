@@ -265,6 +265,8 @@ static int ProcedureUpdateUserParameters_target(const char* data, std::size_t si
 
 // List of supported fuzzing targets.
 // The key is taken from the input data and is used to determine which target to call.
+int RegexFallbackSearchTarget(const char* data, std::size_t size);
+
 static const std::map<std::string, int (*)(const char*, std::size_t)> g_targets = {
     { "GetNumberOfLinesInFile.", GetNumberOfLinesInFile_target },
     { "LoadStringFromFile.", LoadStringFromFile_target },
@@ -278,6 +280,7 @@ static const std::map<std::string, int (*)(const char*, std::size_t)> g_targets 
     { "GetMaxLogSizeDebugMultiplierFromJsonConfig.", GetMaxLogSizeDebugMultiplierFromJsonConfig_target },
     { "Base64Decode.", Base64Decode_target },
     { "ProcedureUpdateUserParameters.", ProcedureUpdateUserParameters_target },
+    { "RegexFallbackSearch.", RegexFallbackSearchTarget },
 };
 
 // libfuzzer entry point

@@ -100,4 +100,10 @@ target_link_libraries(complianceenginetests
     parsonlib
 )
 
+add_library(file_regex_match_fallback_compile OBJECT ../src/lib/procedures/FileRegexMatch.cpp)
+target_compile_definitions(file_regex_match_fallback_compile PRIVATE USE_REGEX_FALLBACK=1)
+target_include_directories(file_regex_match_fallback_compile PRIVATE $<TARGET_PROPERTY:complianceenginelib,INCLUDE_DIRECTORIES>)
+target_link_libraries(file_regex_match_fallback_compile PRIVATE complianceenginelib)
+add_dependencies(complianceenginetests file_regex_match_fallback_compile)
+
 gtest_discover_tests(complianceenginetests XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR})
