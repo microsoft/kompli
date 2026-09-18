@@ -104,7 +104,7 @@ void ComplianceEngineLoad(MMI_HANDLE clientSession, const char* componentName)
 {
     if ((nullptr == componentName) || (nullptr == clientSession))
     {
-        OsConfigLogError(g_log, "ComplianceEngineLoad(%s, %p) called with invalid arguments", componentName, clientSession);
+        OsConfigLogError(g_log, "ComplianceEngineLoad(%s, %p) called with invalid arguments", componentName ? componentName : "(null)", clientSession);
         return;
     }
 
