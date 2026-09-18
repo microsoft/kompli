@@ -10,6 +10,7 @@
 #include "ComplianceEngineInterface.h"
 
 #include <dlfcn.h>
+#include <cerrno>
 
 namespace ComplianceEngine
 {
