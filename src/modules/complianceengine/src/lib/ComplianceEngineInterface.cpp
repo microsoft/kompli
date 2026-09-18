@@ -35,7 +35,7 @@
 using ComplianceEngine::CISBenchmarkInfo;
 using ComplianceEngine::DistributionInfo;
 using ComplianceEngine::Engine;
-using ComplianceEngine::GetCompilanceEngineDirectory;
+using ComplianceEngine::GetComplianceEngineDirectory;
 using ComplianceEngine::JsonWrapper;
 using ComplianceEngine::Status;
 
@@ -152,7 +152,7 @@ void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
 
     event.Add("ComplianceEngineVersion", KOMPLI_VERSION);
     ComplianceEngine::LogCreatedTelemetryEvent(event, engine->GetTelemetry(), g_log, durationUs, g_benchmarkRunCreatedAt);
-    auto moduleDirectory = GetCompilanceEngineDirectory();
+    auto moduleDirectory = GetComplianceEngineDirectory();
     if (moduleDirectory.HasValue())
     {
         const std::string telemetryBinaryPath = moduleDirectory.Value() + "/" + telemetry_binary;
@@ -170,7 +170,7 @@ void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
     }
     else
     {
-        OsConfigLogError(g_log, "ComplianceEngineMmiClose: failed to GetCompilanceEngineDirectory() telemetry not run");
+        OsConfigLogError(g_log, "ComplianceEngineMmiClose: failed to GetComplianceEngineDirectory() telemetry not run");
     }
 #endif // BUILD_TELEMETRY
 }

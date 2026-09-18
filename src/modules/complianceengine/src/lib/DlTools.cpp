@@ -15,7 +15,7 @@
 namespace ComplianceEngine
 {
 
-Result<std::string> GetCompilanceEngineDirectory()
+Result<std::string> GetComplianceEngineDirectory()
 {
     Dl_info dlInfo = {};
     if ((0 == dladdr(reinterpret_cast<void*>(ComplianceEngineMmiOpen), &dlInfo)) || (nullptr == dlInfo.dli_fname))

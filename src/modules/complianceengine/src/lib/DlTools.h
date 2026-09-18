@@ -10,7 +10,7 @@
 namespace ComplianceEngine
 {
 
-Result<std::string> GetCompilanceEngineDirectory();
+Result<std::string> GetComplianceEngineDirectory();
 
 } // namespace ComplianceEngine
 
