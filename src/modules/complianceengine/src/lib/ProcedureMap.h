@@ -148,6 +148,19 @@ inline const std::map<std::string, GsettingsOperationType>& MapEnum<GsettingsOpe
     return map;
 }
 
+// Maps the MtaConfigurationVersion enum labels to the enum values.
+template <>
+inline const std::map<std::string, MtaConfigurationVersion>& MapEnum<MtaConfigurationVersion>()
+{
+    static const std::map<std::string, MtaConfigurationVersion> map = {
+        {"none", MtaConfigurationVersion::None},
+        {"1", MtaConfigurationVersion::Version1},
+        {"2", MtaConfigurationVersion::Version2},
+        {"3", MtaConfigurationVersion::Version3},
+    };
+    return map;
+}
+
 // Maps the InterfaceFlag enum labels to the enum values.
 template <>
 inline const std::map<std::string, InterfaceFlag>& MapEnum<InterfaceFlag>()
@@ -357,9 +370,9 @@ template <>
 struct Bindings<FileRegexMatchParams>
 {
     using T = FileRegexMatchParams;
-    static constexpr size_t size = 11;
+    static constexpr size_t size = 14;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::path, &T::filenamePattern, &T::matchOperation, &T::matchPattern, &T::stateOperation, &T::statePattern, &T::minimumValue, &T::maximumValue, &T::allMatches, &T::ignoreCase, &T::behavior);
+    static constexpr auto members = std::make_tuple(&T::path, &T::filenamePattern, &T::filenameSearch, &T::matchOperation, &T::matchPattern, &T::stateOperation, &T::statePattern, &T::minimumValue, &T::maximumValue, &T::allMatches, &T::wholeFile, &T::noneMatches, &T::ignoreCase, &T::behavior);
 };
 
 // Defines the bindings for the FileSymlinkTargetParams structure.
@@ -430,6 +443,16 @@ struct Bindings<MountPointExistsParams>
     static constexpr size_t size = 1;
     static const char* names[];
     static constexpr auto members = std::make_tuple(&T::mountPoint);
+};
+
+// Defines the bindings for the MtaLocalOnlyParams structure.
+template <>
+struct Bindings<MtaLocalOnlyParams>
+{
+    using T = MtaLocalOnlyParams;
+    static constexpr size_t size = 1;
+    static const char* names[];
+    static constexpr auto members = std::make_tuple(&T::configurationVersion);
 };
 
 // Defines the bindings for the NetworkInterfaceFlagParams structure.
@@ -626,6 +649,9 @@ string to_string(ComplianceEngine::GsettingsKeyType value) noexcept(false); // N
 
 // Returns a string representation of the GsettingsOperationType enum value.
 string to_string(ComplianceEngine::GsettingsOperationType value) noexcept(false); // NOLINT(*-identifier-naming)
+
+// Returns a string representation of the MtaConfigurationVersion enum value.
+string to_string(ComplianceEngine::MtaConfigurationVersion value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the InterfaceFlag enum value.
 string to_string(ComplianceEngine::InterfaceFlag value) noexcept(false); // NOLINT(*-identifier-naming)

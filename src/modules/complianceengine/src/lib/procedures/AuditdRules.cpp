@@ -25,7 +25,7 @@ namespace
 {
 std::string ReplaceAuidPlaceholder(const std::string& option, int uidMin)
 {
-    regex auidRegex(R"(-F auid>=[0-9]+\b)");
+    regex auidRegex(R"(auid>=[0-9]+\b)");
     smatch m;
     std::string replaced = option;
     // Replace all matches of auidRegex with the new value
@@ -39,8 +39,8 @@ std::string ReplaceAuidPlaceholder(const std::string& option, int uidMin)
         }
         auto pos = m.position(0) + offset;
         auto len = m.length(0);
-        replaced.replace(pos, len, "-F auid>=" + std::to_string(uidMin));
-        offset = pos + std::string("-F auid>=").length() + std::to_string(uidMin).length();
+        replaced.replace(pos, len, "auid>=" + std::to_string(uidMin));
+        offset = pos + std::string("auid>=").length() + std::to_string(uidMin).length();
     }
     return replaced;
 }
