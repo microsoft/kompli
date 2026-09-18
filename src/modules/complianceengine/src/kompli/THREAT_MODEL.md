@@ -124,6 +124,6 @@ tracked follow-ups.
   `payload` and ignores schema-required `tags` / `metadata`. Do not rely on
   the schema to constrain what kompli executes. (`tags` / `metadata`
   consumption is planned in a follow-up.)
-- **`apiVersion` value is not validated** — only required to be present and
-  non-empty. There is currently no version-skew detection; value pinning is
-  planned as a follow-up.
+- **`apiVersion` value is validated against an allowlist** (currently `v1`
+  only) — closes the version-skew gap: an unrecognised value is a hard parse
+  error, not a best-effort parse. See SECURITY_REVIEW.md #5.

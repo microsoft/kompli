@@ -33,6 +33,30 @@ constexpr size_t kMaxInputBytes = static_cast<size_t>(8) * 1024 * 1024;
 // Upper bound on the number of rules parsed from a single definition.
 constexpr size_t kMaxRules = 100000;
 
+// Supported envelope format versions (ADR-0008 §4: the format axis, gated at
+// generation time by the committed schema and now, per M-27, at parse time
+// too - closes TM-5). Extend this set (never silently reinterpret an
+// unrecognised value) when a schema reshape adds a new apiVersion; kompli may
+// carry a bounded window of several supported entries during a migration,
+// dropping the oldest once its definitions are no longer expected in the
+// field, per a stated support-window policy decided when that first happens.
+const std::set<string> kSupportedApiVersions = {"v1"};
+
+// Joins a set of strings with ", " for a human-readable error message.
+string JoinSet(const std::set<string>& values)
+{
+    string joined;
+    for (const auto& value : values)
+    {
+        if (!joined.empty())
+        {
+            joined += ", ";
+        }
+        joined += value;
+    }
+    return joined;
+}
+
 // Reads an entire stream into a string, refusing inputs larger than the cap.
 Result<string> ReadAllBounded(std::istream& stream)
 {
@@ -351,6 +375,10 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
     if (!apiVersion.HasValue())
     {
         return apiVersion.Error();
+    }
+    if (0 == kSupportedApiVersions.count(apiVersion.Value()))
+    {
+        return Error("Benchmark definition has an unsupported 'apiVersion' (\"" + apiVersion.Value() + "\"); supported: " + JoinSet(kSupportedApiVersions), EINVAL);
     }
 
     auto* metadata = json_object_get_object(root, "metadata");

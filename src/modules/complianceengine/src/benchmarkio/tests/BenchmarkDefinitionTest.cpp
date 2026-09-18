@@ -307,6 +307,15 @@ TEST(BenchmarkDefinitionParserTest, RejectsMissingApiVersion)
     EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
 }
 
+TEST(BenchmarkDefinitionParserTest, RejectsUnsupportedApiVersion)
+{
+    std::string doc = OneRuleDoc();
+    const std::string::size_type pos = doc.find(R"("apiVersion":"v1")");
+    ASSERT_NE(pos, std::string::npos);
+    doc.replace(pos, std::string(R"("apiVersion":"v1")").size(), R"("apiVersion":"v2")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
 TEST(BenchmarkDefinitionParserTest, RejectsMissingMetadata)
 {
     const std::string doc = std::string(R"({"apiVersion":"v1","kind":"BenchmarkDefinition","spec":{"rules":[)") + kValidRule + "]}}";

@@ -18,7 +18,7 @@ Reviewed at kompli commits `834acde1` ("Support the new definitions format") and
 | 2 | `stdin` bypassed all input-integrity checks | Medium | Fixed — stdin removed for definitions |
 | 3 | Schema is not a runtime control; `tags`/`metadata` ignored by parser | Low | **Deferred** — follow-up PR |
 | 4 | Embedded NUL byte silently truncated the parse | Low | Fixed — fail-closed on NUL |
-| 5 | `apiVersion` value never validated | Low | **Deferred** — follow-up PR |
+| 5 | `apiVersion` value never validated | Low | Fixed — allowlist gate (M-27) |
 | 6 | `fnmatch` version-glob hardening | Low | **Deferred** — shared-lib change |
 | 7 | Memory / recursion bounds | Low | Adjusted — input cap lowered to 8 MiB |
 | 8 | TOCTOU: parent-dir stat vs. open | Low | Pre-existing, documented, mitigated |
@@ -39,6 +39,14 @@ silently truncate the document and hide everything after it. Because
 `ParseString` is the single choke point, this also protects `ParseFile`,
 `ParseStream`, and the fuzzer. Covered by unit tests (`RejectsEmbeddedNulByte`,
 `RejectsLeadingNulByte`) and attested crash-free by the libFuzzer target.
+
+### 5. `apiVersion` value is now validated (M-27)
+`ParseString` now rejects any `apiVersion` outside a small allowlist
+(`kSupportedApiVersions`, currently just `"v1"`) with a clear error naming the
+offending value and the supported set, closing the version-skew gap: an
+incompatible future format is no longer parsed best-effort. Covered by
+`RejectsUnsupportedApiVersion`. See the definitions-versioning ADR (ADR-0008
+§4) and its TM-5 threat-model entry in the unified-definitions workspace docs.
 
 ### 7. Input memory cap lowered
 JSON parsing is not streaming: the whole document is buffered and parsed at once
@@ -83,15 +91,6 @@ the schema-required `tags` / `metadata`. Consequences:
 When that lands, decide whether the parser should also enforce their presence
 (closing the parser/schema divergence) or continue to treat the schema purely as
 a generation-time gate.
-
-### 5. `apiVersion` value is not validated
-`ParseString` requires `apiVersion` to be present and non-empty but never checks
-its value, so there is no version-skew detection: an incompatible future format
-would be parsed on a best-effort basis.
-
-**Planned:** pin / allowlist known `apiVersion` values in a follow-up so
-kompli rejects formats it does not understand instead of silently
-best-effort-parsing them.
 
 ### 6. `fnmatch` version-glob hardening (shared library)
 Applicability matching uses `fnmatch(version, VERSION_ID)` where `version` comes
