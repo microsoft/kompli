@@ -7,7 +7,7 @@ kompli is a modular security configuration stack for Linux. kompli supports mana
 
 This document describes the North Star architecture of this project. Its prime target is to guide the people who develop kompli. The doc can be also useful to anyone who is interested to learn about this project.
 
-kompli design principles are the following:
+kompli follows these design principles:
 
 - Policy evaluator engine.
 - Modular architecture.
@@ -16,6 +16,8 @@ kompli design principles are the following:
 - Not permanently tied to any management authority.
 
 The main way to extend kompli is by developing new [procedures](../src/modules/complianceengine/src/lib/procedures/).
+
+See [glossary.md](glossary.md) for unfamiliar acronyms (MC, NRP, GC, MOF, MIM, ASB, MMI, MPI) used below.
 
 # 2. Overall kompli Architecture
 
@@ -52,7 +54,7 @@ kompli supports two integration scenarios that share the same ComplianceEngine m
 - **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The definitions generator produces MOF files that drive audit and remediation per rule.
 - **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/kompli/`) that reads a benchmark-definition JSON file (supplied on disk as a required positional filename argument; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
 
-A third scenario, **`komplid`** (a native, systemd-managed daemon sharing the same ComplianceEngine core), runs a synchronous audit/remediate subset; see §3 and [src/komplid/README.md](../src/komplid/README.md) for its design.
+A third scenario, `komplid` (a native, systemd-managed daemon sharing the same ComplianceEngine core), runs a synchronous audit/remediate subset; see §3 and [src/komplid/README.md](../src/komplid/README.md) for its design.
 
 All three scenarios ultimately drive the same `Engine` through the same
 typed, stateless per-rule API (`PrepareRule`/`Audit`/`Remediate`, §3.1) — they
@@ -81,35 +83,35 @@ flowchart TB
 
 kompli will be able to run as a standalone daemon that can evaluate policy given requests from external sources.
 
-> The concrete name for this daemon is **`komplid`**. Its build-graph location
-> is [src/komplid/](../src/komplid/README.md), which runs a
-> **synchronous** audit/remediate subset (`SO_PEERCRED`-authenticated,
-> engine-backed) — see the linked README for the full design. It is started
-> by systemd via socket activation with **`Accept=yes`** (one fresh process
-> per connection, chosen for initial simplicity) and shares the
-> ComplianceEngine core and the `benchmarkio`
-> benchmark-definition/input-security library with the `kompli` CLI rather
-> than duplicating that logic. Wire protocol: JSONL over the Unix domain
-> socket, replacing the old MPI-over-UDS/HTTP design, one connection per
-> session carrying many sequential per-rule requests (see
-> [src/komplid/README.md](../src/komplid/README.md#wire-protocol) for the
-> `requestId`/`benchmark`/`id`/`mode`/`parameters` request shape and
-> `result`/`error` response envelopes). Slow rules respond with a task ID
-> instead of blocking, backed by a SQLite task registry/audit-result cache
-> (see
-> [src/komplid/README.md](../src/komplid/README.md#long-running-rules-background-tasks)).
-> `komplid` always
-> runs as root; passthrough clients only need membership in
-> a new `kompli` system group, with no fallback to standalone (root-required)
-> execution if the daemon is unreachable (see
-> [src/komplid/README.md](../src/komplid/README.md#privilege-model)).
-> Neither `komplid` nor the `kompli` CLI
-> use a shared persistent state directory (each `kompli`/`komplid`
-> invocation gets its own ephemeral temp directory) — the `kompli` CLI stays
-> ephemeral, while `komplid`'s own persistent state lives at the
-> root-only `/var/lib/komplid/` (chosen to avoid clashing with
-> GuestConfiguration's `/var/lib/GuestConfig`); see
-> [docs/configuration.md](configuration.md).
+> The concrete name for this daemon is `komplid`, built at
+> [src/komplid/](../src/komplid/README.md) — see the linked README for the
+> full design.
+>
+> - It runs a synchronous audit/remediate subset, authenticated via
+>   `SO_PEERCRED` and backed by the same engine as the other scenarios.
+> - systemd starts it via socket activation with `Accept=yes`: one fresh
+>   process per connection, chosen for initial simplicity.
+> - It shares the ComplianceEngine core and the `benchmarkio`
+>   benchmark-definition/input-security library with the `kompli` CLI,
+>   rather than duplicating that logic.
+> - Its wire protocol is JSONL over the Unix domain socket, replacing the
+>   old MPI-over-UDS/HTTP design. One connection carries many sequential
+>   per-rule requests — see
+>   [src/komplid/README.md](../src/komplid/README.md#wire-protocol) for the
+>   `requestId`/`benchmark`/`id`/`mode`/`parameters` request shape and the
+>   `result`/`error` response envelopes.
+> - A slow rule returns a task ID instead of blocking, backed by a SQLite
+>   task registry and audit-result cache — see
+>   [src/komplid/README.md](../src/komplid/README.md#long-running-rules-background-tasks).
+> - `komplid` always runs as root; passthrough clients only need membership
+>   in a new `kompli` system group, and there is no fallback to standalone
+>   (root-required) execution if the daemon is unreachable — see
+>   [src/komplid/README.md](../src/komplid/README.md#privilege-model).
+> - Neither `komplid` nor the `kompli` CLI keeps a shared persistent state
+>   directory: each invocation gets its own ephemeral temp directory instead.
+>   `komplid`'s own persistent state lives at the root-only
+>   `/var/lib/komplid/` (chosen to avoid clashing with GuestConfiguration's
+>   `/var/lib/GuestConfig`); see [docs/configuration.md](configuration.md).
 
 ```mermaid
 sequenceDiagram
@@ -159,8 +161,7 @@ arguments, with no mutable per-session rule database to carry stale state
 between calls. `kompli` CLI and `komplid` call this API directly (§4.2); the
 NRP/MC adapter (§5.1) translates the MOF wire format's legacy
 `Procedure`/`Init`/`Reported`/`Desired` object values into the same calls at
-its own boundary, so the MOF contract stays byte-identical to existing GC
-consumers.
+its own boundary, keeping the wire format unchanged (§2.2).
 
 The old OSConfig platform daemon and its MPI/HTTP-over-UDS transport (formerly
 documented here as "kompli Management Platform") has been removed from this
@@ -191,14 +192,12 @@ prefixes such as `procedure{RuleName}`).
   for the given prepared rule with the supplied parameter overrides, and
   returns a typed `Status`.
 
-Because each call takes the rule (and its overrides) explicitly as an
-argument, there is no stale rule state to leak between invocations, and no
-handle lifecycle (`MmiOpen`/`MmiClose`) to manage. `kompli` CLI and `komplid`
-call this API in-process (§4.2); the NRP/MC adapter translates the MOF wire
-format's `Procedure`/`Init`/`Reported`/`Desired` object values into the same
-calls at its own boundary (§5.1, §5.3), so the MOF contract stays
-byte-identical while nothing downstream of the adapter speaks the legacy MMI
-protocol.
+Each call takes the rule (and its overrides) explicitly as an argument, so
+there's no shared state between calls and no open/close lifecycle to manage.
+`kompli` CLI and `komplid` call this API in-process (§4.2); the NRP/MC
+adapter translates the MOF wire format's `Procedure`/`Init`/`Reported`/`Desired`
+object values into the same calls at its own boundary (§5.1, §5.3) — the same
+unchanged MOF contract as §2.2.
 
 # 4. kompli Management Modules
 
@@ -300,7 +299,7 @@ sequenceDiagram
 
 ### Definition versioning & compatibility
 
-A benchmark-definition file carries **three independent version axes**, each
+A benchmark-definition file carries three independent version axes, each
 answering a different question and consumed by a different layer:
 
 | Field | Axis | Consumer | Comparison |
@@ -310,30 +309,33 @@ answering a different question and consumed by a different layer:
 | `benchmarkVersion` | **upstream** CIS/STIG version | identity tuple | exact (identity) |
 
 - **`apiVersion` — format gate.** The parser validates `apiVersion` against a
-  supported set and **rejects** an unknown format rather than parsing it
+  supported set and rejects an unknown format rather than parsing it
   best-effort. A JSON-schema change that reshapes the on-disk format bumps
-  `apiVersion`. kompli may accept a
-  **bounded window** of `apiVersion`s so a definitions package can lag the
-  installed kompli during an upgrade.
+  `apiVersion`. kompli may accept a bounded window of `apiVersion`s so a
+  definitions package can lag the installed kompli during an upgrade.
 - **`version` — content semver, what plans pin.** A plan records each
-  benchmark's `version` plus a `versionConstraint` (default **caret** `^`,
-  "same major"). At `run`, kompli resolves the on-disk definition's `version`:
-  if it satisfies the constraint (a patch/minor update — e.g. an
-  admin-applied security fix), the run proceeds **transparently**; if not (a
-  **major** bump), the run **hard-errors** and asks the user to review and
-  regenerate the plan. This is what lets `/etc/kompli/definitions/` be auto-updated without invalidating every
-  pinned plan on each bugfix.
-- **`benchmarkVersion` — upstream identity.** Part of the identity tuple
-  `(framework, distribution, distributionVersion, benchmarkVersion)`; a change
-  here is a **different benchmark** (re-plan by design — already a cross-version
-  hard error), not a compatible update.
+  benchmark's `version` plus a `versionConstraint` (default caret `^`, "same
+  major"). At `run`, kompli checks the on-disk definition's `version` against
+  that constraint. A patch/minor update — e.g. an admin-applied security fix —
+  satisfies it, so the run proceeds transparently; a major bump does not, so
+  the run hard-errors and asks the user to review and regenerate the plan
+  instead. This is what lets `/etc/kompli/definitions/` be auto-updated
+  without invalidating every pinned plan on each bugfix.
+- **`benchmarkVersion` — upstream identity.** It's part of the identity tuple
+  `(framework, distribution, distributionVersion, benchmarkVersion)`. A
+  change here means a different benchmark, not a compatible update — this is
+  already a cross-version hard error, and re-planning is expected by design.
 
-**Bump semantics.** MAJOR = a change that could invalidate or silently alter a
-plan-referenced rule (rule `id` removed/renamed, parameter removed/renamed or
-`validationRegex` tightened, a rule's semantics redefined); MINOR = additive
-(new rule, new optional parameter); PATCH = a behavior-preserving payload fix.
-The definitions generator enforces the mechanically-detectable **floor** and the
-author **declares** the ceiling (a payload change is ≥ PATCH, justified in
+**Bump semantics:**
+
+| Bump | Meaning |
+|---|---|
+| MAJOR | A change that could invalidate or silently alter a plan-referenced rule: rule `id` removed/renamed, parameter removed/renamed, `validationRegex` tightened, or a rule's semantics redefined. |
+| MINOR | Additive — a new rule or a new optional parameter. |
+| PATCH | A behavior-preserving payload fix. |
+
+The definitions generator enforces the mechanically-detectable floor, and the
+author declares the ceiling (a payload change is at least PATCH, justified in
 review), since a bugfix and a semantic redefinition both read as "the payload
 changed".
 
@@ -347,7 +349,7 @@ Using MC and the kompli Universal NRP, we can create Azure Policies that automat
 
 The NRP scenario uses a standalone shared library (`src/adapters/mc/complianceengine/`) bundled in a policy package. The GC worker dynamically loads the library periodically and uses the `OsConfigResource` class as its interface.
 
-The adapter implements `ComplianceMmiSet` and `ComplianceMmiGet` functions, which follow the same C interface as the existing `AsbMmiSet`/`AsbMmiGet` functions — this is the GC-facing contract, and it stays unchanged. `OsConfigResource.c` selects the appropriate function set at library-load time based on `ComponentName`, so both ASB and Compliance rules can coexist in the same package without changes to the GC worker. Internally, the Compliance function set translates each call's MOF-encoded object name and value into the typed `Engine` API (§3.1, §5.3) rather than passing the object name through to a generic per-rule protocol.
+The adapter implements `ComplianceMmiSet` and `ComplianceMmiGet` functions, which follow the same C interface as the existing `AsbMmiSet`/`AsbMmiGet` functions — this is the GC-facing contract, and — as in §2.2 — it stays unchanged. `OsConfigResource.c` selects the appropriate function set at library-load time based on `ComponentName`, so both ASB and Compliance rules can coexist in the same package without changes to the GC worker. Internally, the Compliance function set translates each call's MOF-encoded object name and value into the typed `Engine` API (§3.1, §5.3) rather than passing the object name through to a generic per-rule protocol.
 
 Direct in-process calls are used (no MPI communication) to match the existing ASB implementation and avoid introducing additional IPC complexity for this critical path.
 

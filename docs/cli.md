@@ -7,7 +7,7 @@ a snapshot of what's shipped at any given moment; implementation status and
 remaining gaps are tracked separately, in each workstream's own roadmap.
 Cross-referenced from [architecture.md](architecture.md) and
 [src/komplid/README.md](../src/komplid/README.md) rather than duplicated
-there.
+there. See [glossary.md](glossary.md) for unfamiliar acronyms (e.g. NRP, GC).
 
 ## 1. Command overview
 

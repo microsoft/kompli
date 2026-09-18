@@ -5,7 +5,7 @@ Design decision and reference for where kompli's diagnostic logging goes, and wh
 `komplid`'s wire-protocol request/response handling is separate from this
 shared logging library (see [../src/komplid/README.md](../src/komplid/README.md));
 its Engine-internal `OsConfigLog*` calls go through the same sinks described
-here.
+here. See [glossary.md](glossary.md) for unfamiliar acronyms (e.g. NRP, GC).
 
 ## Model
 
