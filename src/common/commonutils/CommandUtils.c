@@ -290,7 +290,9 @@ int ExecuteCommand(void* context, const char* command, bool replaceEol, bool for
 
         close(pipefd[0]);
         kill(workerPid, SIGKILL);
-        waitpid(workerPid, &childStatus, 0);
+        while ((waitpid(workerPid, &childStatus, 0) < 0) && (EINTR == errno))
+        {
+        }
 
         if (status == 0)
         {
