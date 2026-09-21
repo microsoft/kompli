@@ -34,9 +34,10 @@ static constexpr const char* cModuleInfo =
     "\"Lifetime\": 2,"
     "\"UserAccount\": 0}";
 
-Engine::Engine(std::unique_ptr<ContextInterface> context, std::unique_ptr<PayloadFormatter> payloadFormatter) noexcept
+Engine::Engine(std::unique_ptr<ContextInterface> context, std::unique_ptr<PayloadFormatter> payloadFormatter)
     : mContext{std::move(context)},
-      mFormatter{std::move(payloadFormatter)}
+      mFormatter{std::move(payloadFormatter)},
+      mDistributionInfo{Error("Distribution info has not been loaded")}
 {
 }
 
@@ -73,40 +74,39 @@ Optional<Error> Engine::LoadDistributionInfo()
         // Override file exists, use it as distribution info source
         OsConfigLogDebug(Log(), "ComplianceEngineValidatePayload: Using %s for distribution info", DistributionInfo::cDefaultOverrideFilePath);
         auto overrideInfo = DistributionInfo::ParseOverrideFile(DistributionInfo::cDefaultOverrideFilePath);
-        if (!overrideInfo.HasValue())
+        mDistributionInfo = std::move(overrideInfo);
+        if (!mDistributionInfo.HasValue())
         {
             OsConfigLogError(Log(), "ComplianceEngineValidatePayload failed to parse %s: %s", DistributionInfo::cDefaultOverrideFilePath,
-                overrideInfo.Error().message.c_str());
-            return overrideInfo.Error();
+                mDistributionInfo.Error().message.c_str());
+            return mDistributionInfo.Error();
         }
-
-        mDistributionInfo = std::move(overrideInfo).Value();
     }
     else if (ENOENT == errno)
     {
         // Override file does not exist, use /etc/os-release
         OsConfigLogDebug(Log(), "ComplianceEngineValidatePayload: Using %s for distribution info", DistributionInfo::cDefaultEtcOsReleasePath);
         auto osReleaseInfo = DistributionInfo::ParseEtcOsRelease(DistributionInfo::cDefaultEtcOsReleasePath);
-        if (!osReleaseInfo.HasValue())
+        mDistributionInfo = std::move(osReleaseInfo);
+        if (!mDistributionInfo.HasValue())
         {
             OsConfigLogError(Log(), "ComplianceEngineValidatePayload failed to parse %s: %s", DistributionInfo::cDefaultEtcOsReleasePath,
-                osReleaseInfo.Error().message.c_str());
-            return osReleaseInfo.Error();
+                mDistributionInfo.Error().message.c_str());
+            return mDistributionInfo.Error();
         }
-
-        mDistributionInfo = std::move(osReleaseInfo).Value();
     }
     else
     {
         int status = errno;
         OsConfigLogError(Log(), "ComplianceEngineValidatePayload failed to access %s: %s", DistributionInfo::cDefaultOverrideFilePath, strerror(status));
-        return Error("Failed to access override file", status);
+        mDistributionInfo = Error("Failed to access override file", status);
+        return mDistributionInfo.Error();
     }
 
     return Optional<Error>();
 }
 
-const Optional<DistributionInfo>& Engine::GetDistributionInfo() const noexcept
+const Result<DistributionInfo>& Engine::GetDistributionInfo() const noexcept
 {
     return mDistributionInfo;
 }

@@ -169,8 +169,9 @@ void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
     const auto& distributionInfo = engine->GetDistributionInfo();
     if (!distributionInfo.HasValue())
     {
-        OsConfigLogError(g_log, "Failed to GetDistributionInfo for telemetry");
-        event.Add("Distribution", "Invalid distribution information");
+        const auto& error = distributionInfo.Error();
+        OsConfigLogError(g_log, "Failed to add distribution information to telemetry: %s (error code: %d)", error.message.c_str(), error.code);
+        event.Add("Distribution", error.message);
     }
     else
     {
