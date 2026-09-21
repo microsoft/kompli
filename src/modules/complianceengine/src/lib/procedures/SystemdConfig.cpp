@@ -3,7 +3,6 @@
 
 #include <StringTools.h>
 #include <SystemdConfig.h>
-#include <Telemetry.h>
 #include <algorithm>
 #include <cstdlib>
 #include <fts.h>
@@ -29,7 +28,6 @@ Result<bool> GetSystemdConfig(SystemdConfigMap_t& config, const std::string& fil
     if (!result.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to execute systemd-analyze command: %s", result.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("ExecuteCommand", result.Error().code);
         return result.Error();
     }
     std::istringstream stream(result.Value());
@@ -62,7 +60,6 @@ Result<bool> GetSystemdConfig(SystemdConfigMap_t& config, const std::string& fil
         if (eqSign == std::string::npos)
         {
             OsConfigLogError(context.GetLogHandle(), "Invalid line in systemd config: %s", line.c_str());
-            OSConfigTelemetryStatusTrace("getline", EINVAL);
             continue;
         }
         std::string key = line.substr(0, eqSign);
@@ -81,31 +78,26 @@ Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, I
     if (!params.dir.HasValue() && !params.file.HasValue())
     {
         OsConfigLogError(log, "Error: SystemdConfigValue: neither 'file' nor 'dir' argument is provided");
-        OSConfigTelemetryStatusTrace("dir.empty && filename.empty", EINVAL);
         return Error("Neither 'file' nor 'dir' argument is provided");
     }
     if (params.dir.HasValue() && params.file.HasValue())
     {
         OsConfigLogError(log, "Error: SystemdConfigValue: both 'file' and 'dir' arguments are provided, only one is allowed");
-        OSConfigTelemetryStatusTrace("one dir or file only", EINVAL);
         return Error("Both 'file' and 'dir' arguments are provided, only one is allowed");
     }
     if (params.valueRegex.HasValue() && params.value.HasValue())
     {
         OsConfigLogError(log, "Error: SystemdConfigValue: both 'value' and 'valueRegex' are provided, only one is allowed");
-        OSConfigTelemetryStatusTrace("value and valueRegex", EINVAL);
         return Error("Both 'value' and 'valueRegex' are provided, only one is allowed");
     }
     if (!params.valueRegex.HasValue() && !params.value.HasValue())
     {
         OsConfigLogError(log, "Error: SystemdConfigValue: 'value' (or 'valueRegex') must be provided");
-        OSConfigTelemetryStatusTrace("value required", EINVAL);
         return Error("'value' (or 'valueRegex') must be provided");
     }
     if (params.op.HasValue() && !params.value.HasValue())
     {
         OsConfigLogError(log, "Error: SystemdConfigValue: 'op' requires 'value' (not 'valueRegex')");
-        OSConfigTelemetryStatusTrace("op requires value", EINVAL);
         return Error("'op' requires 'value' (not 'valueRegex')");
     }
 
@@ -117,7 +109,6 @@ Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, I
         if (!result.HasValue())
         {
             OsConfigLogError(log, "Failed to get systemd config for file '%s' - %s", params.file->c_str(), result.Error().message.c_str());
-            OSConfigTelemetryStatusTrace("GetSystemdConfig", result.Error().code);
             return result.Error();
         }
     }
@@ -129,7 +120,6 @@ Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, I
         if (!file_system)
         {
             OsConfigLogError(log, "Failed to open directory '%s' with fts", params.dir->c_str());
-            OSConfigTelemetryStatusTrace("fts_open", EINVAL);
             return Error("Failed to open directory '" + params.dir.Value() + "'");
         }
 
@@ -148,7 +138,6 @@ Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, I
                     if (!result.HasValue())
                     {
                         OsConfigLogError(log, "Failed to get systemd config for file '%s' - %s", filePath.c_str(), result.Error().message.c_str());
-                        OSConfigTelemetryStatusTrace("GetSystemdConfig", result.Error().code);
                     }
                     else
                     {
@@ -258,7 +247,6 @@ Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, I
             {
                 OsConfigLogError(log, "Failed to convert values to numbers for comparison: actual='%s', expected='%s'", actualValue.c_str(),
                     expectedValue.c_str());
-                OSConfigTelemetryStatusTrace("strtol", EINVAL);
                 return Error("Failed to convert values to numbers for comparison: actual='" + actualValue + "', expected='" + expectedValue + "'");
             }
 

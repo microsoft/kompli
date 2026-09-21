@@ -6,7 +6,6 @@
 #include <Optional.h>
 #include <Regex.h>
 #include <StringTools.h>
-#include <Telemetry.h>
 #include <Users.h>
 #include <cctype>
 #include <cstring>
@@ -217,7 +216,6 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
     catch (const regex_error& e)
     {
         OsConfigLogError(context.GetLogHandle(), "Invalid searchItem regex: %s", e.what());
-        OSConfigTelemetryStatusTrace("regex", EINVAL);
         return indicators.NonCompliant("Invalid searchItem regex: " + std::string(e.what()));
     }
     std::vector<std::string> incompleteRules;

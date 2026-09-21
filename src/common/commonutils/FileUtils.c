@@ -262,7 +262,6 @@ static int CheckAccess(bool directory, const char* name, int desiredOwnerId, int
     if (NULL == name)
     {
         OsConfigLogError(log, "CheckAccess called with an invalid name argument");
-        OSConfigTelemetryStatusTrace("name", EINVAL);
         return EINVAL;
     }
 
@@ -342,7 +341,6 @@ static int SetAccess(bool directory, const char* name, unsigned int desiredOwner
     if (NULL == name)
     {
         OsConfigLogError(log, "SetAccess called with an invalid name argument");
-        OSConfigTelemetryStatusTrace("name", EINVAL);
         return EINVAL;
     }
 

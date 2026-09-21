@@ -16,6 +16,9 @@ extern "C"
 void ComplianceEngineInitialize(OsConfigLogHandle);
 void ComplianceEngineShutdown();
 
+void ComplianceEngineLoad(MMI_HANDLE clientSession, const char* componentName);
+void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName);
+
 MMI_HANDLE ComplianceEngineMmiOpen(const char* clientName, const unsigned int maxPayloadSizeBytes);
 void ComplianceEngineMmiClose(MMI_HANDLE clientSession);
 int ComplianceEngineMmiGetInfo(const char* clientName, char** payload, int* payloadSizeBytes);
