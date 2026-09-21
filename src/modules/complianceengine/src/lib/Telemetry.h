@@ -128,6 +128,9 @@ public:
     Telemetry(Telemetry&&) = delete;
     Telemetry& operator=(Telemetry&&) = delete;
 
+    void SetFileDescriptor(const int newFd) noexcept;
+    void CloseFileDescriptor() noexcept;
+
 private:
     void LogEvent(const TelemetryEvent& event, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt) noexcept override;
     int fd = -1;

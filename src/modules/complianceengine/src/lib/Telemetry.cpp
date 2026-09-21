@@ -107,9 +107,21 @@ Telemetry::Telemetry(const int fd) noexcept
 
 Telemetry::~Telemetry() noexcept
 {
+    CloseFileDescriptor();
+}
+
+void Telemetry::SetFileDescriptor(const int newFd) noexcept
+{
+    CloseFileDescriptor();
+    fd = newFd;
+}
+
+void Telemetry::CloseFileDescriptor() noexcept
+{
     if (0 <= fd)
     {
         close(fd);
+        fd = -1;
     }
 }
 
