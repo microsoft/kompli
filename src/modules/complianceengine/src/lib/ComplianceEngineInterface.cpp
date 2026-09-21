@@ -184,7 +184,7 @@ void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
     event.Add("ComplianceEngineVersion", KOMPLI_VERSION);
     ComplianceEngine::LogCreatedTelemetryEvent(event, engine->GetTelemetry(), g_log, durationUs, g_benchmarkRunCreatedAt);
     engine->GetTelemetry().CloseFileDescriptor();
-    auto moduleDirectory = GetCompilanceEngineDirectory();
+    auto moduleDirectory = GetComplianceEngineDirectory();
     if (moduleDirectory.HasValue())
     {
         const std::string telemetryBinaryPath = moduleDirectory.Value() + "/" + telemetry_binary;
