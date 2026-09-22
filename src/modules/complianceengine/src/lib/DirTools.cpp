@@ -3,8 +3,11 @@
 #include "DirTools.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
+#include <vector>
 
 namespace ComplianceEngine
 {
@@ -13,35 +16,46 @@ bool MkdirRecursive(const std::string& path, mode_t mode)
     if (path.empty())
         return false;
 
-    std::string tmp;
-    tmp.reserve(path.size());
-
-    for (size_t i = 0; i < path.size(); ++i)
+    std::vector<std::string> components;
+    for (size_t begin = 0; begin < path.size();)
     {
-        tmp += path[i];
+        begin = path.find_first_not_of('/', begin);
+        if (begin == std::string::npos)
+            break;
 
-        // create on '/' boundaries
-        if (path[i] == '/' || i == path.size() - 1)
-        {
-            if (tmp.size() == 0)
-                continue;
-
-            if (::mkdir(tmp.c_str(), mode) != 0)
-            {
-                if (errno == EEXIST)
-                {
-                    struct stat existing = {};
-                    if ((::stat(tmp.c_str(), &existing) != 0) || !S_ISDIR(existing.st_mode))
-                    {
-                        return false;
-                    }
-                    continue;
-                }
-                return false;
-            }
-        }
+        const size_t end = path.find('/', begin);
+        const std::string component = path.substr(begin, end - begin);
+        if (component == "." || component == "..")
+            return false;
+        components.push_back(component);
+        begin = end;
     }
-    return ::chmod(path.c_str(), mode) == 0;
+
+    if (components.empty())
+        return false;
+
+    int directoryFd = ::open(path[0] == '/' ? "/" : ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (directoryFd < 0)
+        return false;
+
+    for (const auto& component : components)
+    {
+        if (::mkdirat(directoryFd, component.c_str(), mode) != 0 && errno != EEXIST)
+        {
+            ::close(directoryFd);
+            return false;
+        }
+
+        const int childFd = ::openat(directoryFd, component.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        ::close(directoryFd);
+        if (childFd < 0)
+            return false;
+        directoryFd = childFd;
+    }
+
+    const bool success = ::fchmod(directoryFd, mode) == 0;
+    ::close(directoryFd);
+    return success;
 }
 
 } // namespace ComplianceEngine

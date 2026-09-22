@@ -3,6 +3,7 @@
 
 #include "JsonWrapper.h"
 #include "MmiResults.h"
+#include "Optional.h"
 #include "Result.h"
 #include "Telemetry.h"
 
@@ -43,7 +44,7 @@ public:
     std::vector<std::pair<TelemetryEvent, CapturedEvent>> mCapturedEvents;
 
 private:
-    void LogEvent(const TelemetryEvent& event, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt) noexcept override
+    void LogEvent(const TelemetryEvent& event, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt) override
     {
         mCapturedEvents.push_back(std::make_pair(event, CapturedEvent{durationUs, createdAt}));
     }
@@ -149,6 +150,25 @@ TEST_F(TelemetryTest, TelemetryEvent_RunWithTelemetryLogsSuccessfulEvent)
     ASSERT_EQ(mockTelemetry.mCapturedEvents.size(), 1);
     EXPECT_EQ(mockTelemetry.mCapturedEvents[0].first.Type(), TelemetryEventType::Audit);
     EXPECT_EQ(mockTelemetry.mCapturedEvents[0].first.Name(), std::string("FooBar"));
+}
+
+TEST_F(TelemetryTest, TelemetryEvent_RunWithTelemetryPropagatesLoggingExceptions)
+{
+    class ThrowingTelemetry : public ComplianceEngine::TelemetryInterface
+    {
+    private:
+        void LogEvent(const TelemetryEvent&, int64_t, const std::chrono::system_clock::time_point&) override
+        {
+            throw std::bad_alloc();
+        }
+    } telemetry;
+
+    auto event = TelemetryEvent(TelemetryEventType::Audit, "FooBar");
+    EXPECT_THROW(RunWithTelemetry(event, telemetry, nullptr,
+                     []() {
+                         return Result<AuditResult>(AuditResult{Status::Compliant, "Horay"});
+                     }),
+        std::bad_alloc);
 }
 
 TEST_F(TelemetryTest, TelemetryEvent_RunWithTelemetry_StdExceptionIsRethrown)

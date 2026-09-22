@@ -5,7 +5,6 @@
 #define COMPLIANCEENGINE_CETELEMETRY_H
 
 #include "Logging.h"
-#include "Optional.h"
 #include "Result.h"
 
 #include <chrono>
@@ -102,18 +101,18 @@ public:
     virtual ~TelemetryInterface() = 0;
 
 private:
-    virtual void LogEvent(const TelemetryEvent& event, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt) noexcept = 0;
+    virtual void LogEvent(const TelemetryEvent& event, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt) = 0;
     template <typename F>
     friend auto RunWithTelemetry(const TelemetryEvent& event, TelemetryInterface& telemetry, OsConfigLogHandle log, F&& function)
         -> decltype(std::forward<F>(function)());
     friend void LogTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& telemetry, int64_t durationUs,
-        const std::chrono::system_clock::time_point& createdAt) noexcept;
+        const std::chrono::system_clock::time_point& createdAt);
     friend void LogCreatedTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& telemetry, OsConfigLogHandle log, int64_t durationUs,
-        const std::chrono::system_clock::time_point& createdAt) noexcept;
+        const std::chrono::system_clock::time_point& createdAt);
 };
 
 void LogCreatedTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& telemetry, OsConfigLogHandle log, int64_t durationUs,
-    const std::chrono::system_clock::time_point& createdAt) noexcept;
+    const std::chrono::system_clock::time_point& createdAt);
 
 #ifdef BUILD_TELEMETRY
 
@@ -128,8 +127,11 @@ public:
     Telemetry(Telemetry&&) = delete;
     Telemetry& operator=(Telemetry&&) = delete;
 
+    void SetFileDescriptor(const int newFd) noexcept;
+    void CloseFileDescriptor() noexcept;
+
 private:
-    void LogEvent(const TelemetryEvent& event, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt) noexcept override;
+    void LogEvent(const TelemetryEvent& event, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt) override;
     int fd = -1;
 };
 
@@ -142,32 +144,32 @@ auto RunWithTelemetry(const TelemetryEvent& event, TelemetryInterface& telemetry
     using chrono_time = std::chrono::time_point<std::chrono::steady_clock>;
     chrono_time end;
 
-    // Use Optional to hold data that has no default constructor
-    Optional<decltype(std::forward<F>(function)())> tmp_result;
-    try
-    {
-        tmp_result = std::forward<F>(function)();
-    }
-    catch (const std::exception& e)
-    {
-        end = std::chrono::steady_clock::now();
-        const auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
-        TelemetryEvent logged = event;
-        logged.Add("exception", std::string(e.what()));
-        LogCreatedTelemetryEvent(logged, telemetry, log, durationUs, createdAt);
-        throw;
-    }
-    catch (...)
-    {
-        end = std::chrono::steady_clock::now();
-        const auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
-        TelemetryEvent logged = event;
-        logged.Add("exception", std::string("unknown non-std exception"));
-        LogCreatedTelemetryEvent(logged, telemetry, log, durationUs, createdAt);
-        throw;
-    }
+    auto invoke = [&]() -> decltype(std::forward<F>(function)()) {
+        try
+        {
+            return std::forward<F>(function)();
+        }
+        catch (const std::exception& e)
+        {
+            end = std::chrono::steady_clock::now();
+            const auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
+            TelemetryEvent logged = event;
+            logged.Add("exception", std::string(e.what()));
+            LogCreatedTelemetryEvent(logged, telemetry, log, durationUs, createdAt);
+            throw;
+        }
+        catch (...)
+        {
+            end = std::chrono::steady_clock::now();
+            const auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
+            TelemetryEvent logged = event;
+            logged.Add("exception", std::string("unknown non-std exception"));
+            LogCreatedTelemetryEvent(logged, telemetry, log, durationUs, createdAt);
+            throw;
+        }
+    };
 
-    auto result = tmp_result.Value();
+    auto result = invoke();
     end = std::chrono::steady_clock::now();
     const auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
     if (result.HasValue())
@@ -204,7 +206,7 @@ public:
     Telemetry& operator=(Telemetry&&) = delete;
 
 private:
-    void LogEvent(const TelemetryEvent& event, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt) noexcept override
+    void LogEvent(const TelemetryEvent& event, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt) override
     {
         (void)event;
         (void)durationUs;
@@ -222,7 +224,7 @@ auto RunWithTelemetry(const TelemetryEvent& event, TelemetryInterface& telemetry
     return std::forward<F>(function)();
 }
 
-inline void LogTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& telemetry, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt) noexcept
+inline void LogTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& telemetry, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt)
 {
     (void)event;
     (void)telemetry;

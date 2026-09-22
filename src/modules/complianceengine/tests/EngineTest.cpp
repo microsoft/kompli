@@ -31,6 +31,13 @@ protected:
     Engine mEngine;
 };
 
+TEST_F(EngineTest, GetDistributionInfoBeforeLoadReturnsError)
+{
+    const auto& result = mEngine.GetDistributionInfo();
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().message, "Distribution info has not been loaded");
+}
+
 TEST_F(EngineTest, MmiGet_InvalidArgument_1)
 {
     auto result = mEngine.MmiGet(nullptr);

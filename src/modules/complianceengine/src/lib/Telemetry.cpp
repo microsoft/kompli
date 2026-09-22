@@ -37,7 +37,7 @@ namespace ComplianceEngine
 TelemetryInterface::~TelemetryInterface() = default;
 
 void LogCreatedTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& telemetry, OsConfigLogHandle log, int64_t durationUs,
-    const std::chrono::system_clock::time_point& createdAt) noexcept
+    const std::chrono::system_clock::time_point& createdAt)
 {
     (void)log;
     telemetry.LogEvent(event, durationUs, createdAt);
@@ -107,13 +107,25 @@ Telemetry::Telemetry(const int fd) noexcept
 
 Telemetry::~Telemetry() noexcept
 {
+    CloseFileDescriptor();
+}
+
+void Telemetry::SetFileDescriptor(const int newFd) noexcept
+{
+    CloseFileDescriptor();
+    fd = newFd;
+}
+
+void Telemetry::CloseFileDescriptor() noexcept
+{
     if (0 <= fd)
     {
         close(fd);
+        fd = -1;
     }
 }
 
-void Telemetry::LogEvent(const TelemetryEvent& event, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt) noexcept
+void Telemetry::LogEvent(const TelemetryEvent& event, int64_t durationUs, const std::chrono::system_clock::time_point& createdAt)
 {
     if (0 > fd)
     {

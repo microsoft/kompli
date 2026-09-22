@@ -472,8 +472,9 @@ int main(int argc, char* argv[])
         const auto& distributionInfo = engine.GetDistributionInfo();
         if (!distributionInfo.HasValue())
         {
-            OsConfigLogError(logHandle.get(), "Failed to GetDistributionInfo for telemetry");
-            event.Add("Distribution", "Invalid distribution information");
+            const auto& error = distributionInfo.Error();
+            OsConfigLogError(logHandle.get(), "Failed to add distribution information to telemetry: %s (error code: %d)", error.message.c_str(), error.code);
+            event.Add("Distribution", error.message);
         }
         else
         {

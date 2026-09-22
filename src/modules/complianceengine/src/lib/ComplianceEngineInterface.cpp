@@ -71,6 +71,33 @@ std::string QuoteForShell(const std::string& value)
     quoted += "'";
     return quoted;
 }
+
+int OpenTelemetryFile()
+{
+    std::string telemetry_log_path(telemetry_log_dir);
+
+    if (!ComplianceEngine::MkdirRecursive(telemetry_log_path, 0700))
+    {
+        OsConfigLogError(g_log, "Failed to create telemetry directory %s: %d", telemetry_log_path.c_str(), errno);
+        return -1;
+    }
+
+    auto telemetry_file = telemetry_log_path + std::string(telemetry_log_file);
+    auto telemetry_fd = open(telemetry_file.c_str(), O_CREAT | O_APPEND | O_NOFOLLOW | O_WRONLY, 0600);
+    OsConfigLogError(g_log, "Opening Telemetry  file %s", telemetry_file.c_str());
+    if (0 > telemetry_fd)
+    {
+        OsConfigLogError(g_log, "Failed to open telemetry file  %s: %d", telemetry_file.c_str(), errno);
+    }
+    else if (0 != fchmod(telemetry_fd, 0600))
+    {
+        OsConfigLogError(g_log, "Failed to set telemetry file permissions %s: %d", telemetry_file.c_str(), errno);
+        close(telemetry_fd);
+        telemetry_fd = -1;
+    }
+
+    return telemetry_fd;
+}
 #endif // BUILD_TELEMETRY
 
 } // namespace
@@ -115,6 +142,8 @@ void ComplianceEngineLoad(MMI_HANDLE clientSession, const char* componentName)
     }
 
 #ifdef BUILD_TELEMETRY
+    auto* engine = reinterpret_cast<Engine*>(clientSession);
+    engine->GetTelemetry().SetFileDescriptor(OpenTelemetryFile());
     g_benchmarkRunCreatedAt = std::chrono::system_clock::now();
     g_benchmarkRunBeginAt = std::chrono::steady_clock::now();
 #endif
@@ -140,8 +169,9 @@ void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
     const auto& distributionInfo = engine->GetDistributionInfo();
     if (!distributionInfo.HasValue())
     {
-        OsConfigLogError(g_log, "Failed to GetDistributionInfo for telemetry");
-        event.Add("Distribution", "Invalid distribution information");
+        const auto& error = distributionInfo.Error();
+        OsConfigLogError(g_log, "Failed to add distribution information to telemetry: %s (error code: %d)", error.message.c_str(), error.code);
+        event.Add("Distribution", error.message);
     }
     else
     {
@@ -153,6 +183,7 @@ void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
 
     event.Add("ComplianceEngineVersion", KOMPLI_VERSION);
     ComplianceEngine::LogCreatedTelemetryEvent(event, engine->GetTelemetry(), g_log, durationUs, g_benchmarkRunCreatedAt);
+    engine->GetTelemetry().CloseFileDescriptor();
     auto moduleDirectory = GetComplianceEngineDirectory();
     if (moduleDirectory.HasValue())
     {
@@ -183,30 +214,8 @@ void ComplianceEngineShutdown(void)
 MMI_HANDLE ComplianceEngineMmiOpen(const char* clientName, const unsigned int maxPayloadSizeBytes)
 {
     int telemetry_fd = -1;
-
 #ifdef BUILD_TELEMETRY
-    std::string telemetry_log_path(telemetry_log_dir);
-
-    if (!ComplianceEngine::MkdirRecursive(telemetry_log_path, 0700))
-    {
-        OsConfigLogError(g_log, "Failed to create telemetry directory %s: %d", telemetry_log_path.c_str(), errno);
-    }
-    else
-    {
-        auto telemetry_file = telemetry_log_path + std::string(telemetry_log_file);
-        telemetry_fd = open(telemetry_file.c_str(), O_CREAT | O_APPEND | O_NOFOLLOW | O_WRONLY, 0600);
-        OsConfigLogError(g_log, "Opening Telemetry  file %s", telemetry_file.c_str());
-        if (0 > telemetry_fd)
-        {
-            OsConfigLogError(g_log, "Failed to open telemetry file  %s: %d", telemetry_file.c_str(), errno);
-        }
-        else if (0 != fchmod(telemetry_fd, 0600))
-        {
-            OsConfigLogError(g_log, "Failed to set telemetry file permissions %s: %d", telemetry_file.c_str(), errno);
-            close(telemetry_fd);
-            telemetry_fd = -1;
-        }
-    }
+    telemetry_fd = OpenTelemetryFile();
 #endif // BUILD_TELEMETRY
 
     auto context = std::unique_ptr<ComplianceEngine::GuestConfigurationContext>(new ComplianceEngine::GuestConfigurationContext(g_log, telemetry_fd));
