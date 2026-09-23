@@ -29,6 +29,7 @@ enum class LinuxDistribution
     AmazonLinux,
     AlmaLinux,
     RockyLinux,
+    AKS, // Azure Kubernetes Service
 };
 
 // Defines the system architecture, e.g., x86_64, arm64
