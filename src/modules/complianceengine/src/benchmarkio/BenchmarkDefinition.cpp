@@ -424,7 +424,7 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
     {
         return benchmarkVersion.Error();
     }
-    auto benchmarkInfo = CISBenchmarkInfo::FromMetadata(framework.Value(), distribution.Value(), distributionVersion.Value(), benchmarkVersion.Value());
+    auto benchmarkInfo = BenchmarkInfo::FromMetadata(framework.Value(), distribution.Value(), distributionVersion.Value(), benchmarkVersion.Value());
     if (!benchmarkInfo.HasValue())
     {
         return Error("Benchmark definition has an invalid file-level prefix: " + benchmarkInfo.Error().message, benchmarkInfo.Error().code);

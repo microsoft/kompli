@@ -5,7 +5,7 @@
 // (ComplianceEngine::BenchmarkDefinition). The parser reads the in-repo
 // data/definitions/*.benchmark.json documents produced by the Compliance
 // Augmentation Engine and yields a BenchmarkDocument: a file-level
-// CISBenchmarkInfo prefix (framework/distribution/distributionVersion/
+// BenchmarkInfo prefix (framework/distribution/distributionVersion/
 // benchmarkVersion) plus the BenchmarkIO::Resource entries the kompli CLI's
 // main loop consumes. These tests cover the happy path, the field mapping,
 // and a broad set of malformed / adversarial inputs.
@@ -336,10 +336,20 @@ TEST(BenchmarkDefinitionParserTest, RejectsMissingFrameworkLabel)
     EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
 }
 
-TEST(BenchmarkDefinitionParserTest, RejectsUnknownFrameworkLabel)
+TEST(BenchmarkDefinitionParserTest, AcceptsArbitraryFrameworkLabel)
 {
     const std::string doc =
-        MakeDocWithMetadata(R"({"name":"n","labels":{"framework":"unknown","distribution":"ubuntu","distributionVersion":"22.04"},"annotations":{"benchmarkVersion":"v1.0.0"}})",
+        MakeDocWithMetadata(R"({"name":"n","labels":{"framework":"custom","distribution":"ubuntu","distributionVersion":"22.04"},"annotations":{"benchmarkVersion":"v1.0.0"}})",
+            std::string("[") + kValidRule + "]");
+    auto result = ParseString(doc, nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().benchmarkInfo.framework, "custom");
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEmptyFrameworkLabel)
+{
+    const std::string doc =
+        MakeDocWithMetadata(R"({"name":"n","labels":{"framework":"","distribution":"ubuntu","distributionVersion":"22.04"},"annotations":{"benchmarkVersion":"v1.0.0"}})",
             std::string("[") + kValidRule + "]");
     EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
 }
@@ -372,15 +382,14 @@ TEST(BenchmarkDefinitionParserTest, RejectsMissingBenchmarkVersionAnnotation)
     EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
 }
 
-TEST(BenchmarkDefinitionParserTest, RejectsBenchmarkVersionWithoutVPrefix)
+TEST(BenchmarkDefinitionParserTest, AcceptsBenchmarkVersionWithoutVPrefix)
 {
-    // New (non-MOF-sourced) definitions must use a 'v'-prefixed benchmark
-    // version; legacy MOF-sourced full
-    // payload keys parsed via CISBenchmarkInfo::Parse are unaffected.
     const std::string doc =
         MakeDocWithMetadata(R"({"name":"n","labels":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04"},"annotations":{"benchmarkVersion":"1.0.0"}})",
             std::string("[") + kValidRule + "]");
-    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+    auto result = ParseString(doc, nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().benchmarkInfo.benchmarkVersion, "1.0.0");
 }
 
 TEST(BenchmarkDefinitionParserTest, RejectsMissingSpec)

@@ -514,10 +514,10 @@ TEST_F(ParsePlanFileTest, RefusesNonRootOwnedFile)
 namespace
 {
 // No filesystem/root needed: CheckUniqueBenchmarkIdentities operates purely
-// on already-parsed CISBenchmarkInfo values.
-ComplianceEngine::CISBenchmarkInfo MakeInfo(const std::string& framework, const std::string& distribution, const std::string& version, const std::string& benchmarkVersion)
+// on already-parsed BenchmarkInfo values.
+ComplianceEngine::BenchmarkInfo MakeInfo(const std::string& framework, const std::string& distribution, const std::string& version, const std::string& benchmarkVersion)
 {
-    auto result = ComplianceEngine::CISBenchmarkInfo::FromMetadata(framework, distribution, version, benchmarkVersion);
+    auto result = ComplianceEngine::BenchmarkInfo::FromMetadata(framework, distribution, version, benchmarkVersion);
     EXPECT_TRUE(result.HasValue()) << result.Error().message;
     return result.Value();
 }
@@ -525,7 +525,7 @@ ComplianceEngine::CISBenchmarkInfo MakeInfo(const std::string& framework, const 
 
 TEST(CheckUniqueBenchmarkIdentitiesTest, AcceptsDistinctIdentities)
 {
-    const std::vector<std::pair<std::string, ComplianceEngine::CISBenchmarkInfo>> benchmarks = {
+    const std::vector<std::pair<std::string, ComplianceEngine::BenchmarkInfo>> benchmarks = {
         {"cis_ubuntu24.04.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v1.0.0")},
         {"stig_ubuntu24.04.benchmark.json", MakeInfo("stig", "ubuntu", "24.04", "v1.0.0")},
     };
@@ -534,9 +534,21 @@ TEST(CheckUniqueBenchmarkIdentitiesTest, AcceptsDistinctIdentities)
     EXPECT_FALSE(result.HasValue());
 }
 
+TEST(CheckUniqueBenchmarkIdentitiesTest, AcceptsDistinctIdentitiesWithDelimiterCharacters)
+{
+    const std::vector<std::pair<std::string, ComplianceEngine::BenchmarkInfo>> benchmarks = {
+        {"first.benchmark.json", MakeInfo("custom/ubuntu", "ubuntu", "24.04", "1.0.0")},
+        {"second.benchmark.json", MakeInfo("custom", "ubuntu", "ubuntu/24.04", "1.0.0")},
+    };
+    ASSERT_EQ(std::to_string(benchmarks[0].second), std::to_string(benchmarks[1].second));
+
+    auto result = ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities(benchmarks);
+    EXPECT_FALSE(result.HasValue());
+}
+
 TEST(CheckUniqueBenchmarkIdentitiesTest, RejectsDuplicateIdentity)
 {
-    const std::vector<std::pair<std::string, ComplianceEngine::CISBenchmarkInfo>> benchmarks = {
+    const std::vector<std::pair<std::string, ComplianceEngine::BenchmarkInfo>> benchmarks = {
         {"cis_ubuntu24.04.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v1.0.0")},
         {"cis_ubuntu24.04_copy.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v1.0.0")},
     };
@@ -549,7 +561,7 @@ TEST(CheckUniqueBenchmarkIdentitiesTest, RejectsDuplicateIdentity)
 
 TEST(CheckUniqueBenchmarkIdentitiesTest, DifferingBenchmarkVersionIsNotADuplicate)
 {
-    const std::vector<std::pair<std::string, ComplianceEngine::CISBenchmarkInfo>> benchmarks = {
+    const std::vector<std::pair<std::string, ComplianceEngine::BenchmarkInfo>> benchmarks = {
         {"cis_ubuntu24.04_v1.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v1.0.0")},
         {"cis_ubuntu24.04_v2.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v2.0.0")},
     };

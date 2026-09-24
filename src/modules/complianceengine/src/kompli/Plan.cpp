@@ -14,6 +14,7 @@
 #include <ext/stdio_filebuf.h>
 #include <istream>
 #include <parson.h>
+#include <tuple>
 
 namespace ComplianceEngine
 {
@@ -253,7 +254,7 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
 
     std::vector<ParsedBenchmarkFile> parsedFiles;
     parsedFiles.reserve(benchmarkFiles.size());
-    std::vector<std::pair<string, CISBenchmarkInfo>> identities;
+    std::vector<std::pair<string, BenchmarkInfo>> identities;
     identities.reserve(benchmarkFiles.size());
     std::size_t selectedRuleCount = 0;
 
@@ -560,20 +561,21 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
     return plan;
 }
 
-Optional<Error> CheckUniqueBenchmarkIdentities(const std::vector<std::pair<string, CISBenchmarkInfo>>& benchmarks)
+Optional<Error> CheckUniqueBenchmarkIdentities(const std::vector<std::pair<string, BenchmarkInfo>>& benchmarks)
 {
-    // identity string (std::to_string(CISBenchmarkInfo), see BenchmarkInfo.h -
-    // section is always empty on this path, so it doesn't affect the tuple)
-    // -> the first file seen with it.
-    std::map<string, string> seen;
+    using Identity = std::tuple<string, LinuxDistribution, string, string>;
+    std::map<Identity, string> seen;
     for (const auto& entry : benchmarks)
     {
-        const string identity = std::to_string(entry.second);
+        const auto& benchmarkInfo = entry.second;
+        const Identity identity{
+            benchmarkInfo.framework, benchmarkInfo.distribution, benchmarkInfo.version, benchmarkInfo.benchmarkVersion};
         auto it = seen.find(identity);
         if (it != seen.end())
         {
             return Error("Benchmark files '" + it->second + "' and '" + entry.first +
-                             "' share the same (framework, distribution, distributionVersion, benchmarkVersion) identity '" + identity + "'",
+                             "' share the same (framework, distribution, distributionVersion, benchmarkVersion) identity '" +
+                             std::to_string(benchmarkInfo) + "'",
                 EINVAL);
         }
         seen.emplace(identity, entry.first);

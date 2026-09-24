@@ -1,0 +1,30 @@
+{
+  "apiVersion": "v1",
+  "kind": "BenchmarkDefinition",
+  "metadata": {
+    "name": "custom_ubuntu_22.04_1.0.0",
+    "labels": { "distribution": "ubuntu", "distributionVersion": "22.04", "framework": "custom" },
+    "annotations": { "benchmarkVersion": "1.0.0" }
+  },
+  "spec": {
+    "rules": [
+      {
+        "ruleName": "ExampleRule",
+        "title": "rule-1 Example rule",
+        "id": "rule-1",
+        "tags": [],
+        "metadata": {
+          "description": "d",
+          "rationale": "r",
+          "fixtext": "f",
+          "severity": "Warning",
+          "references": "x"
+        },
+        "payload": {
+          "audit": { "ExampleRule": {} },
+          "parameters": {}
+        }
+      }
+    ]
+  }
+}

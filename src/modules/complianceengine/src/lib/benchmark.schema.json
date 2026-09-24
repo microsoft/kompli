@@ -42,8 +42,8 @@
           "properties": {
             "framework": {
               "type": "string",
-              "enum": ["cis", "stig"],
-              "description": "Benchmark framework. Closed set matching kompli's BenchmarkType (BenchmarkInfo.cpp's sBenchmarkTypeMap); an unrecognised value is a hard parse error."
+              "minLength": 1,
+              "description": "Required opaque benchmark framework identity. It does not select parsing or execution behavior."
             },
             "distribution": {
               "type": "string",
@@ -60,15 +60,15 @@
         },
         "annotations": {
           "type": "object",
-          "description": "Non-selectable descriptive fields. benchmarkVersion is required, must start with 'v' (e.g. 'v2.0.0').",
+          "description": "Non-selectable descriptive fields. benchmarkVersion is required and non-empty.",
           "required": [
             "benchmarkVersion"
           ],
           "properties": {
             "benchmarkVersion": {
               "type": "string",
-              "pattern": "^v.+",
-              "description": "Benchmark version, 'v'-prefixed (e.g. 'v2.0.0')."
+              "minLength": 1,
+              "description": "Upstream benchmark version (e.g. 'v2.0.0' or 'V2R7')."
             }
           },
           "additionalProperties": {

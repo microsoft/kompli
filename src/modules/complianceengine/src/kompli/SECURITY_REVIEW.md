@@ -99,7 +99,7 @@ from the definition file. `ValidateGlobbing` already rejects `[ ] { }`, but
 so the residual catastrophic-backtracking surface is minimal.
 
 Importantly, kompli does **not** have its own copy of this logic: it calls
-the shared `CISBenchmarkInfo::Match` in `lib/BenchmarkInfo.cpp`, the same code
+the shared `BenchmarkInfo::Match` in `lib/BenchmarkInfo.cpp`, the same code
 used by the module interface's `ComplianceEngineCheckApplicability`. So there is
 nothing kompli-specific to change — any hardening belongs in the shared library
 so both consumers benefit.

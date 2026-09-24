@@ -39,11 +39,11 @@ struct BenchmarkDocument
 
     // The file-level prefix (framework/distribution/distributionVersion/
     // benchmarkVersion), built from metadata.labels/annotations
-    // (CISBenchmarkInfo::FromMetadata) - shared by every rule in this file.
-    // `.section` is left empty here; it's a legacy field of CISBenchmarkInfo
+    // (BenchmarkInfo::FromMetadata) - shared by every rule in this file.
+    // `.section` is left empty here; it's a legacy field of BenchmarkInfo
     // used only by the MOF/NRP path's `Parse()` (see BenchmarkInfo.h) - the
     // unified-definition path never populates it.
-    CISBenchmarkInfo benchmarkInfo;
+    BenchmarkInfo benchmarkInfo;
 
     // One entry per rule in spec.rules, in document order. Each rule maps as:
     //   resourceID   <- rule.title

@@ -325,6 +325,11 @@ answering a different question and consumed by a different layer:
   `(framework, distribution, distributionVersion, benchmarkVersion)`. A
   change here means a different benchmark, not a compatible update — this is
   already a cross-version hard error, and re-planning is expected by design.
+- **`framework` — opaque identity.** It is a required, non-empty component of
+  that tuple, not a parser or execution discriminator. Every framework uses the
+  same identity shape; adding a framework name does not require a kompli code
+  change. A future framework that needs a different shape must use an explicit
+  format/API-version change.
 
 **Bump semantics:**
 

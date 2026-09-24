@@ -37,7 +37,7 @@
 #include <version.h>
 
 using ComplianceEngine::Action;
-using ComplianceEngine::CISBenchmarkInfo;
+using ComplianceEngine::BenchmarkInfo;
 using ComplianceEngine::CombineAllOf;
 using ComplianceEngine::DistributionInfo;
 using ComplianceEngine::Engine;
@@ -278,7 +278,7 @@ int main(int argc, char* argv[])
     // This re-reads each benchmark file up front (a nullptr log handle is
     // fine here, same as ParsePlanFile above); the per-block loop below
     // parses it again once log handle / applicability checks are ready.
-    std::vector<std::pair<string, CISBenchmarkInfo>> identities;
+    std::vector<std::pair<string, BenchmarkInfo>> identities;
     identities.reserve(plan.benchmarks.size());
     for (const auto& benchmark : plan.benchmarks)
     {

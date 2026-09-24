@@ -10,23 +10,13 @@
 
 namespace ComplianceEngine
 {
-// Defines the type of the benchmark, e.g., CIS
-enum class BenchmarkType
+// Defines the identity and applicability information shared by every rule in a
+// benchmark.
+struct BenchmarkInfo
 {
-    CIS,
-    STIG,
-};
-
-// Defines CIS benchmark information
-// Note: For now only CIS is supported, but when new benchmark types are added,
-// intention is to make this struct generic and use a variant type,
-// which needs to be implemented for this purpose.
-struct CISBenchmarkInfo
-{
-    // Which framework this came from (cis/stig). Needed to round-trip
-    // to_string() correctly for non-CIS frameworks - previously not stored,
-    // which made to_string() silently assume CIS regardless of the actual value.
-    BenchmarkType benchmarkType = BenchmarkType::CIS;
+    // Opaque framework identity, e.g. "cis" or "stig". Framework does not
+    // select parsing or execution behavior.
+    std::string framework;
 
     // Defines the Linux distribution, e.g., Ubuntu, CentOS
     LinuxDistribution distribution;
@@ -50,19 +40,17 @@ struct CISBenchmarkInfo
     // key is still fully self-contained - this must keep accepting exactly
     // what it accepts today (including STIG's historical lack of a 'v'
     // prefix on benchmarkVersion), since existing MOFs are not regenerated.
-    static Result<CISBenchmarkInfo> Parse(const std::string& payloadKey);
+    static Result<BenchmarkInfo> Parse(const std::string& payloadKey);
 
     // Builds the file-level prefix directly from the unified
     // benchmark-definition file's already-separate metadata fields
     // (metadata.labels.framework/distribution/distributionVersion,
     // metadata.annotations.benchmarkVersion) - no path string to split, since
     // the definition-file schema hoists these once per file rather than
-    // repeating them in every rule's payload key. Unlike Parse(), this
-    // requires benchmarkVersion to start with 'v' (mandated for all
-    // frameworks going forward).
+    // repeating them in every rule's payload key.
     // section is left empty; the definition-file schema keeps section on
     // each rule instead.
-    static Result<CISBenchmarkInfo> FromMetadata(const std::string& framework, const std::string& distribution, const std::string& distributionVersion,
+    static Result<BenchmarkInfo> FromMetadata(const std::string& framework, const std::string& distribution, const std::string& distributionVersion,
         const std::string& benchmarkVersion);
 
     // Match the benchmark information against detected distribution information.
@@ -111,8 +99,7 @@ struct CISBenchmarkInfo
 
 namespace std
 {
-std::string to_string(ComplianceEngine::BenchmarkType benchmarkType);           // NOLINT(*-identifier-naming)
-std::string to_string(const ComplianceEngine::CISBenchmarkInfo& benchmarkInfo); // NOLINT(*-identifier-naming)
+std::string to_string(const ComplianceEngine::BenchmarkInfo& benchmarkInfo); // NOLINT(*-identifier-naming)
 } // namespace std
 
 #endif // COMPLIANCEENGINE_BENCHMARK_INFO_H

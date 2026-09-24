@@ -105,7 +105,7 @@ a result JSON and performs none of these checks, still accepts stdin.)
 
 Before running a rule, kompli checks the benchmark's
 distribution/version against the detected system via
-`CISBenchmarkInfo::Match`. This is the **same shared code**
+`BenchmarkInfo::Match`. This is the **same shared code**
 (`lib/BenchmarkInfo.cpp`) used by the module interface's
 `ComplianceEngineCheckApplicability`, so kompli and the engine agree by
 construction. Version matching uses `fnmatch(3)` against the system `VERSION_ID`;

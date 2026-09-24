@@ -105,7 +105,7 @@ Result<std::string> ApplyParameterOverrides(const std::string& procedureJson, co
 // variadic `plan` (docs/CLI.md section 8.1) will call it the same way over
 // its input files. `benchmarks` pairs each entry's file path (for the error
 // message) with its already-parsed benchmarkInfo, in the order to check.
-Optional<Error> CheckUniqueBenchmarkIdentities(const std::vector<std::pair<std::string, CISBenchmarkInfo>>& benchmarks);
+Optional<Error> CheckUniqueBenchmarkIdentities(const std::vector<std::pair<std::string, BenchmarkInfo>>& benchmarks);
 
 } // namespace Kompli
 } // namespace ComplianceEngine
