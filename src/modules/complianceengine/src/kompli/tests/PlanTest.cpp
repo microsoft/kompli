@@ -26,6 +26,7 @@ using ComplianceEngine::Kompli::ApplyParameterOverrides;
 using ComplianceEngine::Kompli::GeneratePlan;
 using ComplianceEngine::Kompli::ParamOverride;
 using ComplianceEngine::Kompli::ParsePlanFile;
+using ComplianceEngine::Kompli::RuleFilters;
 using ComplianceEngine::Kompli::Toggle;
 using ComplianceEngine::Kompli::ToggleMode;
 
@@ -47,7 +48,7 @@ const char* const kBenchmarkJson = R"({
         "ruleName": "TestingProceduresPass",
         "title": "Rule one",
         "id": "1.1.1.1",
-        "tags": [],
+        "tags": ["level:l1", "severity:low"],
         "metadata": {"description": "", "rationale": "", "fixtext": "", "references": "", "severity": "Low"},
         "payload": {"audit": {}, "remediate": {}, "parameters": {}}
       },
@@ -55,7 +56,7 @@ const char* const kBenchmarkJson = R"({
         "ruleName": "TestingProceduresPass",
         "title": "Rule two",
         "id": "1.1.1.2",
-        "tags": [],
+        "tags": ["level:l2", "severity:critical"],
         "metadata": {"description": "", "rationale": "", "fixtext": "", "references": "", "severity": "Low"},
         "payload": {"audit": {}, "remediate": {}, "parameters": {}}
       }
@@ -151,7 +152,7 @@ TEST_F(GeneratePlanTest, SeedsEveryRuleAtAudit)
     }
     const std::string path = MakeVerifiedFile("plan_bench_dir", "bench.benchmark.json", kBenchmarkJson);
 
-    auto result = GeneratePlan({path}, {}, {}, nullptr);
+    auto result = GeneratePlan({path}, {}, {}, {}, nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
 
     // Parse the generated plan back rather than string-matching its raw JSON:
@@ -186,7 +187,7 @@ TEST_F(GeneratePlanTest, TogglesOverrideDefaultAndLastWriteWins)
         Toggle{"1.1.1.1", ToggleMode::Audit},
         Toggle{"1.1.1.2", ToggleMode::Enforce},
     };
-    auto result = GeneratePlan({path}, toggles, {}, nullptr);
+    auto result = GeneratePlan({path}, toggles, {}, {}, nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
 
     const std::string planPath = MakeVerifiedFile("plan_out_dir", "plan.json", result.Value());
@@ -210,8 +211,82 @@ TEST_F(GeneratePlanTest, UnknownSectionInToggleIsRejected)
     const std::string path = MakeVerifiedFile("plan_bench_dir3", "bench.benchmark.json", kBenchmarkJson);
 
     const std::vector<Toggle> toggles = {Toggle{"9.9.9.9", ToggleMode::Remediate}};
-    auto result = GeneratePlan({path}, toggles, {}, nullptr);
+    auto result = GeneratePlan({path}, toggles, {}, {}, nullptr);
     EXPECT_FALSE(result.HasValue());
+}
+
+TEST_F(GeneratePlanTest, FiltersBeforeApplyingToggles)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const std::string path = MakeVerifiedFile("plan_filter_dir", "bench.benchmark.json", kBenchmarkJson);
+    RuleFilters filters;
+    filters.tags = {"level:l1"};
+
+    auto result = GeneratePlan({path}, {}, {}, filters, nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+
+    const std::string planPath = MakeVerifiedFile("plan_filter_out_dir", "plan.json", result.Value());
+    auto planResult = ParsePlanFile(planPath, nullptr);
+    ASSERT_TRUE(planResult.HasValue()) << planResult.Error().message;
+    const auto& rules = planResult.Value().benchmarks[0].rules;
+    ASSERT_EQ(rules.size(), 1u);
+    EXPECT_EQ(rules.count("1.1.1.1"), 1u);
+
+    auto toggleResult = GeneratePlan({path}, {Toggle{"1.1.1.2", ToggleMode::Remediate}}, {}, filters, nullptr);
+    EXPECT_FALSE(toggleResult.HasValue());
+}
+
+TEST_F(GeneratePlanTest, ExplicitZeroMatchFilterKindsAreRejected)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const std::string path = MakeVerifiedFile("plan_zero_filter_dir", "bench.benchmark.json", kBenchmarkJson);
+    RuleFilters missingTag;
+    missingTag.tags = {"level:missing"};
+    EXPECT_FALSE(GeneratePlan({path}, {}, {}, missingTag, nullptr).HasValue());
+
+    RuleFilters missingSection;
+    missingSection.sections = {"9.*"};
+    EXPECT_FALSE(GeneratePlan({path}, {}, {}, missingSection, nullptr).HasValue());
+
+    RuleFilters excludedTags;
+    excludedTags.excludedTags = {"severity:low", "severity:critical"};
+    EXPECT_FALSE(GeneratePlan({path}, {}, {}, excludedTags, nullptr).HasValue());
+
+    RuleFilters excludedSections;
+    excludedSections.excludedSections = {"*"};
+    EXPECT_FALSE(GeneratePlan({path}, {}, {}, excludedSections, nullptr).HasValue());
+}
+
+TEST_F(GeneratePlanTest, AppliesOneFilterSetAcrossMultipleFiles)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const std::string firstPath = MakeVerifiedFile("plan_multi_filter_first_dir", "first.benchmark.json", kBenchmarkJson);
+    std::string secondJson = kBenchmarkJson;
+    secondJson.replace(secondJson.find("\"v1.0.0\""), std::string("\"v1.0.0\"").size(), "\"v2.0.0\"");
+    secondJson.replace(secondJson.find("level:l1"), std::string("level:l1").size(), "level:l3");
+    secondJson.replace(secondJson.find("level:l2"), std::string("level:l2").size(), "level:l4");
+    const std::string secondPath = MakeVerifiedFile("plan_multi_filter_second_dir", "second.benchmark.json", secondJson);
+    RuleFilters filters;
+    filters.tags = {"level:l1"};
+
+    auto result = GeneratePlan({firstPath, secondPath}, {}, {}, filters, nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+
+    const std::string planPath = MakeVerifiedFile("plan_multi_filter_out_dir", "plan.json", result.Value());
+    auto planResult = ParsePlanFile(planPath, nullptr);
+    ASSERT_TRUE(planResult.HasValue()) << planResult.Error().message;
+    ASSERT_EQ(planResult.Value().benchmarks.size(), 2u);
+    EXPECT_EQ(planResult.Value().benchmarks[0].rules.size(), 1u);
+    EXPECT_TRUE(planResult.Value().benchmarks[1].rules.empty());
 }
 
 TEST_F(ParsePlanFileTest, ParsesValidPlan)
@@ -268,7 +343,7 @@ TEST_F(GeneratePlanTest, PreFillsParameterDefaultsFromMetadata)
     }
     const std::string path = MakeVerifiedFile("plan_param_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
 
-    auto result = GeneratePlan({path}, {}, {}, nullptr);
+    auto result = GeneratePlan({path}, {}, {}, {}, nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
 
     const std::string planPath = MakeVerifiedFile("plan_param_out_dir", "plan.json", result.Value());
@@ -288,7 +363,7 @@ TEST_F(GeneratePlanTest, ParamOverrideReplacesDefault)
     const std::string path = MakeVerifiedFile("plan_param_override_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
 
     const std::vector<ParamOverride> overrides = {ParamOverride{"1.1.1.1", "mountPoint", "/var/tmp"}};
-    auto result = GeneratePlan({path}, {}, overrides, nullptr);
+    auto result = GeneratePlan({path}, {}, overrides, {}, nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
 
     const std::string planPath = MakeVerifiedFile("plan_param_override_out_dir", "plan.json", result.Value());
@@ -307,7 +382,7 @@ TEST_F(GeneratePlanTest, ParamOverrideRejectsValueNotMatchingValidationRegex)
     const std::string path = MakeVerifiedFile("plan_param_regex_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
 
     const std::vector<ParamOverride> overrides = {ParamOverride{"1.1.1.1", "mountPoint", "relative/path"}};
-    auto result = GeneratePlan({path}, {}, overrides, nullptr);
+    auto result = GeneratePlan({path}, {}, overrides, {}, nullptr);
     EXPECT_FALSE(result.HasValue());
 }
 
@@ -320,7 +395,7 @@ TEST_F(GeneratePlanTest, ParamOverrideRejectsUnknownParameterName)
     const std::string path = MakeVerifiedFile("plan_param_unknown_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
 
     const std::vector<ParamOverride> overrides = {ParamOverride{"1.1.1.1", "notAParameter", "x"}};
-    auto result = GeneratePlan({path}, {}, overrides, nullptr);
+    auto result = GeneratePlan({path}, {}, overrides, {}, nullptr);
     EXPECT_FALSE(result.HasValue());
 }
 
@@ -333,7 +408,7 @@ TEST_F(GeneratePlanTest, ParamOverrideRejectsUnknownRule)
     const std::string path = MakeVerifiedFile("plan_param_unknown_rule_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
 
     const std::vector<ParamOverride> overrides = {ParamOverride{"9.9.9.9", "mountPoint", "/var/tmp"}};
-    auto result = GeneratePlan({path}, {}, overrides, nullptr);
+    auto result = GeneratePlan({path}, {}, overrides, {}, nullptr);
     EXPECT_FALSE(result.HasValue());
 }
 

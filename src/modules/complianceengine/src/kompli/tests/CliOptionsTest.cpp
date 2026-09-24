@@ -188,6 +188,49 @@ TEST(CliOptionsSmokeTest, PlanWithOutput)
     EXPECT_EQ(result.Value().output.Value(), "plan.json");
 }
 
+TEST(CliOptionsSmokeTest, PlanParsesRepeatableRuleFilters)
+{
+    ArgvHelper a{"prog", "--tag=level:l1", "--tag=level:l2", "--section=1.*", "--exclude-tag=severity:critical",
+        "--exclude-section=1.2.*", "plan", "bench.json"};
+    auto result = ParseCommandLine(a.Argc(), a.Argv());
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    ASSERT_EQ(result.Value().ruleFilters.tags.size(), 2u);
+    EXPECT_EQ(result.Value().ruleFilters.tags[0], "level:l1");
+    EXPECT_EQ(result.Value().ruleFilters.tags[1], "level:l2");
+    ASSERT_EQ(result.Value().ruleFilters.sections.size(), 1u);
+    EXPECT_EQ(result.Value().ruleFilters.sections[0], "1.*");
+    ASSERT_EQ(result.Value().ruleFilters.excludedTags.size(), 1u);
+    EXPECT_EQ(result.Value().ruleFilters.excludedTags[0], "severity:critical");
+    ASSERT_EQ(result.Value().ruleFilters.excludedSections.size(), 1u);
+    EXPECT_EQ(result.Value().ruleFilters.excludedSections[0], "1.2.*");
+}
+
+TEST(CliOptionsSmokeTest, RenderAcceptsRuleFilters)
+{
+    ArgvHelper a{"prog", "--tag=level:l1", "--section=1.*", "render", "result.json"};
+    auto result = ParseCommandLine(a.Argc(), a.Argv());
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_FALSE(result.Value().ruleFilters.Empty());
+}
+
+TEST(CliOptionsSmokeTest, EmptyRuleFilterIsRejected)
+{
+    ArgvHelper a{"prog", "--tag=", "plan", "bench.json"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, RunRejectsRuleFilters)
+{
+    ArgvHelper a{"prog", "--section=1.*", "run", "plan.json"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, ListRejectsRuleFilters)
+{
+    ArgvHelper a{"prog", "--exclude-tag=severity:critical", "list", "bench.json"};
+    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
 TEST(CliOptionsSmokeTest, PlanWithoutFilenameIsRejected)
 {
     ArgvHelper a{"prog", "plan"};

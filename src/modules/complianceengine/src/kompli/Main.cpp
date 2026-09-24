@@ -14,6 +14,7 @@
 #include "CliOptions.hpp"
 #include "JUnitRenderer.hpp"
 #include "Plan.hpp"
+#include "RuleFilters.hpp"
 #include "TextRenderers.hpp"
 
 #include <CliContext.h>
@@ -52,6 +53,7 @@ using ComplianceEngine::Kompli::ApplyParameterOverrides;
 using ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities;
 using ComplianceEngine::Kompli::Command;
 using ComplianceEngine::Kompli::Format;
+using ComplianceEngine::Kompli::FilterResultRules;
 using ComplianceEngine::Kompli::GeneratePlan;
 using ComplianceEngine::Kompli::Options;
 using ComplianceEngine::Kompli::ParseCommandLine;
@@ -115,6 +117,12 @@ int RunRender(const Options& options)
         std::cerr << "Error: " << jsonResult.Error().message << std::endl;
         return 1;
     }
+    auto filteredResult = FilterResultRules(jsonResult.Value(), options.ruleFilters);
+    if (!filteredResult.HasValue())
+    {
+        std::cerr << "Error: " << filteredResult.Error().message << std::endl;
+        return 1;
+    }
 
     const string suiteName = options.suiteName.HasValue() ? options.suiteName.Value() : string("compliance");
 
@@ -124,16 +132,16 @@ int RunRender(const Options& options)
     switch (format)
     {
         case Format::Junit:
-            rendered = RenderJUnit(jsonResult.Value(), suiteName);
+            rendered = RenderJUnit(filteredResult.Value(), suiteName);
             break;
         case Format::NestedList:
-            rendered = RenderText(jsonResult.Value(), TextStyle::NestedList);
+            rendered = RenderText(filteredResult.Value(), TextStyle::NestedList);
             break;
         case Format::CompactList:
-            rendered = RenderText(jsonResult.Value(), TextStyle::CompactList);
+            rendered = RenderText(filteredResult.Value(), TextStyle::CompactList);
             break;
         case Format::Debug:
-            rendered = RenderText(jsonResult.Value(), TextStyle::Debug);
+            rendered = RenderText(filteredResult.Value(), TextStyle::Debug);
             break;
     }
     if (!rendered.HasValue())
@@ -150,7 +158,7 @@ int RunRender(const Options& options)
 // reads the benchmark file and hashes it, it evaluates nothing.
 int RunPlan(const Options& options)
 {
-    auto planResult = GeneratePlan(options.inputs, options.toggles, options.paramOverrides, nullptr);
+    auto planResult = GeneratePlan(options.inputs, options.toggles, options.paramOverrides, options.ruleFilters, nullptr);
     if (!planResult.HasValue())
     {
         std::cerr << "Error: " << planResult.Error().message << std::endl;

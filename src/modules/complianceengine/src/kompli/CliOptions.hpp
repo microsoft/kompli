@@ -3,6 +3,7 @@
 
 #include <Optional.h>
 #include <Result.h>
+#include <RuleFilters.hpp>
 #include <string>
 #include <vector>
 
@@ -113,6 +114,9 @@ struct Options
     std::vector<ParamOverride> paramOverrides;
     // `plan` only: write the generated plan here instead of stdout.
     Optional<std::string> output;
+    // `plan` and `render` only: selectors shared by plan generation and
+    // canonical-result projection.
+    RuleFilters ruleFilters;
 };
 
 void PrintHelp(const std::string& programName);

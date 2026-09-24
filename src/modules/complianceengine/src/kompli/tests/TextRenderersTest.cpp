@@ -1,11 +1,13 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+#include <RuleFilters.hpp>
 #include <TextRenderers.hpp>
 #include <gtest/gtest.h>
 #include <string>
 
 using ComplianceEngine::Kompli::RenderText;
+using ComplianceEngine::Kompli::RuleFilters;
 using ComplianceEngine::Kompli::TextStyle;
 
 namespace
@@ -61,6 +63,28 @@ TEST(TextRenderersTest, DebugRendersIdentityTitleParametersAndIndicators)
     EXPECT_TRUE(Contains(r.Value(), "    parameters: mask=0600"));
     EXPECT_TRUE(Contains(r.Value(), "    - P [NonCompliant]"));
     EXPECT_TRUE(Contains(r.Value(), "      - bad thing [NonCompliant]"));
+}
+
+TEST(TextRenderersTest, EveryStyleRendersOnlyFilteredRulesAndKeepsRunWideFacts)
+{
+    const std::string json =
+        R"({"action":"Audit","timestamp":"t","durationMs":9,"status":"NonCompliant","rules":[)"
+        R"({"id":"1","ruleName":"A","title":"A","status":"Compliant","tags":["level:l1"],"indicators":[]},)"
+        R"({"id":"2","ruleName":"B","title":"B","status":"NonCompliant","tags":["level:l2"],"indicators":[]}]})";
+    RuleFilters filters;
+    filters.tags = {"level:l1"};
+    auto filtered = ComplianceEngine::Kompli::FilterResultRules(json, filters);
+    ASSERT_TRUE(filtered.HasValue()) << filtered.Error().message;
+
+    for (const auto style : {TextStyle::CompactList, TextStyle::NestedList, TextStyle::Debug})
+    {
+        auto r = RenderText(filtered.Value(), style);
+        ASSERT_TRUE(r.HasValue()) << r.Error().message;
+        EXPECT_TRUE(Contains(r.Value(), "1 A"));
+        EXPECT_FALSE(Contains(r.Value(), "2 B"));
+        EXPECT_TRUE(Contains(r.Value(), "Duration: 9 ms"));
+        EXPECT_TRUE(Contains(r.Value(), "Status: NonCompliant"));
+    }
 }
 
 TEST(TextRenderersTest, DebugSerializesNonStringParameterValues)

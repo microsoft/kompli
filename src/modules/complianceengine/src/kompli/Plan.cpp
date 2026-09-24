@@ -226,7 +226,7 @@ Result<ResolvedRuleRef> ResolveRuleRef(std::vector<ParsedBenchmarkFile>& parsedF
 } // anonymous namespace
 
 Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std::vector<Toggle>& toggles,
-    const std::vector<ParamOverride>& paramOverrides, OsConfigLogHandle logHandle)
+    const std::vector<ParamOverride>& paramOverrides, const RuleFilters& ruleFilters, OsConfigLogHandle logHandle)
 {
     if (benchmarkFiles.empty())
     {
@@ -255,6 +255,7 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
     parsedFiles.reserve(benchmarkFiles.size());
     std::vector<std::pair<string, CISBenchmarkInfo>> identities;
     identities.reserve(benchmarkFiles.size());
+    std::size_t selectedRuleCount = 0;
 
     for (const auto& file : benchmarkFiles)
     {
@@ -274,6 +275,10 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
         // within this file).
         for (const auto& resource : doc.resources)
         {
+            if (!ruleFilters.Matches(resource.id, resource.tags))
+            {
+                continue;
+            }
             PlanRuleMode ruleMode{ToggleMode::Audit};
             for (const auto& param : resource.parameterMetadata)
             {
@@ -281,9 +286,15 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
             }
             parsed.rules[resource.id] = std::move(ruleMode);
             parsed.parameterMetadata[resource.id] = resource.parameterMetadata;
+            ++selectedRuleCount;
         }
         identities.emplace_back(file, doc.benchmarkInfo);
         parsedFiles.push_back(std::move(parsed));
+    }
+
+    if (!ruleFilters.Empty() && 0 == selectedRuleCount)
+    {
+        return Error("Rule filters matched no rules across the benchmark definitions", EINVAL);
     }
 
     // Two files that resolve to the same (framework, distribution,

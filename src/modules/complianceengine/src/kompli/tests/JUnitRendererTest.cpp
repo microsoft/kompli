@@ -2,10 +2,12 @@
 // Licensed under the MIT License.
 
 #include <JUnitRenderer.hpp>
+#include <RuleFilters.hpp>
 #include <gtest/gtest.h>
 #include <string>
 
 using ComplianceEngine::Kompli::RenderJUnit;
+using ComplianceEngine::Kompli::RuleFilters;
 
 namespace
 {
@@ -104,6 +106,23 @@ TEST(JUnitRendererTest, MixedRulesCountFailuresCorrectly)
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
     EXPECT_TRUE(Contains(r.Value(), "tests=\"3\" failures=\"2\""));
+}
+
+TEST(JUnitRendererTest, FilteredRulesDetermineSuiteCounts)
+{
+    const std::string json = R"({"rules":[)"
+                             R"({"id":"1","ruleName":"A","status":"Compliant","tags":["level:l1"],"indicators":[]},)"
+                             R"({"id":"2","ruleName":"B","status":"NonCompliant","tags":["level:l2"],"indicators":[]}]})";
+    RuleFilters filters;
+    filters.tags = {"level:l1"};
+    auto filtered = ComplianceEngine::Kompli::FilterResultRules(json, filters);
+    ASSERT_TRUE(filtered.HasValue()) << filtered.Error().message;
+
+    auto r = RenderJUnit(filtered.Value(), "s");
+    ASSERT_TRUE(r.HasValue()) << r.Error().message;
+    EXPECT_TRUE(Contains(r.Value(), "tests=\"1\" failures=\"0\" skipped=\"0\""));
+    EXPECT_TRUE(Contains(r.Value(), "classname=\"1\""));
+    EXPECT_FALSE(Contains(r.Value(), "classname=\"2\""));
 }
 
 TEST(JUnitRendererTest, NotApplicableRuleIsSkipped)

@@ -63,21 +63,22 @@ struct Plan
 };
 
 // Generates a plan spanning one or more `benchmarkFiles`, in argument order
-// (docs/CLI.md section 8.1): every rule in every file is seeded at `audit`,
-// then `toggles` are applied in order (last write per rule wins). With
-// exactly one file, a toggle's `section` is that file's unqualified `id`
-// (today's contract, unchanged); with more than one, it must be qualified as
-// `<file-basename>:<id>` since `id` is only unique within one file. Returns
-// the plan serialized as pretty JSON, with one `benchmarks[]` entry per file.
-// Fails if: `benchmarkFiles` is empty; the same file path is given twice (or
-// two paths canonicalize to the same file); two files resolve to the same
-// (framework, distribution, distributionVersion, benchmarkVersion) identity
-// (see CheckUniqueBenchmarkIdentities); a toggle references a rule/file the
-// input doesn't have; a `--param=` override references an unknown rule or
-// parameter, or a value that doesn't match the parameter's validationRegex
-// (fail-fast validation, see docs/CLI.md section 2/8.1).
+// (docs/CLI.md section 8.1): matching rules are seeded at `audit`, then
+// `toggles` are applied in order (last write per rule wins). With exactly one
+// file, a toggle's `section` is that file's unqualified `id`; with more than
+// one, it must be qualified as `<file-basename>:<id>` since `id` is only unique
+// within one file. Returns pretty JSON with one `benchmarks[]` entry per file,
+// including an empty block when filters match another input but not that file.
+// Fails if: `benchmarkFiles` is empty; explicit filters select no rules across
+// all inputs; the same file path is given twice (or two paths canonicalize to
+// the same file); two files resolve to the same (framework, distribution,
+// distributionVersion, benchmarkVersion) identity (see
+// CheckUniqueBenchmarkIdentities); a toggle references a filtered or unknown
+// rule/file; a `--param=` override references an unknown rule or parameter, or
+// a value that doesn't match the parameter's validationRegex (fail-fast
+// validation, see docs/CLI.md section 2/8.1).
 Result<std::string> GeneratePlan(const std::vector<std::string>& benchmarkFiles, const std::vector<Toggle>& toggles,
-    const std::vector<ParamOverride>& paramOverrides, OsConfigLogHandle logHandle);
+    const std::vector<ParamOverride>& paramOverrides, const RuleFilters& ruleFilters, OsConfigLogHandle logHandle);
 
 // Parses a plan file from disk, applying the same input-hardening posture as
 // benchmark-definition files (this is root-run input too).

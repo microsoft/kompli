@@ -42,11 +42,16 @@ void PrintHelp(const std::string& programName)
                  "--audit=.\n";
     std::cout << "\t    --param=<ref>.<name>=<value>\tOverride parameter <name> for <ref> (default: pre-filled from the definition's "
                  "parameterMetadata). Repeatable. Same <ref> form as --audit=.\n";
+    std::cout << "\t    --tag=<axis:value>\tKeep rules carrying this exact tag. Repeatable.\n";
+    std::cout << "\t    --section=<glob>\tKeep rules whose id matches this POSIX glob. Repeatable.\n";
+    std::cout << "\t    --exclude-tag=<axis:value>\tRemove rules carrying this exact tag. Repeatable.\n";
+    std::cout << "\t    --exclude-section=<glob>\tRemove rules whose id matches this POSIX glob. Repeatable.\n";
     std::cout << "\t-o, --output\tWrite the generated plan to this path. Default: standard output.\n";
     std::cout << "\n";
     std::cout << "render options:\n";
     std::cout << "\t-f, --format\tPresentation format. Allowed values: {junit, nested-list, compact-list, debug}. Default: junit.\n";
     std::cout << "\t    --suite-name\tName for the JUnit <testsuite>. Default: compliance.\n";
+    std::cout << "\t    --tag/--section/--exclude-tag/--exclude-section\tProject the result using the same repeatable filters as plan.\n";
     std::cout << "\tfilename\tRead the canonical result JSON from this file. Optional: if skipped or '-', reads standard input.\n";
     std::cout << "\n";
     std::cout << "list options:\n";
@@ -61,7 +66,11 @@ enum
     kAuditOpt,
     kRemediateOpt,
     kEnforceOpt,
-    kParamOpt
+    kParamOpt,
+    kTagOpt,
+    kSectionOpt,
+    kExcludeTagOpt,
+    kExcludeSectionOpt
 };
 
 // Command line parser using getopt_long.
@@ -82,7 +91,10 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
         {"debug", no_argument, nullptr, 'd'}, {"continue-on-error", no_argument, nullptr, 'e'}, {"format", required_argument, nullptr, 'f'},
         {"output", required_argument, nullptr, 'o'}, {"suite-name", required_argument, nullptr, kSuiteNameOpt},
         {"audit", required_argument, nullptr, kAuditOpt}, {"remediate", required_argument, nullptr, kRemediateOpt},
-        {"enforce", required_argument, nullptr, kEnforceOpt}, {"param", required_argument, nullptr, kParamOpt}, {nullptr, 0, nullptr, 0}};
+        {"enforce", required_argument, nullptr, kEnforceOpt}, {"param", required_argument, nullptr, kParamOpt},
+        {"tag", required_argument, nullptr, kTagOpt}, {"section", required_argument, nullptr, kSectionOpt},
+        {"exclude-tag", required_argument, nullptr, kExcludeTagOpt}, {"exclude-section", required_argument, nullptr, kExcludeSectionOpt},
+        {nullptr, 0, nullptr, 0}};
 
     auto result = Options{};
     int opt = getopt_long(argc, argv, short_opts, long_opts, nullptr);
@@ -178,6 +190,21 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
                     return Error("--param must be of the form <ref>.<name>=<value>.");
                 }
                 result.paramOverrides.push_back(ParamOverride{key.substr(0, dot), key.substr(dot + 1), value});
+                break;
+            }
+            case kTagOpt:
+            case kSectionOpt:
+            case kExcludeTagOpt:
+            case kExcludeSectionOpt: {
+                if (optarg[0] == '\0')
+                {
+                    return Error("Rule filter values must not be empty.");
+                }
+                auto& values = (kTagOpt == opt)             ? result.ruleFilters.tags :
+                    (kSectionOpt == opt)                    ? result.ruleFilters.sections :
+                    (kExcludeTagOpt == opt)                 ? result.ruleFilters.excludedTags :
+                                                             result.ruleFilters.excludedSections;
+                values.push_back(optarg);
                 break;
             }
             default:
@@ -276,6 +303,10 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
         }
         else
         {
+            if (!result.ruleFilters.Empty())
+            {
+                return Error("--tag=/--section=/--exclude-tag=/--exclude-section= are only valid for 'plan' and 'render'.");
+            }
             if (!result.toggles.empty())
             {
                 return Error("--audit=/--remediate=/--enforce= are only valid for 'plan'.");

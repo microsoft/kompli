@@ -26,6 +26,7 @@ set(LIB_SOURCES
     JUnitRenderer.cpp
     TextRenderers.cpp
     Plan.cpp
+    RuleFilters.cpp
 )
 
 add_library(${lib_name} STATIC ${LIB_SOURCES})
