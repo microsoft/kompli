@@ -147,7 +147,7 @@ Result<string> RenderText(const string& canonicalJson, const TextStyle style)
                 break;
 
             case TextStyle::Debug: {
-                out << "  " << id << " " << ruleName << " [" << status << "]\n";
+                out << "  " << id << " " << ruleName << " (ruleId=" << StringOrEmpty(json_object_get_string(rule, "ruleId")) << ") [" << status << "]\n";
                 out << "    title: " << StringOrEmpty(json_object_get_string(rule, "title")) << "\n";
                 const string parameters = JoinParameters(rule);
                 if (!parameters.empty())

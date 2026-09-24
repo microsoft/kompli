@@ -15,7 +15,7 @@ using std::string;
 namespace
 {
 // Fills every rule-result field that doesn't depend on whether/how the rule
-// was executed (title/id/ruleName/tags/metadata/parameters), shared by the
+// was executed (title/id/ruleId/ruleName/tags/metadata/parameters), shared by the
 // executed and Skipped builders below.
 Optional<Error> FillCommonRuleFields(JSON_Object* object, const Resource& entry, const std::map<string, string>& parameters)
 {
@@ -26,6 +26,10 @@ Optional<Error> FillCommonRuleFields(JSON_Object* object, const Resource& entry,
     if (JSONSuccess != json_object_set_string(object, "id", entry.id.c_str()))
     {
         return Error("Failed to set JSON id", ENOMEM);
+    }
+    if (JSONSuccess != json_object_set_string(object, "ruleId", entry.ruleId.c_str()))
+    {
+        return Error("Failed to set JSON ruleId", ENOMEM);
     }
     if (JSONSuccess != json_object_set_string(object, "ruleName", entry.ruleName.c_str()))
     {

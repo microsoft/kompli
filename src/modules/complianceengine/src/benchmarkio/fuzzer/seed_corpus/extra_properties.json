@@ -14,6 +14,7 @@
         "ruleName": "RuleA",
         "title": "1.1.1 Rule A",
         "id": "1.1.1",
+        "ruleId": "extra-properties-rule-1",
         "tags": ["level:l1"],
         "metadata": { "description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x" },
         "payload": { "audit": {}, "parameters": {} }

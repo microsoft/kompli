@@ -12,6 +12,7 @@
         "ruleName": "Sample",
         "title": "1.1.1 Sample Rule",
         "id": "1.1.1",
+        "ruleId": "audit-rule-1",
         "tags": [],
         "metadata": { "description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x" },
         "payload": { "audit": {} }

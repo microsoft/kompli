@@ -61,6 +61,7 @@
         "indicators",
         "title",
         "id",
+        "ruleId",
         "ruleName",
         "status",
         "tags",
@@ -79,7 +80,12 @@
         "id": {
           "type": "string",
           "minLength": 1,
-          "description": "The rule's sole externally-quoted identifier (opaque, unique within the benchmark file it was evaluated from - e.g. '1.1.1.1'). No separate ruleId field in this schema."
+          "description": "The rule's externally-quoted, framework-defined identifier, unique within the benchmark file it was evaluated from (e.g. '1.1.1.1')."
+        },
+        "ruleId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable, benchmark-agnostic rule identifier preserved from the benchmark definition for external correlation."
         },
         "ruleName": {
           "type": "string",

@@ -24,14 +24,15 @@ using ComplianceEngine::BenchmarkDefinition::Resource;
 namespace
 {
 // A single, valid rule matching what the definitions generator emits. The
-// id is now the sole per-rule identifier (opaque remainder, doubling
-// as the human-facing identifier); the
+// id is the human-facing framework identifier; ruleId is the stable
+// benchmark-agnostic identifier retained for external correlation. The
 // file-level framework/distribution/distributionVersion/benchmarkVersion
 // prefix is hoisted into metadata (see MakeDoc below).
 const char* const kValidRule = R"({
     "ruleName": "EnsureCramfsKernelModuleIsNotAvailable",
     "title": "1.1.1.1 Ensure cramfs kernel module is not available",
     "id": "1.1.1.1",
+    "ruleId": "2b568469-ea61-c184-66ba-db6720414ddd",
     "tags": ["level:l1"],
     "metadata": {
         "description": "d",
@@ -52,6 +53,7 @@ const char* const kValidRule2 = R"({
     "ruleName": "EnsureFreevxfsKernelModuleIsNotAvailable",
     "title": "1.1.1.2 Ensure freevxfs kernel module is not available",
     "id": "1.1.1.2",
+    "ruleId": "9fd6f537-1234-4e42-a456-426614174000",
     "tags": ["level:l1"],
     "metadata": {
         "description": "d",
@@ -111,11 +113,10 @@ TEST(BenchmarkDefinitionParserTest, ParsesValidDocument)
     EXPECT_EQ(res.ruleName, "EnsureCramfsKernelModuleIsNotAvailable");
     EXPECT_TRUE(res.hasInitAudit);
     EXPECT_FALSE(res.payload.HasValue());
-    // id is now the sole per-rule identifier, stored verbatim (no
-    // path parsing) - dot form for CIS, matching what a separate 'section'
-    // field used to hold before the two were unified. There is no separate
-    // ruleId field any more - kompli's own schema only ever carries id.
+    // id is stored verbatim (no path parsing), while ruleId preserves the
+    // stable benchmark-agnostic identifier emitted by the producer.
     EXPECT_EQ(res.id, "1.1.1.1");
+    EXPECT_EQ(res.ruleId, "2b568469-ea61-c184-66ba-db6720414ddd");
     // The procedure is the rule's payload serialized as plain JSON.
     EXPECT_NE(res.procedure.find("KernelModuleUnavailable"), std::string::npos);
     EXPECT_NE(res.procedure.find("cramfs"), std::string::npos);
@@ -153,6 +154,7 @@ TEST(BenchmarkDefinitionParserTest, IgnoresUnknownFields)
         "ruleName": "EnsureCramfsKernelModuleIsNotAvailable",
         "title": "1.1.1.1 Ensure cramfs kernel module is not available",
         "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "unexpected": "ignored",
         "tags": [],
         "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
@@ -180,6 +182,7 @@ TEST(BenchmarkDefinitionParserTest, ParsesParameterMetadataFields)
         "ruleName": "EnsureMountPoint",
         "title": "1.1.2.1.1 Ensure mount point",
         "id": "1.1.2.1.1",
+        "ruleId": "rule-id",
         "tags": [],
         "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {"X": {}}, "parameters": {"mountPoint": "/tmp"}},
@@ -217,6 +220,7 @@ TEST(BenchmarkDefinitionParserTest, ParsesMultipleParameterMetadataEntries)
         "ruleName": "EnsureMountPoint",
         "title": "1.1.2.1.2 Ensure mount point options",
         "id": "1.1.2.1.2",
+        "ruleId": "rule-id",
         "tags": [],
         "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {"X": {}}, "parameters": {"mountPoint": "/tmp", "requiredMountOptions": "nodev"}},
@@ -236,6 +240,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsParameterMetadataNotAnObject)
         "ruleName": "EnsureMountPoint",
         "title": "1.1.2.1.1 Ensure mount point",
         "id": "1.1.2.1.1",
+        "ruleId": "rule-id",
         "tags": [],
         "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {"X": {}}, "parameters": {}},
@@ -251,6 +256,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsParameterMetadataMissingDefault)
         "ruleName": "EnsureMountPoint",
         "title": "1.1.2.1.1 Ensure mount point",
         "id": "1.1.2.1.1",
+        "ruleId": "rule-id",
         "tags": [],
         "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {"X": {}}, "parameters": {}},
@@ -266,6 +272,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsParameterMetadataEntryNotAnObject)
         "ruleName": "EnsureMountPoint",
         "title": "1.1.2.1.1 Ensure mount point",
         "id": "1.1.2.1.1",
+        "ruleId": "rule-id",
         "tags": [],
         "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {"X": {}}, "parameters": {}},
@@ -425,6 +432,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingTitle)
     const char* const rule = R"({
         "ruleName": "R",
         "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
@@ -435,6 +443,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingRuleName)
     const char* const rule = R"({
         "title": "t",
         "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
@@ -446,6 +455,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleWithEmptyStringField)
         "ruleName": "",
         "title": "t",
         "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
@@ -456,7 +466,8 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingPayload)
     const char* const rule = R"({
         "ruleName": "R",
         "title": "t",
-        "id": "1.1.1.1"
+        "id": "1.1.1.1",
+        "ruleId": "rule-id"
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
 }
@@ -467,6 +478,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRulePayloadNotAnObject)
         "ruleName": "R",
         "title": "t",
         "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "payload": "not-an-object"
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
@@ -477,6 +489,18 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingId)
     const char* const rule = R"({
         "ruleName": "R",
         "title": "t",
+        "ruleId": "rule-id",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingRuleId)
+{
+    const char* const rule = R"({
+        "ruleName": "R",
+        "title": "t",
+        "id": "1.1.1.1",
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
@@ -488,6 +512,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingTags)
         "ruleName": "R",
         "title": "t",
         "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {}, "parameters": {}}
     })";
@@ -500,6 +525,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleTagsNotAnArray)
         "ruleName": "R",
         "title": "t",
         "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "tags": "not-an-array",
         "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {}, "parameters": {}}
@@ -513,6 +539,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleNonStringTagEntry)
         "ruleName": "R",
         "title": "t",
         "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "tags": ["level:l1", 1],
         "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {}, "parameters": {}}
@@ -526,6 +553,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingMetadata)
         "ruleName": "R",
         "title": "t",
         "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "tags": [],
         "payload": {"audit": {}, "parameters": {}}
     })";
@@ -538,6 +566,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataMissingSeverity)
         "ruleName": "R",
         "title": "t",
         "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "tags": [],
         "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "references": "x"},
         "payload": {"audit": {}, "parameters": {}}
@@ -556,6 +585,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsDuplicateId)
         "ruleName": "RuleA",
         "title": "Rule A",
         "id": "1.1.1.1",
+        "ruleId": "rule-a",
         "tags": [],
         "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {}, "parameters": {}}
@@ -564,6 +594,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsDuplicateId)
         "ruleName": "RuleB",
         "title": "Rule B, accidental duplicate id",
         "id": "1.1.1.1",
+        "ruleId": "rule-b",
         "tags": [],
         "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {}, "parameters": {}}

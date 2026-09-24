@@ -12,6 +12,7 @@
         "ruleName": "EnsureCramfsKernelModuleIsNotAvailable",
         "title": "1.1.1.1 Ensure cramfs kernel module is not available",
         "id": "1.1.1.1",
+        "ruleId": "2b568469-ea61-c184-66ba-db6720414ddd",
         "tags": ["level:l1"],
         "metadata": {
           "description": "d",

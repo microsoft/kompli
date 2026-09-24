@@ -299,6 +299,11 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
     {
         return id.Error();
     }
+    auto ruleId = RequiredString(ruleObject, "ruleId", context);
+    if (!ruleId.HasValue())
+    {
+        return ruleId.Error();
+    }
     auto procedure = SerializeProcedure(ruleObject, context);
     if (!procedure.HasValue())
     {
@@ -322,12 +327,11 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
 
     Resource resource;
     resource.resourceID = std::move(title.Value());
-    // id is opaque here: the file-level
-    // prefix lives once on BenchmarkDocument::benchmarkInfo, so this is just
-    // the rule's remainder, stored verbatim - no parsing. It's kompli's sole
-    // per-rule identifier - there is no separate ruleId field in this
-    // schema.
+    // id is opaque here: the file-level prefix lives once on
+    // BenchmarkDocument::benchmarkInfo, so this is just the framework-defined
+    // rule identifier, stored verbatim without parsing.
     resource.id = std::move(id.Value());
+    resource.ruleId = std::move(ruleId.Value());
     resource.procedure = std::move(procedure.Value());
     resource.ruleName = std::move(ruleName.Value());
     resource.tags = std::move(tags.Value());

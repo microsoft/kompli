@@ -12,6 +12,7 @@
         "ruleName": "EscapedGlob",
         "title": "3.1.2.4 Escaped Glob Version",
         "id": "3.1.2.4",
+        "ruleId": "escaped-version-rule-1",
         "tags": [],
         "metadata": { "description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x" },
         "payload": { "audit": {}, "parameters": {} }

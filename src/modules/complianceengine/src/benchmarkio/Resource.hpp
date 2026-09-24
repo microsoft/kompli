@@ -59,11 +59,13 @@ struct Resource
     // JSON as `title`.
     std::string resourceID;
 
-    // Stable, benchmark-agnostic rule identifier (the definition's `id`).
-    // Emitted in the canonical result JSON as `id`. There is no separate
-    // `ruleId` field in kompli's own schema/result - this is the sole
-    // per-rule identifier kompli carries.
+    // Human-facing, framework-defined identifier (the definition's `id`).
+    // Emitted in the canonical result JSON as `id`.
     std::string id;
+
+    // Stable, benchmark-agnostic identifier (the definition's `ruleId`).
+    // Emitted unchanged in canonical results for external correlation.
+    std::string ruleId;
 
     // The rule payload serialized as JSON. Passed to the ComplianceEngine as the
     // procedure; the engine parses plain JSON directly (Engine::SetProcedure).

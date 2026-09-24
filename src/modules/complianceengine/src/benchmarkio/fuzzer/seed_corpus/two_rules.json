@@ -12,6 +12,7 @@
         "ruleName": "RuleA",
         "title": "1.1.1 Rule A",
         "id": "1.1.1",
+        "ruleId": "rule-a",
         "tags": [],
         "metadata": { "description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x" },
         "payload": { "audit": {}, "parameters": {} }
@@ -20,6 +21,7 @@
         "ruleName": "RuleB",
         "title": "1.1.2 Rule B",
         "id": "1.1.2",
+        "ruleId": "rule-b",
         "tags": [],
         "metadata": { "description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x" },
         "payload": { "audit": {}, "parameters": {} }

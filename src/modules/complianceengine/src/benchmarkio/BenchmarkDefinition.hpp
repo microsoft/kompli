@@ -47,9 +47,9 @@ struct BenchmarkDocument
 
     // One entry per rule in spec.rules, in document order. Each rule maps as:
     //   resourceID   <- rule.title
-    //   id           <- rule.id (verbatim, opaque, unique within this file -
-    //                   kompli's sole per-rule identifier, no separate ruleId
-    //                   field)
+    //   id           <- rule.id (verbatim, framework-defined, unique within
+    //                   this file)
+    //   ruleId       <- rule.ruleId (stable external correlation identifier)
     //   procedure    <- rule.payload serialized as compact JSON (the ComplianceEngine
     //                   parses plain JSON directly; see Engine::SetProcedure)
     //   hasInitAudit <- true (every rule carries an init object)
@@ -62,7 +62,7 @@ struct BenchmarkDocument
 // metadata / spec.rules), the file-level prefix fields (metadata.labels.
 // framework/distribution/distributionVersion, metadata.annotations.
 // benchmarkVersion), and the fixed per-rule field set (ruleName, title, id,
-// payload). Rejects a document with a duplicate `id` across its rules (id
+// ruleId, payload). Rejects a document with a duplicate `id` across its rules (id
 // must be unique within one file) and rejects malformed input. Consistent
 // with the definition schema (additionalProperties: true), unknown fields
 // are ignored rather than rejected.

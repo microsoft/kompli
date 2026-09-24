@@ -32,8 +32,8 @@ using ComplianceEngine::Kompli::ToggleMode;
 
 namespace
 {
-// A minimal, schema-valid benchmark definition with two rules, identified by
-// id "1.1.1.1" and "1.1.1.2" (the sole per-rule identifier now).
+// A minimal, schema-valid benchmark definition with two human-facing ids and
+// their stable ruleIds.
 const char* const kBenchmarkJson = R"({
   "apiVersion": "v1",
   "kind": "BenchmarkDefinition",
@@ -48,6 +48,7 @@ const char* const kBenchmarkJson = R"({
         "ruleName": "TestingProceduresPass",
         "title": "Rule one",
         "id": "1.1.1.1",
+        "ruleId": "rule-1",
         "tags": ["level:l1", "severity:low"],
         "metadata": {"description": "", "rationale": "", "fixtext": "", "references": "", "severity": "Low"},
         "payload": {"audit": {}, "remediate": {}, "parameters": {}}
@@ -56,6 +57,7 @@ const char* const kBenchmarkJson = R"({
         "ruleName": "TestingProceduresPass",
         "title": "Rule two",
         "id": "1.1.1.2",
+        "ruleId": "rule-2",
         "tags": ["level:l2", "severity:critical"],
         "metadata": {"description": "", "rationale": "", "fixtext": "", "references": "", "severity": "Low"},
         "payload": {"audit": {}, "remediate": {}, "parameters": {}}
@@ -81,6 +83,7 @@ const char* const kParameterizedBenchmarkJson = R"({
         "ruleName": "TestingProceduresPass",
         "title": "Rule one",
         "id": "1.1.1.1",
+        "ruleId": "rule-1",
         "tags": [],
         "metadata": {"description": "", "rationale": "", "fixtext": "", "references": "", "severity": "Low"},
         "payload": {"audit": {}, "remediate": {}, "parameters": {"mountPoint": "/tmp"}},

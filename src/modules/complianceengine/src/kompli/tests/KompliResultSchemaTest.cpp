@@ -47,6 +47,7 @@ Resource MakeResource(const std::string& id, const std::string& title, const std
     r.resourceID = title;
     r.ruleName = ruleName;
     r.id = id;
+    r.ruleId = "rule-" + id;
     return r;
 }
 

@@ -18,7 +18,7 @@ bool Contains(const std::string& haystack, const std::string& needle)
 }
 
 const char* kResult = R"({"action":"Audit","timestamp":"2026-01-01T00:00:00Z","durationMs":5,"status":"NonCompliant",)"
-                      R"("rules":[{"id":"1.1","ruleName":"RuleA","title":"Title A","status":"NonCompliant",)"
+                      R"("rules":[{"id":"1.1","ruleId":"stable-rule-a","ruleName":"RuleA","title":"Title A","status":"NonCompliant",)"
                       R"("parameters":{"mask":"0600"},)"
                       R"("indicators":[{"procedure":"P","status":"NonCompliant",)"
                       R"("indicators":[{"message":"bad thing","status":"NonCompliant"}]}]}]})";
@@ -58,7 +58,7 @@ TEST(TextRenderersTest, DebugRendersIdentityTitleParametersAndIndicators)
 {
     auto r = RenderText(kResult, TextStyle::Debug);
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
-    EXPECT_TRUE(Contains(r.Value(), "1.1 RuleA [NonCompliant]"));
+    EXPECT_TRUE(Contains(r.Value(), "1.1 RuleA (ruleId=stable-rule-a) [NonCompliant]"));
     EXPECT_TRUE(Contains(r.Value(), "    title: Title A"));
     EXPECT_TRUE(Contains(r.Value(), "    parameters: mask=0600"));
     EXPECT_TRUE(Contains(r.Value(), "    - P [NonCompliant]"));

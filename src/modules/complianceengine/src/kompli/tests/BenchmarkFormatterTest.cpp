@@ -34,6 +34,7 @@ Resource MakeResource(const std::string& id, const std::string& resourceID, cons
     r.resourceID = resourceID;
     r.ruleName = ruleName;
     r.id = id;
+    r.ruleId = "rule-" + id;
     return r;
 }
 
@@ -191,7 +192,7 @@ TEST(BenchmarkFormatterTest, HostBlockIsPopulatedFromDistributionInfo)
     EXPECT_STREQ(json_object_get_string(host, "distributionVersion"), "22.04");
 }
 
-TEST(BenchmarkFormatterTest, AddEntryEmitsTitleIdRuleNameStatus)
+TEST(BenchmarkFormatterTest, AddEntryEmitsTitleIdRuleIdRuleNameStatus)
 {
     auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
     ASSERT_TRUE(formatterResult.HasValue());
@@ -211,14 +212,13 @@ TEST(BenchmarkFormatterTest, AddEntryEmitsTitleIdRuleNameStatus)
 
     EXPECT_STREQ(json_object_get_string(rule, "title"), "1.1.1 Ensure something");
     EXPECT_STREQ(json_object_get_string(rule, "id"), "1.1.1");
+    EXPECT_STREQ(json_object_get_string(rule, "ruleId"), "rule-1.1.1");
     EXPECT_STREQ(json_object_get_string(rule, "ruleName"), "EnsureSomething");
     EXPECT_STREQ(json_object_get_string(rule, "status"), "Compliant");
     EXPECT_EQ(json_value_get_type(json_object_get_value(rule, "indicators")), JSONArray);
     EXPECT_EQ(json_value_get_type(json_object_get_value(rule, "parameters")), JSONObject);
     // The legacy alias must be gone.
     EXPECT_EQ(json_object_has_value(rule, "resourceID"), 0) << "resourceID must be renamed to title";
-    // ruleId is MOF-only now - kompli's own result no longer carries it.
-    EXPECT_EQ(json_object_has_value(rule, "ruleId"), 0) << "ruleId must not be in kompli's own result";
 }
 
 TEST(BenchmarkFormatterTest, AddEntryEmitsTagsAndMetadata)

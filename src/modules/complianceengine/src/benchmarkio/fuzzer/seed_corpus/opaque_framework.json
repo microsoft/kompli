@@ -12,6 +12,7 @@
         "ruleName": "ExampleRule",
         "title": "rule-1 Example rule",
         "id": "rule-1",
+        "ruleId": "opaque-framework-rule-1",
         "tags": [],
         "metadata": {
           "description": "d",
