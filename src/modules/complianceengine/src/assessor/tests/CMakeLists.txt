@@ -5,7 +5,7 @@ include(GoogleTest)
 find_package(GTest CONFIG REQUIRED)
 
 add_executable(compliance-engine-assessor-tests
-    AssessorResultSchemaTest.cpp
+    KompliResultSchemaTest.cpp
     BenchmarkDefinitionTest.cpp
     BenchmarkFormatterTest.cpp
     CliOptionsTest.cpp
@@ -20,7 +20,7 @@ target_include_directories(compliance-engine-assessor-tests PRIVATE
 
 # The schema conformance test reads the shipped schema from the source tree.
 target_compile_definitions(compliance-engine-assessor-tests PRIVATE
-    ASSESSOR_RESULT_SCHEMA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../assessor-result.schema.json"
+    KOMPLI_RESULT_SCHEMA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../kompli-result.schema.json"
 )
 
 target_link_libraries(compliance-engine-assessor-tests

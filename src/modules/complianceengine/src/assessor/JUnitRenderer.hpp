@@ -11,18 +11,17 @@ namespace ComplianceEngine
 {
 namespace Assessor
 {
-// Renders a canonical assessor result JSON (as emitted by `audit` / `remediate`)
+// Renders a canonical kompli result JSON (as emitted by `audit` / `remediate`)
 // into a JUnit XML document.
 //
-// - one <testcase classname=<section> name=<ruleName>> per rule,
+// - one <testcase classname=<id> name=<ruleName>> per rule,
 // - a <failure> only for NonCompliant rules (Compliant rules are bare
 //   passing <testcase/>),
 // - the failure body carries the rule's Parameters and Indicators, modelled on
 //   the augmentation engine's tests/reporting/junit.py.
 //
-// `section` is used verbatim as the classname; it is framework-agnostic (a
-// dotted CIS number or a STIG id), so the renderer makes no CIS-specific
-// assumptions. `suiteName` names the <testsuite>; the assessor does not know
+// `id` is used verbatim as the classname and is framework-agnostic.
+// `suiteName` names the <testsuite>; the assessor does not know
 // which benchmark package it came from, so the caller supplies it.
 Result<std::string> RenderJUnit(const std::string& canonicalJson, const std::string& suiteName);
 

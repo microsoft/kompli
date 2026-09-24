@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Compliance Engine Assessor Result",
-  "description": "Canonical result JSON emitted by `compliance-engine-assessor audit` / `remediate`. This is the Phase 1 shape; per-rule `tags` and inline `metadata` are added when the unified benchmark-definition input lands (Phase 3), which is why additional properties are permitted at the top level and per rule.",
+  "title": "kompli Result",
+  "description": "Canonical result JSON emitted by `kompli audit` / `remediate`. Additional properties are permitted at the top level and per rule for forward-compatible metadata.",
   "type": "object",
   "additionalProperties": true,
   "required": [
@@ -66,8 +66,8 @@
       "required": [
         "indicators",
         "title",
+        "id",
         "ruleId",
-        "section",
         "ruleName",
         "status",
         "parameters"
@@ -81,13 +81,15 @@
           "type": "string",
           "description": "Human-readable rule title (the ResourceID; reuses the definition's field name)."
         },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The rule's externally-quoted, framework-defined identifier, opaque and unique within its benchmark definition."
+        },
         "ruleId": {
           "type": "string",
-          "description": "Stable, benchmark-agnostic rule identifier (UUID derived from the payload key)."
-        },
-        "section": {
-          "type": "string",
-          "description": "Externally-quoted per-rule identifier (dotted CIS number or STIG id)."
+          "minLength": 1,
+          "description": "Stable, benchmark-agnostic rule identifier preserved from the benchmark definition for external correlation."
         },
         "ruleName": {
           "type": "string",

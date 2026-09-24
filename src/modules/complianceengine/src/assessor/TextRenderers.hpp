@@ -17,7 +17,7 @@ enum class TextStyle
 {
     // Per-rule header line plus an indented indicator tree.
     NestedList,
-    // One line per rule: status + section + name (no indicators).
+    // One line per rule: status + id + name (no indicators).
     CompactList,
     // Verbose: identity, title, parameters, and the full indicator tree.
     Debug

@@ -4,44 +4,26 @@
 #include <BenchmarkInfo.h>
 #include <Optional.h>
 #include <Result.h>
-#include <RevertMap.h>
 #include <cstring>
 #include <fnmatch.h>
 #include <fstream>
 #include <iterator>
-#include <map>
 #include <sstream>
 #include <string>
 
 namespace ComplianceEngine
 {
-using std::map;
 using std::string;
-
-static const map<string, BenchmarkType> sBenchmarkTypeMap = {
-    {"cis", BenchmarkType::CIS}, {"stig", BenchmarkType::STIG},
-    // Add more benchmark types as needed
-};
 
 namespace
 {
-Result<BenchmarkType> ParseBenchmarkType(const string& benchmarkType)
+Optional<Error> ValidateGlobbing(const string& distributionVersion)
 {
-    auto it = sBenchmarkTypeMap.find(benchmarkType);
-    if (it != sBenchmarkTypeMap.end())
-    {
-        return it->second;
-    }
-    return Error("Unsupported benchmark type: '" + benchmarkType + "'", EINVAL);
-}
-
-Optional<Error> ValidateGlobbing(const string& benchmarkVersion)
-{
-    for (auto c : benchmarkVersion)
+    for (auto c : distributionVersion)
     {
         if (strchr("[]{}", c) != nullptr)
         {
-            return Error("Invalid benchmark version: " + benchmarkVersion + ". Globbing characters [ ] { } are not allowed.", EINVAL);
+            return Error("Invalid benchmark version: " + distributionVersion + ". Globbing characters [ ] { } are not allowed.", EINVAL);
         }
     }
 
@@ -49,9 +31,9 @@ Optional<Error> ValidateGlobbing(const string& benchmarkVersion)
 }
 } // namespace
 
-Result<CISBenchmarkInfo> CISBenchmarkInfo::Parse(const string& payloadKey)
+Result<BenchmarkInfo> BenchmarkInfo::Parse(const string& payloadKey)
 {
-    CISBenchmarkInfo result;
+    BenchmarkInfo result;
     string token;
     std::stringstream ss(payloadKey);
     // skip the first token which is expected to be empty due to leading '/'
@@ -60,20 +42,14 @@ Result<CISBenchmarkInfo> CISBenchmarkInfo::Parse(const string& payloadKey)
         return Error("Invalid payload key format: must start with '/'", EINVAL);
     }
 
-    // Get the benchmark type
-    if (!std::getline(ss, token, '/'))
+    if (!std::getline(ss, result.framework, '/') || result.framework.empty())
     {
-        return Error("Invalid payload key format: missing benchmark type", EINVAL);
-    }
-    const auto benchmarkType = ParseBenchmarkType(token);
-    if (!benchmarkType.HasValue())
-    {
-        return benchmarkType.Error();
+        return Error("Invalid payload key format: missing benchmark framework", EINVAL);
     }
 
     if (!std::getline(ss, token, '/'))
     {
-        return Error("Invalid CIS benchmark payload key format: missing distribution", EINVAL);
+        return Error("Invalid benchmark payload key format: missing distribution", EINVAL);
     }
     const auto distribution = DistributionInfo::ParseLinuxDistribution(token);
     if (!distribution.HasValue())
@@ -84,7 +60,7 @@ Result<CISBenchmarkInfo> CISBenchmarkInfo::Parse(const string& payloadKey)
 
     if (!std::getline(ss, result.version, '/') || result.version.empty())
     {
-        return Error("Invalid CIS benchmark payload key format: missing distribution version", EINVAL);
+        return Error("Invalid benchmark payload key format: missing distribution version", EINVAL);
     }
     auto error = ValidateGlobbing(result.version);
     if (error.HasValue())
@@ -94,17 +70,53 @@ Result<CISBenchmarkInfo> CISBenchmarkInfo::Parse(const string& payloadKey)
 
     if (!std::getline(ss, result.benchmarkVersion, '/') || result.benchmarkVersion.empty())
     {
-        return Error("Invalid CIS benchmark payload key format: missing benchmark version", EINVAL);
+        return Error("Invalid benchmark payload key format: missing benchmark version", EINVAL);
     }
 
     if (!std::getline(ss, result.section) || result.section.empty())
     {
-        return Error("Invalid CIS benchmark payload key format: missing benchmark section", EINVAL);
+        return Error("Invalid benchmark payload key format: missing benchmark section", EINVAL);
     }
     return result;
 }
 
-bool CISBenchmarkInfo::Match(const DistributionInfo& distributionInfo) const
+Result<BenchmarkInfo> BenchmarkInfo::FromMetadata(
+    const string& framework, const string& distribution, const string& distributionVersion, const string& benchmarkVersion)
+{
+    BenchmarkInfo result;
+    if (framework.empty())
+    {
+        return Error("Benchmark framework must not be empty", EINVAL);
+    }
+    result.framework = framework;
+
+    const auto distributionResult = DistributionInfo::ParseLinuxDistribution(distribution);
+    if (!distributionResult.HasValue())
+    {
+        return distributionResult.Error();
+    }
+    result.distribution = distributionResult.Value();
+
+    if (distributionVersion.empty())
+    {
+        return Error("Benchmark distribution version must not be empty", EINVAL);
+    }
+    auto error = ValidateGlobbing(distributionVersion);
+    if (error.HasValue())
+    {
+        return error.Value();
+    }
+    result.version = distributionVersion;
+
+    if (benchmarkVersion.empty())
+    {
+        return Error("Benchmark version must not be empty", EINVAL);
+    }
+    result.benchmarkVersion = benchmarkVersion;
+    return result;
+}
+
+bool BenchmarkInfo::Match(const DistributionInfo& distributionInfo) const
 {
     if (distributionInfo.distribution != distribution)
     {
@@ -123,23 +135,10 @@ bool CISBenchmarkInfo::Match(const DistributionInfo& distributionInfo) const
 
 namespace std
 {
-using ComplianceEngine::RevertMap;
-
-string to_string(ComplianceEngine::BenchmarkType benchmarkType)
-{
-    static const auto benchmarkTypeMap = RevertMap(ComplianceEngine::sBenchmarkTypeMap);
-    auto it = benchmarkTypeMap.find(benchmarkType);
-    if (it != benchmarkTypeMap.end())
-    {
-        return it->second;
-    }
-    throw invalid_argument("Unsupported benchmark type");
-}
-
-string to_string(const ComplianceEngine::CISBenchmarkInfo& benchmarkInfo)
+string to_string(const ComplianceEngine::BenchmarkInfo& benchmarkInfo)
 {
     ostringstream oss;
-    oss << "/" << to_string(ComplianceEngine::BenchmarkType::CIS) << "/" << to_string(benchmarkInfo.distribution) << "/" << benchmarkInfo.version << "/"
+    oss << "/" << benchmarkInfo.framework << "/" << to_string(benchmarkInfo.distribution) << "/" << benchmarkInfo.version << "/"
         << benchmarkInfo.benchmarkVersion << "/" << benchmarkInfo.section;
     return oss.str();
 }

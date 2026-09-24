@@ -26,7 +26,7 @@ TEST(JUnitRendererTest, EmptyRulesProduceEmptySuite)
 
 TEST(JUnitRendererTest, CompliantRuleIsBarePassingTestcase)
 {
-    const std::string json = R"({"rules":[{"section":"1.1","ruleName":"RuleA","status":"Compliant","indicators":[]}]})";
+    const std::string json = R"({"rules":[{"id":"1.1","ruleName":"RuleA","status":"Compliant","indicators":[]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
     EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"1.1\" name=\"RuleA\"/>"));
@@ -36,7 +36,7 @@ TEST(JUnitRendererTest, CompliantRuleIsBarePassingTestcase)
 
 TEST(JUnitRendererTest, NonCompliantRuleHasFailureWithIndicatorBody)
 {
-    const std::string json = R"({"rules":[{"section":"2.3","ruleName":"RuleB","status":"NonCompliant",)"
+    const std::string json = R"({"rules":[{"id":"2.3","ruleName":"RuleB","status":"NonCompliant",)"
                              R"("indicators":[{"procedure":"AuditFailure","status":"NonCompliant",)"
                              R"("indicators":[{"message":"bad thing","status":"NonCompliant"}]}]}]})";
     auto r = RenderJUnit(json, "s");
@@ -51,7 +51,7 @@ TEST(JUnitRendererTest, NonCompliantRuleHasFailureWithIndicatorBody)
 
 TEST(JUnitRendererTest, NestedIndicatorsAreIndentedByDepth)
 {
-    const std::string json = R"({"rules":[{"section":"1","ruleName":"R","status":"NonCompliant",)"
+    const std::string json = R"({"rules":[{"id":"1","ruleName":"R","status":"NonCompliant",)"
                              R"("indicators":[{"message":"top","status":"Compliant",)"
                              R"("indicators":[{"message":"child","status":"Compliant"}]}]}]})";
     auto r = RenderJUnit(json, "s");
@@ -63,7 +63,7 @@ TEST(JUnitRendererTest, NestedIndicatorsAreIndentedByDepth)
 
 TEST(JUnitRendererTest, ParametersAreRenderedWhenPresent)
 {
-    const std::string json = R"({"rules":[{"section":"1","ruleName":"R","status":"NonCompliant",)"
+    const std::string json = R"({"rules":[{"id":"1","ruleName":"R","status":"NonCompliant",)"
                              R"("parameters":{"mask":"0600","owner":"root"},"indicators":[]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
@@ -74,7 +74,7 @@ TEST(JUnitRendererTest, ParametersAreRenderedWhenPresent)
 
 TEST(JUnitRendererTest, XmlSpecialCharsAreEscapedInAttributesAndBody)
 {
-    const std::string json = R"({"rules":[{"section":"1&1","ruleName":"A & B <c> \"d\"","status":"NonCompliant",)"
+    const std::string json = R"({"rules":[{"id":"1&1","ruleName":"A & B <c> \"d\"","status":"NonCompliant",)"
                              R"("indicators":[{"message":"m<&>\"'","status":"NonCompliant"}]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
@@ -96,9 +96,9 @@ TEST(JUnitRendererTest, SuiteNameIsEscaped)
 TEST(JUnitRendererTest, MixedRulesCountFailuresCorrectly)
 {
     const std::string json = R"({"rules":[)"
-                             R"({"section":"1","ruleName":"A","status":"Compliant","indicators":[]},)"
-                             R"({"section":"2","ruleName":"B","status":"NonCompliant","indicators":[]},)"
-                             R"({"section":"3","ruleName":"C","status":"NonCompliant","indicators":[]}]})";
+                             R"({"id":"1","ruleName":"A","status":"Compliant","indicators":[]},)"
+                             R"({"id":"2","ruleName":"B","status":"NonCompliant","indicators":[]},)"
+                             R"({"id":"3","ruleName":"C","status":"NonCompliant","indicators":[]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
     EXPECT_TRUE(Contains(r.Value(), "tests=\"3\" failures=\"2\""));
@@ -106,7 +106,7 @@ TEST(JUnitRendererTest, MixedRulesCountFailuresCorrectly)
 
 TEST(JUnitRendererTest, NotApplicableRuleIsSkipped)
 {
-    const std::string json = R"({"rules":[{"section":"4.1","ruleName":"R","status":"NotApplicable",)"
+    const std::string json = R"({"rules":[{"id":"4.1","ruleName":"R","status":"NotApplicable",)"
                              R"("indicators":[{"message":"n/a on this distro","status":"NotApplicable"}]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
@@ -134,7 +134,7 @@ TEST(JUnitRendererTest, NonObjectRootIsError)
 TEST(JUnitRendererTest, UnknownRuleStatusIsError)
 {
     // An unrecognised status must be rejected, not silently rendered as a pass.
-    const std::string json = R"({"rules":[{"section":"1","ruleName":"R","status":"Bogus","indicators":[]}]})";
+    const std::string json = R"({"rules":[{"id":"1","ruleName":"R","status":"Bogus","indicators":[]}]})";
     auto r = RenderJUnit(json, "s");
     EXPECT_FALSE(r.HasValue());
 }
@@ -142,7 +142,7 @@ TEST(JUnitRendererTest, UnknownRuleStatusIsError)
 TEST(JUnitRendererTest, MissingRuleStatusIsError)
 {
     // A missing status field must be rejected rather than treated as a pass.
-    const std::string json = R"({"rules":[{"section":"1","ruleName":"R","indicators":[]}]})";
+    const std::string json = R"({"rules":[{"id":"1","ruleName":"R","indicators":[]}]})";
     auto r = RenderJUnit(json, "s");
     EXPECT_FALSE(r.HasValue());
 }
@@ -151,7 +151,7 @@ TEST(JUnitRendererTest, ControlCharactersAreNeutralised)
 {
     // A control character (U+0001) in a message must not corrupt the XML; it is
     // replaced with a space.
-    const std::string json = R"({"rules":[{"section":"1","ruleName":"R","status":"NonCompliant",)"
+    const std::string json = R"({"rules":[{"id":"1","ruleName":"R","status":"NonCompliant",)"
                              R"("indicators":[{"message":"a\u0001b","status":"NonCompliant"}]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
@@ -160,7 +160,7 @@ TEST(JUnitRendererTest, ControlCharactersAreNeutralised)
 
 TEST(JUnitRendererTest, NonStringParameterIsSerialised)
 {
-    const std::string json = R"({"rules":[{"section":"1","ruleName":"R","status":"NonCompliant",)"
+    const std::string json = R"({"rules":[{"id":"1","ruleName":"R","status":"NonCompliant",)"
                              R"("parameters":{"count":5,"enabled":true},"indicators":[]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
@@ -171,7 +171,7 @@ TEST(JUnitRendererTest, NonStringParameterIsSerialised)
 TEST(JUnitRendererTest, NonObjectIndicatorEntriesAreSkipped)
 {
     // A malformed (non-object) indicator entry is skipped without crashing.
-    const std::string json = R"({"rules":[{"section":"1","ruleName":"R","status":"NonCompliant",)"
+    const std::string json = R"({"rules":[{"id":"1","ruleName":"R","status":"NonCompliant",)"
                              R"("indicators":["junk",{"message":"real","status":"Compliant"}]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;

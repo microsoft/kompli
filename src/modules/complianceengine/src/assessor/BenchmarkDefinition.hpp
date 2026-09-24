@@ -6,6 +6,7 @@
 
 #include "Resource.hpp"
 
+#include <BenchmarkInfo.h>
 #include <Logging.h>
 #include <Result.h>
 #include <istream>
@@ -22,37 +23,28 @@ namespace BenchmarkDefinition
 // (apiVersion / kind / metadata / spec) whose spec.rules array carries one
 // inline rule payload per rule. It is the assessor's input format.
 //
-// Each definition rule maps onto a parsed Assessor::Resource:
-//   resourceID   <- rule.title
-//   ruleId       <- rule.ruleId
-//   ruleName     <- rule.ruleName
-//   benchmarkInfo<- CISBenchmarkInfo::Parse(rule.payloadKey) (section '/'->'.'),
-//                   cross-checked against the rule's explicit `section` field
-//   procedure    <- rule.payload serialized as compact JSON (the ComplianceEngine
-//                   parses plain JSON directly; see Engine::SetProcedure)
-//   hasInitAudit <- true (every rule carries an init object)
-//   payload      <- absent (definitions carry no desired object value)
 using Assessor::Resource;
 
-// Parses a benchmark-definition JSON document into the assessor's rule
-// resources. Strict about structure: it requires the resource envelope
-// (apiVersion / kind == "BenchmarkDefinition" / metadata / spec.rules) and the
-// fixed per-rule field set (section, ruleId, ruleName, title, payloadKey,
-// payload), rejects a rule whose `section` disagrees with the section encoded
-// in its payloadKey, and rejects malformed input. Consistent with the
-// definition schema (additionalProperties: true), unknown fields are ignored
-// rather than rejected.
-Result<std::vector<Resource>> ParseString(const std::string& json, OsConfigLogHandle logHandle);
+struct BenchmarkDocument
+{
+    std::string name;
+    BenchmarkInfo benchmarkInfo;
+    std::vector<Resource> resources;
+};
+
+// Parses the resource envelope, hoisted benchmark identity, and sole-id rules.
+// Unknown fields are ignored consistently with the definition schema.
+Result<BenchmarkDocument> ParseString(const std::string& json, OsConfigLogHandle logHandle);
 
 // Reads the whole document from a stream (stdin / tests), bounding the total
 // input size, then parses it.
-Result<std::vector<Resource>> ParseStream(std::istream& stream, OsConfigLogHandle logHandle);
+Result<BenchmarkDocument> ParseStream(std::istream& stream, OsConfigLogHandle logHandle);
 
 // Opens a regular file on disk with the full input-hardening posture
 // (path-traversal rejection, root-owned non-writable parent directory,
 // O_NOFOLLOW open, regular-file/ownership/mode checks) before the first byte is
 // read, then parses it.
-Result<std::vector<Resource>> ParseFile(const std::string& path, OsConfigLogHandle logHandle);
+Result<BenchmarkDocument> ParseFile(const std::string& path, OsConfigLogHandle logHandle);
 
 } // namespace BenchmarkDefinition
 } // namespace ComplianceEngine

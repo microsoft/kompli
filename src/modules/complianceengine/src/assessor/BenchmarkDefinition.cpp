@@ -7,11 +7,11 @@
 
 #include <BenchmarkInfo.h>
 #include <JsonWrapper.h>
-#include <algorithm>
 #include <cerrno>
 #include <ext/stdio_filebuf.h>
 #include <memory>
 #include <parson.h>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -100,6 +100,11 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
     {
         return title.Error();
     }
+    auto id = RequiredString(ruleObject, "id", context);
+    if (!id.HasValue())
+    {
+        return id.Error();
+    }
     auto ruleId = RequiredString(ruleObject, "ruleId", context);
     if (!ruleId.HasValue())
     {
@@ -110,45 +115,16 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
     {
         return ruleName.Error();
     }
-    auto payloadKey = RequiredString(ruleObject, "payloadKey", context);
-    if (!payloadKey.HasValue())
-    {
-        return payloadKey.Error();
-    }
-    auto section = RequiredString(ruleObject, "section", context);
-    if (!section.HasValue())
-    {
-        return section.Error();
-    }
     auto procedure = SerializeProcedure(ruleObject, context);
     if (!procedure.HasValue())
     {
         return procedure.Error();
     }
 
-    auto benchmarkInfo = CISBenchmarkInfo::Parse(payloadKey.Value());
-    if (!benchmarkInfo.HasValue())
-    {
-        return Error("Failed to parse payloadKey of benchmark definition " + context + ": " + benchmarkInfo.Error().message, benchmarkInfo.Error().code);
-    }
-
     Resource resource;
     resource.resourceID = std::move(title.Value());
+    resource.id = std::move(id.Value());
     resource.ruleId = std::move(ruleId.Value());
-    resource.benchmarkInfo = std::move(benchmarkInfo.Value());
-    // The section in the payload key is '/'-separated (e.g. "1/1/1/1"); the rest
-    // of the assessor expects dotted notation (e.g. "1.1.1.1").
-    std::replace(resource.benchmarkInfo.section.begin(), resource.benchmarkInfo.section.end(), '/', '.');
-    // The rule's explicit `section` must agree with the section encoded in the
-    // payload key (the generator derives one from the other); a mismatch is a
-    // corrupt or hand-edited definition and is rejected rather than silently
-    // resolved to the payload-key value.
-    if (section.Value() != resource.benchmarkInfo.section)
-    {
-        return Error("Benchmark definition " + context + " has a 'section' ('" + section.Value() + "') that disagrees with its payloadKey section ('" +
-                         resource.benchmarkInfo.section + "')",
-            EINVAL);
-    }
     resource.procedure = std::move(procedure.Value());
     resource.ruleName = std::move(ruleName.Value());
     // Every rule carries an init object.
@@ -160,7 +136,7 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
 }
 } // anonymous namespace
 
-Result<std::vector<Resource>> ParseString(const string& json, OsConfigLogHandle logHandle)
+Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logHandle)
 {
     // Fail closed on an embedded NUL. The underlying JSON parser is NUL-terminated
     // (parses via c_str()), so a NUL would silently truncate the document and hide
@@ -194,9 +170,51 @@ Result<std::vector<Resource>> ParseString(const string& json, OsConfigLogHandle 
         return apiVersion.Error();
     }
 
-    if (nullptr == json_object_get_object(root, "metadata"))
+    auto* metadata = json_object_get_object(root, "metadata");
+    if (nullptr == metadata)
     {
         return Error("Benchmark definition is missing the 'metadata' object", EINVAL);
+    }
+    auto name = RequiredString(metadata, "name", "metadata");
+    if (!name.HasValue())
+    {
+        return name.Error();
+    }
+
+    auto* labels = json_object_get_object(metadata, "labels");
+    if (nullptr == labels)
+    {
+        return Error("Benchmark definition is missing the 'metadata.labels' object", EINVAL);
+    }
+    auto framework = RequiredString(labels, "framework", "metadata.labels");
+    if (!framework.HasValue())
+    {
+        return framework.Error();
+    }
+    auto distribution = RequiredString(labels, "distribution", "metadata.labels");
+    if (!distribution.HasValue())
+    {
+        return distribution.Error();
+    }
+    auto distributionVersion = RequiredString(labels, "distributionVersion", "metadata.labels");
+    if (!distributionVersion.HasValue())
+    {
+        return distributionVersion.Error();
+    }
+    auto* annotations = json_object_get_object(metadata, "annotations");
+    if (nullptr == annotations)
+    {
+        return Error("Benchmark definition is missing the 'metadata.annotations' object", EINVAL);
+    }
+    auto benchmarkVersion = RequiredString(annotations, "benchmarkVersion", "metadata.annotations");
+    if (!benchmarkVersion.HasValue())
+    {
+        return benchmarkVersion.Error();
+    }
+    auto benchmarkInfo = BenchmarkInfo::FromMetadata(framework.Value(), distribution.Value(), distributionVersion.Value(), benchmarkVersion.Value());
+    if (!benchmarkInfo.HasValue())
+    {
+        return Error("Benchmark definition has invalid file-level identity: " + benchmarkInfo.Error().message, benchmarkInfo.Error().code);
     }
 
     auto* spec = json_object_get_object(root, "spec");
@@ -217,8 +235,11 @@ Result<std::vector<Resource>> ParseString(const string& json, OsConfigLogHandle 
         return Error("Benchmark definition has more than the maximum of " + std::to_string(kMaxRules) + " rules", E2BIG);
     }
 
-    std::vector<Resource> resources;
-    resources.reserve(ruleCount);
+    BenchmarkDocument result;
+    result.name = std::move(name.Value());
+    result.benchmarkInfo = std::move(benchmarkInfo.Value());
+    result.resources.reserve(ruleCount);
+    std::set<string> seenIds;
     for (size_t i = 0; i < ruleCount; ++i)
     {
         const JSON_Object* ruleObject = json_array_get_object(rules, i);
@@ -233,13 +254,17 @@ Result<std::vector<Resource>> ParseString(const string& json, OsConfigLogHandle 
             OsConfigLogError(logHandle, "Failed to parse benchmark definition rule #%zu: %s", i, resource.Error().message.c_str());
             return resource.Error();
         }
-        resources.push_back(std::move(resource.Value()));
+        if (!seenIds.insert(resource.Value().id).second)
+        {
+            return Error("Benchmark definition has duplicate rule id '" + resource.Value().id + "'", EINVAL);
+        }
+        result.resources.push_back(std::move(resource.Value()));
     }
 
-    return resources;
+    return result;
 }
 
-Result<std::vector<Resource>> ParseStream(std::istream& stream, OsConfigLogHandle logHandle)
+Result<BenchmarkDocument> ParseStream(std::istream& stream, OsConfigLogHandle logHandle)
 {
     auto content = ReadAllBounded(stream);
     if (!content.HasValue())
@@ -249,7 +274,7 @@ Result<std::vector<Resource>> ParseStream(std::istream& stream, OsConfigLogHandl
     return ParseString(content.Value(), logHandle);
 }
 
-Result<std::vector<Resource>> ParseFile(const string& path, OsConfigLogHandle logHandle)
+Result<BenchmarkDocument> ParseFile(const string& path, OsConfigLogHandle logHandle)
 {
     // Apply the full input-hardening posture before reading: reject path
     // traversal, require a root-owned non-writable parent directory, and open

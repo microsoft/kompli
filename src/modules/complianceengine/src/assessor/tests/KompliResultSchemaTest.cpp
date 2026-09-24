@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 //
 // Conformance checks tying the emitted canonical result to the shipped
-// assessor-result.schema.json. There is no JSON-Schema validator wired into the
+// kompli-result.schema.json. There is no JSON-Schema validator wired into the
 // build yet (the `validate` subcommand that performs full validation lands in a
 // later phase), so this test drives the check from the schema's own `required`
 // lists: it reads the shipped schema and asserts a generated result carries
@@ -20,8 +20,8 @@
 #include <sstream>
 #include <string>
 
-#ifndef ASSESSOR_RESULT_SCHEMA_PATH
-#error "ASSESSOR_RESULT_SCHEMA_PATH must be defined by the build."
+#ifndef KOMPLI_RESULT_SCHEMA_PATH
+#error "KOMPLI_RESULT_SCHEMA_PATH must be defined by the build."
 #endif
 
 using ComplianceEngine::Action;
@@ -41,16 +41,13 @@ std::string ReadFile(const std::string& path)
     return ss.str();
 }
 
-Resource MakeResource(const std::string& section, const std::string& title, const std::string& ruleId, const std::string& ruleName)
+Resource MakeResource(const std::string& id, const std::string& title, const std::string& ruleName)
 {
     Resource r;
     r.resourceID = title;
-    r.ruleId = ruleId;
+    r.id = id;
+    r.ruleId = "rule-" + id;
     r.ruleName = ruleName;
-    r.benchmarkInfo.distribution = LinuxDistribution::Ubuntu;
-    r.benchmarkInfo.version = "24.04";
-    r.benchmarkInfo.benchmarkVersion = "v1.0.0";
-    r.benchmarkInfo.section = section;
     return r;
 }
 
@@ -79,19 +76,19 @@ std::string GenerateResult()
     auto formatterResult = BenchmarkFormatter::Begin(distInfo, Action::Audit);
     EXPECT_TRUE(formatterResult.HasValue());
     auto& formatter = formatterResult.Value();
-    EXPECT_FALSE(formatter.AddEntry(MakeResource("1.1", "1.1 First", "id1", "First"), Status::Compliant, "[]", {}).HasValue());
+    EXPECT_FALSE(formatter.AddEntry(MakeResource("1.1", "1.1 First", "First"), Status::Compliant, "[]", {}).HasValue());
     const std::map<std::string, std::string> params{{"mask", "0600"}};
-    EXPECT_FALSE(formatter.AddEntry(MakeResource("1.2", "1.2 Second", "id2", "Second"), Status::NonCompliant, "[]", params).HasValue());
+    EXPECT_FALSE(formatter.AddEntry(MakeResource("1.2", "1.2 Second", "Second"), Status::NonCompliant, "[]", params).HasValue());
     auto result = std::move(formatter).Finish(Status::NonCompliant);
     EXPECT_TRUE(result.HasValue());
     return result.HasValue() ? result.Value() : std::string();
 }
 } // namespace
 
-TEST(AssessorResultSchemaTest, SchemaFileIsValidDraft202012)
+TEST(KompliResultSchemaTest, SchemaFileIsValidDraft202012)
 {
-    const std::string schemaText = ReadFile(ASSESSOR_RESULT_SCHEMA_PATH);
-    ASSERT_FALSE(schemaText.empty()) << "schema file not found at " << ASSESSOR_RESULT_SCHEMA_PATH;
+    const std::string schemaText = ReadFile(KOMPLI_RESULT_SCHEMA_PATH);
+    ASSERT_FALSE(schemaText.empty()) << "schema file not found at " << KOMPLI_RESULT_SCHEMA_PATH;
 
     JSON_Value* schema = json_parse_string(schemaText.c_str());
     ASSERT_NE(schema, nullptr) << "schema is not valid JSON";
@@ -107,9 +104,9 @@ TEST(AssessorResultSchemaTest, SchemaFileIsValidDraft202012)
     json_value_free(schema);
 }
 
-TEST(AssessorResultSchemaTest, GeneratedResultSatisfiesSchemaRequiredFields)
+TEST(KompliResultSchemaTest, GeneratedResultSatisfiesSchemaRequiredFields)
 {
-    JSON_Value* schema = json_parse_string(ReadFile(ASSESSOR_RESULT_SCHEMA_PATH).c_str());
+    JSON_Value* schema = json_parse_string(ReadFile(KOMPLI_RESULT_SCHEMA_PATH).c_str());
     ASSERT_NE(schema, nullptr);
     JSON_Object* schemaObject = json_value_get_object(schema);
     ASSERT_NE(schemaObject, nullptr);

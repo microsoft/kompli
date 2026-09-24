@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Unified benchmark-definition file",
-  "description": "One native definition file per benchmark, as a Kubernetes-style resource (apiVersion / kind / metadata / spec) consistent with the other compliancectl data files. Carries identity + inline rule payloads + generic metadata + flat axis:value tags. Produced by the Compliance Augmentation Engine and consumed by the compliance-engine-assessor as its input (replacing the MOF, which is retained only for Machine Configuration).",
+  "description": "One native definition file per benchmark, as a Kubernetes-style resource (apiVersion / kind / metadata / spec) consistent with the other compliancectl data files. Carries identity + inline rule payloads + generic metadata + flat axis:value tags. Produced by the Compliance Augmentation Engine and consumed by kompli as its input (replacing the MOF, which is retained only for Machine Configuration).",
   "type": "object",
   "additionalProperties": true,
   "required": [
@@ -24,7 +24,9 @@
       "type": "object",
       "additionalProperties": true,
       "required": [
-        "name"
+        "name",
+        "labels",
+        "annotations"
       ],
       "properties": {
         "name": {
@@ -33,14 +35,37 @@
         },
         "labels": {
           "type": "object",
-          "description": "Selectable identity axes (framework, os, distribution, distributionVersion, ...). Architecture-agnostic; the scanned host's arch is recorded in the assessor result, not here.",
+          "description": "Selectable identity axes hoisted once per benchmark.",
+          "required": ["framework", "distribution", "distributionVersion"],
+          "properties": {
+            "framework": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Required opaque benchmark framework identity. It does not select parsing or execution behavior."
+            },
+            "distribution": {
+              "type": "string",
+              "minLength": 1
+            },
+            "distributionVersion": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
           "additionalProperties": {
             "type": "string"
           }
         },
         "annotations": {
           "type": "object",
-          "description": "Non-selectable descriptive fields (e.g. displayName, benchmarkVersion).",
+          "description": "Non-selectable descriptive fields.",
+          "required": ["benchmarkVersion"],
+          "properties": {
+            "benchmarkVersion": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
           "additionalProperties": {
             "type": "string"
           }
@@ -69,14 +94,29 @@
       "type": "object",
       "additionalProperties": true,
       "required": [
-        "section",
-        "ruleId",
         "ruleName",
         "title",
-        "payloadKey",
+        "ruleId",
         "tags",
         "metadata",
         "payload"
+      ],
+      "oneOf": [
+        {
+          "required": ["section", "payloadKey"],
+          "not": {
+            "required": ["id"]
+          }
+        },
+        {
+          "required": ["id"],
+          "not": {
+            "anyOf": [
+              { "required": ["section"] },
+              { "required": ["payloadKey"] }
+            ]
+          }
+        }
       ],
       "properties": {
         "section": {
@@ -85,7 +125,8 @@
         },
         "ruleId": {
           "type": "string",
-          "description": "Stable, benchmark-agnostic rule identifier (UUID derived from the payload key)."
+          "minLength": 1,
+          "description": "Stable, benchmark-agnostic rule identifier retained unchanged for external correlation."
         },
         "ruleName": {
           "type": "string",
@@ -98,6 +139,11 @@
         "payloadKey": {
           "type": "string",
           "description": "The rule's payload key, e.g. '/cis/ubuntu/22.04/v2.0.0/1/1/1/1'."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The rule's externally-quoted, framework-defined identifier, opaque and unique within its benchmark definition."
         },
         "tags": {
           "type": "array",

@@ -71,13 +71,11 @@ in THREAT_MODEL.md.
 > they are not lost.
 
 ### 3. Schema is not a runtime control; `tags` / `metadata` are ignored
-`benchmark.schema.json` gates *generation*, not *execution*. The parser only
-requires `title` / `ruleId` / `ruleName` / `payloadKey` / `payload` and ignores
-the schema-required `section` / `tags` / `metadata`. Consequences:
+`benchmark.schema.json` gates *generation*, not *execution*. The parser
+requires the `id` + `ruleId` runtime fields and file-level identity but ignores the
+schema-required per-rule `tags` / `metadata`. Consequences:
 
 - A file that would fail schema validation can still be executed by the assessor.
-- The per-rule `section` field is unused (the section is derived from `payloadKey`).
-
 **Planned:** `tags` and `metadata` consumption is intended in a follow-up PR.
 When that lands, decide whether the parser should also enforce their presence
 (closing the parser/schema divergence) or continue to treat the schema purely as
@@ -99,7 +97,7 @@ from the definition file. `ValidateGlobbing` already rejects `[ ] { }`, but
 so the residual catastrophic-backtracking surface is minimal.
 
 Importantly, the assessor does **not** have its own copy of this logic: it calls
-the shared `CISBenchmarkInfo::Match` in `lib/BenchmarkInfo.cpp`, the same code
+the shared `BenchmarkInfo::Match` in `lib/BenchmarkInfo.cpp`, the same code
 used by the module interface's `ComplianceEngineCheckApplicability`. So there is
 nothing assessor-specific to change — any hardening belongs in the shared library
 so both consumers benefit.
