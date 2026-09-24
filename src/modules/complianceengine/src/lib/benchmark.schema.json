@@ -24,7 +24,9 @@
       "type": "object",
       "additionalProperties": true,
       "required": [
-        "name"
+        "name",
+        "labels",
+        "annotations"
       ],
       "properties": {
         "name": {
@@ -47,10 +49,12 @@
             },
             "distribution": {
               "type": "string",
+              "minLength": 1,
               "description": "Target Linux distribution, e.g. 'ubuntu'."
             },
             "distributionVersion": {
               "type": "string",
+              "minLength": 1,
               "description": "Target distribution version, glob-matched against the host's VERSION_ID (e.g. '22.04', '3.*')."
             }
           },
@@ -123,6 +127,7 @@
         },
         "id": {
           "type": "string",
+          "minLength": 1,
           "description": "The rule's sole externally-quoted identifier (opaque, framework-defined shape, e.g. '1.1.1.1'). The file-level framework/distribution/distributionVersion/benchmarkVersion prefix lives once in metadata.labels/annotations, not repeated here. Unique within a benchmark; not parsed or transformed by kompli. There is no separate ruleId field in this schema."
         },
         "tags": {

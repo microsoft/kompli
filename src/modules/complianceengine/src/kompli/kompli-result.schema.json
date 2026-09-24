@@ -78,6 +78,7 @@
         },
         "id": {
           "type": "string",
+          "minLength": 1,
           "description": "The rule's sole externally-quoted identifier (opaque, unique within the benchmark file it was evaluated from - e.g. '1.1.1.1'). No separate ruleId field in this schema."
         },
         "ruleName": {

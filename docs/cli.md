@@ -191,7 +191,7 @@ already supports multiple `benchmarks[]` entries (see above).
   share a `(framework, distribution, distributionVersion, benchmarkVersion)`
   tuple — `Main.cpp`'s `run` dispatch calls `CheckUniqueBenchmarkIdentities`
   (`Plan.cpp`/`Plan.hpp`) over every block's already-resolved
-  `CISBenchmarkInfo`, before evaluating any rule, whether the plan was
+  `BenchmarkInfo`, before evaluating any rule, whether the plan was
   hand-assembled or produced by the multi-file `plan`.
 - **Toggle-flag ambiguity across files.** `id` is only guaranteed
   unique *within* one file (the rule-identity caveat under `kompli list`
@@ -266,7 +266,7 @@ document covering the whole plan.
   resolution to the cross-distro-mixing question for multi-file plans.
 - **Duplicate benchmark identity across blocks: hard error.** Before
   evaluating any rule, `run` checks every block's already-resolved
-  `CISBenchmarkInfo` and refuses the plan if two blocks
+  `BenchmarkInfo` and refuses the plan if two blocks
   share the same `(framework, distribution, distributionVersion,
   benchmarkVersion)` tuple (`CheckUniqueBenchmarkIdentities` in `Plan.cpp`) —
   such a plan is ambiguous (the same benchmark staged twice, or two
