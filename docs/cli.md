@@ -30,6 +30,11 @@ field, see §2), `-o/--output`.
 `junit`), `--suite-name`. `list` takes no flags beyond the common ones -
 see §2.
 
+For `plan` and `render` only: repeatable
+`--tag=<axis:value>`, `--section=<glob>`, `--exclude-tag=<axis:value>`, and
+`--exclude-section=<glob>` rule filters. `run` and `list` reject them. See
+"Rule filtering" in §2.
+
 `plan`/`run`/`list` all require a file as a positional
 argument (the benchmark-definition file for `plan`/`list`, the plan file for
 `run`); a missing path or `-` is a hard error — stdin is deliberately
@@ -283,6 +288,45 @@ document covering the whole plan.
   `komplid` via `--passthrough` (daemon-awareness, §7) — the plan/run input
   model and the execution backend are meant to be orthogonal, so switching
   backend doesn't require a CLI rework.
+
+### Rule filtering
+
+`plan` and `render` share one rule-filter vocabulary:
+
+- `--tag=<axis:value>` keeps a rule carrying that exact tag;
+- `--section=<glob>` keeps a rule whose `id` matches the POSIX glob, for
+  example `--section='1.1.*'`;
+- `--exclude-tag=<axis:value>` removes a rule carrying that exact tag; and
+- `--exclude-section=<glob>` removes a rule whose `id` matches the POSIX glob.
+
+All four flags are repeatable. Positive tags are ORed with each other;
+section globs are ORed with each other; when both positive types are present a
+rule must satisfy both axes. Any matching excluded tag or section excludes the
+rule after positive matching. Tags are exact tokens, not globs. `section` is
+continuity terminology only: the old field no longer exists, so the glob
+matches `id`.
+OR within an axis expresses alternatives, while AND across axes means adding a
+different kind of selector narrows the result. For example,
+`--tag=level:l1 --section='1.1.*'` selects only L1 rules in section 1.1, not the
+union of all L1 rules and all rules in section 1.1.
+
+The option names use `exclude`, not `skip`: a skipped rule can remain present in
+a canonical result with `status: Skipped`, whereas these filters remove the rule
+from the generated plan or rendered projection.
+
+For a multi-file `plan`, the same filter set applies to every input definition.
+Exact mode toggles and parameter overrides retain their qualified
+`<file-basename>:<id>` form and must reference a rule that survives filtering.
+Filters are applied before plan rules are seeded. If explicit filters select no
+rules across all inputs, `plan` fails instead of emitting a no-op plan.
+
+For `render`, filtering is projection only: it neither changes nor re-executes
+the canonical result. If explicit filters select no rules, rendering fails
+rather than emitting a content-free report. JUnit counts describe the visible
+subset; run-wide status and duration remain facts of the source result.
+
+`run` deliberately has no filters. The plan's rule map is the complete
+execution selection.
 
 ### `kompli plan --interactive`
 
