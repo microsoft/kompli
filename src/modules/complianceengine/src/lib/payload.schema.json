@@ -156,6 +156,9 @@
           "$ref": "procedures/AideAttributes.schema.json#/definitions/audit"
         },
         {
+          "$ref": "procedures/AksCommand.schema.json#/definitions/audit"
+        },
+        {
           "$ref": "procedures/ApparmorProfileState.schema.json#/definitions/audit"
         },
         {
@@ -296,6 +299,9 @@
       "anyOf": [
         {
           "$ref": "procedures/AideAttributes.schema.json#/definitions/remediation"
+        },
+        {
+          "$ref": "procedures/AksCommand.schema.json#/definitions/remediation"
         },
         {
           "$ref": "procedures/ApparmorProfileState.schema.json#/definitions/remediation"

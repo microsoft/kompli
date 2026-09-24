@@ -42,7 +42,7 @@ const map<string, LinuxDistribution>& GetDistributionMap()
         {"ubuntu", LinuxDistribution::Ubuntu}, {"centos", LinuxDistribution::Centos}, {"rhel", LinuxDistribution::RHEL},
         {"sles", LinuxDistribution::SUSE}, {"ol", LinuxDistribution::OracleLinux}, {"mariner", LinuxDistribution::Mariner},
         {"debian", LinuxDistribution::Debian}, {"azurelinux", LinuxDistribution::AzureLinux}, {"amzn", LinuxDistribution::AmazonLinux},
-        {"almalinux", LinuxDistribution::AlmaLinux}, {"rocky", LinuxDistribution::RockyLinux},
+        {"almalinux", LinuxDistribution::AlmaLinux}, {"rocky", LinuxDistribution::RockyLinux}, {"aks", LinuxDistribution::AKS},
         // Add more distributions as needed
     };
     return sDistributionMap;

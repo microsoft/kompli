@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "audit": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "AksCommand"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "AksCommand": {
+              "type": "object",
+              "required": [
+                "operation",
+                "pattern"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "operation": {
+                  "type": "string"
+                },
+                "clusterName": {
+                  "type": "string"
+                },
+                "resourceGroup": {
+                  "type": "string"
+                },
+                "nodeName": {
+                  "type": "string"
+                },
+                "pattern": {
+                  "type": "string"
+                },
+                "matchMeansCompliant": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "remediation": {
+      "anyOf": []
+    }
+  }
+}
