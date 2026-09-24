@@ -1,12 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include <AssessorContext.h>
+#include <CliContext.h>
 #include <CommonContext.h>
 #include <Logging.h>
 #include <LuaEvaluator.h>
 #include <Optional.h>
-#include <Telemetry.h>
 #include <cassert>
 #include <fstream>
 #include <getopt.h>
@@ -17,7 +16,6 @@
 #include <version.h>
 
 using ComplianceEngine::Action;
-using ComplianceEngine::AssessorContext;
 using ComplianceEngine::Error;
 using ComplianceEngine::IndicatorsTree;
 using ComplianceEngine::LuaEvaluator;
@@ -26,6 +24,7 @@ using ComplianceEngine::Optional;
 using ComplianceEngine::PayloadFormatter;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
+using ComplianceEngine::Cli::Context;
 using std::ifstream;
 using std::istream;
 using std::string;
@@ -56,7 +55,7 @@ void PrintHelp(const std::string& programName)
     std::cout << "\t-V, --version\tShow software version and exit.\n";
     std::cout << "\t-v, --verbose\tRun in verbose mode.\n";
     std::cout << "\t-d, --debug\tRun in debug mode.\n";
-    std::cout << "\t-l, --log-file\tSpecify a log file. Default: print log entries to standard output.\n";
+    std::cout << "\t-l, --log-file\tSpecify a log file. Default: print log entries to standard error.\n";
     std::cout << "\n";
     std::cout << "Positional arguments:\n";
     std::cout << "\tfilename\tProcess the specified Lua source file. Optional: if skipped or the value is -, the program reads standard input\n";
@@ -139,7 +138,7 @@ int main(int argc, char* argv[])
 
     if (Command::Version == options.command)
     {
-        std::cout << "Compliance Engine Assessor\nVersion: " << KOMPLI_VERSION << "\n";
+        std::cout << "ComplianceEngine Lua Evaluator\nVersion: " << KOMPLI_VERSION << "\n";
         return 0;
     }
 
@@ -159,7 +158,7 @@ int main(int argc, char* argv[])
         OsConfigLogInfo(logHandle, "Debug logging enabled");
     }
 
-    auto context = std::unique_ptr<AssessorContext>(new AssessorContext(logHandle));
+    auto context = std::unique_ptr<Context>(new Context(logHandle));
     LuaEvaluator evaluator;
 
     ifstream file;
@@ -170,7 +169,6 @@ int main(int argc, char* argv[])
         if (!file.is_open())
         {
             OsConfigLogError(logHandle, "Failed to open input file: %s", options.input->c_str());
-            OSConfigTelemetryStatusTrace("fopen", errno);
             return 1;
         }
     }
@@ -184,7 +182,6 @@ int main(int argc, char* argv[])
     if (!result.HasValue())
     {
         OsConfigLogError(logHandle, "Failed to evaluate script: %s", result.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("Evaluate", result.Error().code);
         std::cerr << "Error: " << result.Error().message << std::endl;
         return 1;
     }
@@ -195,7 +192,6 @@ int main(int argc, char* argv[])
     if (!formattingResult.HasValue())
     {
         OsConfigLogError(logHandle, "Failed to format indicators: %s", formattingResult.Error().message.c_str());
-        OSConfigTelemetryStatusTrace("Format", formattingResult.Error().code);
         std::cerr << "Error: " << formattingResult.Error().message << std::endl;
         return 1;
     }

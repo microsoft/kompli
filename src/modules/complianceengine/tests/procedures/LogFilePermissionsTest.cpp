@@ -427,6 +427,23 @@ TEST_F(EnsureLogfileAccessTest, SpecialSystemLogFiles)
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(EnsureLogfileAccessTest, AptLogFilesMayBeWorldReadable)
+{
+    std::string aptDir = testDir + "/apt";
+    ASSERT_EQ(mkdir(aptDir.c_str(), 0755), 0);
+    CreateLogFile("apt/history.log", "root", "adm", 0644);
+    CreateLogFile("apt/eipp.log.xz", "root", "root", 0644);
+
+    mContext.SetSpecialFilePath("/var/log", testDir);
+
+    LogFilePermissionsParams params;
+    params.path = testDir;
+
+    auto result = AuditLogFilePermissions(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
 // A file matching no known pattern that is owned by a daemon/service account (one without a valid
 // login shell) only needs an acceptable permission mask; its owner/group are not constrained.
 TEST_F(EnsureLogfileAccessTest, AuditDaemonOwnedFileWithNonDefaultOwnershipIsCompliant)

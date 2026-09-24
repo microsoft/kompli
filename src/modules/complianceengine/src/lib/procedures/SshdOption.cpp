@@ -6,7 +6,6 @@
 #include <ProcedureMap.h> // Adds std::to_string() for enum classes
 #include <Regex.h>
 #include <SshdOption.h>
-#include <Telemetry.h>
 #include <fnmatch.h>
 #include <fts.h>
 #include <sstream>
@@ -51,7 +50,7 @@ Result<std::vector<std::string>> GetAllMatches(ContextInterface& context)
             std::string directive;
             lineStream >> directive;
 
-            std::transform(directive.begin(), directive.end(), directive.begin(), ::tolower);
+            directive = ToLower(directive);
 
             if (directive == "include")
             {
@@ -90,8 +89,8 @@ Result<std::vector<std::string>> GetAllMatches(ContextInterface& context)
             {
                 std::string type, value;
                 lineStream >> type >> value;
-                std::transform(type.begin(), type.end(), type.begin(), ::tolower);
-                std::transform(value.begin(), value.end(), value.begin(), ::tolower);
+                type = ToLower(type);
+                value = ToLower(value);
                 if ((type == "user") || (type == "group") || (type == "host") || (type == "port") || (type == "address") || (type == "localaddress"))
                 {
                     // The Match criteria value may be a comma-separated pattern list, e.g.
@@ -185,8 +184,8 @@ Result<std::map<std::string, std::string>> GetSshdOptions(ContextInterface& cont
             std::string optionValue;
             std::getline(lineStream, optionValue);
             optionValue.erase(0, optionValue.find_first_not_of(" \t"));
-            std::transform(currentOption.begin(), currentOption.end(), currentOption.begin(), ::tolower);
-            std::transform(optionValue.begin(), optionValue.end(), optionValue.begin(), ::tolower);
+            currentOption = ToLower(currentOption);
+            optionValue = ToLower(optionValue);
             options[currentOption] = optionValue;
         }
     }
@@ -376,7 +375,7 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
     }
     for (auto& option : options)
     {
-        std::transform(option.begin(), option.end(), option.begin(), ::tolower);
+        option = ToLower(option);
     }
 
     std::vector<regex> valueRegexes;
@@ -385,14 +384,12 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
     {
         try
         {
-            // Use case-insensitive matching because GetSshdOptions() lowercases all values from sshd -T output
-            // Use extended to ensure POSIX ERE mode (grouping, alternation) in the regex fallback
-            valueRegexes.push_back(regex(params.value, std::regex_constants::icase | std::regex_constants::extended));
+            // CIS patterns use ECMAScript escapes such as \b for word boundaries.
+            valueRegexes.push_back(regex(params.value, std::regex_constants::icase));
         }
         catch (const regex_error& e)
         {
             OsConfigLogError(log, "Regex error: %s", e.what());
-            OSConfigTelemetryStatusTrace("regex", EINVAL);
             return Error("Failed to compile regex error: " + std::string(e.what()), EINVAL);
         }
     }
@@ -404,12 +401,11 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
         {
             try
             {
-                valueRegexes.push_back(regex(valuePart, std::regex_constants::icase | std::regex_constants::extended));
+                valueRegexes.push_back(regex(valuePart, std::regex_constants::icase));
             }
             catch (const regex_error& e)
             {
                 OsConfigLogError(log, "Regex error: %s", e.what());
-                OSConfigTelemetryStatusTrace("regex", EINVAL);
                 return Error("Failed to compile regex '" + valuePart + "' error: " + e.what(), EINVAL);
             }
         }
@@ -462,7 +458,7 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
             // Match context could not be simulated) is an engine error, not evidence that the
             // system is non-compliant. Reporting it as NonCompliant produces a false negative;
             // propagate it as an Error so it is surfaced as "could not evaluate" and honored by
-            // the assessor's --continue-on-error handling.
+            // kompli's --continue-on-error handling.
             return Error("Failed to get sshd options: " + sshdConfig.Error().message, sshdConfig.Error().code);
         }
         for (auto const& option : options)

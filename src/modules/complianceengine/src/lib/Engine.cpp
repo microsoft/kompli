@@ -4,13 +4,13 @@
 #include "Engine.h"
 
 #include "Base64.h"
+#include "DirTools.h"
 #include "Evaluator.h"
 #include "JsonWrapper.h"
 #include "Logging.h"
 #include "Optional.h"
 #include "Procedure.h"
 #include "Result.h"
-#include "Telemetry.h"
 
 #include <cerrno>
 #include <cstring>
@@ -34,9 +34,10 @@ static constexpr const char* cModuleInfo =
     "\"Lifetime\": 2,"
     "\"UserAccount\": 0}";
 
-Engine::Engine(std::unique_ptr<ContextInterface> context, std::unique_ptr<PayloadFormatter> payloadFormatter) noexcept
+Engine::Engine(std::unique_ptr<ContextInterface> context, std::unique_ptr<PayloadFormatter> payloadFormatter)
     : mContext{std::move(context)},
-      mFormatter{std::move(payloadFormatter)}
+      mFormatter{std::move(payloadFormatter)},
+      mDistributionInfo{Error("Distribution info has not been loaded")}
 {
 }
 
@@ -55,6 +56,16 @@ OsConfigLogHandle Engine::Log() const noexcept
     return mContext->GetLogHandle();
 }
 
+Telemetry& Engine::GetTelemetry() noexcept
+{
+    return mContext->GetTelemetry();
+}
+
+ContextInterface& Engine::GetContext() noexcept
+{
+    return *mContext;
+}
+
 Optional<Error> Engine::LoadDistributionInfo()
 {
     struct stat st;
@@ -63,43 +74,39 @@ Optional<Error> Engine::LoadDistributionInfo()
         // Override file exists, use it as distribution info source
         OsConfigLogDebug(Log(), "ComplianceEngineValidatePayload: Using %s for distribution info", DistributionInfo::cDefaultOverrideFilePath);
         auto overrideInfo = DistributionInfo::ParseOverrideFile(DistributionInfo::cDefaultOverrideFilePath);
-        if (!overrideInfo.HasValue())
+        mDistributionInfo = std::move(overrideInfo);
+        if (!mDistributionInfo.HasValue())
         {
             OsConfigLogError(Log(), "ComplianceEngineValidatePayload failed to parse %s: %s", DistributionInfo::cDefaultOverrideFilePath,
-                overrideInfo.Error().message.c_str());
-            OSConfigTelemetryStatusTrace("ParseOverrideFile", overrideInfo.Error().code);
-            return overrideInfo.Error();
+                mDistributionInfo.Error().message.c_str());
+            return mDistributionInfo.Error();
         }
-
-        mDistributionInfo = std::move(overrideInfo).Value();
     }
     else if (ENOENT == errno)
     {
         // Override file does not exist, use /etc/os-release
         OsConfigLogDebug(Log(), "ComplianceEngineValidatePayload: Using %s for distribution info", DistributionInfo::cDefaultEtcOsReleasePath);
         auto osReleaseInfo = DistributionInfo::ParseEtcOsRelease(DistributionInfo::cDefaultEtcOsReleasePath);
-        if (!osReleaseInfo.HasValue())
+        mDistributionInfo = std::move(osReleaseInfo);
+        if (!mDistributionInfo.HasValue())
         {
             OsConfigLogError(Log(), "ComplianceEngineValidatePayload failed to parse %s: %s", DistributionInfo::cDefaultEtcOsReleasePath,
-                osReleaseInfo.Error().message.c_str());
-            OSConfigTelemetryStatusTrace("ParseEtcOsRelease", osReleaseInfo.Error().code);
-            return osReleaseInfo.Error();
+                mDistributionInfo.Error().message.c_str());
+            return mDistributionInfo.Error();
         }
-
-        mDistributionInfo = std::move(osReleaseInfo).Value();
     }
     else
     {
         int status = errno;
         OsConfigLogError(Log(), "ComplianceEngineValidatePayload failed to access %s: %s", DistributionInfo::cDefaultOverrideFilePath, strerror(status));
-        OSConfigTelemetryStatusTrace("stat", status);
-        return Error("Failed to access override file", status);
+        mDistributionInfo = Error("Failed to access override file", status);
+        return mDistributionInfo.Error();
     }
 
     return Optional<Error>();
 }
 
-const Optional<DistributionInfo>& Engine::GetDistributionInfo() const noexcept
+const Result<DistributionInfo>& Engine::GetDistributionInfo() const noexcept
 {
     return mDistributionInfo;
 }
@@ -152,7 +159,9 @@ Result<AuditResult> Engine::MmiGet(const char* objectName)
     }
 
     Evaluator evaluator(ruleName, procedure.Audit(), procedure.Parameters(), *mContext);
-    return evaluator.ExecuteAudit(*mFormatter);
+    Result<AuditResult> result = RunWithTelemetry(TelemetryEvent(TelemetryEventType::Audit, ruleName), mContext->GetTelemetry(), Log(),
+        [&]() { return evaluator.ExecuteAudit(*mFormatter); });
+    return result;
 }
 
 Optional<Error> Engine::SetProcedure(const std::string& ruleName, const std::string& payload)
@@ -201,7 +210,6 @@ Optional<Error> Engine::SetProcedure(const std::string& ruleName, const std::str
     if (nullptr == procedure.Audit())
     {
         OsConfigLogError(Log(), "Failed to copy 'audit' object");
-        OSConfigTelemetryStatusTrace("Audit", ENOMEM);
         return Error("Out of memory");
     }
 
@@ -221,7 +229,6 @@ Optional<Error> Engine::SetProcedure(const std::string& ruleName, const std::str
         if (nullptr == procedure.Remediation())
         {
             OsConfigLogError(Log(), "Failed to copy 'remediate' object");
-            OSConfigTelemetryStatusTrace("Remediation", ENOMEM);
             return Error("Out of memory");
         }
     }
@@ -238,7 +245,6 @@ Optional<Error> Engine::SetProcedure(const std::string& ruleName, const std::str
         if (nullptr == paramsObj)
         {
             OsConfigLogError(Log(), "Failed to parse 'parameters' object");
-            OSConfigTelemetryStatusTrace("json_value_get_object", EINVAL);
             return Error("The 'parameters' object is null");
         }
 
@@ -246,7 +252,6 @@ Optional<Error> Engine::SetProcedure(const std::string& ruleName, const std::str
         if (!parameters.HasValue())
         {
             OsConfigLogError(Log(), "Failed to parse procedure parameters: %s", parameters.Error().message.c_str());
-            OSConfigTelemetryStatusTrace("ProcedureParameters::Parse", EINVAL);
             return parameters.Error();
         }
 
@@ -310,7 +315,9 @@ Result<Status> Engine::ExecuteRemediation(const std::string& ruleName, const std
     }
 
     Evaluator evaluator(ruleName, remediation, procedure.Parameters(), *mContext);
-    return evaluator.ExecuteRemediation();
+    Result<Status> result = RunWithTelemetry(TelemetryEvent(TelemetryEventType::Remediation, ruleName), mContext->GetTelemetry(), Log(),
+        [&]() { return evaluator.ExecuteRemediation(); });
+    return result;
 }
 
 Result<Status> Engine::MmiSet(const char* objectName, const std::string& payload)
@@ -318,7 +325,6 @@ Result<Status> Engine::MmiSet(const char* objectName, const std::string& payload
     if (nullptr == objectName)
     {
         OsConfigLogError(Log(), "Object name is null");
-        OSConfigTelemetryStatusTrace("objectName", EINVAL);
         return Error("Invalid argument", EINVAL);
     }
 
@@ -356,7 +362,6 @@ Result<Status> Engine::MmiSet(const char* objectName, const std::string& payload
     }
 
     OsConfigLogError(Log(), "Invalid object name: Must start with %s, %s or %s prefix", initPrefix, procedurePrefix, remediatePrefix);
-    OSConfigTelemetryStatusTrace("objectName", EINVAL);
     return Error("Invalid object name");
 }
 } // namespace ComplianceEngine

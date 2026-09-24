@@ -66,6 +66,20 @@ TEST_F(ExecuteCommandGrepTest, AuditCommandMatches)
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(ExecuteCommandGrepTest, AuditDmsetupTableCommand)
+{
+    EXPECT_CALL(mContext, ExecuteCommand("dmsetup table | grep -P -- \"crypt\" || (echo -n 'No match found'; exit 1)"))
+        .WillOnce(Return(Result<std::string>("crypt output")));
+
+    CommandOutputMatchParams params;
+    params.command = "dmsetup table";
+    params.pattern = "crypt";
+
+    auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
 TEST_F(ExecuteCommandGrepTest, AuditExtendedRegex)
 {
     EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr("iptables -L -n"))).WillOnce(Return(Result<std::string>("test output")));

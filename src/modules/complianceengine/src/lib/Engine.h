@@ -30,7 +30,7 @@ private:
     std::map<std::string, Procedure> mDatabase;
     std::unique_ptr<ContextInterface> mContext;
     std::unique_ptr<PayloadFormatter> mFormatter;
-    Optional<DistributionInfo> mDistributionInfo;
+    Result<DistributionInfo> mDistributionInfo;
 
     Optional<Error> SetProcedure(const std::string& ruleName, const std::string& payload);
     Optional<Error> InitAudit(const std::string& ruleName, const std::string& payload);
@@ -38,7 +38,7 @@ private:
 
 public:
     explicit Engine(std::unique_ptr<ContextInterface> context,
-        std::unique_ptr<PayloadFormatter> payloadFormatter = std::unique_ptr<PayloadFormatter>(new DebugFormatter())) noexcept;
+        std::unique_ptr<PayloadFormatter> payloadFormatter = std::unique_ptr<PayloadFormatter>(new DebugFormatter()));
     ~Engine() = default;
     Engine(const Engine&) = delete;
     Engine& operator=(const Engine&) = delete;
@@ -48,14 +48,16 @@ public:
     void SetMaxPayloadSize(unsigned int value) noexcept;
     unsigned int GetMaxPayloadSize() const noexcept;
     OsConfigLogHandle Log() const noexcept;
+    Telemetry& GetTelemetry() noexcept;
+    ContextInterface& GetContext() noexcept;
 
     Optional<Error> LoadDistributionInfo();
-    const Optional<DistributionInfo>& GetDistributionInfo() const noexcept;
+    const Result<DistributionInfo>& GetDistributionInfo() const noexcept;
 
     // Returns the effective parameters (payload defaults merged with any user
     // overrides applied via InitAudit/UpdateUserParameters) for a rule whose
     // procedure has been set, or an empty map if the rule is unknown. Used by
-    // the assessor to surface parameters in the canonical result output.
+    // kompli to surface parameters in the canonical result output.
     std::map<std::string, std::string> GetParameters(const std::string& ruleName) const;
 
     static const char* GetModuleInfo() noexcept;

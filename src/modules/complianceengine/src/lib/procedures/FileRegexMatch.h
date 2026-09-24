@@ -40,6 +40,9 @@ struct FileRegexMatchParams
     /// A pattern to match file names in the provided path
     regex filenamePattern;
 
+    /// Search file names for filenamePattern instead of requiring a complete match
+    Optional<bool> filenameSearch = false;
+
     /// Operation to perform on the file contents
     /// pattern: ^pattern match$
     Optional<Operation> matchOperation = Operation::Match;
@@ -53,6 +56,21 @@ struct FileRegexMatchParams
 
     /// The pattern to match against each line that matches the 'statePattern'
     Optional<std::string> statePattern;
+
+    /// Inclusive signed integer lower bound for the first capture group, or the entire match if no group exists
+    Optional<std::string> minimumValue;
+
+    /// Inclusive signed integer upper bound for the first capture group, or the entire match if no group exists
+    Optional<std::string> maximumValue;
+
+    /// Require every line selected by matchPattern to satisfy the state and numeric constraints; otherwise accept any passing line
+    Optional<bool> allMatches = false;
+
+    /// Match against the complete file and evaluate each non-overlapping match as a selected object
+    Optional<bool> wholeFile = false;
+
+    /// Require no selected object to satisfy the state and numeric constraints
+    Optional<bool> noneMatches = false;
 
     /// Determine whether a match or state should ignore case sensitivity 'matchPattern' and 'statePattern' or none when empty'
     /// pattern: ^(matchPattern\sstatePattern|matchPattern|statePattern)$

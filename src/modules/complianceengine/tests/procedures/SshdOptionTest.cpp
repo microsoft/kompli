@@ -250,6 +250,21 @@ TEST_F(EnsureSshdOptionTest, ComplexRegexMatches)
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(EnsureSshdOptionTest, RegexWordBoundaryMatchesCompleteValue)
+{
+    EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(sshdWithoutMatchGroupOutput)));
+
+    EXPECT_CALL(mContext, ExecuteCommand(sshdSimpleCommand)).WillOnce(Return(Result<std::string>(sshdWithoutMatchGroupOutput)));
+
+    SshdOptionParams params;
+    params.option = {{"permitrootlogin"}};
+    params.value = "no\\b";
+
+    auto result = AuditSshdOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
 TEST_F(EnsureSshdOptionTest, OperationNotMatch_Compliant)
 {
     EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(sshdWithoutMatchGroupOutput)));

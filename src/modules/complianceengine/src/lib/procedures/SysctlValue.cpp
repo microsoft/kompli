@@ -4,7 +4,6 @@
 #include <Regex.h>
 #include <StringTools.h>
 #include <SysctlValue.h>
-#include <Telemetry.h>
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -138,7 +137,6 @@ Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree&
     if (!execResult.HasValue())
     {
         OsConfigLogError(log, "Failed to execute systemd-sysctl command");
-        OSConfigTelemetryStatusTrace("ExecuteCommand", execResult.Error().code);
         return execResult.Error();
     }
 

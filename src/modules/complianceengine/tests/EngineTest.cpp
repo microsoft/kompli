@@ -31,6 +31,13 @@ protected:
     Engine mEngine;
 };
 
+TEST_F(EngineTest, GetDistributionInfoBeforeLoadReturnsError)
+{
+    const auto& result = mEngine.GetDistributionInfo();
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().message, "Distribution info has not been loaded");
+}
+
 TEST_F(EngineTest, MmiGet_InvalidArgument_1)
 {
     auto result = mEngine.MmiGet(nullptr);
@@ -191,7 +198,7 @@ TEST_F(EngineTest, GetParametersForUnknownRuleIsEmpty)
     EXPECT_TRUE(mEngine.GetParameters("NeverSet").empty());
 }
 
-// The allOf status algebra shared by the engine's Evaluator and the assessor's
+// The allOf status algebra shared by the engine's Evaluator and kompli's
 // overall aggregation: NonCompliant dominates, NotApplicable is sticky over
 // Compliant, and the operation is commutative.
 TEST(CombineAllOfTest, ThreeValuedTruthTable)

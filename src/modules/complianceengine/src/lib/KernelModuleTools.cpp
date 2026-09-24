@@ -5,7 +5,6 @@
 #include <Evaluator.h>
 #include <KernelModuleTools.h>
 #include <Regex.h>
-#include <Telemetry.h>
 #include <algorithm>
 #include <dirent.h>
 #include <fts.h>
@@ -65,7 +64,6 @@ Result<bool> SearchFilesystemForModuleName(std::string& moduleName, ContextInter
         if (!fts)
         {
             OsConfigLogError(context.GetLogHandle(), "Failed to open %s - errno %d", modulesVersionDir.c_str(), errno);
-            OSConfigTelemetryStatusTrace("fts_open", errno);
             continue;
         }
         auto ftspDeleter = std::unique_ptr<FTS, int (*)(FTS*)>(fts, fts_close);
@@ -76,6 +74,7 @@ Result<bool> SearchFilesystemForModuleName(std::string& moduleName, ContextInter
             if (node->fts_info == FTS_F)
             {
                 std::string baseName = node->fts_name;
+                std::replace(baseName.begin(), baseName.end(), '-', '_');
 
                 std::string target = moduleName + ".ko";
                 std::string overlayTarget = moduleName + "_overlay.ko";
@@ -107,6 +106,7 @@ Result<bool> SearchFilesystemForModuleName(std::string& moduleName, ContextInter
 static std::string UnderscoreForRegex(std::string input)
 {
     std::string result = input;
+    std::replace(result.begin(), result.end(), '_', '-');
     size_t pos = 0;
     while ((pos = result.find('-', pos)) != std::string::npos)
     {
@@ -167,7 +167,6 @@ Result<bool> IsModuleAvailableInRunningKernel(const std::string& moduleName, Con
             return false;
         }
         OsConfigLogError(context.GetLogHandle(), "Failed to stat %s - errno %d", kernelDirPath.c_str(), errno);
-        OSConfigTelemetryStatusTrace("stat", errno);
         return true;
     }
     if (!S_ISDIR(st.st_mode))
@@ -180,7 +179,6 @@ Result<bool> IsModuleAvailableInRunningKernel(const std::string& moduleName, Con
     if (!fts)
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to open %s - errno %d", kernelDirPath.c_str(), errno);
-        OSConfigTelemetryStatusTrace("fts_open", errno);
         return false;
     }
     auto ftsDeleter = std::unique_ptr<FTS, int (*)(FTS*)>(fts, fts_close);
@@ -200,6 +198,7 @@ Result<bool> IsModuleAvailableInRunningKernel(const std::string& moduleName, Con
             continue;
         }
         std::string baseName = node->fts_name;
+        std::replace(baseName.begin(), baseName.end(), '-', '_');
         if (baseName.find(target) == 0 || baseName.find(targetUnderscore) == 0 || baseName.find(overlayTarget) == 0 || baseName.find(overlayTargetUnderscore) == 0)
         {
             return true;

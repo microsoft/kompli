@@ -68,6 +68,196 @@ protected:
     }
 };
 
+TEST_F(FileRegexMatchTest, NumericBoundsCheckEverySelectedLine)
+{
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex("1");
+    params.matchPattern = "^freq=([^ ]+)";
+    params.minimumValue = "1";
+    params.maximumValue = "100";
+    params.allMatches = true;
+    MakeTempfile("freq=1\nfreq=+00100\n");
+    auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    for (const auto& invalid : {"0", "101", "-1", "1x", "999999999999999999999999"})
+    {
+        std::ofstream output(mTempfiles[0]);
+        output << "freq=1\nfreq=" << invalid << "\n";
+        output.close();
+        result = AuditFileRegexMatch(params, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), Status::NonCompliant) << invalid;
+    }
+    params.maximumValue = "invalid";
+    EXPECT_FALSE(AuditFileRegexMatch(params, mIndicators, mContext).HasValue());
+}
+
+TEST_F(FileRegexMatchTest, IntegerConversionBoundaries)
+{
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex("1");
+    params.matchPattern = "^value=(.*)$";
+    params.minimumValue = "-9223372036854775808";
+    params.maximumValue = "9223372036854775807";
+    params.allMatches = true;
+    MakeTempfile("value=-9223372036854775808\nvalue=9223372036854775807\n");
+    auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    for (const auto& invalid : {"9223372036854775808", "-9223372036854775809", "", "+", "-", " 1", "1 ", "1x"})
+    {
+        std::ofstream output(mTempfiles[0]);
+        output << "value=" << invalid << "\n";
+        output.close();
+        result = AuditFileRegexMatch(params, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), Status::NonCompliant) << invalid;
+    }
+}
+
+TEST_F(FileRegexMatchTest, AllSelectedSettingsRespectOptionalExistence)
+{
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex(".*");
+    params.matchPattern = "^rounds=([0-9]+)$";
+    params.minimumValue = "100000";
+    params.allMatches = true;
+    params.behavior = Behavior::AnyExist;
+    MakeTempfile("unrelated=1\n");
+    auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    MakeTempfile("rounds=100000\n");
+    for (const auto behavior : {Behavior::AnyExist, Behavior::AtLeastOneExists, Behavior::AllExist})
+    {
+        params.behavior = behavior;
+        result = AuditFileRegexMatch(params, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), Status::Compliant);
+    }
+    MakeTempfile("rounds=5000\n");
+    for (const auto behavior : {Behavior::AnyExist, Behavior::AtLeastOneExists, Behavior::AllExist})
+    {
+        params.behavior = behavior;
+        result = AuditFileRegexMatch(params, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), Status::NonCompliant);
+    }
+    params.path = string(mTempdir) + "/missing";
+    params.behavior = Behavior::AnyExist;
+    result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    params.path = mTempfiles[0];
+    EXPECT_FALSE(AuditFileRegexMatch(params, mIndicators, mContext).HasValue());
+}
+
+TEST_F(FileRegexMatchTest, WholeFileEvaluatesEverySelectedSection)
+{
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex(".*\\.repo$");
+    params.matchPattern = R"(^[ \t]*\[[^\]]+\][ \t]*\n(?:[^\[]*\n)*)";
+    params.statePattern = R"(\n[ \t]*gpgcheck[ \t]*=[ \t]*(True|1|yes)[ \t]*(\n|$))";
+    params.allMatches = true;
+    params.wholeFile = true;
+    MakeTempfile("[base]\ngpgcheck=1\n\n[updates]\ngpgcheck=yes\n");
+    rename(mTempfiles[0].c_str(), (string(mTempdir) + "/base.repo").c_str());
+    mTempfiles[0] = string(mTempdir) + "/base.repo";
+
+    auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    std::ofstream output(mTempfiles[0]);
+    output << "[base]\ngpgcheck=1\n\n[updates]\ngpgcheck=0\n";
+    output.close();
+    result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(FileRegexMatchTest, WholeFileCanRequireNoSelectedSectionToMatch)
+{
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex(".*\\.repo$");
+    params.matchPattern = R"(^[ \t]*\[[^\]]+\][ \t]*\n(?:[^\[]*\n)*)";
+    params.statePattern = R"(\n[ \t]*gpgcheck[ \t]*=[ \t]*(False|0|no)[ \t]*(\n|$))";
+    params.wholeFile = true;
+    params.noneMatches = true;
+    MakeTempfile("[base]\ngpgcheck=1\n\n[updates]\ngpgcheck=yes\n");
+    rename(mTempfiles[0].c_str(), (string(mTempdir) + "/base.repo").c_str());
+    mTempfiles[0] = string(mTempdir) + "/base.repo";
+
+    auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    std::ofstream output(mTempfiles[0]);
+    output << "[base]\ngpgcheck=1\n\n[updates]\ngpgcheck=0\n";
+    output.close();
+    result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(FileRegexMatchTest, WholeFilePreservesSearchBoundaries)
+{
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex("1");
+    params.statePattern = "^b$";
+    params.wholeFile = true;
+    params.noneMatches = true;
+    MakeTempfile("ab");
+    for (const auto& pattern : {R"(a|\bb)", "a|^b"})
+    {
+        params.matchPattern = pattern;
+        const auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), Status::Compliant) << pattern;
+    }
+}
+
+TEST_F(FileRegexMatchTest, WholeFileEmptyMatchesDoNotSkipNonemptyAlternatives)
+{
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex("1");
+    params.matchPattern = "x*|bad";
+    params.statePattern = "^bad$";
+    params.wholeFile = true;
+    params.noneMatches = true;
+    MakeTempfile("bad");
+    auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    params.matchPattern = "";
+    result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(FileRegexMatchTest, WholeFileVisitsEmptyMatchAtEndOfInput)
+{
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex("1");
+    params.matchPattern = "value|$";
+    params.statePattern = "^value$";
+    params.wholeFile = true;
+    params.allMatches = true;
+    MakeTempfile("value");
+    const auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
 TEST_F(FileRegexMatchTest, Audit_InvalidArguments_1)
 {
     FileRegexMatchParams params;
@@ -510,6 +700,74 @@ TEST_F(FileRegexMatchTest, Audit_FilenamePattern_8)
     auto result = AuditFileRegexMatch(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(FileRegexMatchTest, Audit_FilenamePatternSuffix)
+{
+    const string filename = string(mTempdir) + "/example.repo";
+    mTempfiles.push_back(filename);
+    std::ofstream(filename) << "setting=true";
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex(R"(\.repo$)");
+    params.filenameSearch = true;
+    params.matchPattern = R"(^setting=true$)";
+
+    const auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+}
+
+TEST_F(FileRegexMatchTest, Audit_RepositoryChecksIgnoreUnselectedFiles)
+{
+    MakeTempfile("[base]\nname=Base\ngpgcheck=1\n");
+    MakeTempfile("");
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex(".*");
+    params.matchPattern = R"(^[ \t]*\[[^\]]+\][ \t]*\n(?:[^\[]*\n)*)";
+    params.wholeFile = true;
+    params.allMatches = true;
+    params.statePattern = string(R"(\n[ \t]*gpgcheck[ \t]*=[ \t]*(True|1|yes)[ \t]*(\n|$))");
+
+    auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+
+    params.allMatches = false;
+    params.noneMatches = true;
+    params.statePattern = string(R"(\n[ \t]*gpgcheck[ \t]*=[ \t]*(False|0|no)[ \t]*(\n|$))");
+    result = AuditFileRegexMatch(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+
+    MakeTempfile("[disabled]\ngpgcheck=0\n");
+    for (const auto behavior : {Behavior::AllExist, Behavior::AnyExist, Behavior::AtLeastOneExists})
+    {
+        params.behavior = behavior;
+        result = AuditFileRegexMatch(params, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(Status::NonCompliant, result.Value());
+    }
+}
+
+TEST_F(FileRegexMatchTest, Audit_ExactFilenameDoesNotSelectBackup)
+{
+    const string filename = string(mTempdir) + "/shadow";
+    const string backup = filename + "-";
+    mTempfiles.insert(mTempfiles.end(), {filename, backup});
+    std::ofstream(filename) << "root:!";
+    std::ofstream(backup) << "root:unlocked";
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex("shadow");
+    params.matchPattern = R"(^root:(!|\*|!!))";
+
+    const auto result = AuditFileRegexMatch(params, mIndicators, mContext);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
 }
 
 TEST_F(FileRegexMatchTest, Audit_TestPattern)

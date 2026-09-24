@@ -9,6 +9,8 @@ include(GoogleTest)
 find_package(GTest CONFIG REQUIRED)
 
 set(PROCEDURES
+    procedures/AideAttributesTest.cpp
+    procedures/AksCommandTest.cpp
     procedures/AuditdRulesTest.cpp
     procedures/NoShellAccountsLockedTest.cpp
     procedures/ApparmorProfileStateTest.cpp
@@ -16,6 +18,7 @@ set(PROCEDURES
     procedures/ShellTimeoutTest.cpp
     procedures/DefaultUmaskTest.cpp
     procedures/FileExistsTest.cpp
+    procedures/FileSymlinkTargetTest.cpp
     procedures/FilePermissionsTest.cpp
     procedures/FilesystemMountOptionTest.cpp
     procedures/FirewalldZoneTargetsTest.cpp
@@ -58,12 +61,15 @@ foreach(proc ${GLOBBED_PROCEDURES})
 endforeach()
 
 add_executable(complianceenginetests
-    AssessorContextTest.cpp
+    CliContextTest.cpp
     Base64Test.cpp
     BenchmarkInfoTest.cpp
     BindingsTest.cpp
     CommonContextTest.cpp
+    ComplianceEngineLoadUnloadTest.cpp
     ComplianceEngineTest.cpp
+    DirToolsTest.cpp
+    EngineTelemetryTest.cpp
     DistributionInfoTest.cpp
     EngineTest.cpp
     EvaluatorTest.cpp
@@ -94,5 +100,11 @@ target_link_libraries(complianceenginetests
     commonutils
     parsonlib
 )
+
+add_library(file_regex_match_fallback_compile OBJECT ../src/lib/procedures/FileRegexMatch.cpp)
+target_compile_definitions(file_regex_match_fallback_compile PRIVATE USE_REGEX_FALLBACK=1)
+target_include_directories(file_regex_match_fallback_compile PRIVATE $<TARGET_PROPERTY:complianceenginelib,INCLUDE_DIRECTORIES>)
+target_link_libraries(file_regex_match_fallback_compile PRIVATE complianceenginelib)
+add_dependencies(complianceenginetests file_regex_match_fallback_compile)
 
 gtest_discover_tests(complianceenginetests XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR})

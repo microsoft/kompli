@@ -101,6 +101,215 @@ protected:
     }
 };
 
+TEST_F(EnsureFilePermissionsTest, DirectoryCollectionChecksRootAndChildren)
+{
+    const std::string child = testDir + "/child";
+    ASSERT_EQ(mkdir(child.c_str(), 0700), 0);
+    ASSERT_EQ(chown(testDir.c_str(), 0, 0), 0);
+    ASSERT_EQ(chown(child.c_str(), 0, 0), 0);
+    CreateFileInDir("regular", 0, 1, 0600);
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = "*";
+    params.directoriesOnly = true;
+    auto group = Pattern::Make("root");
+    ASSERT_TRUE(group.HasValue());
+    params.group = {{std::move(group.Value())}};
+    auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    ASSERT_EQ(chown(child.c_str(), 0, 1), 0);
+    result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    params.recurse = false;
+    result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    ASSERT_EQ(chown(testDir.c_str(), 0, 1), 0);
+    result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(EnsureFilePermissionsTest, NumericOwnershipIncludesSymlinksAndDirectories)
+{
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = "*";
+    params.allFileTypes = true;
+    params.maximumUid = 0;
+    params.maximumGid = 999;
+    params.behavior = Behavior::AnyExist;
+    CreateFileInDir("command", 0, 999, 0755);
+    const auto linkPath = testDir + "/link";
+    ASSERT_EQ(symlink("missing-target", linkPath.c_str()), 0);
+    files.push_back(linkPath);
+    const auto directoryPath = testDir + "/subdir";
+    ASSERT_EQ(mkdir(directoryPath.c_str(), 0755), 0);
+    auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    ASSERT_EQ(lchown(linkPath.c_str(), 0, 1000), 0);
+    result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    ASSERT_EQ(lchown(linkPath.c_str(), 0, 0), 0);
+    ASSERT_EQ(chown(directoryPath.c_str(), 1000, 0), 0);
+    result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    EXPECT_FALSE(RemediateFilePermissionsCollection(params, indicators, mContext).HasValue());
+    params.directory = testDir + "/missing-directory";
+    result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    params.maximumGid = -1;
+    EXPECT_FALSE(AuditFilePermissionsCollection(params, indicators, mContext).HasValue());
+}
+
+TEST_F(EnsureFilePermissionsTest, NumericOwnershipCanExcludeOnlySymlinks)
+{
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = "*";
+    params.allFileTypes = true;
+    params.excludeSymlinks = true;
+    params.maximumUid = 0;
+    params.maximumGid = 999;
+    params.recurse = false;
+    params.behavior = Behavior::AtLeastOneExists;
+    const auto linkPath = testDir + "/link";
+    ASSERT_EQ(symlink("missing-target", linkPath.c_str()), 0);
+    ASSERT_EQ(lchown(linkPath.c_str(), 1000, 1000), 0);
+    auto audit = [&]() {
+        auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+        EXPECT_TRUE(result.HasValue());
+        return result.HasValue() ? result.Value() : Status::NonCompliant;
+    };
+    EXPECT_EQ(audit(), Status::NonCompliant);
+    params.behavior = Behavior::AnyExist;
+    EXPECT_EQ(audit(), Status::Compliant);
+    params.behavior = Behavior::AtLeastOneExists;
+    const auto directoryPath = testDir + "/directory";
+    ASSERT_EQ(mkdir(directoryPath.c_str(), 0755), 0);
+    EXPECT_EQ(audit(), Status::Compliant);
+    ASSERT_EQ(chown(directoryPath.c_str(), 0, 1000), 0);
+    EXPECT_EQ(audit(), Status::NonCompliant);
+    ASSERT_EQ(chown(directoryPath.c_str(), 0, 999), 0);
+    EXPECT_EQ(audit(), Status::Compliant);
+    const auto fifoPath = testDir + "/fifo";
+    ASSERT_EQ(mkfifo(fifoPath.c_str(), 0600), 0);
+    ASSERT_EQ(chown(fifoPath.c_str(), 1, 0), 0);
+    EXPECT_EQ(audit(), Status::NonCompliant);
+    ASSERT_EQ(chown(fifoPath.c_str(), 0, 0), 0);
+    CreateFileInDir("directory/nested", 1000, 1000, 0600);
+    EXPECT_EQ(audit(), Status::Compliant);
+    params.recurse = true;
+    EXPECT_EQ(audit(), Status::NonCompliant);
+    params.directory = testDir + "/missing";
+    EXPECT_EQ(audit(), Status::NonCompliant);
+    params.behavior = Behavior::AnyExist;
+    EXPECT_EQ(audit(), Status::Compliant);
+}
+
+TEST_F(EnsureFilePermissionsTest, NumericFilenameOwnershipExcludesDirectories)
+{
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = "*";
+    params.allFileTypes = true;
+    params.excludeSymlinks = true;
+    params.excludeDirectories = true;
+    params.maximumUid = 0;
+    params.recurse = false;
+    params.behavior = Behavior::AtLeastOneExists;
+    const auto directoryPath = testDir + "/CloudTestWorker";
+    ASSERT_EQ(mkdir(directoryPath.c_str(), 0755), 0);
+    ASSERT_EQ(chown(directoryPath.c_str(), 1001, 0), 0);
+    const auto linkPath = testDir + "/link";
+    ASSERT_EQ(symlink("missing-target", linkPath.c_str()), 0);
+    ASSERT_EQ(lchown(linkPath.c_str(), 1001, 0), 0);
+    auto audit = [&]() {
+        auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+        EXPECT_TRUE(result.HasValue());
+        return result.HasValue() ? result.Value() : Status::NonCompliant;
+    };
+    EXPECT_EQ(audit(), Status::NonCompliant);
+    params.behavior = Behavior::AnyExist;
+    EXPECT_EQ(audit(), Status::Compliant);
+    params.behavior = Behavior::AtLeastOneExists;
+    CreateFileInDir("command", 0, 0, 0755);
+    EXPECT_EQ(audit(), Status::Compliant);
+    ASSERT_EQ(chown((testDir + "/command").c_str(), 1001, 0), 0);
+    EXPECT_EQ(audit(), Status::NonCompliant);
+    ASSERT_EQ(chown((testDir + "/command").c_str(), 0, 0), 0);
+    const auto fifoPath = testDir + "/fifo";
+    ASSERT_EQ(mkfifo(fifoPath.c_str(), 0600), 0);
+    ASSERT_EQ(chown(fifoPath.c_str(), 1001, 0), 0);
+    EXPECT_EQ(audit(), Status::NonCompliant);
+    ASSERT_EQ(chown(fifoPath.c_str(), 0, 0), 0);
+    CreateFileInDir("CloudTestWorker/nested", 1001, 0, 0755);
+    EXPECT_EQ(audit(), Status::Compliant);
+    params.recurse = true;
+    EXPECT_EQ(audit(), Status::NonCompliant);
+    ASSERT_EQ(chown((directoryPath + "/nested").c_str(), 0, 0), 0);
+    EXPECT_EQ(audit(), Status::Compliant);
+    params.excludeDirectories = false;
+    EXPECT_EQ(audit(), Status::NonCompliant);
+    params.allFileTypes = false;
+    params.excludeSymlinks = false;
+    params.excludeDirectories = true;
+    EXPECT_FALSE(AuditFilePermissionsCollection(params, indicators, mContext).HasValue());
+}
+
+TEST_F(EnsureFilePermissionsTest, LibraryGroupFilterChecksSelectedFiles)
+{
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = ".*(?:(\\.so\\S*)$).*";
+    params.filePatternIsRegex = true;
+    params.recurse = true;
+    params.behavior = Behavior::AnyExist;
+    auto group = Pattern::Make("root");
+    ASSERT_TRUE(group.HasValue());
+    params.group = {{std::move(group.Value())}};
+
+    auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    CreateFileInDir("libexample.so.1", 0, 0, 0644);
+    CreateFileInDir("unselected.txt", 0, 1, 0644);
+    result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    ASSERT_EQ(chown((testDir + "/libexample.so.1").c_str(), 0, 1), 0);
+    result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(EnsureFilePermissionsTest, CollectionFollowsConfiguredRootSymlinkOnly)
+{
+    const std::string realDirectory = testDir + "/real";
+    const std::string linkedDirectory = testDir + "/linked";
+    ASSERT_EQ(mkdir(realDirectory.c_str(), 0700), 0);
+    ASSERT_EQ(symlink("real", linkedDirectory.c_str()), 0);
+    CreateFileInDir("real/regular", 0, 0, 0600);
+    ASSERT_EQ(symlink("/missing-target", (realDirectory + "/broken").c_str()), 0);
+    FilePermissionsCollectionParams params;
+    params.directory = linkedDirectory;
+    params.filePattern = "*";
+    params.mask = 0077;
+    auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    ASSERT_EQ(chmod((realDirectory + "/regular").c_str(), 0644), 0);
+    result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
 TEST_F(EnsureFilePermissionsTest, AuditFileMissing)
 {
     FilePermissionsParams params;
@@ -581,6 +790,74 @@ TEST_F(EnsureFilePermissionsTest, AuditCollectionQuestionMark)
     ASSERT_FALSE(mFormatter.Format(indicators).Value().find("file1.log") != std::string::npos);
     ASSERT_FALSE(mFormatter.Format(indicators).Value().find("file13.txt") != std::string::npos);
     ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureFilePermissionsTest, AuditCollectionRegexPattern)
+{
+    CreateFileInDir("auditd.conf", 0, 0, 0640);
+    CreateFileInDir("audit.rules", 0, 0, 0600);
+    CreateFileInDir("ignored.txt", 0, 0, 0666);
+
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = R"(^.*\.(conf|rules)$)";
+    params.filePatternIsRegex = true;
+    params.mask = 0137;
+
+    auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureFilePermissionsTest, CollectionExactPatternDoesNotSelectRegexLookalike)
+{
+    CreateFileInDir("a.conf", 0, 0, 0600);
+    CreateFileInDir("axconf", 0, 0, 0666);
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = "a.conf";
+    params.mask = 0137;
+    auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    result = RemediateFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    struct stat metadata;
+    ASSERT_EQ(stat((testDir + "/axconf").c_str(), &metadata), 0);
+    EXPECT_EQ(metadata.st_mode & 0777, 0666u);
+    params.filePatternIsRegex = true;
+    result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    params.filePattern = "[";
+    EXPECT_FALSE(AuditFilePermissionsCollection(params, indicators, mContext).HasValue());
+}
+
+TEST_F(EnsureFilePermissionsTest, NumericOwnershipLimitsAreIndependentlyOptional)
+{
+    CreateFileInDir("owned", 1000, 1001, 0600);
+    for (bool checkUid : {false, true})
+    {
+        for (bool allowOwner : {false, true})
+        {
+            FilePermissionsCollectionParams params;
+            params.directory = testDir;
+            params.filePattern = "owned";
+            params.behavior = Behavior::AnyExist;
+            if (checkUid)
+            {
+                params.maximumUid = allowOwner ? 1000 : 999;
+            }
+            else
+            {
+                params.maximumGid = allowOwner ? 1001 : 1000;
+            }
+            auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+            ASSERT_TRUE(result.HasValue());
+            EXPECT_EQ(result.Value(), allowOwner ? Status::Compliant : Status::NonCompliant);
+        }
+    }
 }
 
 TEST_F(EnsureFilePermissionsTest, AuditCollectionNonCompliantFile)
@@ -1149,9 +1426,22 @@ TEST_F(EnsureFilePermissionsTest, AuditCollectionNoMatchingFilesAnyExist)
 
     auto result = AuditFilePermissionsCollection(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), Status::NonCompliant);
-    ASSERT_TRUE(mFormatter.Format(indicators).Value().find("At least one file in") != std::string::npos);
-    ASSERT_TRUE(mFormatter.Format(indicators).Value().find("but it should") != std::string::npos);
+    ASSERT_EQ(result.Value(), Status::Compliant);
+    ASSERT_TRUE(mFormatter.Format(indicators).Value().find("All matching files in") != std::string::npos);
+}
+
+TEST_F(EnsureFilePermissionsTest, AuditCollectionMissingDirectoryAnyExist)
+{
+    FilePermissionsCollectionParams params;
+    params.directory = testDir + "/missing";
+    params.filePattern = R"(^.+\.conf$)";
+    params.filePatternIsRegex = true;
+    params.mask = 0177;
+    params.behavior = Behavior::AnyExist;
+
+    auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
 // ── Collection: AnyExist with matching files ──────────────────────────────────
