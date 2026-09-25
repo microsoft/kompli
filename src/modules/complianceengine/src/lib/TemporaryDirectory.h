@@ -16,29 +16,36 @@ namespace ComplianceEngine
 namespace Detail
 {
 
+// Allows to use different than /tmp directory for temporary files
 inline std::string GetTemporaryDirectoryParent()
 {
-    const char* tmpdir = std::getenv("TMPDIR");
-    return ((tmpdir != nullptr) && (tmpdir[0] != '\0')) ? tmpdir : "/tmp";
+    const auto* tmpdir = std::getenv("TMPDIR");
+
+    if ((tmpdir != nullptr) && (tmpdir[0] != '\0'))
+        return tmpdir;
+    return "/tmp";
 }
 
 inline std::string CreateTemporaryDirectory(const std::string& prefix)
 {
-    std::string directoryTemplate = GetTemporaryDirectoryParent();
+    auto directoryTemplate = GetTemporaryDirectoryParent();
     if (directoryTemplate.back() != '/')
     {
         directoryTemplate += '/';
     }
     directoryTemplate += prefix + ".XXXXXX";
 
+    // We need to copy data because mkdtemp modifies the template string in-place.
     std::vector<char> writableTemplate(directoryTemplate.begin(), directoryTemplate.end());
     writableTemplate.push_back('\0');
+
     char* directory = ::mkdtemp(writableTemplate.data());
     if (directory == nullptr)
     {
-        const int error = errno;
+        const auto error = errno;
         throw std::runtime_error("Failed to create temporary directory from " + directoryTemplate + ": " + std::strerror(error));
     }
+
     return directory;
 }
 
