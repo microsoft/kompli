@@ -80,8 +80,7 @@ Result<BenchmarkInfo> BenchmarkInfo::Parse(const string& payloadKey)
     return result;
 }
 
-Result<BenchmarkInfo> BenchmarkInfo::FromMetadata(
-    const string& framework, const string& distribution, const string& distributionVersion, const string& benchmarkVersion)
+Result<BenchmarkInfo> BenchmarkInfo::FromMetadata(const string& framework, const string& distribution, const string& distributionVersion, const string& benchmarkVersion)
 {
     BenchmarkInfo result;
 

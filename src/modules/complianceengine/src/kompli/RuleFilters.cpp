@@ -50,7 +50,7 @@ bool RuleFilters::Empty() const
 bool RuleFilters::Matches(const std::string& id, const std::vector<std::string>& ruleTags) const
 {
     return (tags.empty() || ContainsAny(ruleTags, tags)) && (sections.empty() || MatchesAnyGlob(id, sections)) &&
-        !ContainsAny(ruleTags, excludedTags) && !MatchesAnyGlob(id, excludedSections);
+           !ContainsAny(ruleTags, excludedTags) && !MatchesAnyGlob(id, excludedSections);
 }
 
 Result<std::string> FilterResultRules(const std::string& json, const RuleFilters& filters)

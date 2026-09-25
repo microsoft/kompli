@@ -568,8 +568,7 @@ Optional<Error> CheckUniqueBenchmarkIdentities(const std::vector<std::pair<strin
     for (const auto& entry : benchmarks)
     {
         const auto& benchmarkInfo = entry.second;
-        const Identity identity{
-            benchmarkInfo.framework, benchmarkInfo.distribution, benchmarkInfo.version, benchmarkInfo.benchmarkVersion};
+        const Identity identity{benchmarkInfo.framework, benchmarkInfo.distribution, benchmarkInfo.version, benchmarkInfo.benchmarkVersion};
         auto it = seen.find(identity);
         if (it != seen.end())
         {

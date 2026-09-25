@@ -67,10 +67,9 @@ TEST(TextRenderersTest, DebugRendersIdentityTitleParametersAndIndicators)
 
 TEST(TextRenderersTest, EveryStyleRendersOnlyFilteredRulesAndKeepsRunWideFacts)
 {
-    const std::string json =
-        R"({"action":"Audit","timestamp":"t","durationMs":9,"status":"NonCompliant","rules":[)"
-        R"({"id":"1","ruleName":"A","title":"A","status":"Compliant","tags":["level:l1"],"indicators":[]},)"
-        R"({"id":"2","ruleName":"B","title":"B","status":"NonCompliant","tags":["level:l2"],"indicators":[]}]})";
+    const std::string json = R"({"action":"Audit","timestamp":"t","durationMs":9,"status":"NonCompliant","rules":[)"
+                             R"({"id":"1","ruleName":"A","title":"A","status":"Compliant","tags":["level:l1"],"indicators":[]},)"
+                             R"({"id":"2","ruleName":"B","title":"B","status":"NonCompliant","tags":["level:l2"],"indicators":[]}]})";
     RuleFilters filters;
     filters.tags = {"level:l1"};
     auto filtered = ComplianceEngine::Kompli::FilterResultRules(json, filters);

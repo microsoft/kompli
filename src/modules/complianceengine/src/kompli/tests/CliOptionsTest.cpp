@@ -190,8 +190,8 @@ TEST(CliOptionsSmokeTest, PlanWithOutput)
 
 TEST(CliOptionsSmokeTest, PlanParsesRepeatableRuleFilters)
 {
-    ArgvHelper a{"prog", "--tag=level:l1", "--tag=level:l2", "--section=1.*", "--exclude-tag=severity:critical",
-        "--exclude-section=1.2.*", "plan", "bench.json"};
+    ArgvHelper a{
+        "prog", "--tag=level:l1", "--tag=level:l2", "--section=1.*", "--exclude-tag=severity:critical", "--exclude-section=1.2.*", "plan", "bench.json"};
     auto result = ParseCommandLine(a.Argc(), a.Argv());
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
     ASSERT_EQ(result.Value().ruleFilters.tags.size(), 2u);

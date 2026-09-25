@@ -47,10 +47,9 @@ TEST(RuleFiltersTest, TagsAreExactAndSectionsArePosixGlobs)
 
 TEST(FilterResultRulesTest, KeepsRunWideFactsAndSelectedRules)
 {
-    const std::string json =
-        R"({"timestamp":"t","durationMs":42,"status":"NonCompliant","rules":[)"
-        R"({"id":"1.1","tags":["level:l1"],"status":"Compliant"},)"
-        R"({"id":"1.2","tags":["level:l2"],"status":"NonCompliant"}]})";
+    const std::string json = R"({"timestamp":"t","durationMs":42,"status":"NonCompliant","rules":[)"
+                             R"({"id":"1.1","tags":["level:l1"],"status":"Compliant"},)"
+                             R"({"id":"1.2","tags":["level:l2"],"status":"NonCompliant"}]})";
     RuleFilters filters;
     filters.tags = {"level:l1"};
 
