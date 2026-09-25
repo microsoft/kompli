@@ -164,7 +164,7 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
         if (section.Value() != payloadKeySection)
         {
             return Error("Benchmark definition " + context + " has a 'section' ('" + section.Value() +
-                    "') that disagrees with its payloadKey section ('" + payloadKeySection + "')",
+                             "') that disagrees with its payloadKey section ('" + payloadKeySection + "')",
                 EINVAL);
         }
         id = std::move(section.Value());
