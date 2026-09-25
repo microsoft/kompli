@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 #include "ContextInterface.h"
+#include "TemporaryDirectory.h"
 
 #include <cstdio>
 #include <cstring>
@@ -50,39 +51,26 @@ struct MockContext : public ComplianceEngine::ContextInterface
     }
 
     MockContext()
+        : mTempdir(ComplianceEngine::Detail::CreateTemporaryDirectory("ComplianceEngineTest"))
     {
-        strcpy(mTempdir, "/tmp/ComplianceEngineTest.XXXXXX");
-        if (mkdtemp(mTempdir) == nullptr)
-        {
-            throw std::runtime_error("Failed to create temporary directory");
-        }
-        mTempRootDir = std::string(mTempdir) + "/rootfs";
+        mTempRootDir = mTempdir + "/rootfs";
         ::mkdir(mTempRootDir.c_str(), 0755);
 
-        std::string mCachePath = std::string(mTempdir) + "/fsscanner-cache";
-        std::string mLockfilePath = std::string(mTempdir) + "/fsscanner-lock";
+        std::string mCachePath = mTempdir + "/fsscanner-cache";
+        std::string mLockfilePath = mTempdir + "/fsscanner-lock";
         mFsScannerp =
             std::unique_ptr<ComplianceEngine::FilesystemScanner>(new ComplianceEngine::FilesystemScanner(mTempRootDir, mCachePath, mLockfilePath, 60, 120, 10));
     }
 
     ~MockContext() override
     {
-        // Remove files tracked explicitly
-        for (const auto& file : mTempfiles)
-        {
-            if (0 != remove(file.c_str()))
-            {
-                std::cerr << "Failed to remove temporary file: " << file << ", error: " << std::strerror(errno) << std::endl;
-            }
-        }
-
         // Recursively remove any directories created under the temp root (e.g., modulesRoot tree)
         RecursiveRemove(mTempdir);
-        if (0 != rmdir(mTempdir))
+        if (0 != rmdir(mTempdir.c_str()))
         {
             // If directory not empty (race), best-effort second pass
             RecursiveRemove(mTempdir);
-            if (0 != rmdir(mTempdir))
+            if (0 != rmdir(mTempdir.c_str()))
             {
                 std::cerr << "Failed to remove temporary directory: " << mTempdir << ", error: " << std::strerror(errno) << std::endl;
             }
@@ -130,10 +118,9 @@ struct MockContext : public ComplianceEngine::ContextInterface
 
     std::string MakeTempfile(const std::string& content, const std::string& extension = "")
     {
-        std::string filename = std::string(mTempdir) + "/" + std::to_string(mTempfiles.size() + 1) + extension;
+        std::string filename = mTempdir + "/" + std::to_string(++mTempfileCount) + extension;
         std::ofstream file(filename);
         file << content;
-        mTempfiles.push_back(filename);
         return filename;
     }
 
@@ -174,9 +161,9 @@ struct MockContext : public ComplianceEngine::ContextInterface
     }
 
 private:
-    char mTempdir[PATH_MAX];
+    std::string mTempdir;
     std::string mTempRootDir;
-    std::vector<std::string> mTempfiles;
+    std::size_t mTempfileCount{0};
     std::map<std::string, std::string> mSpecialFilesMap;
     std::unique_ptr<ComplianceEngine::FilesystemScanner> mFsScannerp;
     ComplianceEngine::Result<std::string> mRunningKernelRelease{std::string("5.15.test")};

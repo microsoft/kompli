@@ -86,12 +86,11 @@ TEST_F(AideAttributesTest, EveryAttributeIsRequired)
 
 TEST_F(AideAttributesTest, ExecutableFailureCannotBeHiddenByMatchingOutput)
 {
-    char directoryTemplate[] = "/tmp/aide-attributes-XXXXXX";
-    char* directory = mkdtemp(directoryTemplate);
-    ASSERT_NE(directory, nullptr);
-    const std::string executable = std::string(directory) + "/aide";
-    const std::string selected = std::string(directory) + "/tool \"$(id)`id`";
-    const std::string link = std::string(directory) + "/tool-link";
+    const std::string directory = context.GetTempdirPath() + "/aide-attributes";
+    ASSERT_EQ(0, mkdir(directory.c_str(), 0700));
+    const std::string executable = directory + "/aide";
+    const std::string selected = directory + "/tool \"$(id)`id`";
+    const std::string link = directory + "/tool-link";
     std::ofstream(selected).close();
     ASSERT_EQ(symlink(selected.c_str(), link.c_str()), 0);
     params.filename = link;
@@ -105,16 +104,12 @@ TEST_F(AideAttributesTest, ExecutableFailureCannotBeHiddenByMatchingOutput)
         }
         ASSERT_EQ(chmod(executable.c_str(), 0700), 0);
         EXPECT_CALL(context, ExecuteCommand(command)).WillOnce(::testing::Invoke([&](const std::string& query) {
-            return realContext.ExecuteCommand("PATH=\"" + std::string(directory) + "\" " + query);
+            return realContext.ExecuteCommand("PATH=\"" + directory + "\" " + query);
         }));
         auto result = AuditAideAttributes(params, indicators, context);
         ASSERT_TRUE(result.HasValue());
         EXPECT_EQ(result.Value(), exitCode == 0 ? Status::Compliant : Status::NonCompliant);
     }
-    EXPECT_EQ(unlink(link.c_str()), 0);
-    EXPECT_EQ(unlink(selected.c_str()), 0);
-    EXPECT_EQ(unlink(executable.c_str()), 0);
-    EXPECT_EQ(rmdir(directory), 0);
 }
 
 TEST_F(AideAttributesTest, MissingFile)

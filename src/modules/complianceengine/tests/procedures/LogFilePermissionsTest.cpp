@@ -27,10 +27,7 @@ using ComplianceEngine::Status;
 class EnsureLogfileAccessTest : public ::testing::Test
 {
 protected:
-    char dirTemplate[PATH_MAX] = "/tmp/logfileTest.XXXXXX";
     std::string testDir;
-    std::vector<std::string> createdFiles;
-    std::vector<std::string> createdDirs;
     MockContext mContext;
     IndicatorsTree indicators;
     ComplianceEngine::NestedListFormatter mFormatter;
@@ -58,26 +55,9 @@ protected:
         system("groupadd loguser >/dev/null 2>&1");
         system("useradd -M -g loguser -s /bin/bash loguser >/dev/null 2>&1");
 
-        testDir = mkdtemp(dirTemplate);
-        ASSERT_FALSE(testDir.empty());
+        testDir = mContext.GetTempdirPath() + "/log-file-permissions";
+        ASSERT_EQ(0, mkdir(testDir.c_str(), 0700));
         indicators.Push("EnsureLogfileAccess");
-    }
-
-    void TearDown() override
-    {
-        // Clean up created files
-        for (const auto& file : createdFiles)
-        {
-            unlink(file.c_str());
-        }
-
-        // Clean up created directories (in reverse order)
-        for (auto it = createdDirs.rbegin(); it != createdDirs.rend(); ++it)
-        {
-            rmdir(it->c_str());
-        }
-
-        rmdir(testDir.c_str());
     }
 
     void CreateLogFile(const std::string& filename, const std::string& owner, const std::string& group, mode_t permissions)
@@ -95,21 +75,18 @@ protected:
 
         ASSERT_EQ(chmod(filePath.c_str(), permissions), 0);
         ASSERT_EQ(chown(filePath.c_str(), ownerId, groupId), 0);
-        createdFiles.push_back(filePath);
     }
 
     void CreateSubdir(const std::string& dirname)
     {
         std::string dirPath = testDir + "/" + dirname;
         ASSERT_EQ(mkdir(dirPath.c_str(), 0755), 0);
-        createdDirs.push_back(dirPath);
     }
 
     void CreateSymlink(const std::string& linkname, const std::string& target)
     {
         std::string linkPath = testDir + "/" + linkname;
         ASSERT_EQ(symlink(target.c_str(), linkPath.c_str()), 0);
-        createdFiles.push_back(linkPath);
     }
 
     void VerifyFilePermissions(const std::string& filename, uid_t expectedOwner, gid_t expectedGroup, mode_t expectedPerms)

@@ -22,7 +22,8 @@ TEST_F(ContextTest, DirectoryCreatedOnConstruction)
 TEST_F(ContextTest, DirectoryHasCorrectPrefix)
 {
     ComplianceEngine::Cli::Context ctx(nullptr);
-    EXPECT_EQ(0u, ctx.GetStatePath().rfind("/tmp/kompli-cli.", 0));
+    const std::string expectedPrefix = ComplianceEngine::Detail::GetTemporaryDirectoryParent() + "/kompli-cli.";
+    EXPECT_EQ(0u, ctx.GetStatePath().rfind(expectedPrefix, 0));
 }
 
 TEST_F(ContextTest, DirectoryPermissionsAre0700)

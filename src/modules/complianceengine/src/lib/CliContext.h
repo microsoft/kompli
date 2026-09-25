@@ -6,10 +6,9 @@
 
 #include "CommonContext.h"
 #include "Logging.h"
+#include "TemporaryDirectory.h"
 
-#include <cstdlib>
 #include <ftw.h>
-#include <stdexcept>
 #include <unistd.h>
 
 namespace ComplianceEngine
@@ -55,12 +54,7 @@ public:
 private:
     static std::string CreateTempDir()
     {
-        char tmpl[] = "/tmp/kompli-cli.XXXXXX";
-        if (mkdtemp(tmpl) == nullptr)
-        {
-            throw std::runtime_error("Cli::Context: failed to create temporary state directory");
-        }
-        return std::string(tmpl);
+        return Detail::CreateTemporaryDirectory("kompli-cli");
     }
 };
 

@@ -30,9 +30,7 @@ using ComplianceEngine::Status;
 class EnsureFilePermissionsTest : public ::testing::Test
 {
 protected:
-    char fileTemplate[PATH_MAX] = "/tmp/permTest.XXXXXX";
     std::vector<std::string> files;
-    char dirTemplate[PATH_MAX] = "/tmp/permCollectionTest.XXXXXX";
     std::string testDir;
     MockContext mContext;
     IndicatorsTree indicators;
@@ -47,37 +45,15 @@ protected:
         // SLES15 docker image doesn't have the bin group/user, create if it doesn't exist.
         system("groupadd -g 1 bin >/dev/null 2>&1");
         system("useradd -g 1 -u 1 bin >/dev/null 2>&1");
-        testDir = mkdtemp(dirTemplate);
-        ASSERT_FALSE(testDir.empty());
+        testDir = mContext.GetTempdirPath() + "/file-permissions";
+        ASSERT_EQ(0, mkdir(testDir.c_str(), 0700));
         indicators.Push("EnsureFilePermissions");
-    }
-
-    void TearDown() override
-    {
-        // Remove all tracked files; some may be in nested directories. Remove directories afterwards.
-        for (auto& file : files)
-        {
-            unlink(file.c_str());
-        }
-        // Attempt recursive removal of any nested directories created during tests.
-        std::string cmd = std::string("rm -rf ") + testDir;
-        system(cmd.c_str());
     }
 
     void CreateFile(std::string& filename, int owner, int group, short permissions)
     {
-        char* newFileName = strdup(fileTemplate);
-        EXPECT_NE(newFileName, nullptr);
-        int f = mkstemp(newFileName);
-        if (f < 0)
-        {
-            free(newFileName);
-            GTEST_FAIL() << "Failed to create temporary file";
-        }
-        close(f);
-        filename = newFileName;
+        filename = mContext.MakeTempfile("");
         files.push_back(filename);
-        free(newFileName);
         ASSERT_EQ(chown(filename.c_str(), owner, group), 0);
         ASSERT_EQ(chmod(filename.c_str(), permissions), 0);
     }

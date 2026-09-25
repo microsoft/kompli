@@ -33,11 +33,10 @@ protected:
         EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillRepeatedly(Return(Result<std::string>(std::string("UID_MIN 1000\n"))));
     }
 
-    static std::string MakeTempDir()
+    std::string MakeTempDir()
     {
-        char tmpl[] = "/tmp/auditrulesXXXXXX";
-        char* d = mkdtemp(tmpl);
-        return d ? std::string(d) : std::string();
+        const std::string directory = mContext.GetTempdirPath() + "/audit-rules-" + std::to_string(++mTempdirCount);
+        return (mkdir(directory.c_str(), 0700) == 0) ? directory : std::string();
     }
 
     static void WriteFile(const std::string& path, const std::string& content)
@@ -56,6 +55,8 @@ protected:
     {
         rmdir(path.c_str());
     }
+
+    std::size_t mTempdirCount{0};
 };
 
 // Test invalid requiredOptions regex

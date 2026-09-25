@@ -3,6 +3,8 @@
 
 #include "FilesystemScanner.h"
 
+#include "MockContext.h"
+
 #include <cerrno>
 #include <cstring>
 #include <fstream>
@@ -19,17 +21,6 @@ using ComplianceEngine::Result;
 
 namespace
 {
-std::string MakeTempDir()
-{
-    char templ[] = "/tmp/fs_scanner_testXXXXXX";
-    char* p = ::mkdtemp(templ);
-    if (!p)
-    {
-        throw std::runtime_error("mkdtemp failed");
-    }
-    return std::string(p);
-}
-
 void TouchFile(const std::string& path)
 {
     std::ofstream ofs(path.c_str());
@@ -59,28 +50,18 @@ protected:
     std::string rootDir;
     std::string cachePath;
     std::string lockPath;
+    MockContext mContext;
 
     void SetUp() override
     {
-        rootDir = MakeTempDir();
+        rootDir = mContext.GetTempdirPath() + "/filesystem-scanner";
+        ASSERT_EQ(0, ::mkdir(rootDir.c_str(), 0700));
         // create some files
         ::mkdir((rootDir + "/sub").c_str(), 0755);
         TouchFile(rootDir + "/a.txt");
         TouchFile(rootDir + "/sub/b.txt");
         cachePath = rootDir + "/cache.txt"; // place cache within temp dir
         lockPath = rootDir + "/lock.lck";
-    }
-
-    void TearDown() override
-    {
-        // Best-effort cleanup
-        ::unlink(cachePath.c_str());
-        ::unlink((cachePath + ".tmp").c_str());
-        ::unlink(lockPath.c_str());
-        ::unlink((rootDir + "/a.txt").c_str());
-        ::unlink((rootDir + "/sub/b.txt").c_str());
-        ::rmdir((rootDir + "/sub").c_str());
-        ::rmdir(rootDir.c_str());
     }
 };
 

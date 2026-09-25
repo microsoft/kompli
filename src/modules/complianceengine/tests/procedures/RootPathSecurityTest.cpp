@@ -26,15 +26,9 @@ protected:
 
     void SetUp() override
     {
-        char tmppath[MAXPATHLEN] = "/tmp/pathTestXXXXXX";
-        ASSERT_TRUE(nullptr != mkdtemp(tmppath));
-        path = tmppath;
+        path = mContext.GetTempdirPath() + "/root-path";
+        ASSERT_EQ(0, mkdir(path.c_str(), 0700));
         indicators.Push("EnsureRootPath");
-    }
-
-    void TearDown() override
-    {
-        rmdir(path.c_str());
     }
 };
 
