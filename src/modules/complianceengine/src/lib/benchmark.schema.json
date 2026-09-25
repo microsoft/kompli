@@ -13,6 +13,7 @@
   "properties": {
     "apiVersion": {
       "type": "string",
+      "minLength": 1,
       "description": "API version string, e.g. 'v1'. Versions the file format, independently of the benchmark's own version."
     },
     "kind": {
@@ -31,6 +32,7 @@
       "properties": {
         "name": {
           "type": "string",
+          "minLength": 1,
           "description": "Stable benchmark identifier (the benchmark selector label)."
         },
         "labels": {
@@ -121,6 +123,7 @@
       "properties": {
         "section": {
           "type": "string",
+          "minLength": 1,
           "description": "Externally-quoted per-rule identifier (dotted CIS number or STIG id). Unique within a benchmark."
         },
         "ruleId": {
@@ -130,14 +133,17 @@
         },
         "ruleName": {
           "type": "string",
+          "minLength": 1,
           "description": "PascalCase ComplianceEngine rule name."
         },
         "title": {
           "type": "string",
+          "minLength": 1,
           "description": "Human-readable rule title (section prefix + rule name)."
         },
         "payloadKey": {
           "type": "string",
+          "minLength": 1,
           "description": "The rule's payload key, e.g. '/cis/ubuntu/22.04/v2.0.0/1/1/1/1'."
         },
         "id": {

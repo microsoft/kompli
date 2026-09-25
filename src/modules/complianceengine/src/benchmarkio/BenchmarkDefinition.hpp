@@ -34,8 +34,11 @@ struct BenchmarkDocument
 };
 
 // Parses the resource envelope, hoisted benchmark identity, and rules carrying
-// a framework-defined `id` plus the stable external-correlation `ruleId`.
-// Unknown fields are ignored consistently with the definition schema.
+// the stable external-correlation `ruleId`. During the producer migration, a
+// rule may carry either its framework-defined `id` or the complete legacy
+// `section` + `payloadKey` identity; the legacy section is normalized into
+// Resource::id. Unknown fields are ignored consistently with the definition
+// schema.
 Result<BenchmarkDocument> ParseString(const std::string& json, OsConfigLogHandle logHandle);
 
 // Reads the whole document from a stream (stdin / tests), bounding the total

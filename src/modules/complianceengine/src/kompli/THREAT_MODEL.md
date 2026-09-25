@@ -131,9 +131,10 @@ See [SECURITY_REVIEW.md](./SECURITY_REVIEW.md) for the full findings list and th
 tracked follow-ups.
 
 - **Schema is not a runtime control.** `benchmark.schema.json` gates generation,
-  not execution: the parser requires the `id` + `ruleId` runtime fields and file-level
-  identity, but still ignores schema-required per-rule `tags` / `metadata`. Do
-  not rely on the schema to constrain what kompli executes.
+  not execution: the parser requires file-level identity, `ruleId`, and either
+  `id` or the complete temporary legacy `section` + `payloadKey` identity, but
+  still ignores schema-required per-rule `tags` / `metadata`. Do not rely on
+  the schema to constrain what kompli executes.
   (`tags` / `metadata` consumption is planned in a follow-up.)
 - **`apiVersion` value is not validated** — only required to be present and
   non-empty. There is currently no version-skew detection; value pinning is

@@ -72,7 +72,8 @@ in THREAT_MODEL.md.
 
 ### 3. Schema is not a runtime control; `tags` / `metadata` are ignored
 `benchmark.schema.json` gates *generation*, not *execution*. The parser
-requires the `id` + `ruleId` runtime fields and file-level identity but ignores the
+requires file-level identity, `ruleId`, and either `id` or the complete
+temporary legacy `section` + `payloadKey` identity, but ignores the
 schema-required per-rule `tags` / `metadata`. Consequences:
 
 - A file that would fail schema validation can still be executed by kompli.

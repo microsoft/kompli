@@ -7,6 +7,7 @@
 
 #include <BenchmarkInfo.h>
 #include <JsonWrapper.h>
+#include <algorithm>
 #include <cerrno>
 #include <ext/stdio_filebuf.h>
 #include <memory>
@@ -100,11 +101,6 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
     {
         return title.Error();
     }
-    auto id = RequiredString(ruleObject, "id", context);
-    if (!id.HasValue())
-    {
-        return id.Error();
-    }
     auto ruleId = RequiredString(ruleObject, "ruleId", context);
     if (!ruleId.HasValue())
     {
@@ -121,9 +117,62 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
         return procedure.Error();
     }
 
+    const bool hasId = json_object_has_value(ruleObject, "id") == 1;
+    const bool hasSection = json_object_has_value(ruleObject, "section") == 1;
+    const bool hasPayloadKey = json_object_has_value(ruleObject, "payloadKey") == 1;
+
+    string id;
+    if (hasId)
+    {
+        if (hasSection || hasPayloadKey)
+        {
+            return Error("Benchmark definition " + context + " mixes the 'id' identity with legacy 'section' or 'payloadKey' fields", EINVAL);
+        }
+
+        auto parsedId = RequiredString(ruleObject, "id", context);
+        if (!parsedId.HasValue())
+        {
+            return parsedId.Error();
+        }
+        id = std::move(parsedId.Value());
+    }
+    else
+    {
+        if (!hasSection || !hasPayloadKey)
+        {
+            return Error("Benchmark definition " + context + " must contain either 'id' or the complete legacy 'section' and 'payloadKey' identity", EINVAL);
+        }
+
+        auto section = RequiredString(ruleObject, "section", context);
+        if (!section.HasValue())
+        {
+            return section.Error();
+        }
+        auto payloadKey = RequiredString(ruleObject, "payloadKey", context);
+        if (!payloadKey.HasValue())
+        {
+            return payloadKey.Error();
+        }
+        auto payloadKeyInfo = BenchmarkInfo::Parse(payloadKey.Value());
+        if (!payloadKeyInfo.HasValue())
+        {
+            return Error("Failed to parse payloadKey of benchmark definition " + context + ": " + payloadKeyInfo.Error().message, payloadKeyInfo.Error().code);
+        }
+
+        string payloadKeySection = std::move(payloadKeyInfo.Value().section);
+        std::replace(payloadKeySection.begin(), payloadKeySection.end(), '/', '.');
+        if (section.Value() != payloadKeySection)
+        {
+            return Error("Benchmark definition " + context + " has a 'section' ('" + section.Value() +
+                    "') that disagrees with its payloadKey section ('" + payloadKeySection + "')",
+                EINVAL);
+        }
+        id = std::move(section.Value());
+    }
+
     Resource resource;
     resource.resourceID = std::move(title.Value());
-    resource.id = std::move(id.Value());
+    resource.id = std::move(id);
     resource.ruleId = std::move(ruleId.Value());
     resource.procedure = std::move(procedure.Value());
     resource.ruleName = std::move(ruleName.Value());
