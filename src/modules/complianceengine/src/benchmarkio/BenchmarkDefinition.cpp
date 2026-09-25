@@ -119,6 +119,19 @@ Result<string> RequiredString(const JSON_Object* object, const char* key, const 
     return string(value);
 }
 
+// Reads a required string field whose empty value is meaningful. Descriptive
+// metadata fields use this contract; the schema requires their presence and
+// type but deliberately does not require content.
+Result<string> RequiredStringAllowEmpty(const JSON_Object* object, const char* key, const string& context)
+{
+    const char* value = json_object_get_string(object, key);
+    if (nullptr == value)
+    {
+        return Error("Benchmark definition " + context + " is missing required string field '" + string(key) + "'", EINVAL);
+    }
+    return string(value);
+}
+
 // Serializes a rule's `payload` object into the compact JSON the ComplianceEngine
 // consumes as the procedure. The engine parses plain JSON directly
 // (Engine::SetProcedure falls back from base64 to a plain-JSON parse), so no
@@ -245,27 +258,27 @@ Result<BenchmarkIO::Metadata> ParseMetadata(const JSON_Object* ruleObject, const
     }
     const string metadataContext = context + ".metadata";
 
-    auto description = RequiredString(metadataObject, "description", metadataContext);
+    auto description = RequiredStringAllowEmpty(metadataObject, "description", metadataContext);
     if (!description.HasValue())
     {
         return description.Error();
     }
-    auto rationale = RequiredString(metadataObject, "rationale", metadataContext);
+    auto rationale = RequiredStringAllowEmpty(metadataObject, "rationale", metadataContext);
     if (!rationale.HasValue())
     {
         return rationale.Error();
     }
-    auto fixtext = RequiredString(metadataObject, "fixtext", metadataContext);
+    auto fixtext = RequiredStringAllowEmpty(metadataObject, "fixtext", metadataContext);
     if (!fixtext.HasValue())
     {
         return fixtext.Error();
     }
-    auto severity = RequiredString(metadataObject, "severity", metadataContext);
+    auto severity = RequiredStringAllowEmpty(metadataObject, "severity", metadataContext);
     if (!severity.HasValue())
     {
         return severity.Error();
     }
-    auto references = RequiredString(metadataObject, "references", metadataContext);
+    auto references = RequiredStringAllowEmpty(metadataObject, "references", metadataContext);
     if (!references.HasValue())
     {
         return references.Error();

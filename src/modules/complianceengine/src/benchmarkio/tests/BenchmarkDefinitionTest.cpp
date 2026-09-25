@@ -574,6 +574,37 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataMissingSeverity)
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
 }
 
+TEST(BenchmarkDefinitionParserTest, AcceptsEmptyDescriptiveMetadata)
+{
+    const char* const rule = R"({
+        "ruleName": "R",
+        "title": "t",
+        "id": "1.1.1.1",
+        "ruleId": "rule-id",
+        "tags": [],
+        "metadata": {"description": "", "rationale": "", "fixtext": "", "severity": "", "references": ""},
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    ASSERT_EQ(result.Value().resources.size(), 1u);
+    EXPECT_TRUE(result.Value().resources[0].metadata.references.empty());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataNonStringReferences)
+{
+    const char* const rule = R"({
+        "ruleName": "R",
+        "title": "t",
+        "id": "1.1.1.1",
+        "ruleId": "rule-id",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": []},
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
 TEST(BenchmarkDefinitionParserTest, RejectsDuplicateId)
 {
     // kompli's plan/run rule-reference model (docs/cli.md) requires a rule
