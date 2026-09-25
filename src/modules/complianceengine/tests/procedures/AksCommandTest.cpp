@@ -115,6 +115,84 @@ TEST_F(AksCommandTest, RejectsInvalidDnsNodeNameWithoutExecution)
     EXPECT_EQ(result.Error().code, EINVAL);
 }
 
+TEST_F(AksCommandTest, ServiceAccountUsesValidatedNames)
+{
+    AksCommandParams params;
+    params.operation = AksCommandOperation::ServiceAccount;
+    params.serviceAccountName = "workload.identity";
+    params.namespaceName = "application";
+    params.pattern = "automountServiceAccountToken.*false";
+    EXPECT_CALL(context, ExecuteCommand("kubectl get serviceaccount workload.identity --namespace application -o yaml"))
+        .WillOnce(Return(Result<std::string>("automountServiceAccountToken: false")));
+
+    auto result = AuditAksCommand(params, indicators, context);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(AksCommandTest, PodUsesValidatedNames)
+{
+    AksCommandParams params;
+    params.operation = AksCommandOperation::Pod;
+    params.podName = "workload-0";
+    params.namespaceName = "application";
+    params.pattern = "automountServiceAccountToken.*false";
+    EXPECT_CALL(context, ExecuteCommand("kubectl get pod workload-0 --namespace application -o yaml"))
+        .WillOnce(Return(Result<std::string>("automountServiceAccountToken: false")));
+
+    auto result = AuditAksCommand(params, indicators, context);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(AksCommandTest, RejectsKubernetesNameInjectionWithoutExecution)
+{
+    AksCommandParams params;
+    params.operation = AksCommandOperation::ServiceAccount;
+    params.serviceAccountName = "default; kubectl delete namespace default";
+    params.namespaceName = "default";
+    params.pattern = ".*";
+    EXPECT_CALL(context, ExecuteCommand(testing::_)).Times(0);
+
+    auto result = AuditAksCommand(params, indicators, context);
+
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+}
+
+TEST_F(AksCommandTest, SecretsEnvironmentVariablesUsesFixedReadOnlyQuery)
+{
+    AksCommandParams params;
+    params.operation = AksCommandOperation::SecretsEnvironmentVariables;
+    params.pattern = "secretKeyRef|envFrom|secretRef";
+    params.matchMeansCompliant = false;
+    EXPECT_CALL(context, ExecuteCommand("kubectl get pods --all-namespaces -o json")).WillOnce(Return(Result<std::string>("{\"items\":[]}")));
+
+    auto result = AuditAksCommand(params, indicators, context);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(AksCommandTest, PrivateNodesUsesFixedAgentPoolQuery)
+{
+    AksCommandParams params;
+    params.operation = AksCommandOperation::PrivateNodes;
+    params.clusterName = "cluster-1";
+    params.resourceGroup = "group-1";
+    params.pattern = "enableNodePublicIP.*false";
+    EXPECT_CALL(context, ExecuteCommand("az aks show --resource-group group-1 --name cluster-1 --output json --query "
+                                        "'agentPoolProfiles[].{nodePool:name,mode:mode,enableNodePublicIP:enableNodePublicIP}'"))
+        .WillOnce(Return(Result<std::string>("[{\"enableNodePublicIP\":false}]")));
+
+    auto result = AuditAksCommand(params, indicators, context);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
 TEST_F(AksCommandTest, SupportsInvertedMatchWithoutShellingOutToGrep)
 {
     AksCommandParams params;

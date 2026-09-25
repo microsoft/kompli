@@ -18,7 +18,7 @@ bool IsAzureIdentifier(const std::string& value)
     return regex_match(value, identifier);
 }
 
-bool IsNodeName(const std::string& value)
+bool IsKubernetesDnsSubdomain(const std::string& value)
 {
     static const regex label("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?");
     if (value.empty() || value.size() > 253)
@@ -36,6 +36,12 @@ bool IsNodeName(const std::string& value)
         }
     }
     return value.back() != '.';
+}
+
+bool IsKubernetesNamespace(const std::string& value)
+{
+    static const regex label("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?");
+    return regex_match(value, label);
 }
 
 Result<std::string> AzCommand(const AksCommandParams& params, const std::string& query)
@@ -68,20 +74,43 @@ Result<std::string> BuildCommand(const AksCommandParams& params)
                 "authorizedIpRanges:apiServerAccessProfile.authorizedIpRanges}");
         case AksCommandOperation::NetworkPolicy:
             return AzCommand(params, "networkProfile.networkPolicy");
+        case AksCommandOperation::PrivateNodes:
+            return AzCommand(params, "agentPoolProfiles[].{nodePool:name,mode:mode,enableNodePublicIP:enableNodePublicIP}");
         case AksCommandOperation::GeneralPolicies:
             return std::string("kubectl get namespaces -o jsonpath='{range .items[*]}{.metadata.name}{\"\\n\"}{end}'");
         case AksCommandOperation::PodSecurityStandards:
+        case AksCommandOperation::SecretsEnvironmentVariables:
             return std::string("kubectl get pods --all-namespaces -o json");
         case AksCommandOperation::Kubelet:
             if (!params.nodeName.HasValue())
             {
                 return Error("nodeName is required for the kubelet operation", EINVAL);
             }
-            if (!IsNodeName(params.nodeName.Value()))
+            if (!IsKubernetesDnsSubdomain(params.nodeName.Value()))
             {
                 return Error("nodeName contains unsupported characters", EINVAL);
             }
             return "kubectl get --raw '/api/v1/nodes/" + params.nodeName.Value() + "/proxy/configz'";
+        case AksCommandOperation::ServiceAccount:
+            if (!params.serviceAccountName.HasValue() || !params.namespaceName.HasValue())
+            {
+                return Error("serviceAccountName and namespaceName are required for this operation", EINVAL);
+            }
+            if (!IsKubernetesDnsSubdomain(params.serviceAccountName.Value()) || !IsKubernetesNamespace(params.namespaceName.Value()))
+            {
+                return Error("serviceAccountName or namespaceName contains unsupported characters", EINVAL);
+            }
+            return "kubectl get serviceaccount " + params.serviceAccountName.Value() + " --namespace " + params.namespaceName.Value() + " -o yaml";
+        case AksCommandOperation::Pod:
+            if (!params.podName.HasValue() || !params.namespaceName.HasValue())
+            {
+                return Error("podName and namespaceName are required for this operation", EINVAL);
+            }
+            if (!IsKubernetesDnsSubdomain(params.podName.Value()) || !IsKubernetesNamespace(params.namespaceName.Value()))
+            {
+                return Error("podName or namespaceName contains unsupported characters", EINVAL);
+            }
+            return "kubectl get pod " + params.podName.Value() + " --namespace " + params.namespaceName.Value() + " -o yaml";
     }
     return Error("Unsupported AKS command operation", EINVAL);
 }
