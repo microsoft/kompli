@@ -148,7 +148,10 @@ TEST_F(FilesystemScannerTest, HardTimeoutWithWaitMayReturnFreshCache)
 
 TEST_F(FilesystemScannerTest, LoadCacheSkipsOverHardTimeout)
 {
-    FilesystemScanner scanner(rootDir, cachePath, lockPath, 1, 2, 0);
+    // Keep the initial cache comfortably below the soft timeout. With a
+    // one-second timeout, whole-second timestamps can make a fresh cache look
+    // soft-expired and start a refresh that races with the stale-header write.
+    FilesystemScanner scanner(rootDir, cachePath, lockPath, 3600, 7200, 0);
     // Build initial cache
     auto res = scanner.GetFullFilesystem();
     if (!res)
@@ -160,13 +163,13 @@ TEST_F(FilesystemScannerTest, LoadCacheSkipsOverHardTimeout)
     // Manually modify header to simulate old cache beyond hard timeout
     {
         std::ofstream ofs(cachePath.c_str(), std::ios::out | std::ios::trunc);
-        long oldStart = (long)::time(nullptr) - 100;
+        long oldStart = (long)::time(nullptr) - 10000;
         long oldEnd = oldStart - 1; // ensure earlier
         ofs << "# FilesystemScanCache-V1 " << oldStart << ' ' << oldEnd << "\n";
         ofs.close();
     }
     // Second scanner to test LoadCache rejection
-    FilesystemScanner scanner2(rootDir, cachePath, lockPath, 1, 2, 0);
+    FilesystemScanner scanner2(rootDir, cachePath, lockPath, 3600, 7200, 0);
     auto res2 = scanner2.GetFullFilesystem();
     ASSERT_FALSE(res2); // should treat stale cache as unusable and error (background scan kicked)
 }
