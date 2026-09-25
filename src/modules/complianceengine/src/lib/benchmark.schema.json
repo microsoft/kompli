@@ -13,6 +13,7 @@
   "properties": {
     "apiVersion": {
       "type": "string",
+      "minLength": 1,
       "description": "API version string, e.g. 'v1'. Versions the file format, independently of the benchmark's own version."
     },
     "kind": {
@@ -24,23 +25,49 @@
       "type": "object",
       "additionalProperties": true,
       "required": [
-        "name"
+        "name",
+        "labels",
+        "annotations"
       ],
       "properties": {
         "name": {
           "type": "string",
+          "minLength": 1,
           "description": "Stable benchmark identifier (the benchmark selector label)."
         },
         "labels": {
           "type": "object",
-          "description": "Selectable identity axes (framework, os, distribution, distributionVersion, ...). Architecture-agnostic; the scanned host's arch is recorded in the kompli result, not here.",
+          "description": "Selectable identity axes hoisted once per benchmark.",
+          "required": ["framework", "distribution", "distributionVersion"],
+          "properties": {
+            "framework": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Required opaque benchmark framework identity. It does not select parsing or execution behavior."
+            },
+            "distribution": {
+              "type": "string",
+              "minLength": 1
+            },
+            "distributionVersion": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
           "additionalProperties": {
             "type": "string"
           }
         },
         "annotations": {
           "type": "object",
-          "description": "Non-selectable descriptive fields (e.g. displayName, benchmarkVersion).",
+          "description": "Non-selectable descriptive fields.",
+          "required": ["benchmarkVersion"],
+          "properties": {
+            "benchmarkVersion": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
           "additionalProperties": {
             "type": "string"
           }
@@ -69,35 +96,60 @@
       "type": "object",
       "additionalProperties": true,
       "required": [
-        "section",
-        "ruleId",
         "ruleName",
         "title",
-        "payloadKey",
+        "ruleId",
         "tags",
         "metadata",
         "payload"
       ],
+      "oneOf": [
+        {
+          "required": ["section", "payloadKey"],
+          "not": {
+            "required": ["id"]
+          }
+        },
+        {
+          "required": ["id"],
+          "not": {
+            "anyOf": [
+              { "required": ["section"] },
+              { "required": ["payloadKey"] }
+            ]
+          }
+        }
+      ],
       "properties": {
         "section": {
           "type": "string",
+          "minLength": 1,
           "description": "Externally-quoted per-rule identifier (dotted CIS number or STIG id). Unique within a benchmark."
         },
         "ruleId": {
           "type": "string",
-          "description": "Stable, benchmark-agnostic rule identifier (UUID derived from the payload key)."
+          "minLength": 1,
+          "description": "Stable, benchmark-agnostic rule identifier retained unchanged for external correlation."
         },
         "ruleName": {
           "type": "string",
+          "minLength": 1,
           "description": "PascalCase ComplianceEngine rule name."
         },
         "title": {
           "type": "string",
+          "minLength": 1,
           "description": "Human-readable rule title (section prefix + rule name)."
         },
         "payloadKey": {
           "type": "string",
+          "minLength": 1,
           "description": "The rule's payload key, e.g. '/cis/ubuntu/22.04/v2.0.0/1/1/1/1'."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The rule's externally-quoted, framework-defined identifier, opaque and unique within its benchmark definition."
         },
         "tags": {
           "type": "array",

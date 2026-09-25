@@ -4,7 +4,6 @@
 #ifndef COMPLIANCE_ENGINE_BENCHMARKIO_RESOURCE_HPP
 #define COMPLIANCE_ENGINE_BENCHMARKIO_RESOURCE_HPP
 
-#include <BenchmarkInfo.h>
 #include <Optional.h>
 #include <string>
 
@@ -23,17 +22,13 @@ struct Resource
     // JSON as `title`.
     std::string resourceID;
 
-    // Stable, benchmark-agnostic rule identifier (the definition's `ruleId`, a
-    // UUID derived from the payload key by the augmentation engine). Emitted in
-    // the canonical result JSON as `ruleId` so tooling can join to a rule
-    // reliably rather than matching on ruleName/section.
-    std::string ruleId;
+    // Human-facing, framework-defined identifier (the definition's `id`).
+    // It is opaque and unique within the containing benchmark document.
+    std::string id;
 
-    // Benchmark identity parsed from the rule's payload key. `.distribution` and
-    // `.version` drive the applicability check in the main loop (Match against
-    // the detected system); `.section` drives section filtering (main loop and
-    // JSON formatter).
-    CISBenchmarkInfo benchmarkInfo;
+    // Stable, benchmark-agnostic identifier (the definition's `ruleId`).
+    // Emitted unchanged in canonical results for external correlation.
+    std::string ruleId;
 
     // The rule payload serialized as JSON. Passed to the ComplianceEngine as the
     // procedure; the engine parses plain JSON directly (Engine::SetProcedure).

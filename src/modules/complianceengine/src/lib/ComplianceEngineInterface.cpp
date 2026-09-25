@@ -32,7 +32,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-using ComplianceEngine::CISBenchmarkInfo;
+using ComplianceEngine::BenchmarkInfo;
 using ComplianceEngine::DistributionInfo;
 using ComplianceEngine::Engine;
 using ComplianceEngine::GetComplianceEngineDirectory;
@@ -468,7 +468,7 @@ int ComplianceEngineCheckApplicability(MMI_HANDLE clientSession, const char* pay
         return EINVAL;
     }
 
-    auto benchmark = CISBenchmarkInfo::Parse(payloadKey);
+    auto benchmark = BenchmarkInfo::Parse(payloadKey);
     if (!benchmark.HasValue())
     {
         OsConfigLogError(log, "ComplianceEngineValidatePayload failed to parse benchmark: %s", benchmark.Error().message.c_str());
