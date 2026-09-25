@@ -23,8 +23,7 @@ public:
     static constexpr const int TELEMETRY_CACHE_FILE_SIZE = 10 * 1024 * 1024;
     static constexpr const int TELEMETRY_RAM_QUEUE_SIZE = 2 * 1024 * 1024;
 
-    explicit TelemetryManager(std::string cacheFilePath, bool enableDebug = false, std::chrono::seconds teardownTime = CONFIG_DEFAULT_TEARDOWN_TIME,
-        OsConfigLogHandle logHandle = nullptr);
+    explicit TelemetryManager(std::string cacheFilePath, bool enableDebug, std::chrono::seconds teardownTime, bool validateEvents, OsConfigLogHandle logHandle);
 
     ~TelemetryManager() noexcept;
 

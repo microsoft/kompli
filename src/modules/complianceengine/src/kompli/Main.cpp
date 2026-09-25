@@ -19,15 +19,23 @@
 
 #include <CliContext.h>
 #include <CommonContext.h>
+#include <DirTools.h>
 #include <DistributionInfo.h>
 #include <Engine.h>
 #include <Logging.h>
 #include <Optional.h>
+#include <Telemetry.h>
+#include <algorithm>
+#include <cassert>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
+#include <fcntl.h>
 #include <fstream>
+#include <getopt.h>
 #include <iostream>
 #include <memory>
+#include <stdio.h>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -46,14 +54,16 @@ using ComplianceEngine::Optional;
 using ComplianceEngine::PayloadFormatter;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
+using ComplianceEngine::TelemetryEvent;
+using ComplianceEngine::TelemetryEventType;
 using ComplianceEngine::BenchmarkDefinition::ParseFile;
 using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
 using ComplianceEngine::Cli::Context;
 using ComplianceEngine::Kompli::ApplyParameterOverrides;
 using ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities;
 using ComplianceEngine::Kompli::Command;
-using ComplianceEngine::Kompli::Format;
 using ComplianceEngine::Kompli::FilterResultRules;
+using ComplianceEngine::Kompli::Format;
 using ComplianceEngine::Kompli::GeneratePlan;
 using ComplianceEngine::Kompli::Options;
 using ComplianceEngine::Kompli::ParseCommandLine;
@@ -66,6 +76,10 @@ using ComplianceEngine::Kompli::TextStyle;
 using ComplianceEngine::Kompli::ToggleMode;
 using std::string;
 
+#ifdef BUILD_TELEMETRY
+static constexpr const char* telemetry_log_dir = "/var/lib/osconfig/telemetry/";
+static constexpr const char* telemetry_log_file = "complianceengine.telemetry";
+#endif
 namespace
 {
 // Upper bound on a canonical result JSON fed to `render`. Generous (results for
@@ -211,6 +225,10 @@ int RunList(const Options& options)
 
 int main(int argc, char* argv[])
 {
+#ifdef BUILD_TELEMETRY
+    auto benchmarkRunCreatedAt = std::chrono::system_clock::now();
+    auto benchmarkRunBeginAt = std::chrono::steady_clock::now();
+#endif
     // Ensure file-creation permissions are at least as restrictive as 0077
     // without overriding a stricter inherited mask.
     ::umask(::umask(0) | S_IRWXG | S_IRWXO);
@@ -318,7 +336,34 @@ int main(int argc, char* argv[])
         OsConfigLogInfo(logHandle.get(), "Debug logging enabled");
     }
 
-    auto context = std::unique_ptr<Context>(new Context(logHandle.get()));
+    int telemetry_fd = -1;
+#ifdef BUILD_TELEMETRY
+    if (options.telemetryEnabled)
+    {
+        std::string telemetry_log_path(telemetry_log_dir);
+        if (!ComplianceEngine::MkdirRecursive(telemetry_log_path, 0700))
+        {
+            OsConfigLogError(logHandle.get(), "Failed to create telemetry directory %s: %d", telemetry_log_path.c_str(), errno);
+        }
+        else
+        {
+            auto telemetry_file = telemetry_log_path + std::string(telemetry_log_file);
+            telemetry_fd = open(telemetry_file.c_str(), O_CREAT | O_APPEND | O_NOFOLLOW | O_WRONLY, 0600);
+            if (0 > telemetry_fd)
+            {
+                OsConfigLogError(logHandle.get(), "Failed to open telemetry file  %s: %d", telemetry_file.c_str(), errno);
+            }
+            else if (0 != fchmod(telemetry_fd, 0600))
+            {
+                OsConfigLogError(logHandle.get(), "Failed to set telemetry file permissions %s: %d", telemetry_file.c_str(), errno);
+                close(telemetry_fd);
+                telemetry_fd = -1;
+            }
+        }
+    }
+#endif // BUILD_TELEMETRY
+
+    auto context = std::unique_ptr<Context>(new Context(logHandle.get(), telemetry_fd));
     // The Engine takes ownership of a PayloadFormatter and uses it polymorphically
     // to render each rule's indicators. Pass the JSON one explicitly: the
     // constructor's default is a DebugFormatter, whose text output could not be
@@ -587,6 +632,32 @@ int main(int argc, char* argv[])
     }
 
     auto result = std::move(benchmarkFormatter).Finish(status);
+
+#ifdef BUILD_TELEMETRY
+    if (options.telemetryEnabled)
+    {
+        auto benchmarkRunCompletedAt = std::chrono::steady_clock::now();
+        auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(benchmarkRunCompletedAt - benchmarkRunBeginAt).count();
+        auto event = TelemetryEvent(TelemetryEventType::BenchmarkRun, "ComplianceEngineSession");
+        const auto& distributionInfo = engine.GetDistributionInfo();
+        if (!distributionInfo.HasValue())
+        {
+            const auto& error = distributionInfo.Error();
+            OsConfigLogError(logHandle.get(), "Failed to add distribution information to telemetry: %s (error code: %d)", error.message.c_str(), error.code);
+            event.Add("Distribution", error.message);
+        }
+        else
+        {
+            event.Add("OsType", std::to_string(distributionInfo.Value().osType));
+            event.Add("architecture", std::to_string(distributionInfo.Value().architecture));
+            event.Add("Distribution", std::to_string(distributionInfo.Value().distribution));
+            event.Add("DistributionVersion", distributionInfo.Value().version);
+        }
+        event.Add("ComplianceEngineVersion", KOMPLI_VERSION);
+        LogCreatedTelemetryEvent(event, engine.GetTelemetry(), logHandle.get(), durationUs, benchmarkRunCreatedAt);
+    }
+#endif // BUILD_TELEMETRY
+
     if (!result.HasValue())
     {
         OsConfigLogError(logHandle.get(), "Failed to finish formatted output: %s", result.Error().message.c_str());

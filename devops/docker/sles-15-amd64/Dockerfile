@@ -1,5 +1,5 @@
 # TODO: Add mcr.io retagged images
-FROM registry.suse.com/bci/bci-base:15.7@sha256:3e961532089c1ca792d004250b56f02af782ee909f5543086166d89730d8eaab
+FROM registry.suse.com/bci/bci-base:15.7@sha256:a1bff75c7ab3d66c8423e3f2370838d5dbed077a4133e9f38a98d7525a630958
 
 ARG CMAKE_VERSION=v3.30.1
 

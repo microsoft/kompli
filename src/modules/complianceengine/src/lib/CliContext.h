@@ -24,8 +24,8 @@ namespace Cli
 class Context : public CommonContext
 {
 public:
-    Context(OsConfigLogHandle log)
-        : CommonContext(log, CreateTempDir())
+    Context(OsConfigLogHandle log, const int fd = -1)
+        : CommonContext(log, CreateTempDir(), fd)
     {
     }
     Context(const Context&) = delete;

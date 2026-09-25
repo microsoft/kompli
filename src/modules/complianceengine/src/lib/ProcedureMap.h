@@ -6,6 +6,7 @@
 #define COMPLIANCEENGINE_PROCEDURE_MAP_H
 
 #include <AideAttributes.h>
+#include <AksCommand.h>
 #include <ApparmorProfileState.h>
 #include <AuditdRules.h>
 #include <CommandOutputMatch.h>
@@ -61,6 +62,22 @@ struct Bindings;
 // Forward declaration, defined in Bindings.h
 template <typename Enum>
 const std::map<std::string, Enum>& MapEnum();
+
+// Maps the AksCommandOperation enum labels to the enum values.
+template <>
+inline const std::map<std::string, AksCommandOperation>& MapEnum<AksCommandOperation>()
+{
+    static const std::map<std::string, AksCommandOperation> map = {
+        {"CniPlugin", AksCommandOperation::CniPlugin},
+        {"ControlPlaneEndpoint", AksCommandOperation::ControlPlaneEndpoint},
+        {"PublicPrivateEndpointAccess", AksCommandOperation::PublicPrivateEndpointAccess},
+        {"NetworkPolicy", AksCommandOperation::NetworkPolicy},
+        {"GeneralPolicies", AksCommandOperation::GeneralPolicies},
+        {"PodSecurityStandards", AksCommandOperation::PodSecurityStandards},
+        {"Kubelet", AksCommandOperation::Kubelet},
+    };
+    return map;
+}
 
 // Maps the Behavior enum labels to the enum values.
 template <>
@@ -144,6 +161,19 @@ inline const std::map<std::string, GsettingsOperationType>& MapEnum<GsettingsOpe
         {"lt", GsettingsOperationType::LessThan},
         {"gt", GsettingsOperationType::GreaterThan},
         {"is-unlocked", GsettingsOperationType::IsUnlocked},
+    };
+    return map;
+}
+
+// Maps the MtaConfigurationVersion enum labels to the enum values.
+template <>
+inline const std::map<std::string, MtaConfigurationVersion>& MapEnum<MtaConfigurationVersion>()
+{
+    static const std::map<std::string, MtaConfigurationVersion> map = {
+        {"none", MtaConfigurationVersion::None},
+        {"1", MtaConfigurationVersion::Version1},
+        {"2", MtaConfigurationVersion::Version2},
+        {"3", MtaConfigurationVersion::Version3},
     };
     return map;
 }
@@ -282,6 +312,16 @@ struct Bindings<AideAttributesParams>
     static constexpr auto members = std::make_tuple(&T::configPath, &T::filename, &T::attributes);
 };
 
+// Defines the bindings for the AksCommandParams structure.
+template <>
+struct Bindings<AksCommandParams>
+{
+    using T = AksCommandParams;
+    static constexpr size_t size = 6;
+    static const char* names[];
+    static constexpr auto members = std::make_tuple(&T::operation, &T::clusterName, &T::resourceGroup, &T::nodeName, &T::pattern, &T::matchMeansCompliant);
+};
+
 // Defines the bindings for the ApparmorProfileStateParams structure.
 template <>
 struct Bindings<ApparmorProfileStateParams>
@@ -357,9 +397,9 @@ template <>
 struct Bindings<FileRegexMatchParams>
 {
     using T = FileRegexMatchParams;
-    static constexpr size_t size = 11;
+    static constexpr size_t size = 14;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::path, &T::filenamePattern, &T::matchOperation, &T::matchPattern, &T::stateOperation, &T::statePattern, &T::minimumValue, &T::maximumValue, &T::allMatches, &T::ignoreCase, &T::behavior);
+    static constexpr auto members = std::make_tuple(&T::path, &T::filenamePattern, &T::filenameSearch, &T::matchOperation, &T::matchPattern, &T::stateOperation, &T::statePattern, &T::minimumValue, &T::maximumValue, &T::allMatches, &T::wholeFile, &T::noneMatches, &T::ignoreCase, &T::behavior);
 };
 
 // Defines the bindings for the FileSymlinkTargetParams structure.
@@ -430,6 +470,16 @@ struct Bindings<MountPointExistsParams>
     static constexpr size_t size = 1;
     static const char* names[];
     static constexpr auto members = std::make_tuple(&T::mountPoint);
+};
+
+// Defines the bindings for the MtaLocalOnlyParams structure.
+template <>
+struct Bindings<MtaLocalOnlyParams>
+{
+    using T = MtaLocalOnlyParams;
+    static constexpr size_t size = 1;
+    static const char* names[];
+    static constexpr auto members = std::make_tuple(&T::configurationVersion);
 };
 
 // Defines the bindings for the NetworkInterfaceFlagParams structure.
@@ -606,6 +656,9 @@ struct Bindings<UniqueUserIdParams>
 
 namespace std
 {
+// Returns a string representation of the AksCommandOperation enum value.
+string to_string(ComplianceEngine::AksCommandOperation value) noexcept(false); // NOLINT(*-identifier-naming)
+
 // Returns a string representation of the Behavior enum value.
 string to_string(ComplianceEngine::Behavior value) noexcept(false); // NOLINT(*-identifier-naming)
 
@@ -626,6 +679,9 @@ string to_string(ComplianceEngine::GsettingsKeyType value) noexcept(false); // N
 
 // Returns a string representation of the GsettingsOperationType enum value.
 string to_string(ComplianceEngine::GsettingsOperationType value) noexcept(false); // NOLINT(*-identifier-naming)
+
+// Returns a string representation of the MtaConfigurationVersion enum value.
+string to_string(ComplianceEngine::MtaConfigurationVersion value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the InterfaceFlag enum value.
 string to_string(ComplianceEngine::InterfaceFlag value) noexcept(false); // NOLINT(*-identifier-naming)

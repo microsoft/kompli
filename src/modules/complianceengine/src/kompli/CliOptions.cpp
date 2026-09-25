@@ -28,6 +28,10 @@ void PrintHelp(const std::string& programName)
     std::cout << "\t-V, --version\tShow software version and exit.\n";
     std::cout << "\t-v, --verbose\tRun in verbose mode.\n";
     std::cout << "\t-d, --debug\tRun in debug mode.\n";
+    std::cout << "\t-l, --log-file\tSpecify a log file. Default: print log entries to standard error.\n";
+#ifdef BUILD_TELEMETRY
+    std::cout << "\t-t, --telemetry\tEnable telemetry event logging. Default: disabled.\n";
+#endif // BUILD_TELEMETRY
     std::cout << "\n";
     std::cout << "run options:\n";
     std::cout << "\t-e, --continue-on-error\tSkip rules that fail due to engine errors and continue processing. Returns 1 if any error occurred.\n";
@@ -86,15 +90,17 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
     optind = 1;
 #endif
 
-    const auto* short_opts = "hVvdef:o:";
+    const auto* short_opts = "hVvdetf:o:";
     const option long_opts[] = {{"help", no_argument, nullptr, 'h'}, {"version", no_argument, nullptr, 'V'}, {"verbose", no_argument, nullptr, 'v'},
         {"debug", no_argument, nullptr, 'd'}, {"continue-on-error", no_argument, nullptr, 'e'}, {"format", required_argument, nullptr, 'f'},
         {"output", required_argument, nullptr, 'o'}, {"suite-name", required_argument, nullptr, kSuiteNameOpt},
+#ifdef BUILD_TELEMETRY
+        {"telemetry", no_argument, nullptr, 't'},
+#endif // BUILD_TELEMETRY
         {"audit", required_argument, nullptr, kAuditOpt}, {"remediate", required_argument, nullptr, kRemediateOpt},
-        {"enforce", required_argument, nullptr, kEnforceOpt}, {"param", required_argument, nullptr, kParamOpt},
-        {"tag", required_argument, nullptr, kTagOpt}, {"section", required_argument, nullptr, kSectionOpt},
-        {"exclude-tag", required_argument, nullptr, kExcludeTagOpt}, {"exclude-section", required_argument, nullptr, kExcludeSectionOpt},
-        {nullptr, 0, nullptr, 0}};
+        {"enforce", required_argument, nullptr, kEnforceOpt}, {"param", required_argument, nullptr, kParamOpt}, {"tag", required_argument, nullptr, kTagOpt},
+        {"section", required_argument, nullptr, kSectionOpt}, {"exclude-tag", required_argument, nullptr, kExcludeTagOpt},
+        {"exclude-section", required_argument, nullptr, kExcludeSectionOpt}, {nullptr, 0, nullptr, 0}};
 
     auto result = Options{};
     int opt = getopt_long(argc, argv, short_opts, long_opts, nullptr);
@@ -114,6 +120,11 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
             case 'd':
                 result.debug = true;
                 break;
+#ifdef BUILD_TELEMETRY
+            case 't':
+                result.telemetryEnabled = true;
+                break;
+#endif // BUILD_TELEMETRY
             case 'e':
                 result.continueOnError = true;
                 break;
@@ -200,10 +211,10 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
                 {
                     return Error("Rule filter values must not be empty.");
                 }
-                auto& values = (kTagOpt == opt)             ? result.ruleFilters.tags :
-                    (kSectionOpt == opt)                    ? result.ruleFilters.sections :
-                    (kExcludeTagOpt == opt)                 ? result.ruleFilters.excludedTags :
-                                                             result.ruleFilters.excludedSections;
+                auto& values = (kTagOpt == opt)        ? result.ruleFilters.tags :
+                               (kSectionOpt == opt)    ? result.ruleFilters.sections :
+                               (kExcludeTagOpt == opt) ? result.ruleFilters.excludedTags :
+                                                         result.ruleFilters.excludedSections;
                 values.push_back(optarg);
                 break;
             }

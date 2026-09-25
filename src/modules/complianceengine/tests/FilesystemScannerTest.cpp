@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 #include <string>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 
@@ -35,6 +36,21 @@ void TouchFile(const std::string& path)
     ofs << "data";
     ofs.close();
 }
+
+pid_t WaitForScannerPid(const std::string& path, pid_t previousPid = -1)
+{
+    for (int attempt = 0; attempt < 300; ++attempt)
+    {
+        std::ifstream lockFile(path.c_str());
+        pid_t scannerPid = -1;
+        if ((lockFile >> scannerPid) && (scannerPid > 0) && (scannerPid != previousPid))
+        {
+            return scannerPid;
+        }
+        ::usleep(10 * 1000);
+    }
+    return -1;
+}
 } // namespace
 
 class FilesystemScannerTest : public ::testing::Test
@@ -59,6 +75,7 @@ protected:
     {
         // Best-effort cleanup
         ::unlink(cachePath.c_str());
+        ::unlink((cachePath + ".tmp").c_str());
         ::unlink(lockPath.c_str());
         ::unlink((rootDir + "/a.txt").c_str());
         ::unlink((rootDir + "/sub/b.txt").c_str());
@@ -81,6 +98,64 @@ TEST_F(FilesystemScannerTest, InitialCacheBuildWaitsAndSucceeds)
     }
     ASSERT_TRUE(res) << "Cache should be available after wait window: " << (res ? "" : res.Error().message);
     ASSERT_GT(res.Value()->entries.size(), 0u);
+}
+
+TEST_F(FilesystemScannerTest, BackgroundScanLeavesNoChild)
+{
+    {
+        FilesystemScanner scanner(rootDir, cachePath, lockPath, 5, 10, 3);
+        auto res = scanner.GetFullFilesystem();
+        ASSERT_TRUE(res);
+    }
+
+    ::usleep(100 * 1000);
+    EXPECT_EQ(::waitpid(-1, nullptr, WNOHANG), -1);
+    EXPECT_EQ(errno, ECHILD);
+}
+
+TEST_F(FilesystemScannerTest, BackgroundScanOutlivesLaunchingProcess)
+{
+    pid_t launcherPid = ::fork();
+    ASSERT_GE(launcherPid, 0);
+    if (launcherPid == 0)
+    {
+        FilesystemScanner scanner(rootDir, cachePath, lockPath, 5, 10, 0);
+        (void)scanner.GetFullFilesystem();
+        _exit(0);
+    }
+
+    int launcherStatus = 0;
+    ASSERT_EQ(::waitpid(launcherPid, &launcherStatus, 0), launcherPid);
+    ASSERT_TRUE(WIFEXITED(launcherStatus));
+    ASSERT_EQ(WEXITSTATUS(launcherStatus), 0);
+
+    for (int attempt = 0; (attempt < 30) && (::access(cachePath.c_str(), F_OK) != 0); ++attempt)
+    {
+        ::usleep(100 * 1000);
+    }
+    EXPECT_EQ(::access(cachePath.c_str(), F_OK), 0);
+}
+
+TEST_F(FilesystemScannerTest, KilledBackgroundScanIsReplaced)
+{
+    FilesystemScanner scanner("/", cachePath, lockPath, 5, 10, 0);
+    ASSERT_FALSE(scanner.GetFullFilesystem());
+
+    pid_t firstScannerPid = WaitForScannerPid(lockPath);
+    ASSERT_GT(firstScannerPid, 0);
+    ASSERT_EQ(::kill(firstScannerPid, SIGKILL), 0);
+
+    pid_t replacementScannerPid = -1;
+    for (int attempt = 0; (attempt < 300) && (replacementScannerPid < 0); ++attempt)
+    {
+        ASSERT_FALSE(scanner.GetFullFilesystem());
+        replacementScannerPid = WaitForScannerPid(lockPath, firstScannerPid);
+    }
+
+    ASSERT_GT(replacementScannerPid, 0);
+    EXPECT_NE(replacementScannerPid, firstScannerPid);
+    EXPECT_EQ(::kill(replacementScannerPid, 0), 0);
+    EXPECT_EQ(::kill(replacementScannerPid, SIGKILL), 0);
 }
 
 TEST_F(FilesystemScannerTest, SoftTimeoutTriggersBackgroundButReturnsData)

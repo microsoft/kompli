@@ -23,13 +23,13 @@ Result<std::string> CommonContext::ExecuteCommand(const std::string& cmd) const
 {
     char* output = nullptr;
     int err = ::ExecuteCommand(NULL, cmd.c_str(), false, false, 0, 0, &output, NULL, mLog);
-    if (err != 0 || output == nullptr)
+    if (err != 0)
     {
         std::string outStr = output == NULL ? "Failed to execute command" : output;
         free(output);
         return Error(outStr, err);
     }
-    std::string result(output);
+    std::string result(output == nullptr ? "" : output);
     free(output);
     return result;
 }

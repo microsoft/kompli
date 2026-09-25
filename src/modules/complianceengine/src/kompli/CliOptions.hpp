@@ -88,6 +88,7 @@ struct Options
 {
     bool verbose = false;
     bool debug = false;
+    bool telemetryEnabled = false;
     bool continueOnError = false;
     Optional<Format> format;
     Command command = Command::Help;

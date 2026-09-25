@@ -14,7 +14,13 @@
               "type": "object",
               "required": [],
               "additionalProperties": false,
-              "properties": {}
+              "properties": {
+                "configurationVersion": {
+                  "type": "string",
+                  "description": "Configuration check version from the source audit; none checks only listening ports",
+                  "pattern": "(^\\$[a-zA-Z0-9_]+:((none|1|2|3))$|(^(none|1|2|3)$))"
+                }
+              }
             }
           }
         }

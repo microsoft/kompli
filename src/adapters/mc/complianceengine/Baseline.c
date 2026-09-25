@@ -4,7 +4,10 @@
 #include "../Common.h"
 #include "ComplianceEngineInterface.h"
 
+#include <stdbool.h>
+
 static MMI_HANDLE gComplianceEngine = NULL;
+static bool gIsMmiLoaded = false;
 static const char gComponentName[] = "ComplianceEngine";
 
 int BaselineIsValidResourceIdRuleId(const char* resourceId, const char* ruleId, const char* payloadKey, OsConfigLogHandle log)
@@ -22,6 +25,7 @@ int BaselineIsCorrectDistribution(const char* payloadKey, OsConfigLogHandle log)
 }
 
 // This function is called in library constructor in OsConfigResource.c
+// once per Baseline lifetime
 void BaselineInitialize(OsConfigLogHandle log)
 {
     ComplianceEngineInitialize(log);
@@ -29,17 +33,59 @@ void BaselineInitialize(OsConfigLogHandle log)
 }
 
 // This function is called in library destructor in OsConfigResource.c
+// once per Baseline lifetime
 void BaselineShutdown(OsConfigLogHandle log)
 {
     UNUSED(log);
     if (NULL == gComplianceEngine)
     {
+        gIsMmiLoaded = false;
         return;
     }
 
     ComplianceEngineMmiClose(gComplianceEngine);
     ComplianceEngineShutdown();
     gComplianceEngine = NULL;
+    gIsMmiLoaded = false;
+}
+
+// This function is called after BaselineInitialize and before BaselineMmiUnload
+// may be called many times per Baseline lifetime
+void BaselineMmiLoad(OsConfigLogHandle log)
+{
+    if (NULL == gComplianceEngine)
+    {
+        OsConfigLogError(log, "BaselineMmiLoad called before BaselineInitialize");
+        return;
+    }
+
+    if (gIsMmiLoaded)
+    {
+        OsConfigLogError(log, "BaselineMmiLoad called without a matching BaselineMmiUnload");
+        return;
+    }
+
+    ComplianceEngineLoad(gComplianceEngine, gComponentName);
+    gIsMmiLoaded = true;
+}
+// This function is called in after BaselineMmiLoad and before BaselineShutdown
+// may be called many times per Baseline lifetime
+void BaselineMmiUnload(OsConfigLogHandle log)
+{
+    if (NULL == gComplianceEngine)
+    {
+        OsConfigLogError(log, "BaselineMmiUnload called before BaselineInitialize");
+        return;
+    }
+
+    if (!gIsMmiLoaded)
+    {
+        OsConfigLogError(log, "BaselineMmiUnload called without a matching BaselineMmiLoad");
+        return;
+    }
+
+    ComplianceEngineUnload(gComplianceEngine, gComponentName);
+    gIsMmiLoaded = false;
 }
 
 int BaselineMmiGet(const char* componentName, const char* objectName, char** payload, int* payloadSizeBytes, unsigned int maxPayloadSizeBytes, OsConfigLogHandle log)

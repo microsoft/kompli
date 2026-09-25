@@ -6,7 +6,6 @@
 #include <Optional.h>
 #include <Regex.h>
 #include <StringTools.h>
-#include <Telemetry.h>
 #include <Users.h>
 #include <cctype>
 #include <cstring>
@@ -25,7 +24,7 @@ namespace
 {
 std::string ReplaceAuidPlaceholder(const std::string& option, int uidMin)
 {
-    regex auidRegex(R"(-F auid>=[0-9]+\b)");
+    regex auidRegex(R"(auid>=[0-9]+\b)");
     smatch m;
     std::string replaced = option;
     // Replace all matches of auidRegex with the new value
@@ -39,8 +38,8 @@ std::string ReplaceAuidPlaceholder(const std::string& option, int uidMin)
         }
         auto pos = m.position(0) + offset;
         auto len = m.length(0);
-        replaced.replace(pos, len, "-F auid>=" + std::to_string(uidMin));
-        offset = pos + std::string("-F auid>=").length() + std::to_string(uidMin).length();
+        replaced.replace(pos, len, "auid>=" + std::to_string(uidMin));
+        offset = pos + std::string("auid>=").length() + std::to_string(uidMin).length();
     }
     return replaced;
 }
@@ -217,7 +216,6 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
     catch (const regex_error& e)
     {
         OsConfigLogError(context.GetLogHandle(), "Invalid searchItem regex: %s", e.what());
-        OSConfigTelemetryStatusTrace("regex", EINVAL);
         return indicators.NonCompliant("Invalid searchItem regex: " + std::string(e.what()));
     }
     std::vector<std::string> incompleteRules;

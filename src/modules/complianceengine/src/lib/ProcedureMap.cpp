@@ -11,6 +11,9 @@ namespace ComplianceEngine
 // AideAttributes.h:18
 const char* Bindings<AideAttributesParams>::names[] = {"configPath", "filename", "attributes"};
 
+// AksCommand.h:30
+const char* Bindings<AksCommandParams>::names[] = {"operation", "clusterName", "resourceGroup", "nodeName", "pattern", "matchMeansCompliant"};
+
 // ApparmorProfileState.h:15
 const char* Bindings<ApparmorProfileStateParams>::names[] = {"enforce"};
 
@@ -32,8 +35,8 @@ const char* Bindings<FilePermissionsParams>::names[] = {"path", "owner", "group"
 // FilePermissions.h:82
 const char* Bindings<FilePermissionsCollectionParams>::names[] = {"directory", "recurse", "directoriesOnly", "allFileTypes", "excludeSymlinks", "excludeDirectories", "maximumUid", "maximumGid", "filePattern", "filePatternIsRegex", "owner", "group", "permissions", "mask", "behavior"};
 
-// FileRegexMatch.h:73
-const char* Bindings<FileRegexMatchParams>::names[] = {"path", "filenamePattern", "matchOperation", "matchPattern", "stateOperation", "statePattern", "minimumValue", "maximumValue", "allMatches", "ignoreCase", "behavior"};
+// FileRegexMatch.h:82
+const char* Bindings<FileRegexMatchParams>::names[] = {"path", "filenamePattern", "filenameSearch", "matchOperation", "matchPattern", "stateOperation", "statePattern", "minimumValue", "maximumValue", "allMatches", "wholeFile", "noneMatches", "ignoreCase", "behavior"};
 
 // FileSymlinkTarget.h:15
 const char* Bindings<FileSymlinkTargetParams>::names[] = {"filename", "targetPattern"};
@@ -55,6 +58,9 @@ const char* Bindings<LoginDefsOptionParams>::names[] = {"option", "value", "comp
 
 // MountPointExists.h:15
 const char* Bindings<MountPointExistsParams>::names[] = {"mountPoint"};
+
+// MtaLocalOnly.h:32
+const char* Bindings<MtaLocalOnlyParams>::names[] = {"configurationVersion"};
 
 // NetworkInterfaceFlag.h:73
 const char* Bindings<NetworkInterfaceFlagParams>::names[] = {"flag", "interfaceName"};
@@ -109,6 +115,7 @@ const char* Bindings<UniqueUserIdParams>::names[] = {"username", "uid", "gid"};
 
 const ProcedureMap Evaluator::mProcedureMap = {
     {"AideAttributes", {MakeHandler(AuditAideAttributes), nullptr}},
+    {"AksCommand", {MakeHandler(AuditAksCommand), nullptr}},
     {"ApparmorProfileState", {MakeHandler(AuditApparmorProfileState), nullptr}},
     {"AuditFailure", {MakeHandler(AuditAuditFailure), nullptr}},
     {"AuditGetParamValues", {MakeHandler(AuditAuditGetParamValues), nullptr}},
@@ -169,6 +176,18 @@ const ProcedureMap Evaluator::mProcedureMap = {
 
 namespace std
 {
+string to_string(const ComplianceEngine::AksCommandOperation value) noexcept(false)
+{
+    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::AksCommandOperation>();
+    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto it = revmap.find(value);
+    if (revmap.end() == it)
+    {
+        throw std::out_of_range("Invalid enum value");
+    }
+    return it->second;
+}
+
 string to_string(const ComplianceEngine::Behavior value) noexcept(false)
 {
     const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::Behavior>();
@@ -244,6 +263,18 @@ string to_string(const ComplianceEngine::GsettingsKeyType value) noexcept(false)
 string to_string(const ComplianceEngine::GsettingsOperationType value) noexcept(false)
 {
     const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::GsettingsOperationType>();
+    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto it = revmap.find(value);
+    if (revmap.end() == it)
+    {
+        throw std::out_of_range("Invalid enum value");
+    }
+    return it->second;
+}
+
+string to_string(const ComplianceEngine::MtaConfigurationVersion value) noexcept(false)
+{
+    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::MtaConfigurationVersion>();
     static const auto revmap = ComplianceEngine::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
