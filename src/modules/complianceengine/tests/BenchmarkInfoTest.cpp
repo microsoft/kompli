@@ -195,6 +195,13 @@ TEST_F(BenchmarkInfoTest, FromMetadata_RejectsEmptyBenchmarkVersion)
     ASSERT_EQ(result.Error().code, EINVAL);
 }
 
+TEST_F(BenchmarkInfoTest, FromMetadata_RejectsInvalidDistributionVersionGlobbing)
+{
+    auto result = BenchmarkInfo::FromMetadata("cis", "ubuntu", "22.[", "v1.0.0");
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ("Invalid benchmark distribution version: 22.[. Globbing characters [ ] { } are not allowed.", result.Error().message);
+}
+
 TEST_F(BenchmarkInfoTest, Match_1)
 {
     auto benchmarkInfo = BenchmarkInfo::Parse("/cis/ubuntu/20.04/v1.0.0/x/y/z");
@@ -249,21 +256,21 @@ TEST_F(BenchmarkInfoTest, InvalidGlobbing_1)
 {
     auto benchmarkInfo = BenchmarkInfo::Parse("/cis/ubuntu/[/v1.0.0/x/y/z");
     ASSERT_FALSE(benchmarkInfo.HasValue());
-    EXPECT_EQ("Invalid benchmark version: [. Globbing characters [ ] { } are not allowed.", benchmarkInfo.Error().message);
+    EXPECT_EQ("Invalid benchmark distribution version: [. Globbing characters [ ] { } are not allowed.", benchmarkInfo.Error().message);
 }
 
 TEST_F(BenchmarkInfoTest, InvalidGlobbing_2)
 {
     auto benchmarkInfo = BenchmarkInfo::Parse("/cis/ubuntu/foo]/v1.0.0/x/y/z");
     ASSERT_FALSE(benchmarkInfo.HasValue());
-    EXPECT_EQ("Invalid benchmark version: foo]. Globbing characters [ ] { } are not allowed.", benchmarkInfo.Error().message);
+    EXPECT_EQ("Invalid benchmark distribution version: foo]. Globbing characters [ ] { } are not allowed.", benchmarkInfo.Error().message);
 }
 
 TEST_F(BenchmarkInfoTest, InvalidGlobbing_3)
 {
     auto benchmarkInfo = BenchmarkInfo::Parse("/cis/ubuntu/bar{}/v1.0.0/x/y/z");
     ASSERT_FALSE(benchmarkInfo.HasValue());
-    EXPECT_EQ("Invalid benchmark version: bar{}. Globbing characters [ ] { } are not allowed.", benchmarkInfo.Error().message);
+    EXPECT_EQ("Invalid benchmark distribution version: bar{}. Globbing characters [ ] { } are not allowed.", benchmarkInfo.Error().message);
 }
 
 TEST_F(BenchmarkInfoTest, SanitizedGlobbing_1)

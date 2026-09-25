@@ -23,7 +23,7 @@ Optional<Error> ValidateGlobbing(const string& distributionVersion)
     {
         if (strchr("[]{}", c) != nullptr)
         {
-            return Error("Invalid benchmark version: " + distributionVersion + ". Globbing characters [ ] { } are not allowed.", EINVAL);
+            return Error("Invalid benchmark distribution version: " + distributionVersion + ". Globbing characters [ ] { } are not allowed.", EINVAL);
         }
     }
 
