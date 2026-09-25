@@ -148,8 +148,8 @@ below).
 
 - Checksum validation of the benchmark file is deliberately **not** kompli's
   job — that's the package manager's/admin's responsibility for whatever
-  delivers definitions to `/etc/kompli/definitions/` (see ADR-0008). Plans
-  therefore pin a benchmark by `file`, not by content hash.
+  delivers definitions to `/etc/kompli/definitions/`. Plans therefore pin a
+  benchmark by `file`, not by content hash.
 - Plans are meant to be hand-editable afterward. A rule manually **removed**
   from a block's `rules` map is not an error — it's how a user narrows a plan
   down. A whole `benchmarks[]` entry can be removed the same way.

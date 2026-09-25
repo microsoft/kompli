@@ -87,8 +87,25 @@
       "type": "object",
       "additionalProperties": true,
       "required": [
-        "version",
         "rules"
+      ],
+      "anyOf": [
+        {
+          "required": ["version"]
+        },
+        {
+          "properties": {
+            "rules": {
+              "minItems": 1,
+              "items": {
+                "required": ["section", "payloadKey"],
+                "not": {
+                  "required": ["id"]
+                }
+              }
+            }
+          }
+        }
       ],
       "properties": {
         "version": {
@@ -113,11 +130,27 @@
       "required": [
         "ruleName",
         "title",
-        "id",
         "ruleId",
         "tags",
         "metadata",
         "payload"
+      ],
+      "oneOf": [
+        {
+          "required": ["section", "payloadKey"],
+          "not": {
+            "required": ["id"]
+          }
+        },
+        {
+          "required": ["id"],
+          "not": {
+            "anyOf": [
+              { "required": ["section"] },
+              { "required": ["payloadKey"] }
+            ]
+          }
+        }
       ],
       "properties": {
         "ruleName": {
@@ -129,6 +162,16 @@
           "type": "string",
           "minLength": 1,
           "description": "Human-readable rule title (id prefix + rule name)."
+        },
+        "section": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Legacy externally-quoted per-rule identifier accepted during producer migration."
+        },
+        "payloadKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Legacy full payload key accepted during producer migration."
         },
         "id": {
           "type": "string",

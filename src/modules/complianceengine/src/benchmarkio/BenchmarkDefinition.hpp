@@ -47,8 +47,8 @@ struct BenchmarkDocument
 
     // One entry per rule in spec.rules, in document order. Each rule maps as:
     //   resourceID   <- rule.title
-    //   id           <- rule.id (verbatim, framework-defined, unique within
-    //                   this file)
+    //   id           <- rule.id, or the normalized legacy rule.section
+    //                   (framework-defined and unique within this file)
     //   ruleId       <- rule.ruleId (stable external correlation identifier)
     //   procedure    <- rule.payload serialized as compact JSON (the ComplianceEngine
     //                   parses plain JSON directly; see Engine::SetProcedure)
@@ -61,11 +61,12 @@ struct BenchmarkDocument
 // requires the resource envelope (apiVersion / kind == "BenchmarkDefinition" /
 // metadata / spec.rules), the file-level prefix fields (metadata.labels.
 // framework/distribution/distributionVersion, metadata.annotations.
-// benchmarkVersion), and the fixed per-rule field set (ruleName, title, id,
-// ruleId, payload). Rejects a document with a duplicate `id` across its rules (id
-// must be unique within one file) and rejects malformed input. Consistent
-// with the definition schema (additionalProperties: true), unknown fields
-// are ignored rather than rejected.
+// benchmarkVersion), and the fixed per-rule fields. During producer migration,
+// each rule must carry either `id` or the complete legacy `section` plus
+// `payloadKey` identity; legacy sections are normalized into `id`. Rejects a
+// document with a duplicate `id` across its rules (id must be unique within one
+// file) and rejects malformed input. Consistent with the definition schema
+// (additionalProperties: true), unknown fields are ignored rather than rejected.
 Result<BenchmarkDocument> ParseString(const std::string& json, OsConfigLogHandle logHandle);
 
 // Reads the whole document from a stream (stdin / tests), bounding the total
