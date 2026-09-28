@@ -53,8 +53,10 @@ string JoinSet(const std::set<string>& values)
         {
             joined += ", ";
         }
+
         joined += value;
     }
+
     return joined;
 }
 
@@ -71,10 +73,12 @@ Result<string> ReadAllBounded(std::istream& stream)
             return Error("Benchmark definition exceeds the maximum size of " + std::to_string(kMaxInputBytes) + " bytes", EFBIG);
         }
     }
+
     if (stream.bad())
     {
         return Error("I/O error reading benchmark definition", EIO);
     }
+
     return content;
 }
 
@@ -88,10 +92,12 @@ Result<string> ReadVerifiedFile(const string& path, OsConfigLogHandle logHandle)
     {
         return Error("Refusing to open benchmark definition with an unsafe path: '" + path + "'", EACCES);
     }
+
     if (BenchmarkIO::RefuseWritableParentDir(path, logHandle))
     {
         return Error("Refusing to open benchmark definition in a writable parent directory: '" + path + "'", EACCES);
     }
+
     auto fdResult = BenchmarkIO::OpenVerifiedInput(path, logHandle);
     if (!fdResult.HasValue())
     {
@@ -111,6 +117,7 @@ Result<string> ReadRequiredString(const JSON_Object* object, const char* key, co
     {
         return Error("Benchmark definition " + context + " is missing required string field '" + string(key) + "'", EINVAL);
     }
+
     const char* value = json_value_get_string(jsonValue);
     const size_t length = json_value_get_string_len(jsonValue);
     string result(value, length);
@@ -118,10 +125,12 @@ Result<string> ReadRequiredString(const JSON_Object* object, const char* key, co
     {
         return Error("Benchmark definition " + context + " has an embedded NUL in '" + string(key) + "'", EINVAL);
     }
+
     if (!allowEmpty && result.empty())
     {
         return Error("Benchmark definition " + context + " has an empty '" + string(key) + "' field", EINVAL);
     }
+
     return result;
 }
 
@@ -147,16 +156,19 @@ Result<Optional<string>> OptionalString(const JSON_Object* object, const char* k
     {
         return Optional<string>();
     }
+
     if (json_value_get_type(jsonValue) != JSONString)
     {
         return Error("Benchmark definition " + context + " has a non-string '" + string(key) + "' field", EINVAL);
     }
+
     const char* value = json_value_get_string(jsonValue);
     string result(value, json_value_get_string_len(jsonValue));
     if (string::npos != result.find('\0'))
     {
         return Error("Benchmark definition " + context + " has an embedded NUL in '" + string(key) + "'", EINVAL);
     }
+
     return Optional<string>(std::move(result));
 }
 
@@ -177,6 +189,7 @@ Result<string> SerializeProcedure(const JSON_Object* ruleObject, const string& c
     {
         return Error("Failed to serialize the payload of benchmark definition " + context, EINVAL);
     }
+
     string procedure(serialized);
     json_free_serialized_string(serialized);
     return procedure;
@@ -194,10 +207,12 @@ Result<std::map<string, BenchmarkIO::ParameterMetadata>> ParseParameterMetadata(
     {
         return result;
     }
+
     if (json_value_get_type(value) != JSONObject)
     {
         return Error("Benchmark definition " + context + " has a 'parameterMetadata' field that is not a JSON object", EINVAL);
     }
+
     const JSON_Object* metadataObject = json_value_get_object(value);
     const size_t count = json_object_get_count(metadataObject);
     for (size_t i = 0; i < count; ++i)
@@ -207,6 +222,7 @@ Result<std::map<string, BenchmarkIO::ParameterMetadata>> ParseParameterMetadata(
         {
             return Error("Benchmark definition " + context + " has a 'parameterMetadata' entry with an empty name", EINVAL);
         }
+
         const string entryContext = context + ".parameterMetadata." + string(name);
         const JSON_Value* entryValue = json_object_get_value_at(metadataObject, i);
         const JSON_Object* entryObject = (nullptr != entryValue) ? json_value_get_object(entryValue) : nullptr;
@@ -214,11 +230,13 @@ Result<std::map<string, BenchmarkIO::ParameterMetadata>> ParseParameterMetadata(
         {
             return Error("Benchmark definition " + entryContext + " is not a JSON object", EINVAL);
         }
+
         auto defaultValue = RequiredString(entryObject, "default", entryContext);
         if (!defaultValue.HasValue())
         {
             return defaultValue.Error();
         }
+
         auto type = RequiredString(entryObject, "type", entryContext);
         if (!type.HasValue())
         {
@@ -233,22 +251,26 @@ Result<std::map<string, BenchmarkIO::ParameterMetadata>> ParseParameterMetadata(
         {
             return displayName.Error();
         }
+
         metadata.displayName = std::move(displayName.Value());
         auto validationRegex = OptionalString(entryObject, "validationRegex", entryContext);
         if (!validationRegex.HasValue())
         {
             return validationRegex.Error();
         }
+
         metadata.validationRegex = std::move(validationRegex.Value());
         auto validationFailedMessage = OptionalString(entryObject, "validationFailedMessage", entryContext);
         if (!validationFailedMessage.HasValue())
         {
             return validationFailedMessage.Error();
         }
+
         metadata.validationFailedMessage = std::move(validationFailedMessage.Value());
         metadata.mandatory = (1 == json_object_get_boolean(entryObject, "mandatory"));
         result[name] = std::move(metadata);
     }
+
     return result;
 }
 
@@ -262,6 +284,7 @@ Result<std::vector<string>> ParseTags(const JSON_Object* ruleObject, const strin
     {
         return Error("Benchmark definition " + context + " is missing an array 'tags' field", EINVAL);
     }
+
     const JSON_Array* array = json_value_get_array(value);
     const size_t count = json_array_get_count(array);
     std::vector<string> tags;
@@ -273,14 +296,17 @@ Result<std::vector<string>> ParseTags(const JSON_Object* ruleObject, const strin
         {
             return Error("Benchmark definition " + context + " has a non-string 'tags' entry", EINVAL);
         }
+
         const char* tag = json_value_get_string(tagValue);
         string decodedTag(tag, json_value_get_string_len(tagValue));
         if (string::npos != decodedTag.find('\0'))
         {
             return Error("Benchmark definition " + context + " has an embedded NUL in a 'tags' entry", EINVAL);
         }
+
         tags.push_back(std::move(decodedTag));
     }
+
     return tags;
 }
 
@@ -293,6 +319,7 @@ Result<BenchmarkIO::Metadata> ParseMetadata(const JSON_Object* ruleObject, const
     {
         return Error("Benchmark definition " + context + " is missing an object 'metadata' field", EINVAL);
     }
+
     const string metadataContext = context + ".metadata";
 
     auto description = RequiredStringAllowEmpty(metadataObject, "description", metadataContext);
@@ -300,21 +327,25 @@ Result<BenchmarkIO::Metadata> ParseMetadata(const JSON_Object* ruleObject, const
     {
         return description.Error();
     }
+
     auto rationale = RequiredStringAllowEmpty(metadataObject, "rationale", metadataContext);
     if (!rationale.HasValue())
     {
         return rationale.Error();
     }
+
     auto fixtext = RequiredStringAllowEmpty(metadataObject, "fixtext", metadataContext);
     if (!fixtext.HasValue())
     {
         return fixtext.Error();
     }
+
     auto severity = RequiredStringAllowEmpty(metadataObject, "severity", metadataContext);
     if (!severity.HasValue())
     {
         return severity.Error();
     }
+
     auto references = RequiredStringAllowEmpty(metadataObject, "references", metadataContext);
     if (!references.HasValue())
     {
@@ -343,24 +374,28 @@ Optional<Error> ValidateLegacyPayloadKeyPrefix(const BenchmarkInfo& payloadKeyIn
                          "' disagrees with metadata framework '" + documentInfo.framework + "'",
             EINVAL);
     }
+
     if (payloadKeyInfo.distribution != documentInfo.distribution)
     {
         return Error("Benchmark definition " + context + " payloadKey distribution '" + std::to_string(payloadKeyInfo.distribution) +
                          "' disagrees with metadata distribution '" + std::to_string(documentInfo.distribution) + "'",
             EINVAL);
     }
+
     if (payloadKeyInfo.version != documentInfo.version)
     {
         return Error("Benchmark definition " + context + " payloadKey distribution version '" + payloadKeyInfo.version +
                          "' disagrees with metadata distribution version '" + documentInfo.version + "'",
             EINVAL);
     }
+
     if (BenchmarkVersionWithoutOptionalPrefix(payloadKeyInfo.benchmarkVersion) != BenchmarkVersionWithoutOptionalPrefix(documentInfo.benchmarkVersion))
     {
         return Error("Benchmark definition " + context + " payloadKey benchmark version '" + payloadKeyInfo.benchmarkVersion +
                          "' disagrees with metadata benchmark version '" + documentInfo.benchmarkVersion + "'",
             EINVAL);
     }
+
     return Optional<Error>();
 }
 
@@ -373,31 +408,37 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index, const Be
     {
         return title.Error();
     }
+
     auto ruleName = RequiredString(ruleObject, "ruleName", context);
     if (!ruleName.HasValue())
     {
         return ruleName.Error();
     }
+
     auto ruleId = RequiredString(ruleObject, "ruleId", context);
     if (!ruleId.HasValue())
     {
         return ruleId.Error();
     }
+
     auto procedure = SerializeProcedure(ruleObject, context);
     if (!procedure.HasValue())
     {
         return procedure.Error();
     }
+
     auto parameterMetadata = ParseParameterMetadata(ruleObject, context);
     if (!parameterMetadata.HasValue())
     {
         return parameterMetadata.Error();
     }
+
     auto tags = ParseTags(ruleObject, context);
     if (!tags.HasValue())
     {
         return tags.Error();
     }
+
     auto metadata = ParseMetadata(ruleObject, context);
     if (!metadata.HasValue())
     {
@@ -421,6 +462,7 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index, const Be
         {
             return parsedId.Error();
         }
+
         id = std::move(parsedId.Value());
     }
     else
@@ -435,16 +477,19 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index, const Be
         {
             return section.Error();
         }
+
         auto payloadKey = RequiredString(ruleObject, "payloadKey", context);
         if (!payloadKey.HasValue())
         {
             return payloadKey.Error();
         }
+
         auto payloadKeyInfo = BenchmarkInfo::Parse(payloadKey.Value());
         if (!payloadKeyInfo.HasValue())
         {
             return Error("Failed to parse payloadKey of benchmark definition " + context + ": " + payloadKeyInfo.Error().message, payloadKeyInfo.Error().code);
         }
+
         auto prefixError = ValidateLegacyPayloadKeyPrefix(payloadKeyInfo.Value(), documentInfo, context);
         if (prefixError.HasValue())
         {
@@ -459,6 +504,7 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index, const Be
                              "') that disagrees with its payloadKey section ('" + payloadKeySection + "')",
                 EINVAL);
         }
+
         id = std::move(section.Value());
     }
 
@@ -514,6 +560,7 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
     {
         return apiVersion.Error();
     }
+
     if (0 == kSupportedApiVersions.count(apiVersion.Value()))
     {
         return Error("Benchmark definition has an unsupported 'apiVersion' (\"" + apiVersion.Value() + "\"); supported: " + JoinSet(kSupportedApiVersions), EINVAL);
@@ -524,6 +571,7 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
     {
         return Error("Benchmark definition is missing the 'metadata' object", EINVAL);
     }
+
     auto name = RequiredString(metadata, "name", "metadata");
     if (!name.HasValue())
     {
@@ -564,6 +612,7 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
         {
             return Error("Benchmark definition 'metadata.labels' is not an object", EINVAL);
         }
+
         if (nullptr == annotations)
         {
             return Error("Benchmark definition 'metadata.annotations' is not an object", EINVAL);
@@ -574,34 +623,43 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
         {
             return framework.Error();
         }
+
         auto distribution = RequiredString(labels, "distribution", "metadata.labels");
         if (!distribution.HasValue())
         {
             return distribution.Error();
         }
+
         auto distributionVersion = RequiredString(labels, "distributionVersion", "metadata.labels");
         if (!distributionVersion.HasValue())
         {
             return distributionVersion.Error();
         }
+
         auto benchmarkVersion = RequiredString(annotations, "benchmarkVersion", "metadata.annotations");
         if (!benchmarkVersion.HasValue())
         {
             return benchmarkVersion.Error();
         }
+
         auto benchmarkInfo = BenchmarkInfo::FromMetadata(framework.Value(), distribution.Value(), distributionVersion.Value(), benchmarkVersion.Value());
         if (!benchmarkInfo.HasValue())
         {
             return Error("Benchmark definition has an invalid file-level prefix: " + benchmarkInfo.Error().message, benchmarkInfo.Error().code);
         }
+
         documentInfo = std::move(benchmarkInfo.Value());
     }
     else
     {
+        // TODO(robertwoj): Legacy payload handling is TEMPORARY
+        // and will be removed once the PR which
+        // adds the new functionality for hoisted identities is merged.
         if (0 == ruleCount)
         {
             return Error("Legacy benchmark definition without hoisted identity must contain at least one rule", EINVAL);
         }
+
         for (size_t i = 0; i < ruleCount; ++i)
         {
             const JSON_Object* ruleObject = json_array_get_object(rules, i);
@@ -609,6 +667,7 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
             {
                 return Error("Benchmark definition rule #" + std::to_string(i) + " is not a JSON object", EINVAL);
             }
+
             if (json_object_has_value(ruleObject, "id") == 1 || json_object_has_value(ruleObject, "section") != 1 ||
                 json_object_has_value(ruleObject, "payloadKey") != 1)
             {
@@ -622,11 +681,13 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
         {
             return firstPayloadKey.Error();
         }
+
         auto benchmarkInfo = BenchmarkInfo::Parse(firstPayloadKey.Value());
         if (!benchmarkInfo.HasValue())
         {
             return Error("Failed to derive legacy benchmark identity from rule #0 payloadKey: " + benchmarkInfo.Error().message, benchmarkInfo.Error().code);
         }
+
         documentInfo = std::move(benchmarkInfo.Value());
         documentInfo.section.clear();
     }
@@ -654,10 +715,12 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
             OsConfigLogError(logHandle, "Failed to parse benchmark definition rule #%zu: %s", i, resource.Error().message.c_str());
             return resource.Error();
         }
+
         if (!seenIds.insert(resource.Value().id).second)
         {
             return Error("Benchmark definition rule #" + std::to_string(i) + " has a duplicate id: '" + resource.Value().id + "'", EINVAL);
         }
+
         doc.resources.push_back(std::move(resource.Value()));
     }
 
@@ -671,6 +734,7 @@ Result<BenchmarkDocument> ParseStream(std::istream& stream, OsConfigLogHandle lo
     {
         return content.Error();
     }
+
     return ParseString(content.Value(), logHandle);
 }
 
@@ -681,6 +745,7 @@ Result<BenchmarkDocument> ParseFile(const string& path, OsConfigLogHandle logHan
     {
         return content.Error();
     }
+
     return ParseString(content.Value(), logHandle);
 }
 
