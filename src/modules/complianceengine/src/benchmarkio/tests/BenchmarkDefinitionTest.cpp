@@ -156,6 +156,22 @@ TEST(BenchmarkDefinitionParserTest, LegacyPayloadKeyAllowsOptionalBenchmarkVersi
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
 }
 
+TEST(BenchmarkDefinitionParserTest, ParsesLegacyDocumentWithoutHoistedIdentity)
+{
+    const char* const legacyRule = R"({
+        "section": "1.1.1.1", "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "ruleId": "rule-id", "ruleName": "R", "title": "t",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    auto result = ParseString(MakeDocWithMetadata(R"({"name":"legacy"})", std::string("[") + legacyRule + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().benchmarkInfo.framework, "cis");
+    EXPECT_EQ(result.Value().benchmarkInfo.distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
+    EXPECT_EQ(result.Value().benchmarkInfo.version, "22.04");
+    EXPECT_EQ(result.Value().benchmarkInfo.benchmarkVersion, "v2.0.0");
+    EXPECT_TRUE(result.Value().benchmarkInfo.section.empty());
+}
+
 // ---------------------------------------------------------------------------
 // Malformed documents
 // ---------------------------------------------------------------------------
@@ -201,6 +217,27 @@ TEST(BenchmarkDefinitionParserTest, RejectsMissingAnnotations)
 {
     const std::string metadata = R"({"name":"n","labels":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04"}})";
     EXPECT_FALSE(ParseString(MakeDocWithMetadata(metadata, std::string("[") + kValidRule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsPartialHoistedIdentityOnLegacyDocument)
+{
+    const char* const legacyRule = R"({
+        "section": "1.1.1.1", "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "ruleId": "rule-id", "ruleName": "R", "title": "t",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    const std::string metadata = R"({"name":"legacy","labels":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04"}})";
+    EXPECT_FALSE(ParseString(MakeDocWithMetadata(metadata, std::string("[") + legacyRule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsSoleIdDocumentWithoutHoistedIdentity)
+{
+    EXPECT_FALSE(ParseString(MakeDocWithMetadata(R"({"name":"n"})", std::string("[") + kValidRule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEmptyLegacyDocumentWithoutHoistedIdentity)
+{
+    EXPECT_FALSE(ParseString(MakeDocWithMetadata(R"({"name":"legacy"})", "[]"), nullptr).HasValue());
 }
 
 TEST(BenchmarkDefinitionParserTest, AcceptsArbitraryFrameworkAndBenchmarkVersion)
@@ -429,6 +466,22 @@ TEST(BenchmarkDefinitionParserTest, RejectsLegacyPayloadKeyBenchmarkVersionMisma
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsInconsistentLegacyPayloadKeysWithoutHoistedIdentity)
+{
+    const char* const firstRule = R"({
+        "section": "1.1.1.1", "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "ruleId": "rule-a", "ruleName": "A", "title": "a",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    const char* const secondRule = R"({
+        "section": "1.1.1.2", "payloadKey": "/cis/ubuntu/18.04/v2.0.0/1/1/1/2",
+        "ruleId": "rule-b", "ruleName": "B", "title": "b",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    const std::string rules = std::string("[") + firstRule + "," + secondRule + "]";
+    EXPECT_FALSE(ParseString(MakeDocWithMetadata(R"({"name":"legacy"})", rules), nullptr).HasValue());
 }
 
 TEST(BenchmarkDefinitionParserTest, RejectsDuplicateIds)

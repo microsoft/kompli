@@ -269,42 +269,6 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
         return name.Error();
     }
 
-    auto* labels = json_object_get_object(metadata, "labels");
-    if (nullptr == labels)
-    {
-        return Error("Benchmark definition is missing the 'metadata.labels' object", EINVAL);
-    }
-    auto framework = RequiredString(labels, "framework", "metadata.labels");
-    if (!framework.HasValue())
-    {
-        return framework.Error();
-    }
-    auto distribution = RequiredString(labels, "distribution", "metadata.labels");
-    if (!distribution.HasValue())
-    {
-        return distribution.Error();
-    }
-    auto distributionVersion = RequiredString(labels, "distributionVersion", "metadata.labels");
-    if (!distributionVersion.HasValue())
-    {
-        return distributionVersion.Error();
-    }
-    auto* annotations = json_object_get_object(metadata, "annotations");
-    if (nullptr == annotations)
-    {
-        return Error("Benchmark definition is missing the 'metadata.annotations' object", EINVAL);
-    }
-    auto benchmarkVersion = RequiredString(annotations, "benchmarkVersion", "metadata.annotations");
-    if (!benchmarkVersion.HasValue())
-    {
-        return benchmarkVersion.Error();
-    }
-    auto benchmarkInfo = BenchmarkInfo::FromMetadata(framework.Value(), distribution.Value(), distributionVersion.Value(), benchmarkVersion.Value());
-    if (!benchmarkInfo.HasValue())
-    {
-        return Error("Benchmark definition has invalid file-level identity: " + benchmarkInfo.Error().message, benchmarkInfo.Error().code);
-    }
-
     auto* spec = json_object_get_object(root, "spec");
     if (nullptr == spec)
     {
@@ -323,9 +287,92 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
         return Error("Benchmark definition has more than the maximum of " + std::to_string(kMaxRules) + " rules", E2BIG);
     }
 
+    BenchmarkInfo documentInfo;
+    const JSON_Value* labelsValue = json_object_get_value(metadata, "labels");
+    const JSON_Value* annotationsValue = json_object_get_value(metadata, "annotations");
+    if ((nullptr == labelsValue) != (nullptr == annotationsValue))
+    {
+        return Error("Benchmark definition metadata must contain both 'labels' and 'annotations', or neither for a legacy document", EINVAL);
+    }
+
+    if (nullptr != labelsValue)
+    {
+        const JSON_Object* labels = json_value_get_object(labelsValue);
+        const JSON_Object* annotations = json_value_get_object(annotationsValue);
+        if (nullptr == labels)
+        {
+            return Error("Benchmark definition 'metadata.labels' is not an object", EINVAL);
+        }
+        if (nullptr == annotations)
+        {
+            return Error("Benchmark definition 'metadata.annotations' is not an object", EINVAL);
+        }
+
+        auto framework = RequiredString(labels, "framework", "metadata.labels");
+        if (!framework.HasValue())
+        {
+            return framework.Error();
+        }
+        auto distribution = RequiredString(labels, "distribution", "metadata.labels");
+        if (!distribution.HasValue())
+        {
+            return distribution.Error();
+        }
+        auto distributionVersion = RequiredString(labels, "distributionVersion", "metadata.labels");
+        if (!distributionVersion.HasValue())
+        {
+            return distributionVersion.Error();
+        }
+        auto benchmarkVersion = RequiredString(annotations, "benchmarkVersion", "metadata.annotations");
+        if (!benchmarkVersion.HasValue())
+        {
+            return benchmarkVersion.Error();
+        }
+        auto benchmarkInfo = BenchmarkInfo::FromMetadata(framework.Value(), distribution.Value(), distributionVersion.Value(), benchmarkVersion.Value());
+        if (!benchmarkInfo.HasValue())
+        {
+            return Error("Benchmark definition has invalid file-level identity: " + benchmarkInfo.Error().message, benchmarkInfo.Error().code);
+        }
+        documentInfo = std::move(benchmarkInfo.Value());
+    }
+    else
+    {
+        if (0 == ruleCount)
+        {
+            return Error("Legacy benchmark definition without hoisted identity must contain at least one rule", EINVAL);
+        }
+        for (size_t i = 0; i < ruleCount; ++i)
+        {
+            const JSON_Object* ruleObject = json_array_get_object(rules, i);
+            if (nullptr == ruleObject)
+            {
+                return Error("Benchmark definition rule #" + std::to_string(i) + " is not a JSON object", EINVAL);
+            }
+            if (json_object_has_value(ruleObject, "id") == 1 || json_object_has_value(ruleObject, "section") != 1 ||
+                json_object_has_value(ruleObject, "payloadKey") != 1)
+            {
+                return Error("Benchmark definition without hoisted identity must contain only complete legacy rule identities", EINVAL);
+            }
+        }
+
+        const JSON_Object* firstRule = json_array_get_object(rules, 0);
+        auto firstPayloadKey = RequiredString(firstRule, "payloadKey", "rule #0");
+        if (!firstPayloadKey.HasValue())
+        {
+            return firstPayloadKey.Error();
+        }
+        auto benchmarkInfo = BenchmarkInfo::Parse(firstPayloadKey.Value());
+        if (!benchmarkInfo.HasValue())
+        {
+            return Error("Failed to derive legacy benchmark identity from rule #0 payloadKey: " + benchmarkInfo.Error().message, benchmarkInfo.Error().code);
+        }
+        documentInfo = std::move(benchmarkInfo.Value());
+        documentInfo.section.clear();
+    }
+
     BenchmarkDocument result;
     result.name = std::move(name.Value());
-    result.benchmarkInfo = std::move(benchmarkInfo.Value());
+    result.benchmarkInfo = std::move(documentInfo);
     result.resources.reserve(ruleCount);
     std::set<string> seenIds;
     for (size_t i = 0; i < ruleCount; ++i)

@@ -29,16 +29,19 @@ using BenchmarkIO::Resource;
 struct BenchmarkDocument
 {
     std::string name;
+    // Built from hoisted metadata for sole-id definitions or derived from
+    // consistent payload keys for a legacy definition that predates it.
     BenchmarkInfo benchmarkInfo;
     std::vector<Resource> resources;
 };
 
-// Parses the resource envelope, hoisted benchmark identity, and rules carrying
-// the stable external-correlation `ruleId`. During the producer migration, a
-// rule may carry either its framework-defined `id` or the complete legacy
-// `section` + `payloadKey` identity; the legacy section is normalized into
-// Resource::id. Unknown fields are ignored consistently with the definition
-// schema.
+// Parses the resource envelope and rules carrying the stable
+// external-correlation `ruleId`. Sole-id definitions require hoisted benchmark
+// identity. A non-empty, all-legacy document may omit it; the prefix is derived
+// from the first payload key and every rule must agree. During the producer
+// migration, a rule may carry either its framework-defined `id` or the complete
+// legacy `section` + `payloadKey` identity; the legacy section is normalized
+// into Resource::id. Unknown fields are ignored consistently with the schema.
 Result<BenchmarkDocument> ParseString(const std::string& json, OsConfigLogHandle logHandle);
 
 // Reads the whole document from a stream (stdin / tests), bounding the total
