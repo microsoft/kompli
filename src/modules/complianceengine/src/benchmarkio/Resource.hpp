@@ -7,11 +7,21 @@
 #include <BenchmarkInfo.h>
 #include <Optional.h>
 #include <string>
+#include <vector>
 
 namespace ComplianceEngine
 {
 namespace BenchmarkIO
 {
+struct Metadata
+{
+    std::string description;
+    std::string rationale;
+    std::string fixtext;
+    std::string severity;
+    std::string references;
+};
+
 // A single parsed benchmark rule, as consumed by callers (the `kompli` CLI's
 // main loop and output formatters today; `komplid` in the future). Populated
 // by the benchmark-definition parser (BenchmarkDefinition) from one entry of a
@@ -46,6 +56,9 @@ struct Resource
     // The ComplianceEngine rule name (the definition's `ruleName`), shared by the
     // procedure/init/audit/remediate object names the engine is driven with.
     std::string ruleName;
+
+    std::vector<std::string> tags;
+    Metadata metadata;
 
     // True when the rule carries an init object (always true for definitions).
     bool hasInitAudit = false;

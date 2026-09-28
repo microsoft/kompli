@@ -54,6 +54,18 @@ std::string OneRuleDoc()
 {
     return MakeDoc(std::string("[") + kValidRule + "]");
 }
+
+std::string RuleWithReplacement(const std::string& oldField, const std::string& newField)
+{
+    std::string rule = kValidRule;
+    const auto pos = rule.find(oldField);
+    EXPECT_NE(pos, std::string::npos);
+    if (pos != std::string::npos)
+    {
+        rule.replace(pos, oldField.size(), newField);
+    }
+    return MakeDoc("[" + rule + "]");
+}
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -77,6 +89,13 @@ TEST(BenchmarkDefinitionParserTest, ParsesValidDocument)
     // The procedure is the rule's payload serialized as plain JSON.
     EXPECT_NE(res.procedure.find("KernelModuleUnavailable"), std::string::npos);
     EXPECT_NE(res.procedure.find("cramfs"), std::string::npos);
+    ASSERT_EQ(res.tags.size(), 1u);
+    EXPECT_EQ(res.tags[0], "level:l1");
+    EXPECT_EQ(res.metadata.description, "d");
+    EXPECT_EQ(res.metadata.rationale, "r");
+    EXPECT_EQ(res.metadata.fixtext, "f");
+    EXPECT_EQ(res.metadata.severity, "Warning");
+    EXPECT_EQ(res.metadata.references, "x");
 }
 
 TEST(BenchmarkDefinitionParserTest, ParsesMultipleRulesInOrder)
@@ -105,6 +124,8 @@ TEST(BenchmarkDefinitionParserTest, IgnoresUnknownFields)
         "title": "1.1.1.1 Ensure cramfs kernel module is not available",
         "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
         "unexpected": "ignored",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {"X": {}}, "parameters": {}}
     })";
     auto result = ParseString(MakeDoc(std::string("[") + ruleWithExtras + "]"), nullptr);
@@ -168,6 +189,54 @@ TEST(BenchmarkDefinitionParserTest, RejectsRulesNotAnArray)
 // ---------------------------------------------------------------------------
 // Malformed rules
 // ---------------------------------------------------------------------------
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingTags)
+{
+    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("tags": ["level:l1"],)", ""), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleTagsNotAnArray)
+{
+    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("tags": ["level:l1"])", R"("tags": "level:l1")"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleNonStringTagEntry)
+{
+    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("tags": ["level:l1"])", R"("tags": [42])"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingMetadata)
+{
+    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("metadata": {
+        "description": "d",
+        "rationale": "r",
+        "fixtext": "f",
+        "severity": "Warning",
+        "references": "x"
+    },)",
+                                 ""),
+        nullptr)
+                     .HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataNotAnObject)
+{
+    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("metadata": {
+        "description": "d",
+        "rationale": "r",
+        "fixtext": "f",
+        "severity": "Warning",
+        "references": "x"
+    })",
+                                 R"("metadata": [])"),
+        nullptr)
+                     .HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataMissingSeverity)
+{
+    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("severity": "Warning",)", ""), nullptr).HasValue());
+}
 
 TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingTitle)
 {
