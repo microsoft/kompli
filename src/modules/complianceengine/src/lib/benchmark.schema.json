@@ -44,6 +44,7 @@
     "apiVersion": {
       "type": "string",
       "minLength": 1,
+      "pattern": "^[^\\u0000]*$",
       "description": "API version string, e.g. 'v1'. Versions the file format, independently of the benchmark's own version."
     },
     "kind": {
@@ -74,6 +75,7 @@
         "name": {
           "type": "string",
           "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
           "description": "Stable benchmark identifier (the benchmark selector label)."
         },
         "labels": {
@@ -88,16 +90,19 @@
             "framework": {
               "type": "string",
               "minLength": 1,
+              "pattern": "^[^\\u0000]*$",
               "description": "Required opaque benchmark framework identity. It does not select parsing or execution behavior."
             },
             "distribution": {
               "type": "string",
               "minLength": 1,
+              "pattern": "^[^\\u0000]*$",
               "description": "Target Linux distribution, e.g. 'ubuntu'."
             },
             "distributionVersion": {
               "type": "string",
               "minLength": 1,
+              "pattern": "^[^\\u0000]*$",
               "description": "Target distribution version, glob-matched against the host's VERSION_ID (e.g. '22.04', '3.*')."
             }
           },
@@ -115,6 +120,7 @@
             "benchmarkVersion": {
               "type": "string",
               "minLength": 1,
+              "pattern": "^[^\\u0000]*$",
               "description": "Upstream benchmark version (e.g. 'v2.0.0' or 'V2R7')."
             }
           },
@@ -197,31 +203,37 @@
         "ruleName": {
           "type": "string",
           "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
           "description": "PascalCase ComplianceEngine rule name."
         },
         "title": {
           "type": "string",
           "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
           "description": "Human-readable rule title (id prefix + rule name)."
         },
         "section": {
           "type": "string",
           "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
           "description": "Legacy externally-quoted per-rule identifier accepted during producer migration."
         },
         "payloadKey": {
           "type": "string",
           "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
           "description": "Legacy full payload key accepted during producer migration."
         },
         "id": {
           "type": "string",
           "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
           "description": "The rule's externally-quoted, framework-defined identifier (e.g. '1.1.1.1'). The file-level framework/distribution/distributionVersion/benchmarkVersion prefix lives once in metadata.labels/annotations, not repeated here. Unique within a benchmark; not parsed or transformed by kompli."
         },
         "ruleId": {
           "type": "string",
           "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
           "description": "Stable, benchmark-agnostic rule identifier retained unchanged for external correlation."
         },
         "tags": {
@@ -229,7 +241,7 @@
           "description": "Flat, sparse set of framework-agnostic 'axis:value' tags.",
           "items": {
             "type": "string",
-            "pattern": "^[a-z0-9-]+:.+$"
+            "pattern": "^[a-z0-9-]+:[^\\u0000]+$"
           }
         },
         "metadata": {
@@ -244,19 +256,24 @@
           ],
           "properties": {
             "description": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[^\\u0000]*$"
             },
             "rationale": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[^\\u0000]*$"
             },
             "fixtext": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[^\\u0000]*$"
             },
             "severity": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[^\\u0000]*$"
             },
             "references": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[^\\u0000]*$"
             }
           }
         },
@@ -280,18 +297,22 @@
               },
               "default": {
                 "type": "string",
+                "pattern": "^[^\\u0000]*$",
                 "description": "Default value applied when the parameter is not overridden."
               },
               "displayName": {
                 "type": "string",
+                "pattern": "^[^\\u0000]*$",
                 "description": "Human-readable parameter name for UI presentation."
               },
               "validationRegex": {
                 "type": "string",
+                "pattern": "^[^\\u0000]*$",
                 "description": "Regular expression the parameter value must match."
               },
               "validationFailedMessage": {
                 "type": "string",
+                "pattern": "^[^\\u0000]*$",
                 "description": "Message shown when validationRegex does not match."
               },
               "mandatory": {

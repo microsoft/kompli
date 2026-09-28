@@ -104,20 +104,32 @@ Result<string> ReadVerifiedFile(const string& path, OsConfigLogHandle logHandle)
     return ReadAllBounded(stream);
 }
 
+Result<string> ReadRequiredString(const JSON_Object* object, const char* key, const string& context, bool allowEmpty)
+{
+    const JSON_Value* jsonValue = json_object_get_value(object, key);
+    if (nullptr == jsonValue || json_value_get_type(jsonValue) != JSONString)
+    {
+        return Error("Benchmark definition " + context + " is missing required string field '" + string(key) + "'", EINVAL);
+    }
+    const char* value = json_value_get_string(jsonValue);
+    const size_t length = json_value_get_string_len(jsonValue);
+    string result(value, length);
+    if (string::npos != result.find('\0'))
+    {
+        return Error("Benchmark definition " + context + " has an embedded NUL in '" + string(key) + "'", EINVAL);
+    }
+    if (!allowEmpty && result.empty())
+    {
+        return Error("Benchmark definition " + context + " has an empty '" + string(key) + "' field", EINVAL);
+    }
+    return result;
+}
+
 // Reads a required, non-empty string field from a JSON object. `context`
 // identifies the enclosing element for error messages.
 Result<string> RequiredString(const JSON_Object* object, const char* key, const string& context)
 {
-    const char* value = json_object_get_string(object, key);
-    if (nullptr == value)
-    {
-        return Error("Benchmark definition " + context + " is missing required string field '" + string(key) + "'", EINVAL);
-    }
-    if (value[0] == '\0')
-    {
-        return Error("Benchmark definition " + context + " has an empty '" + string(key) + "' field", EINVAL);
-    }
-    return string(value);
+    return ReadRequiredString(object, key, context, false);
 }
 
 // Reads a required string field whose empty value is meaningful. Descriptive
@@ -125,12 +137,27 @@ Result<string> RequiredString(const JSON_Object* object, const char* key, const 
 // type but deliberately does not require content.
 Result<string> RequiredStringAllowEmpty(const JSON_Object* object, const char* key, const string& context)
 {
-    const char* value = json_object_get_string(object, key);
-    if (nullptr == value)
+    return ReadRequiredString(object, key, context, true);
+}
+
+Result<Optional<string>> OptionalString(const JSON_Object* object, const char* key, const string& context)
+{
+    const JSON_Value* jsonValue = json_object_get_value(object, key);
+    if (nullptr == jsonValue)
     {
-        return Error("Benchmark definition " + context + " is missing required string field '" + string(key) + "'", EINVAL);
+        return Optional<string>();
     }
-    return string(value);
+    if (json_value_get_type(jsonValue) != JSONString)
+    {
+        return Error("Benchmark definition " + context + " has a non-string '" + string(key) + "' field", EINVAL);
+    }
+    const char* value = json_value_get_string(jsonValue);
+    string result(value, json_value_get_string_len(jsonValue));
+    if (string::npos != result.find('\0'))
+    {
+        return Error("Benchmark definition " + context + " has an embedded NUL in '" + string(key) + "'", EINVAL);
+    }
+    return Optional<string>(std::move(result));
 }
 
 // Serializes a rule's `payload` object into the compact JSON the ComplianceEngine
@@ -201,21 +228,24 @@ Result<std::map<string, BenchmarkIO::ParameterMetadata>> ParseParameterMetadata(
         BenchmarkIO::ParameterMetadata metadata;
         metadata.defaultValue = std::move(defaultValue.Value());
         metadata.type = std::move(type.Value());
-        const char* displayName = json_object_get_string(entryObject, "displayName");
-        if (nullptr != displayName)
+        auto displayName = OptionalString(entryObject, "displayName", entryContext);
+        if (!displayName.HasValue())
         {
-            metadata.displayName = string(displayName);
+            return displayName.Error();
         }
-        const char* validationRegex = json_object_get_string(entryObject, "validationRegex");
-        if (nullptr != validationRegex)
+        metadata.displayName = std::move(displayName.Value());
+        auto validationRegex = OptionalString(entryObject, "validationRegex", entryContext);
+        if (!validationRegex.HasValue())
         {
-            metadata.validationRegex = string(validationRegex);
+            return validationRegex.Error();
         }
-        const char* validationFailedMessage = json_object_get_string(entryObject, "validationFailedMessage");
-        if (nullptr != validationFailedMessage)
+        metadata.validationRegex = std::move(validationRegex.Value());
+        auto validationFailedMessage = OptionalString(entryObject, "validationFailedMessage", entryContext);
+        if (!validationFailedMessage.HasValue())
         {
-            metadata.validationFailedMessage = string(validationFailedMessage);
+            return validationFailedMessage.Error();
         }
+        metadata.validationFailedMessage = std::move(validationFailedMessage.Value());
         metadata.mandatory = (1 == json_object_get_boolean(entryObject, "mandatory"));
         result[name] = std::move(metadata);
     }
@@ -238,12 +268,18 @@ Result<std::vector<string>> ParseTags(const JSON_Object* ruleObject, const strin
     tags.reserve(count);
     for (size_t i = 0; i < count; ++i)
     {
-        const char* tag = json_array_get_string(array, i);
-        if (nullptr == tag)
+        const JSON_Value* tagValue = json_array_get_value(array, i);
+        if (nullptr == tagValue || json_value_get_type(tagValue) != JSONString)
         {
             return Error("Benchmark definition " + context + " has a non-string 'tags' entry", EINVAL);
         }
-        tags.emplace_back(tag);
+        const char* tag = json_value_get_string(tagValue);
+        string decodedTag(tag, json_value_get_string_len(tagValue));
+        if (string::npos != decodedTag.find('\0'))
+        {
+            return Error("Benchmark definition " + context + " has an embedded NUL in a 'tags' entry", EINVAL);
+        }
+        tags.push_back(std::move(decodedTag));
     }
     return tags;
 }
