@@ -270,8 +270,8 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
         return Error("Benchmark definition is not a JSON object", EINVAL);
     }
 
-    const auto* kind = json_object_get_string(root, "kind");
-    if (nullptr == kind || string(kind) != "BenchmarkDefinition")
+    auto kind = RequiredString(root, "kind", "document");
+    if (!kind.HasValue() || kind.Value() != "BenchmarkDefinition")
     {
         return Error("Benchmark definition has an unexpected or missing 'kind' (expected 'BenchmarkDefinition')", EINVAL);
     }

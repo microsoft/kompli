@@ -497,6 +497,13 @@ TEST(BenchmarkDefinitionParserTest, RejectsDuplicateIds)
     EXPECT_FALSE(ParseString(MakeDoc(rules), nullptr).HasValue());
 }
 
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInKind)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("kind":"BenchmarkDefinition")", R"("kind":"BenchmarkDefinition\u0000Extra")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
 TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInDocumentName)
 {
     std::string doc = OneRuleDoc();
