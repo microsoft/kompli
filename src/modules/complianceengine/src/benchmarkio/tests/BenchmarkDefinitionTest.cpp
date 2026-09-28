@@ -58,6 +58,13 @@ std::string OneRuleDoc()
 {
     return MakeDoc(std::string("[") + kValidRule + "]");
 }
+
+void ReplaceOnce(std::string& value, const std::string& from, const std::string& to)
+{
+    const std::string::size_type position = value.find(from);
+    ASSERT_NE(position, std::string::npos);
+    value.replace(position, from.size(), to);
+}
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -488,6 +495,43 @@ TEST(BenchmarkDefinitionParserTest, RejectsDuplicateIds)
 {
     const std::string rules = std::string("[") + kValidRule + "," + kValidRule + "]";
     EXPECT_FALSE(ParseString(MakeDoc(rules), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInDocumentName)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("name":"cis_ubuntu_22.04_2.0.0")", R"("name":"cis\u0000_ubuntu")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInId)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("id": "1.1.1.1")", R"("id": "1.1\u0000.1.1")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInRuleId)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("ruleId": "2b568469-ea61-c184-66ba-db6720414ddd")", R"("ruleId": "2b568469\u0000-ea61-c184-66ba-db6720414ddd")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInRuleName)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("ruleName": "EnsureCramfsKernelModuleIsNotAvailable")", R"("ruleName": "EnsureCramfs\u0000KernelModuleIsNotAvailable")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInLegacyPayloadKey)
+{
+    const std::string rule = R"({"section":"1.1.1.1","payloadKey":"/cis/ubuntu/22.04/v2.0.0/1/1/1/1",)"
+                             R"("ruleId":"rule-id","ruleName":"R","title":"t","payload":{"audit":{},"parameters":{}}})";
+    std::string doc = MakeDocWithMetadata(R"({"name":"legacy"})", "[" + rule + "]");
+    ReplaceOnce(doc, "/cis/ubuntu/22.04/", "/cis/ubuntu\u0000/22.04/");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
 }
 
 TEST(BenchmarkDefinitionParserTest, RejectsEmbeddedNulByte)
