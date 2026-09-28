@@ -60,7 +60,7 @@ struct BenchmarkDocument
 
 // Parses a benchmark-definition JSON document. Strict about structure: it
 // requires the resource envelope (apiVersion / kind == "BenchmarkDefinition" /
-// metadata / spec.rules) and the fixed per-rule fields. Sole-id definitions
+// metadata / non-empty spec.rules) and the fixed per-rule fields. Sole-id definitions
 // require the file-level prefix in metadata.labels and metadata.annotations.
 // A non-empty, all-legacy document may omit those objects; its prefix is
 // derived from the first payload key and every rule must agree. During producer

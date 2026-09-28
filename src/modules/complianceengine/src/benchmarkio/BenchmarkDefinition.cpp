@@ -611,6 +611,11 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
     }
 
     const size_t ruleCount = json_array_get_count(rules);
+    if (0 == ruleCount)
+    {
+        return Error("Benchmark definition 'spec.rules' must contain at least one rule", EINVAL);
+    }
+
     if (ruleCount > kMaxRules)
     {
         return Error("Benchmark definition has more than the maximum of " + std::to_string(kMaxRules) + " rules", E2BIG);
@@ -675,11 +680,6 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
         // TODO(robertwoj): Legacy payload handling is TEMPORARY
         // and will be removed once the PR which
         // adds the new functionality for hoisted identities is merged.
-        if (0 == ruleCount)
-        {
-            return Error("Legacy benchmark definition without hoisted identity must contain at least one rule", EINVAL);
-        }
-
         for (size_t i = 0; i < ruleCount; ++i)
         {
             const JSON_Object* ruleObject = json_array_get_object(rules, i);

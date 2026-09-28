@@ -25,7 +25,6 @@
             "spec": {
               "properties": {
                 "rules": {
-                  "minItems": 1,
                   "items": {
                     "required": ["section", "payloadKey"],
                     "not": {
@@ -143,7 +142,6 @@
         {
           "properties": {
             "rules": {
-              "minItems": 1,
               "items": {
                 "required": ["section", "payloadKey"],
                 "not": {
@@ -162,6 +160,7 @@
         },
         "rules": {
           "type": "array",
+          "minItems": 1,
           "description": "One entry per rule in the selected benchmark.",
           "items": {
             "$ref": "#/definitions/rule"
