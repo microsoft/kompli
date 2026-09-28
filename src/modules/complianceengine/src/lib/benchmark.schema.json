@@ -10,6 +10,36 @@
     "metadata",
     "spec"
   ],
+  "allOf": [
+    {
+      "anyOf": [
+        {
+          "properties": {
+            "metadata": {
+              "required": ["labels", "annotations"]
+            }
+          }
+        },
+        {
+          "properties": {
+            "spec": {
+              "properties": {
+                "rules": {
+                  "minItems": 1,
+                  "items": {
+                    "required": ["section", "payloadKey"],
+                    "not": {
+                      "required": ["id"]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
   "properties": {
     "apiVersion": {
       "type": "string",
@@ -25,9 +55,20 @@
       "type": "object",
       "additionalProperties": true,
       "required": [
-        "name",
-        "labels",
-        "annotations"
+        "name"
+      ],
+      "oneOf": [
+        {
+          "required": ["labels", "annotations"]
+        },
+        {
+          "not": {
+            "anyOf": [
+              { "required": ["labels"] },
+              { "required": ["annotations"] }
+            ]
+          }
+        }
       ],
       "properties": {
         "name": {
@@ -37,7 +78,7 @@
         },
         "labels": {
           "type": "object",
-          "description": "Selectable identity axes. framework/distribution/distributionVersion are hoisted once here rather than repeated per rule - required, shared by every rule in this file. Architecture-agnostic; the scanned host's arch is recorded in the kompli result, not here.",
+          "description": "Selectable identity axes. Required for sole-id definitions; legacy definitions may derive the same identity from their payload keys. Architecture-agnostic; the scanned host's arch is recorded in the kompli result, not here.",
           "required": [
             "framework",
             "distribution",
