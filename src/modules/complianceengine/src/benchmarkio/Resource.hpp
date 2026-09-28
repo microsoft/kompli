@@ -6,6 +6,7 @@
 
 #include <BenchmarkInfo.h>
 #include <Optional.h>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -13,13 +14,15 @@ namespace ComplianceEngine
 {
 namespace BenchmarkIO
 {
+// Optional descriptive fields and flat string extensions echoed in results.
 struct Metadata
 {
-    std::string description;
-    std::string rationale;
-    std::string fixtext;
-    std::string severity;
-    std::string references;
+    Optional<std::string> description;
+    Optional<std::string> rationale;
+    Optional<std::string> fixtext;
+    Optional<std::string> severity;
+    Optional<std::string> references;
+    std::map<std::string, std::string> additional;
 };
 
 // A single parsed benchmark rule, as consumed by callers (the `kompli` CLI's

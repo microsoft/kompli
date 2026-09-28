@@ -91,11 +91,16 @@ TEST(BenchmarkDefinitionParserTest, ParsesValidDocument)
     EXPECT_NE(res.procedure.find("cramfs"), std::string::npos);
     ASSERT_EQ(res.tags.size(), 1u);
     EXPECT_EQ(res.tags[0], "level:l1");
-    EXPECT_EQ(res.metadata.description, "d");
-    EXPECT_EQ(res.metadata.rationale, "r");
-    EXPECT_EQ(res.metadata.fixtext, "f");
-    EXPECT_EQ(res.metadata.severity, "Warning");
-    EXPECT_EQ(res.metadata.references, "x");
+    ASSERT_TRUE(res.metadata.description.HasValue());
+    EXPECT_EQ(res.metadata.description.Value(), "d");
+    ASSERT_TRUE(res.metadata.rationale.HasValue());
+    EXPECT_EQ(res.metadata.rationale.Value(), "r");
+    ASSERT_TRUE(res.metadata.fixtext.HasValue());
+    EXPECT_EQ(res.metadata.fixtext.Value(), "f");
+    ASSERT_TRUE(res.metadata.severity.HasValue());
+    EXPECT_EQ(res.metadata.severity.Value(), "Warning");
+    ASSERT_TRUE(res.metadata.references.HasValue());
+    EXPECT_EQ(res.metadata.references.Value(), "x");
 }
 
 TEST(BenchmarkDefinitionParserTest, ParsesMultipleRulesInOrder)
@@ -153,6 +158,15 @@ TEST(BenchmarkDefinitionParserTest, RejectsWrongKind)
     const std::string::size_type pos = doc.find("BenchmarkDefinition");
     ASSERT_NE(pos, std::string::npos);
     doc.replace(pos, std::string("BenchmarkDefinition").size(), "SomethingElse");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInKind)
+{
+    std::string doc = OneRuleDoc();
+    const auto pos = doc.find(R"("kind":"BenchmarkDefinition")");
+    ASSERT_NE(pos, std::string::npos);
+    doc.replace(pos, std::string(R"("kind":"BenchmarkDefinition")").size(), R"("kind":"BenchmarkDefinition\u0000suffix")");
     EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
 }
 
@@ -233,9 +247,51 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataNotAnObject)
                      .HasValue());
 }
 
-TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataMissingSeverity)
+TEST(BenchmarkDefinitionParserTest, AcceptsMissingMetadataFields)
 {
-    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("severity": "Warning",)", ""), nullptr).HasValue());
+    auto result = ParseString(RuleWithReplacement(R"("severity": "Warning",)", ""), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_FALSE(result.Value()[0].metadata.severity.HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, AcceptsEmptyMetadataObject)
+{
+    auto result = ParseString(RuleWithReplacement(R"("metadata": {
+        "description": "d",
+        "rationale": "r",
+        "fixtext": "f",
+        "severity": "Warning",
+        "references": "x"
+    })",
+                                  R"("metadata": {})"),
+        nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_FALSE(result.Value()[0].metadata.description.HasValue());
+    EXPECT_FALSE(result.Value()[0].metadata.references.HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, AcceptsEmptyAndAdditionalStringMetadata)
+{
+    auto result = ParseString(RuleWithReplacement(R"("references": "x")", R"("references": "", "owner": "team")"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    ASSERT_TRUE(result.Value()[0].metadata.references.HasValue());
+    EXPECT_TRUE(result.Value()[0].metadata.references.Value().empty());
+    EXPECT_EQ(result.Value()[0].metadata.additional.at("owner"), "team");
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsNonStringMetadata)
+{
+    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("severity": "Warning")", R"("severity": 42)"), nullptr).HasValue());
+    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("references": "x")", R"("references": "x", "owner": {})"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulAndInvalidTags)
+{
+    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("tags": ["level:l1"])", R"("tags": ["level:l1\u0000:other"])"), nullptr).HasValue());
+    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("tags": ["level:l1"])", R"("tags": ["level"])"), nullptr).HasValue());
+    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("tags": ["level:l1"])", R"("tags": ["Level:l1"])"), nullptr).HasValue());
+    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("references": "x")", R"("references": "x\u0000hidden")"), nullptr).HasValue());
+    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("references": "x")", R"("references": "x", "owner": "a\u0000b")"), nullptr).HasValue());
 }
 
 TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingTitle)

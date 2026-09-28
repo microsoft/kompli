@@ -104,34 +104,35 @@
           "description": "Flat, sparse set of framework-agnostic 'axis:value' tags.",
           "items": {
             "type": "string",
-            "pattern": "^[a-z0-9-]+:.+$"
+            "pattern": "^[a-z0-9-]+:[^\\u0000]+$"
           }
         },
         "metadata": {
           "type": "object",
-          "additionalProperties": true,
-          "required": [
-            "description",
-            "rationale",
-            "fixtext",
-            "severity",
-            "references"
-          ],
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[^\\u0000]*$"
+          },
           "properties": {
             "description": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[^\\u0000]*$"
             },
             "rationale": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[^\\u0000]*$"
             },
             "fixtext": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[^\\u0000]*$"
             },
             "severity": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[^\\u0000]*$"
             },
             "references": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[^\\u0000]*$"
             }
           }
         },

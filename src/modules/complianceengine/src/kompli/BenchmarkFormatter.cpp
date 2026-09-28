@@ -180,14 +180,44 @@ Optional<Error> BenchmarkFormatter::AddEntry(const BenchmarkIO::Resource& entry,
         return Error("Failed to initialize metadata JSON object", ENOMEM);
     }
     auto* metadataObject = json_value_get_object(metadataValue);
-    if (nullptr == metadataObject || JSONSuccess != json_object_set_string(metadataObject, "description", entry.metadata.description.c_str()) ||
-        JSONSuccess != json_object_set_string(metadataObject, "rationale", entry.metadata.rationale.c_str()) ||
-        JSONSuccess != json_object_set_string(metadataObject, "fixtext", entry.metadata.fixtext.c_str()) ||
-        JSONSuccess != json_object_set_string(metadataObject, "severity", entry.metadata.severity.c_str()) ||
-        JSONSuccess != json_object_set_string(metadataObject, "references", entry.metadata.references.c_str()))
+    if (nullptr == metadataObject)
     {
         json_value_free(metadataValue);
-        return Error("Failed to set metadata fields", ENOMEM);
+        return Error("Failed to get metadata JSON object", ENOMEM);
+    }
+    auto setField = [metadataObject](const char* key, const Optional<string>& value) -> Optional<Error> {
+        if (value.HasValue() && string::npos != value.Value().find('\0'))
+        {
+            return Error("Failed to set metadata field '" + string(key) + "'", EINVAL);
+        }
+        if (value.HasValue() && JSONSuccess != json_object_set_string_with_len(metadataObject, key, value.Value().c_str(), value.Value().size()))
+        {
+            return Error("Failed to set metadata field '" + string(key) + "'", ENOMEM);
+        }
+        return {};
+    };
+    for (const auto& field : {std::pair<const char*, const Optional<string>*>("description", &entry.metadata.description), {"rationale", &entry.metadata.rationale},
+             {"fixtext", &entry.metadata.fixtext}, {"severity", &entry.metadata.severity}, {"references", &entry.metadata.references}})
+    {
+        if (auto error = setField(field.first, *field.second))
+        {
+            json_value_free(metadataValue);
+            return error.Value();
+        }
+    }
+    for (const auto& field : entry.metadata.additional)
+    {
+        if (string::npos != field.first.find('\0') || string::npos != field.second.find('\0') || field.first == "description" ||
+            field.first == "rationale" || field.first == "fixtext" || field.first == "severity" || field.first == "references")
+        {
+            json_value_free(metadataValue);
+            return Error("Failed to set additional metadata field '" + field.first + "'", EINVAL);
+        }
+        if (JSONSuccess != json_object_set_string_with_len(metadataObject, field.first.c_str(), field.second.c_str(), field.second.size()))
+        {
+            json_value_free(metadataValue);
+            return Error("Failed to set additional metadata field '" + field.first + "'", ENOMEM);
+        }
     }
     if (JSONSuccess != json_object_set_value(object, "metadata", metadataValue))
     {
