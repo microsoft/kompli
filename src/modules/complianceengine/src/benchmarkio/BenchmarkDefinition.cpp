@@ -110,25 +110,14 @@ Result<string> ReadVerifiedFile(const string& path, OsConfigLogHandle logHandle)
     return ReadAllBounded(stream);
 }
 
-Result<string> ReadRequiredString(const JSON_Object* object, const char* key, const string& context, bool allowEmpty)
+Result<string> ReadStringValue(const JSON_Value* jsonValue, const char* key, const string& context)
 {
-    const JSON_Value* jsonValue = json_object_get_value(object, key);
-    if (nullptr == jsonValue || json_value_get_type(jsonValue) != JSONString)
-    {
-        return Error("Benchmark definition " + context + " is missing required string field '" + string(key) + "'", EINVAL);
-    }
-
     const char* value = json_value_get_string(jsonValue);
     const size_t length = json_value_get_string_len(jsonValue);
     string result(value, length);
     if (string::npos != result.find('\0'))
     {
         return Error("Benchmark definition " + context + " has an embedded NUL in '" + string(key) + "'", EINVAL);
-    }
-
-    if (!allowEmpty && result.empty())
-    {
-        return Error("Benchmark definition " + context + " has an empty '" + string(key) + "' field", EINVAL);
     }
 
     return result;
@@ -138,7 +127,21 @@ Result<string> ReadRequiredString(const JSON_Object* object, const char* key, co
 // identifies the enclosing element for error messages.
 Result<string> RequiredString(const JSON_Object* object, const char* key, const string& context)
 {
-    return ReadRequiredString(object, key, context, false);
+    const JSON_Value* jsonValue = json_object_get_value(object, key);
+    if (nullptr == jsonValue || JSONString != json_value_get_type(jsonValue))
+    {
+        return Error("Benchmark definition " + context + " is missing required string field '" + string(key) + "'", EINVAL);
+    }
+    auto value = ReadStringValue(jsonValue, key, context);
+    if (!value.HasValue())
+    {
+        return value.Error();
+    }
+    if (value.Value().empty())
+    {
+        return Error("Benchmark definition " + context + " has an empty '" + string(key) + "' field", EINVAL);
+    }
+    return value;
 }
 
 Result<Optional<string>> OptionalString(const JSON_Object* object, const char* key, const string& context)
@@ -154,14 +157,13 @@ Result<Optional<string>> OptionalString(const JSON_Object* object, const char* k
         return Error("Benchmark definition " + context + " has a non-string '" + string(key) + "' field", EINVAL);
     }
 
-    const char* value = json_value_get_string(jsonValue);
-    string result(value, json_value_get_string_len(jsonValue));
-    if (string::npos != result.find('\0'))
+    auto value = ReadStringValue(jsonValue, key, context);
+    if (!value.HasValue())
     {
-        return Error("Benchmark definition " + context + " has an embedded NUL in '" + string(key) + "'", EINVAL);
+        return value.Error();
     }
 
-    return Optional<string>(std::move(result));
+    return Optional<string>(std::move(value.Value()));
 }
 
 // Serializes a rule's `payload` object into the compact JSON the ComplianceEngine
