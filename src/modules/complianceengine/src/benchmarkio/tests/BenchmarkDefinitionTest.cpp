@@ -129,11 +129,16 @@ TEST(BenchmarkDefinitionParserTest, ParsesValidDocument)
     EXPECT_NE(res.procedure.find("cramfs"), std::string::npos);
     ASSERT_EQ(res.tags.size(), 1u);
     EXPECT_EQ(res.tags[0], "level:l1");
-    EXPECT_EQ(res.metadata.description, "d");
-    EXPECT_EQ(res.metadata.rationale, "r");
-    EXPECT_EQ(res.metadata.fixtext, "f");
-    EXPECT_EQ(res.metadata.severity, "Warning");
-    EXPECT_EQ(res.metadata.references, "x");
+    ASSERT_TRUE(res.metadata.description.HasValue());
+    EXPECT_EQ(res.metadata.description.Value(), "d");
+    ASSERT_TRUE(res.metadata.rationale.HasValue());
+    EXPECT_EQ(res.metadata.rationale.Value(), "r");
+    ASSERT_TRUE(res.metadata.fixtext.HasValue());
+    EXPECT_EQ(res.metadata.fixtext.Value(), "f");
+    ASSERT_TRUE(res.metadata.severity.HasValue());
+    EXPECT_EQ(res.metadata.severity.Value(), "Warning");
+    ASSERT_TRUE(res.metadata.references.HasValue());
+    EXPECT_EQ(res.metadata.references.Value(), "x");
 }
 
 TEST(BenchmarkDefinitionParserTest, ParsesMultipleRulesInOrder)
@@ -758,7 +763,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingMetadata)
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
 }
 
-TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataMissingSeverity)
+TEST(BenchmarkDefinitionParserTest, AcceptsRuleMetadataMissingSeverity)
 {
     const char* const rule = R"({
         "ruleName": "R",
@@ -769,7 +774,26 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataMissingSeverity)
         "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "references": "x"},
         "payload": {"audit": {}, "parameters": {}}
     })";
-    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+    auto result = ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_FALSE(result.Value().resources[0].metadata.severity.HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, AcceptsEmptyMetadataObject)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("metadata": {
+        "description": "d",
+        "rationale": "r",
+        "fixtext": "f",
+        "severity": "Warning",
+        "references": "x"
+    })",
+        R"("metadata": {})");
+    auto result = ParseString(doc, nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_FALSE(result.Value().resources[0].metadata.description.HasValue());
+    EXPECT_FALSE(result.Value().resources[0].metadata.references.HasValue());
 }
 
 TEST(BenchmarkDefinitionParserTest, AcceptsEmptyDescriptiveMetadata)
@@ -786,7 +810,38 @@ TEST(BenchmarkDefinitionParserTest, AcceptsEmptyDescriptiveMetadata)
     auto result = ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
     ASSERT_EQ(result.Value().resources.size(), 1u);
-    EXPECT_TRUE(result.Value().resources[0].metadata.references.empty());
+    ASSERT_TRUE(result.Value().resources[0].metadata.references.HasValue());
+    EXPECT_TRUE(result.Value().resources[0].metadata.references.Value().empty());
+}
+
+TEST(BenchmarkDefinitionParserTest, PreservesAdditionalStringMetadata)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("references": "x")", R"("references": "x", "owner": "team")");
+    auto result = ParseString(doc, nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().resources[0].metadata.additional.at("owner"), "team");
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsNonStringAdditionalMetadata)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("references": "x")", R"("references": "x", "owner": {})");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInAdditionalMetadata)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("references": "x")", R"("references": "x", "owner": "a\u0000b")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsInvalidTagGrammar)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("tags": ["level:l1"])", R"("tags": ["Level:l1"])");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
 }
 
 TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataNonStringReferences)
@@ -829,6 +884,13 @@ TEST(BenchmarkDefinitionParserTest, RejectsDuplicateId)
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + ruleA + "," + ruleB + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInKind)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("kind":"BenchmarkDefinition")", R"("kind":"BenchmarkDefinition\u0000Extra")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
 }
 
 TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInDocumentName)

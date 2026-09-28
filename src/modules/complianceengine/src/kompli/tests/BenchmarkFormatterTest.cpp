@@ -233,6 +233,7 @@ TEST(BenchmarkFormatterTest, AddEntryEmitsTagsAndMetadata)
     entry.metadata.fixtext = "fix";
     entry.metadata.severity = "critical";
     entry.metadata.references = "ref";
+    entry.metadata.additional["owner"] = "team";
     ASSERT_FALSE(formatter.AddEntry(entry, Status::Compliant, "[]", {}, Action::Audit).HasValue());
     auto result = std::move(formatter).Finish(Status::Compliant);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
@@ -255,6 +256,27 @@ TEST(BenchmarkFormatterTest, AddEntryEmitsTagsAndMetadata)
     EXPECT_STREQ(json_object_get_string(metadata, "fixtext"), "fix");
     EXPECT_STREQ(json_object_get_string(metadata, "severity"), "critical");
     EXPECT_STREQ(json_object_get_string(metadata, "references"), "ref");
+    EXPECT_STREQ(json_object_get_string(metadata, "owner"), "team");
+}
+
+TEST(BenchmarkFormatterTest, AddEntryPreservesAbsentAndEmptyMetadata)
+{
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
+    ASSERT_TRUE(formatterResult.HasValue());
+    auto& formatter = formatterResult.Value();
+    auto entry = MakeResource("1.1.1", "1.1.1 Rule", "Rule");
+    entry.metadata.references = "";
+    ASSERT_FALSE(formatter.AddEntry(entry, Status::Compliant, "[]", {}, Action::Audit).HasValue());
+    auto result = std::move(formatter).Finish(Status::Compliant);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    ParsedJson doc(result.Value());
+    ASSERT_NE(doc.object, nullptr);
+    JSON_Object* rule = json_array_get_object(json_object_get_array(doc.object, "rules"), 0);
+    ASSERT_NE(rule, nullptr);
+    JSON_Object* metadata = json_object_get_object(rule, "metadata");
+    ASSERT_NE(metadata, nullptr);
+    EXPECT_STREQ(json_object_get_string(metadata, "references"), "");
+    EXPECT_EQ(json_object_has_value(metadata, "severity"), 0);
 }
 
 TEST(BenchmarkFormatterTest, IndicatorsPayloadIsEmbeddedVerbatim)

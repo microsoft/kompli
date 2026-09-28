@@ -14,15 +14,16 @@ namespace ComplianceEngine
 namespace BenchmarkIO
 {
 // A rule's `metadata` object (benchmark.schema.json's `$defs/rule.metadata`):
-// fixed, benchmark-agnostic descriptive fields. Framework-specific fields
-// belong in `tags`, never here.
+// optional benchmark-agnostic descriptions and flat string extensions.
+// Framework-specific classifications belong in `tags`, never here.
 struct Metadata
 {
-    std::string description;
-    std::string rationale;
-    std::string fixtext;
-    std::string severity;
-    std::string references;
+    Optional<std::string> description;
+    Optional<std::string> rationale;
+    Optional<std::string> fixtext;
+    Optional<std::string> severity;
+    Optional<std::string> references;
+    std::map<std::string, std::string> additional;
 };
 
 // One entry of a rule's `parameterMetadata` (docs/CLI.md "Parametrization"):

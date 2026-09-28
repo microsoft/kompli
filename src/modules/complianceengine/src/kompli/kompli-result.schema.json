@@ -105,14 +105,14 @@
           "type": "array",
           "description": "Flat, sparse 'axis:value' tags, echoed verbatim from the definition (e.g. 'level:l1', 'severity:critical').",
           "items": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9-]+:[^\\u0000]+$"
           }
         },
         "metadata": {
           "type": "object",
           "description": "Descriptive fields echoed verbatim from the definition.",
-          "additionalProperties": true,
-          "required": ["description", "rationale", "fixtext", "severity", "references"],
+          "additionalProperties": { "type": "string" },
           "properties": {
             "description": { "type": "string" },
             "rationale": { "type": "string" },

@@ -246,14 +246,10 @@
         },
         "metadata": {
           "type": "object",
-          "additionalProperties": true,
-          "required": [
-            "description",
-            "rationale",
-            "fixtext",
-            "severity",
-            "references"
-          ],
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[^\\u0000]*$"
+          },
           "properties": {
             "description": {
               "type": "string",
