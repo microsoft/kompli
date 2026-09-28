@@ -92,7 +92,41 @@ Result<string> SerializeProcedure(const JSON_Object* ruleObject, const string& c
     return procedure;
 }
 
-Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
+string BenchmarkVersionWithoutOptionalPrefix(const string& version)
+{
+    return (!version.empty() && version[0] == 'v') ? version.substr(1) : version;
+}
+
+Optional<Error> ValidateLegacyPayloadKeyPrefix(const BenchmarkInfo& payloadKeyInfo, const BenchmarkInfo& documentInfo, const string& context)
+{
+    if (payloadKeyInfo.framework != documentInfo.framework)
+    {
+        return Error("Benchmark definition " + context + " payloadKey framework '" + payloadKeyInfo.framework +
+                         "' disagrees with metadata framework '" + documentInfo.framework + "'",
+            EINVAL);
+    }
+    if (payloadKeyInfo.distribution != documentInfo.distribution)
+    {
+        return Error("Benchmark definition " + context + " payloadKey distribution '" + std::to_string(payloadKeyInfo.distribution) +
+                         "' disagrees with metadata distribution '" + std::to_string(documentInfo.distribution) + "'",
+            EINVAL);
+    }
+    if (payloadKeyInfo.version != documentInfo.version)
+    {
+        return Error("Benchmark definition " + context + " payloadKey distribution version '" + payloadKeyInfo.version +
+                         "' disagrees with metadata distribution version '" + documentInfo.version + "'",
+            EINVAL);
+    }
+    if (BenchmarkVersionWithoutOptionalPrefix(payloadKeyInfo.benchmarkVersion) != BenchmarkVersionWithoutOptionalPrefix(documentInfo.benchmarkVersion))
+    {
+        return Error("Benchmark definition " + context + " payloadKey benchmark version '" + payloadKeyInfo.benchmarkVersion +
+                         "' disagrees with metadata benchmark version '" + documentInfo.benchmarkVersion + "'",
+            EINVAL);
+    }
+    return Optional<Error>();
+}
+
+Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index, const BenchmarkInfo& documentInfo)
 {
     const string context = "rule #" + std::to_string(index);
 
@@ -157,6 +191,11 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
         if (!payloadKeyInfo.HasValue())
         {
             return Error("Failed to parse payloadKey of benchmark definition " + context + ": " + payloadKeyInfo.Error().message, payloadKeyInfo.Error().code);
+        }
+        auto prefixError = ValidateLegacyPayloadKeyPrefix(payloadKeyInfo.Value(), documentInfo, context);
+        if (prefixError.HasValue())
+        {
+            return prefixError.Value();
         }
 
         string payloadKeySection = std::move(payloadKeyInfo.Value().section);
@@ -297,7 +336,7 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
             return Error("Benchmark definition rule #" + std::to_string(i) + " is not a JSON object", EINVAL);
         }
 
-        auto resource = ParseRule(ruleObject, i);
+        auto resource = ParseRule(ruleObject, i, result.benchmarkInfo);
         if (!resource.HasValue())
         {
             OsConfigLogError(logHandle, "Failed to parse benchmark definition rule #%zu: %s", i, resource.Error().message.c_str());
