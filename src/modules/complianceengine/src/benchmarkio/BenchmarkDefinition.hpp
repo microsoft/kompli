@@ -36,7 +36,7 @@ struct BenchmarkDocument
 };
 
 // Parses the resource envelope and rules carrying the stable
-// external-correlation `ruleId`. Sole-id definitions require hoisted benchmark
+// external-correlation `ruleId`. `spec.rules` must be non-empty. Sole-id definitions require hoisted benchmark
 // identity. A non-empty, all-legacy document may omit it; the prefix is derived
 // from the first payload key and every rule must agree. During the producer
 // migration, a rule may carry either its framework-defined `id` or the complete

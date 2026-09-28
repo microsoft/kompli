@@ -106,11 +106,11 @@ TEST(BenchmarkDefinitionParserTest, ParsesMultipleRulesInOrder)
     EXPECT_EQ(result.Value().resources[1].id, "1.1.1.2");
 }
 
-TEST(BenchmarkDefinitionParserTest, EmptyRulesArrayYieldsNoResources)
+TEST(BenchmarkDefinitionParserTest, RejectsEmptyRulesArrayWithHoistedIdentity)
 {
     auto result = ParseString(MakeDoc("[]"), nullptr);
-    ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    EXPECT_TRUE(result.Value().resources.empty());
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("spec.rules"), std::string::npos);
 }
 
 TEST(BenchmarkDefinitionParserTest, IgnoresUnknownFields)
