@@ -54,6 +54,9 @@ if [[ -r /sys/fs/cgroup/memory.current ]]; then
     fi
 elif [[ -r /sys/fs/cgroup/memory/memory.usage_in_bytes ]]; then
     memory_file=/sys/fs/cgroup/memory/memory.usage_in_bytes
+    if [[ -r /sys/fs/cgroup/memory/memory.oom_control ]]; then
+        events_file=/sys/fs/cgroup/memory/memory.oom_control
+    fi
     cpu_dir=/sys/fs/cgroup/cpu
     cpu_file=/sys/fs/cgroup/cpuacct/cpuacct.usage
     if [[ -r /sys/fs/cgroup/cpu,cpuacct/cpuacct.usage ]]; then
@@ -104,18 +107,42 @@ else
 fi
 
 sampler_pid=
+sampler_status=0
 if [[ -n "$memory_file" ]]; then
+    if ! { exec 5> "$samples"; }; then
+        record "memory_sampling_status=failed (cannot create $samples)"
+        exit 1
+    fi
     (
-        trap 'exit 0' TERM
+        termination_requested=false
+        trap 'termination_requested=true' TERM
         while :; do
+            if [[ "$termination_requested" == true ]]; then
+                exit 0
+            fi
             if ! IFS= read -r memory < "$memory_file" || [[ ! "$memory" =~ ^[0-9]+$ ]]; then
-                printf 'memory_sample_unavailable\n'
+                printf 'Cannot read cgroup memory usage\n' >&2
                 exit 1
             fi
-            printf '%s,%s\n' "$(date +%s%3N)" "$memory"
-            sleep 0.2
+            if ! timestamp=$(date +%s%3N); then
+                printf 'Cannot timestamp cgroup memory sample\n' >&2
+                exit 1
+            fi
+            if ! printf '%s,%s\n' "$timestamp" "$memory" >&5; then
+                printf 'Cannot write cgroup memory sample\n' >&2
+                exit 1
+            fi
+            if [[ "$termination_requested" == true ]]; then
+                exit 0
+            fi
+            if ! sleep 0.2; then
+                if [[ "$termination_requested" != true ]]; then
+                    printf 'Cannot wait between cgroup memory samples\n' >&2
+                    exit 1
+                fi
+            fi
         done
-    ) > "$samples" &
+    ) &
     sampler_pid=$!
 else
     record "sampled_peak_memory_bytes=unavailable (cgroup memory counter unavailable)"
@@ -124,7 +151,11 @@ fi
 stop_sampler() {
     if [[ -n "$sampler_pid" ]]; then
         kill "$sampler_pid" 2>/dev/null || true
-        wait "$sampler_pid" 2>/dev/null || true
+        if wait "$sampler_pid"; then
+            sampler_status=0
+        else
+            sampler_status=$?
+        fi
         sampler_pid=
     fi
 }
@@ -136,12 +167,16 @@ statuses=("${PIPESTATUS[@]}")
 end_ms=$(date +%s%3N)
 stop_sampler
 
+sampling_failed=0
 if [[ -n "$memory_file" ]]; then
-    if peak=$(awk -F, 'NF != 2 || $2 !~ /^[0-9]+$/ { bad = 1 } $2 > peak { peak = $2 }
+    if [[ $sampler_status -eq 0 ]] && peak=$(awk -F, 'NF != 2 || $2 !~ /^[0-9]+$/ { bad = 1 } $2 > peak { peak = $2 }
         END { if (NR == 0 || bad) exit 1; printf "%.0f", peak }' "$samples"); then
+        record "memory_sampling_status=complete"
         record "sampled_peak_memory_bytes=$peak"
         record "memory_samples_file=$samples"
     else
+        sampling_failed=1
+        record "memory_sampling_status=failed (sampler exit code $sampler_status or invalid samples)"
         record "sampled_peak_memory_bytes=unavailable (sampling failed)"
     fi
     if [[ -r "$memory_file" ]]; then
@@ -190,5 +225,8 @@ fi
 
 if [[ ${statuses[0]} -ne 0 ]]; then
     exit "${statuses[0]}"
+fi
+if [[ $sampling_failed -ne 0 ]]; then
+    exit 1
 fi
 exit "${statuses[1]}"
