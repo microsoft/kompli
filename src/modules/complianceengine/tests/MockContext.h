@@ -116,9 +116,9 @@ struct MockContext : public ComplianceEngine::ContextInterface
 
 private:
     // throws as it's used by the constructor
-    static ComplianceEngine::Detail::TemporaryDirectory CreateTempdir()
+    static ComplianceEngine::TemporaryDirectory CreateTempdir()
     {
-        auto result = ComplianceEngine::Detail::TemporaryDirectory::Make("ComplianceEngineTest");
+        auto result = ComplianceEngine::TemporaryDirectory::Make("ComplianceEngineTest");
         if (!result.HasValue())
         {
             throw std::runtime_error(result.Error().message);
@@ -126,7 +126,7 @@ private:
         return std::move(result).Value();
     }
 
-    ComplianceEngine::Detail::TemporaryDirectory mTempOwner;
+    ComplianceEngine::TemporaryDirectory mTempOwner;
     std::string mTempdir;
     std::string mTempRootDir;
     std::size_t mTempfileCount{0};

@@ -6,6 +6,7 @@
 #include "CliContext.h"
 #include "MockContext.h"
 
+#include <cerrno>
 #include <cstdlib>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -16,10 +17,11 @@
 #include <type_traits>
 #include <unistd.h>
 #include <utility>
+#include <vector>
 
 static_assert(!std::is_constructible<ComplianceEngine::Detail::OpenedTemporaryParent, std::string, int>::value,
     "Only parent validation may create an opened temporary parent");
-static_assert(!std::is_constructible<ComplianceEngine::Detail::TemporaryDirectory, ComplianceEngine::Detail::OpenedTemporaryParent, std::string, int>::value,
+static_assert(!std::is_constructible<ComplianceEngine::TemporaryDirectory, ComplianceEngine::Detail::OpenedTemporaryParent, std::string, int>::value,
     "Only the temporary directory factory may create an owned directory");
 
 namespace
@@ -108,7 +110,7 @@ TEST(TemporaryDirectoryTest, RejectsWhitespaceInConfiguredParent)
         ASSERT_FALSE(selected.HasValue());
         EXPECT_EQ(EINVAL, selected.Error().code);
 
-        auto created = ComplianceEngine::Detail::TemporaryDirectory::Make("whitespace");
+        auto created = ComplianceEngine::TemporaryDirectory::Make("whitespace");
         ASSERT_FALSE(created.HasValue());
         EXPECT_EQ(EINVAL, created.Error().code);
     }
@@ -119,6 +121,35 @@ TEST(TemporaryDirectoryTest, RejectsWhitespaceInDirectParentValidation)
     auto result = ComplianceEngine::Detail::ValidateTemporaryDirectoryParent("/configured/temporary root");
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);
+}
+
+TEST(TemporaryDirectoryTest, LimitsValidatedParentDepth)
+{
+    MockContext owner;
+    std::string path = owner.GetTempdirPath();
+    std::size_t depth = 0;
+    for (char character : path)
+    {
+        if (character == '/')
+        {
+            ++depth;
+        }
+    }
+    ASSERT_LT(depth, 64u);
+    while (depth < 64)
+    {
+        path += "/d";
+        ASSERT_EQ(0, ::mkdir(path.c_str(), 0700));
+        ++depth;
+    }
+    auto valid = ComplianceEngine::Detail::ValidateTemporaryDirectoryParent(path);
+    ASSERT_TRUE(valid.HasValue()) << valid.Error().message;
+
+    path += "/d";
+    ASSERT_EQ(0, ::mkdir(path.c_str(), 0700));
+    auto overLimit = ComplianceEngine::Detail::ValidateTemporaryDirectoryParent(path);
+    ASSERT_FALSE(overLimit.HasValue());
+    EXPECT_EQ(ELOOP, overLimit.Error().code);
 }
 
 TEST(TemporaryDirectoryTest, CliContextReportsInvalidParent)
@@ -161,7 +192,7 @@ TEST(TemporaryDirectoryTest, CreationFailureDoesNotFallBack)
     const std::string missingParent = owner.GetTempdirPath() + "/missing/parent";
     ScopedTmpdir environment(missingParent.c_str());
 
-    auto result = ComplianceEngine::Detail::TemporaryDirectory::Make("failure");
+    auto result = ComplianceEngine::TemporaryDirectory::Make("failure");
     EXPECT_FALSE(result.HasValue());
 }
 
@@ -172,14 +203,14 @@ TEST(TemporaryDirectoryTest, RejectsParentTraversal)
     ASSERT_EQ(0, ::mkdir(parent.c_str(), 0700));
     ScopedTmpdir environment((parent + "/../parent").c_str());
 
-    auto result = ComplianceEngine::Detail::TemporaryDirectory::Make("traversal");
+    auto result = ComplianceEngine::TemporaryDirectory::Make("traversal");
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);
 }
 
 TEST(TemporaryDirectoryTest, RejectsPrefixTraversal)
 {
-    auto result = ComplianceEngine::Detail::TemporaryDirectory::Make("../escape");
+    auto result = ComplianceEngine::TemporaryDirectory::Make("../escape");
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);
 }
@@ -193,7 +224,7 @@ TEST(TemporaryDirectoryTest, RejectsSymlinkedParent)
     ASSERT_EQ(0, ::symlink(parent.c_str(), link.c_str()));
     ScopedTmpdir environment(link.c_str());
 
-    auto result = ComplianceEngine::Detail::TemporaryDirectory::Make("symlink");
+    auto result = ComplianceEngine::TemporaryDirectory::Make("symlink");
     EXPECT_FALSE(result.HasValue());
 }
 
@@ -205,7 +236,7 @@ TEST(TemporaryDirectoryTest, RejectsUntrustedWritableParent)
     ASSERT_EQ(0, ::chmod(parent.c_str(), 0777));
     ScopedTmpdir environment(parent.c_str());
 
-    auto result = ComplianceEngine::Detail::TemporaryDirectory::Make("writable");
+    auto result = ComplianceEngine::TemporaryDirectory::Make("writable");
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EPERM, result.Error().code);
 }
@@ -223,7 +254,7 @@ TEST(TemporaryDirectoryTest, CreationUsesValidatedParentAfterPathReplacement)
 
     ASSERT_EQ(0, ::rename(parent.c_str(), movedParent.c_str()));
     ASSERT_EQ(0, ::symlink(outside.c_str(), parent.c_str()));
-    auto created = ComplianceEngine::Detail::TemporaryDirectory::MakeInParent(std::move(validated).Value(), "pinned");
+    auto created = ComplianceEngine::TemporaryDirectory::MakeInParent(std::move(validated).Value(), "pinned");
     ASSERT_TRUE(created.HasValue()) << created.Error().message;
     auto directory = std::move(created).Value();
     const std::string name = directory.Path().substr(parent.size() + 1);
@@ -232,6 +263,29 @@ TEST(TemporaryDirectoryTest, CreationUsesValidatedParentAfterPathReplacement)
     EXPECT_NE(0, ::access((outside + "/" + name).c_str(), F_OK));
     EXPECT_TRUE(directory.Remove());
     EXPECT_NE(0, ::access((movedParent + "/" + name).c_str(), F_OK));
+}
+
+TEST(TemporaryDirectoryTest, CleanupStopsAtMaximumDepth)
+{
+    auto result = ComplianceEngine::TemporaryDirectory::Make("deep-cleanup");
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    auto directory = std::move(result).Value();
+    std::string path = directory.Path();
+    std::vector<std::string> children;
+    for (int depth = 0; depth < 65; ++depth)
+    {
+        path += "/d";
+        ASSERT_EQ(0, ::mkdir(path.c_str(), 0700));
+        children.push_back(path);
+    }
+
+    EXPECT_FALSE(directory.Remove());
+    EXPECT_EQ(0, ::access(children.back().c_str(), F_OK));
+    for (auto child = children.rbegin(); child != children.rend(); ++child)
+    {
+        EXPECT_EQ(0, ::rmdir(child->c_str()));
+    }
+    EXPECT_EQ(0, ::rmdir(directory.Path().c_str()));
 }
 
 TEST(TemporaryDirectoryTest, MockContextCleanupDoesNotFollowReplacedRoot)

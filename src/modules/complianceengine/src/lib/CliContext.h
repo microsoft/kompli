@@ -25,7 +25,7 @@ class Context : public CommonContext
 public:
     static Result<std::unique_ptr<Context>> Make(OsConfigLogHandle log, const int telemetryFileDescriptor = -1)
     {
-        auto state = Detail::TemporaryDirectory::Make("kompli-cli");
+        auto state = TemporaryDirectory::Make("kompli-cli");
         if (!state.HasValue())
         {
             return std::move(state).Error();
@@ -46,13 +46,13 @@ public:
     }
 
 private:
-    Context(OsConfigLogHandle log, Detail::TemporaryDirectory state, const int telemetryFileDescriptor)
+    Context(OsConfigLogHandle log, TemporaryDirectory state, const int telemetryFileDescriptor)
         : CommonContext(log, state.Path(), telemetryFileDescriptor),
           mTemporaryDirectory(std::move(state))
     {
     }
 
-    Detail::TemporaryDirectory mTemporaryDirectory;
+    TemporaryDirectory mTemporaryDirectory;
 };
 
 } // namespace Cli
