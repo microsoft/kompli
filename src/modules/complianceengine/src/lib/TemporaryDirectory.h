@@ -10,42 +10,15 @@
 
 namespace ComplianceEngine
 {
-class TemporaryDirectory;
-
 namespace Detail
 {
 Result<std::string> GetTemporaryDirectoryParent();
-
-class OpenedTemporaryParent
-{
-private:
-    OpenedTemporaryParent(std::string path, int fd);
-
-    friend class ::ComplianceEngine::TemporaryDirectory;
-    friend Result<OpenedTemporaryParent> ValidateTemporaryDirectoryParent(const std::string& parent);
-
-public:
-    OpenedTemporaryParent(const OpenedTemporaryParent&) = delete;
-    OpenedTemporaryParent& operator=(const OpenedTemporaryParent&) = delete;
-    OpenedTemporaryParent(OpenedTemporaryParent&& other) noexcept;
-    OpenedTemporaryParent& operator=(OpenedTemporaryParent&& other) noexcept;
-    ~OpenedTemporaryParent();
-
-    const std::string& Path() const;
-
-private:
-    std::string mPath;
-    int mFd;
-};
-
-Result<OpenedTemporaryParent> ValidateTemporaryDirectoryParent(const std::string& parent);
 } // namespace Detail
 
 class TemporaryDirectory
 {
 public:
     static Result<TemporaryDirectory> Make(const std::string& prefix);
-    static Result<TemporaryDirectory> MakeInParent(Detail::OpenedTemporaryParent openedParent, const std::string& prefix);
 
     TemporaryDirectory(const TemporaryDirectory&) = delete;
     TemporaryDirectory& operator=(const TemporaryDirectory&) = delete;
@@ -56,11 +29,11 @@ public:
     bool Remove();
 
 private:
-    TemporaryDirectory(Detail::OpenedTemporaryParent parent, std::string name, int root);
+    TemporaryDirectory(std::string path, std::string name, int parent, int root);
 
     std::string mPath;
     std::string mName;
-    Detail::OpenedTemporaryParent mParent;
+    int mParent;
     int mRoot;
 };
 } // namespace ComplianceEngine

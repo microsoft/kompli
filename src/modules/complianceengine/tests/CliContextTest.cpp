@@ -45,9 +45,12 @@ TEST_F(ContextTest, DirectoryHasCorrectPrefix)
     ASSERT_NE(std::string::npos, separator);
     auto parent = ComplianceEngine::Detail::GetTemporaryDirectoryParent();
     ASSERT_TRUE(parent.HasValue()) << parent.Error().message;
-    auto validatedParent = ComplianceEngine::Detail::ValidateTemporaryDirectoryParent(parent.Value());
-    ASSERT_TRUE(validatedParent.HasValue()) << validatedParent.Error().message;
-    EXPECT_EQ(validatedParent.Value().Path(), statePath.substr(0, separator));
+    struct stat configuredParent;
+    struct stat actualParent;
+    ASSERT_EQ(0, stat(parent.Value().c_str(), &configuredParent));
+    ASSERT_EQ(0, stat(statePath.substr(0, separator).c_str(), &actualParent));
+    EXPECT_EQ(configuredParent.st_dev, actualParent.st_dev);
+    EXPECT_EQ(configuredParent.st_ino, actualParent.st_ino);
     EXPECT_EQ(0u, statePath.substr(separator + 1).rfind("kompli-cli.", 0));
 }
 

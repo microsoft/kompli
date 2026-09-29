@@ -19,9 +19,7 @@
 #include <utility>
 #include <vector>
 
-static_assert(!std::is_constructible<ComplianceEngine::Detail::OpenedTemporaryParent, std::string, int>::value,
-    "Only parent validation may create an opened temporary parent");
-static_assert(!std::is_constructible<ComplianceEngine::TemporaryDirectory, ComplianceEngine::Detail::OpenedTemporaryParent, std::string, int>::value,
+static_assert(!std::is_constructible<ComplianceEngine::TemporaryDirectory, std::string, std::string, int, int>::value,
     "Only the temporary directory factory may create an owned directory");
 
 namespace
@@ -116,13 +114,6 @@ TEST(TemporaryDirectoryTest, RejectsWhitespaceInConfiguredParent)
     }
 }
 
-TEST(TemporaryDirectoryTest, RejectsWhitespaceInDirectParentValidation)
-{
-    auto result = ComplianceEngine::Detail::ValidateTemporaryDirectoryParent("/configured/temporary root");
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EINVAL, result.Error().code);
-}
-
 TEST(TemporaryDirectoryTest, LimitsValidatedParentDepth)
 {
     MockContext owner;
@@ -142,12 +133,16 @@ TEST(TemporaryDirectoryTest, LimitsValidatedParentDepth)
         ASSERT_EQ(0, ::mkdir(path.c_str(), 0700));
         ++depth;
     }
-    auto valid = ComplianceEngine::Detail::ValidateTemporaryDirectoryParent(path);
-    ASSERT_TRUE(valid.HasValue()) << valid.Error().message;
+    {
+        ScopedTmpdir environment(path.c_str());
+        auto valid = ComplianceEngine::TemporaryDirectory::Make("depth");
+        ASSERT_TRUE(valid.HasValue()) << valid.Error().message;
+    }
 
     path += "/d";
     ASSERT_EQ(0, ::mkdir(path.c_str(), 0700));
-    auto overLimit = ComplianceEngine::Detail::ValidateTemporaryDirectoryParent(path);
+    ScopedTmpdir environment(path.c_str());
+    auto overLimit = ComplianceEngine::TemporaryDirectory::Make("depth");
     ASSERT_FALSE(overLimit.HasValue());
     EXPECT_EQ(ELOOP, overLimit.Error().code);
 }
@@ -241,7 +236,7 @@ TEST(TemporaryDirectoryTest, RejectsUntrustedWritableParent)
     EXPECT_EQ(EPERM, result.Error().code);
 }
 
-TEST(TemporaryDirectoryTest, CreationUsesValidatedParentAfterPathReplacement)
+TEST(TemporaryDirectoryTest, CleanupUsesValidatedParentAfterPathReplacement)
 {
     MockContext owner;
     const std::string parent = owner.GetTempdirPath() + "/parent";
@@ -249,15 +244,14 @@ TEST(TemporaryDirectoryTest, CreationUsesValidatedParentAfterPathReplacement)
     const std::string outside = owner.GetTempdirPath() + "/outside";
     ASSERT_EQ(0, ::mkdir(parent.c_str(), 0700));
     ASSERT_EQ(0, ::mkdir(outside.c_str(), 0700));
-    auto validated = ComplianceEngine::Detail::ValidateTemporaryDirectoryParent(parent);
-    ASSERT_TRUE(validated.HasValue()) << validated.Error().message;
-
-    ASSERT_EQ(0, ::rename(parent.c_str(), movedParent.c_str()));
-    ASSERT_EQ(0, ::symlink(outside.c_str(), parent.c_str()));
-    auto created = ComplianceEngine::TemporaryDirectory::MakeInParent(std::move(validated).Value(), "pinned");
+    ScopedTmpdir environment(parent.c_str());
+    auto created = ComplianceEngine::TemporaryDirectory::Make("pinned");
     ASSERT_TRUE(created.HasValue()) << created.Error().message;
     auto directory = std::move(created).Value();
     const std::string name = directory.Path().substr(parent.size() + 1);
+
+    ASSERT_EQ(0, ::rename(parent.c_str(), movedParent.c_str()));
+    ASSERT_EQ(0, ::symlink(outside.c_str(), parent.c_str()));
 
     EXPECT_EQ(0, ::access((movedParent + "/" + name).c_str(), F_OK));
     EXPECT_NE(0, ::access((outside + "/" + name).c_str(), F_OK));
