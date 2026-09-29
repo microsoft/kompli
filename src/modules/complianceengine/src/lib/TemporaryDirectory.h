@@ -26,7 +26,7 @@ public:
     ~TemporaryDirectory();
 
     const std::string& Path() const;
-    bool Remove();
+    Result<bool> Remove();
 
 private:
     TemporaryDirectory(std::string path, std::string name, int parent, int root);
@@ -35,6 +35,7 @@ private:
     std::string mName;
     int mParent;
     int mRoot;
+    Result<bool> mRemovalResult{true};
 };
 } // namespace ComplianceEngine
 

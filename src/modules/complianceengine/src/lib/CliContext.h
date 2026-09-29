@@ -39,9 +39,10 @@ public:
 
     ~Context() override
     {
-        if (!mTemporaryDirectory.Remove())
+        auto result = mTemporaryDirectory.Remove();
+        if (!result.HasValue())
         {
-            OsConfigLogError(GetLogHandle(), "Failed to remove temporary state directory %s", GetStatePath().c_str());
+            OsConfigLogError(GetLogHandle(), "%s", result.Error().message.c_str());
         }
     }
 

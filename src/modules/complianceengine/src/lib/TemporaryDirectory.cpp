@@ -33,36 +33,43 @@ bool TemporaryParentContainsWhitespace(const std::string& parent)
     return false;
 }
 
-Result<bool> ValidateTemporaryDirectoryComponent(int directory, const std::string& path)
-{
-    struct stat status;
-    if (::fstat(directory, &status) != 0)
-    {
-        const int error = errno;
-        return Error("Failed to inspect temporary directory parent " + path + ": " + std::strerror(error), error);
-    }
-
-    const uid_t effectiveUser = ::geteuid();
-    if ((status.st_uid != 0) && (status.st_uid != effectiveUser))
-    {
-        return Error("Temporary directory parent has an untrusted owner: " + path, EPERM);
-    }
-
-    const bool writableByOthers = (status.st_mode & (S_IWGRP | S_IWOTH)) != 0;
-    if (writableByOthers && ((status.st_mode & S_ISVTX) == 0))
-    {
-        return Error("Temporary directory parent is writable by other users without the sticky bit: " + path, EPERM);
-    }
-    return true;
-}
-
 class OpenedTemporaryParent
 {
 public:
-    OpenedTemporaryParent(std::string path, int fd)
-        : mPath(std::move(path)),
-          mFd(fd)
+    static Result<OpenedTemporaryParent> MakeRoot()
     {
+        std::string path = "/";
+        const int fd = ::open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd < 0)
+        {
+            const int error = errno;
+            return Error("Failed to open filesystem root: " + std::string(std::strerror(error)), error);
+        }
+        OpenedTemporaryParent opened(std::move(path), fd);
+        auto validation = opened.Validate();
+        if (!validation.HasValue())
+        {
+            return std::move(validation).Error();
+        }
+        return opened;
+    }
+
+    static Result<OpenedTemporaryParent> MakeChild(const OpenedTemporaryParent& parent, const std::string& component)
+    {
+        std::string path = parent.mPath == "/" ? "/" + component : parent.mPath + "/" + component;
+        const int fd = ::openat(parent.mFd, component.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (fd < 0)
+        {
+            const int error = errno;
+            return Error("Failed to securely open temporary directory parent component " + component + ": " + std::strerror(error), error);
+        }
+        OpenedTemporaryParent opened(std::move(path), fd);
+        auto validation = opened.Validate();
+        if (!validation.HasValue())
+        {
+            return std::move(validation).Error();
+        }
+        return opened;
     }
 
     OpenedTemporaryParent(const OpenedTemporaryParent&) = delete;
@@ -113,6 +120,35 @@ public:
     }
 
 private:
+    OpenedTemporaryParent(std::string path, int fd)
+        : mPath(std::move(path)),
+          mFd(fd)
+    {
+    }
+
+    Result<bool> Validate() const
+    {
+        struct stat status;
+        if (::fstat(mFd, &status) != 0)
+        {
+            const int error = errno;
+            return Error("Failed to inspect temporary directory parent " + mPath + ": " + std::strerror(error), error);
+        }
+
+        const uid_t effectiveUser = ::geteuid();
+        if ((status.st_uid != 0) && (status.st_uid != effectiveUser))
+        {
+            return Error("Temporary directory parent has an untrusted owner: " + mPath, EPERM);
+        }
+
+        const bool writableByOthers = (status.st_mode & (S_IWGRP | S_IWOTH)) != 0;
+        if (writableByOthers && ((status.st_mode & S_ISVTX) == 0))
+        {
+            return Error("Temporary directory parent is writable by other users without the sticky bit: " + mPath, EPERM);
+        }
+        return true;
+    }
+
     std::string mPath;
     int mFd;
 };
@@ -128,18 +164,12 @@ Result<OpenedTemporaryParent> ValidateTemporaryDirectoryParent(const std::string
         return Error("TMPDIR must not contain whitespace", EINVAL);
     }
 
-    OpenedTemporaryParent opened("/", ::open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
-    if (opened.Fd() < 0)
+    auto root = OpenedTemporaryParent::MakeRoot();
+    if (!root.HasValue())
     {
-        const int error = errno;
-        return Error("Failed to open filesystem root: " + std::string(std::strerror(error)), error);
+        return std::move(root).Error();
     }
-
-    auto validation = ValidateTemporaryDirectoryComponent(opened.Fd(), opened.Path());
-    if (!validation.HasValue())
-    {
-        return std::move(validation).Error();
-    }
+    auto opened = std::move(root).Value();
 
     std::size_t offset = 1;
     std::size_t depth = 0;
@@ -162,39 +192,34 @@ Result<OpenedTemporaryParent> ValidateTemporaryDirectoryParent(const std::string
             return Error("TMPDIR exceeds the maximum directory depth", ELOOP);
         }
 
-        const std::string nextPath = opened.Path() == "/" ? "/" + component : opened.Path() + "/" + component;
-        const int child = ::openat(opened.Fd(), component.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-        if (child < 0)
+        auto child = OpenedTemporaryParent::MakeChild(opened, component);
+        if (!child.HasValue())
         {
-            const int error = errno;
-            return Error("Failed to securely open temporary directory parent component " + component + ": " + std::strerror(error), error);
+            return std::move(child).Error();
         }
-        opened = OpenedTemporaryParent(nextPath, child);
-        validation = ValidateTemporaryDirectoryComponent(opened.Fd(), opened.Path());
-        if (!validation.HasValue())
-        {
-            return std::move(validation).Error();
-        }
+        opened = std::move(child).Value();
     }
     return opened;
 }
 
-bool RemoveTemporaryDirectoryContents(int directory, std::size_t depth)
+Result<bool> RemoveTemporaryDirectoryContents(int directory, const std::string& path, std::size_t depth)
 {
     const int scanDescriptor = ::openat(directory, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (scanDescriptor < 0)
     {
-        return false;
+        const int error = errno;
+        return Error("Failed to open temporary directory for cleanup at " + path + ": " + std::strerror(error), error);
     }
 
     DIR* entries = ::fdopendir(scanDescriptor);
     if (entries == nullptr)
     {
+        const int error = errno;
         ::close(scanDescriptor);
-        return false;
+        return Error("Failed to enumerate temporary directory " + path + ": " + std::strerror(error), error);
     }
 
-    bool success = true;
+    Result<bool> result = true;
     errno = 0;
     struct dirent* entry = nullptr;
     while ((entry = ::readdir(entries)) != nullptr)
@@ -204,10 +229,15 @@ bool RemoveTemporaryDirectoryContents(int directory, std::size_t depth)
             continue;
         }
 
+        const std::string entryPath = path + "/" + entry->d_name;
         struct stat status;
         if (::fstatat(directory, entry->d_name, &status, AT_SYMLINK_NOFOLLOW) != 0)
         {
-            success = success && (errno == ENOENT);
+            const int error = errno;
+            if ((error != ENOENT) && result.HasValue())
+            {
+                result = Error("Failed to inspect temporary directory entry " + entryPath + ": " + std::strerror(error), error);
+            }
             errno = 0;
             continue;
         }
@@ -216,33 +246,70 @@ bool RemoveTemporaryDirectoryContents(int directory, std::size_t depth)
         {
             if (depth >= sMaxTemporaryDirectoryDepth)
             {
-                success = false;
+                if (result.HasValue())
+                {
+                    result = Error("Temporary directory cleanup exceeded maximum depth at " + entryPath, ELOOP);
+                }
                 errno = 0;
                 continue;
             }
             const int child = ::openat(directory, entry->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
             if (child < 0)
             {
-                success = false;
+                const int error = errno;
+                if (result.HasValue())
+                {
+                    result = Error("Failed to open temporary directory entry " + entryPath + ": " + std::strerror(error), error);
+                }
                 errno = 0;
                 continue;
             }
-            success = RemoveTemporaryDirectoryContents(child, depth + 1) && success;
-            ::close(child);
+            auto childResult = RemoveTemporaryDirectoryContents(child, entryPath, depth + 1);
+            if (!childResult.HasValue() && result.HasValue())
+            {
+                result = std::move(childResult).Error();
+            }
+            if (::close(child) != 0)
+            {
+                const int error = errno;
+                if (result.HasValue())
+                {
+                    result = Error("Failed to close temporary directory entry " + entryPath + ": " + std::strerror(error), error);
+                }
+            }
             if ((::unlinkat(directory, entry->d_name, AT_REMOVEDIR) != 0) && (errno != ENOENT))
             {
-                success = false;
+                const int error = errno;
+                if (result.HasValue())
+                {
+                    result = Error("Failed to remove temporary directory entry " + entryPath + ": " + std::strerror(error), error);
+                }
             }
         }
         else if ((::unlinkat(directory, entry->d_name, 0) != 0) && (errno != ENOENT))
         {
-            success = false;
+            const int error = errno;
+            if (result.HasValue())
+            {
+                result = Error("Failed to remove temporary directory entry " + entryPath + ": " + std::strerror(error), error);
+            }
         }
         errno = 0;
     }
-    success = success && (errno == 0);
-    ::closedir(entries);
-    return success;
+    const int readError = errno;
+    if ((readError != 0) && result.HasValue())
+    {
+        result = Error("Failed to enumerate temporary directory " + path + ": " + std::strerror(readError), readError);
+    }
+    if (::closedir(entries) != 0)
+    {
+        const int error = errno;
+        if (result.HasValue())
+        {
+            result = Error("Failed to close temporary directory " + path + ": " + std::strerror(error), error);
+        }
+    }
+    return result;
 }
 } // namespace
 
@@ -282,21 +349,23 @@ TemporaryDirectory::TemporaryDirectory(TemporaryDirectory&& other) noexcept
     : mPath(std::move(other.mPath)),
       mName(std::move(other.mName)),
       mParent(other.mParent),
-      mRoot(other.mRoot)
+      mRoot(other.mRoot),
+      mRemovalResult(std::move(other.mRemovalResult))
 {
     other.mParent = -1;
     other.mRoot = -1;
+    other.mRemovalResult = true;
 }
 
 TemporaryDirectory::~TemporaryDirectory()
 {
-    if (mRoot >= 0 && !Remove())
+    if (mRoot >= 0)
     {
-        std::fprintf(stderr, "Failed to remove temporary directory: %s\n", mPath.c_str());
-    }
-    if (mParent >= 0)
-    {
-        ::close(mParent);
+        auto result = Remove();
+        if (!result.HasValue())
+        {
+            std::fprintf(stderr, "%s\n", result.Error().message.c_str());
+        }
     }
 }
 
@@ -305,37 +374,75 @@ const std::string& TemporaryDirectory::Path() const
     return mPath;
 }
 
-bool TemporaryDirectory::Remove()
+Result<bool> TemporaryDirectory::Remove()
 {
     if (mRoot < 0)
     {
-        return true;
+        return mRemovalResult;
     }
 
-    bool success = false;
+    Result<bool> result = true;
     for (int attempt = 0; attempt < 2; ++attempt)
     {
         struct stat rootStatus;
         struct stat entryStatus;
-        if ((::fstat(mRoot, &rootStatus) != 0) || (::fstatat(mParent, mName.c_str(), &entryStatus, AT_SYMLINK_NOFOLLOW) != 0) ||
-            (rootStatus.st_dev != entryStatus.st_dev) || (rootStatus.st_ino != entryStatus.st_ino))
+        if (::fstat(mRoot, &rootStatus) != 0)
         {
+            const int error = errno;
+            result = Error("Failed to inspect temporary directory " + mPath + ": " + std::strerror(error), error);
             break;
         }
-        const bool contentsRemoved = RemoveTemporaryDirectoryContents(mRoot, 0);
+        if (::fstatat(mParent, mName.c_str(), &entryStatus, AT_SYMLINK_NOFOLLOW) != 0)
+        {
+            const int error = errno;
+            result = Error("Failed to inspect temporary directory entry " + mPath + ": " + std::strerror(error), error);
+            break;
+        }
+        if ((rootStatus.st_dev != entryStatus.st_dev) || (rootStatus.st_ino != entryStatus.st_ino))
+        {
+            result = Error("Temporary directory entry was replaced: " + mPath, ESTALE);
+            break;
+        }
+        auto contentsRemoved = RemoveTemporaryDirectoryContents(mRoot, mPath, 0);
         if (::unlinkat(mParent, mName.c_str(), AT_REMOVEDIR) == 0)
         {
-            success = contentsRemoved;
+            result = std::move(contentsRemoved);
             break;
         }
-        if (errno != ENOTEMPTY)
+        const int error = errno;
+        if (!contentsRemoved.HasValue())
+        {
+            result = std::move(contentsRemoved);
+        }
+        else
+        {
+            result = Error("Failed to remove temporary directory " + mPath + ": " + std::strerror(error), error);
+        }
+        if (error != ENOTEMPTY)
         {
             break;
         }
     }
-    ::close(mRoot);
+    if (::close(mRoot) != 0)
+    {
+        const int error = errno;
+        if (result.HasValue())
+        {
+            result = Error("Failed to close temporary directory " + mPath + ": " + std::strerror(error), error);
+        }
+    }
     mRoot = -1;
-    return success;
+    if (::close(mParent) != 0)
+    {
+        const int error = errno;
+        if (result.HasValue())
+        {
+            result = Error("Failed to close temporary directory parent for " + mPath + ": " + std::strerror(error), error);
+        }
+    }
+    mParent = -1;
+    mRemovalResult = std::move(result);
+    return mRemovalResult;
 }
 
 Result<TemporaryDirectory> TemporaryDirectory::Make(const std::string& prefix)

@@ -255,8 +255,49 @@ TEST(TemporaryDirectoryTest, CleanupUsesValidatedParentAfterPathReplacement)
 
     EXPECT_EQ(0, ::access((movedParent + "/" + name).c_str(), F_OK));
     EXPECT_NE(0, ::access((outside + "/" + name).c_str(), F_OK));
-    EXPECT_TRUE(directory.Remove());
+    auto removed = directory.Remove();
+    ASSERT_TRUE(removed.HasValue()) << removed.Error().message;
+    EXPECT_TRUE(removed.Value());
+    auto repeated = directory.Remove();
+    ASSERT_TRUE(repeated.HasValue()) << repeated.Error().message;
+    EXPECT_TRUE(repeated.Value());
     EXPECT_NE(0, ::access((movedParent + "/" + name).c_str(), F_OK));
+}
+
+TEST(TemporaryDirectoryTest, RemovalReportsMissingRoot)
+{
+    auto created = ComplianceEngine::TemporaryDirectory::Make("missing-root");
+    ASSERT_TRUE(created.HasValue()) << created.Error().message;
+    auto directory = std::move(created).Value();
+    ASSERT_EQ(0, ::rmdir(directory.Path().c_str()));
+
+    auto removed = directory.Remove();
+    ASSERT_FALSE(removed.HasValue());
+    EXPECT_EQ(ENOENT, removed.Error().code);
+    EXPECT_NE(std::string::npos, removed.Error().message.find("inspect temporary directory entry"));
+}
+
+TEST(TemporaryDirectoryTest, RemovalReportsReplacedRoot)
+{
+    MockContext owner;
+    const std::string parent = owner.GetTempdirPath() + "/parent";
+    ASSERT_EQ(0, ::mkdir(parent.c_str(), 0700));
+    ScopedTmpdir environment(parent.c_str());
+    auto created = ComplianceEngine::TemporaryDirectory::Make("replacement");
+    ASSERT_TRUE(created.HasValue()) << created.Error().message;
+    auto directory = std::move(created).Value();
+    const std::string original = directory.Path();
+    ASSERT_EQ(0, ::rename(original.c_str(), (original + ".moved").c_str()));
+    ASSERT_EQ(0, ::mkdir(original.c_str(), 0700));
+
+    auto removed = directory.Remove();
+    ASSERT_FALSE(removed.HasValue());
+    EXPECT_EQ(ESTALE, removed.Error().code);
+    EXPECT_NE(std::string::npos, removed.Error().message.find(original));
+    auto repeated = directory.Remove();
+    ASSERT_FALSE(repeated.HasValue());
+    EXPECT_EQ(ESTALE, repeated.Error().code);
+    EXPECT_EQ(0, ::access(original.c_str(), F_OK));
 }
 
 TEST(TemporaryDirectoryTest, CleanupStopsAtMaximumDepth)
@@ -273,7 +314,10 @@ TEST(TemporaryDirectoryTest, CleanupStopsAtMaximumDepth)
         children.push_back(path);
     }
 
-    EXPECT_FALSE(directory.Remove());
+    auto removed = directory.Remove();
+    ASSERT_FALSE(removed.HasValue());
+    EXPECT_EQ(ELOOP, removed.Error().code);
+    EXPECT_NE(std::string::npos, removed.Error().message.find(children.back()));
     EXPECT_EQ(0, ::access(children.back().c_str(), F_OK));
     for (auto child = children.rbegin(); child != children.rend(); ++child)
     {
