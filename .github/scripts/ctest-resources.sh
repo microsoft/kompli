@@ -80,12 +80,14 @@ else
     record "cpu_quota_period=unavailable"
 fi
 
-if available_cpus=$(nproc); then
-    record "available_cpus=$available_cpus"
-else
+if ! available_cpus=$(nproc) || [[ ! "$available_cpus" =~ ^[1-9][0-9]*$ ]]; then
     record "available_cpus=unavailable"
+    record "ctest_parallel_jobs=unavailable"
+    printf 'Cannot determine a positive CTest job count from nproc\n' >&2
+    exit 1
 fi
-record "ctest_parallel_jobs=8"
+record "available_cpus=$available_cpus"
+record "ctest_parallel_jobs=$available_cpus"
 
 cpu_before=
 if [[ -r "$cpu_file" ]]; then
@@ -162,7 +164,7 @@ stop_sampler() {
 trap stop_sampler EXIT
 
 start_ms=$(date +%s%3N)
-ctest --verbose --parallel 8 2>&1 | tee /dev/fd/4 > "$ctest_output"
+ctest --verbose --parallel "$available_cpus" 2>&1 | tee /dev/fd/4 > "$ctest_output"
 statuses=("${PIPESTATUS[@]}")
 end_ms=$(date +%s%3N)
 stop_sampler
