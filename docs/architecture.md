@@ -54,6 +54,23 @@ Kompli supports two integration scenarios that share the same ComplianceEngine m
 - **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The augmentation engine generates MOF files that drive audit and remediation per rule.
 - **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/kompli/`) that reads a benchmark-definition JSON file (supplied on disk as a required positional filename argument; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
 
+### 2.2.1. Ephemeral CLI state
+
+Short-lived CLI consumers create a private, per-invocation state directory
+beneath a non-empty `TMPDIR`. If `TMPDIR` is unset or empty, they use `/tmp` as
+the compatibility parent. A configured parent must be absolute, contain no
+whitespace, `.`/`..` components, or symlinked components, have a trusted owner,
+and not be group- or world-writable without the sticky bit. The parent descriptor remains
+open through the context lifetime. A cryptographically random directory name
+is created atomically beneath that descriptor with `mkdirat` (mode `0700`),
+then the directory itself is held open for descriptor-relative, no-follow
+cleanup. The root name is checked against the held directory before removal;
+the parent ownership and sticky-bit rules prevent replacement by a different
+unprivileged user. A caller with the same UID can still modify its own paths,
+so this does not make every later pathname-based consumer operation race-free.
+Failure to validate or create a directory beneath the selected parent is
+fatal; the process does not retry under a different parent.
+
 # 3. kompli Agent
 
 Kompli will be able to run as a standalone daemon that can evaluate policy given requests from external sources.

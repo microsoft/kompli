@@ -4,6 +4,7 @@
 #include "CommonContext.h"
 
 #include "GuestConfigurationContext.h"
+#include "MockContext.h"
 
 #include <fstream>
 #include <gtest/gtest.h>
@@ -11,20 +12,12 @@
 class CommonContextTest : public ::testing::Test
 {
 protected:
-    void SetUp() override
-    {
-        // Initialize resources if needed
-    }
-
-    void TearDown() override
-    {
-        // Clean up resources if needed
-    }
+    MockContext mContext;
 };
 
 TEST_F(CommonContextTest, ExecuteCommand_Success)
 {
-    ComplianceEngine::CommonContext ctx(nullptr, "/tmp");
+    ComplianceEngine::CommonContext ctx(nullptr, mContext.GetStatePath());
     auto result = ctx.ExecuteCommand("echo test");
     EXPECT_TRUE(result);
     EXPECT_NE(result.Value().find("test"), std::string::npos);
@@ -32,7 +25,7 @@ TEST_F(CommonContextTest, ExecuteCommand_Success)
 
 TEST_F(CommonContextTest, ExecuteCommand_EmptyOutput)
 {
-    ComplianceEngine::CommonContext context(nullptr, "/tmp");
+    ComplianceEngine::CommonContext context(nullptr, mContext.GetStatePath());
     for (const std::string command : {"true", "if false; then echo unused; fi"})
     {
         SCOPED_TRACE(command);
@@ -47,7 +40,7 @@ TEST_F(CommonContextTest, ExecuteCommand_EmptyOutput)
 
 TEST_F(CommonContextTest, ExecuteCommand_Failure)
 {
-    ComplianceEngine::CommonContext ctx(nullptr, "/tmp");
+    ComplianceEngine::CommonContext ctx(nullptr, mContext.GetStatePath());
     auto result = ctx.ExecuteCommand("someinvalidcommand");
     EXPECT_FALSE(result);
     auto err = result.Error();
@@ -56,29 +49,20 @@ TEST_F(CommonContextTest, ExecuteCommand_Failure)
 
 TEST_F(CommonContextTest, GetFileContents_NotFound)
 {
-    ComplianceEngine::CommonContext ctx(nullptr, "/tmp");
+    ComplianceEngine::CommonContext ctx(nullptr, mContext.GetStatePath());
     auto result = ctx.GetFileContents("/non_existent_file");
     EXPECT_FALSE(result);
 }
 
 TEST_F(CommonContextTest, GetFileContents_ExistingFile)
 {
-    ComplianceEngine::CommonContext ctx(nullptr, "/tmp");
-    // Create a dummy file with known content
-    std::string filePath = "/tmp/test_common_context.txt";
+    ComplianceEngine::CommonContext ctx(nullptr, mContext.GetStatePath());
     std::string expectedContent = "Hello from dummy file";
-
-    {
-        std::ofstream tempFile(filePath);
-        ASSERT_TRUE(tempFile.is_open());
-        tempFile << expectedContent;
-    }
+    const std::string filePath = mContext.MakeTempfile(expectedContent);
 
     auto result = ctx.GetFileContents(filePath);
     EXPECT_TRUE(result);
     EXPECT_EQ(result.Value(), expectedContent);
-
-    remove(filePath.c_str());
 }
 
 TEST_F(CommonContextTest, GuestConfigurationContext_StatePath)

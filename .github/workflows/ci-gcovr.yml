@@ -94,7 +94,7 @@ jobs:
         with:
           container: ${{ steps.container.outputs.id }}
           working-directory: ${{ env.MOUNT }}/build
-          cmd: ctest --verbose | tee ../${{ matrix.target.name }}-${{ matrix.target.arch }}-ctest.log || true
+          cmd: ctest --verbose --parallel 8 | tee ../${{ matrix.target.name }}-${{ matrix.target.arch }}-ctest.log || true
 
       - name: Run gcovr
         uses: ./.github/actions/container-exec
