@@ -77,45 +77,59 @@ inline Result<bool> ValidateTemporaryDirectoryComponent(int directory, const std
     return true;
 }
 
-struct OpenedTemporaryParent
-{
-    std::string path;
-    int fd;
+class TemporaryDirectory;
 
+class OpenedTemporaryParent
+{
+private:
     OpenedTemporaryParent(std::string path, int fd)
-        : path(std::move(path)),
-          fd(fd)
+        : mPath(std::move(path)),
+          mFd(fd)
     {
     }
+
+    friend class TemporaryDirectory;
+    friend Result<OpenedTemporaryParent> ValidateTemporaryDirectoryParent(const std::string& parent);
+
+public:
     OpenedTemporaryParent(const OpenedTemporaryParent&) = delete;
     OpenedTemporaryParent& operator=(const OpenedTemporaryParent&) = delete;
     OpenedTemporaryParent(OpenedTemporaryParent&& other) noexcept
-        : path(std::move(other.path)),
-          fd(other.fd)
+        : mPath(std::move(other.mPath)),
+          mFd(other.mFd)
     {
-        other.fd = -1;
+        other.mFd = -1;
     }
     OpenedTemporaryParent& operator=(OpenedTemporaryParent&& other) noexcept
     {
         if (this != &other)
         {
-            if (fd >= 0)
+            if (mFd >= 0)
             {
-                ::close(fd);
+                ::close(mFd);
             }
-            path = std::move(other.path);
-            fd = other.fd;
-            other.fd = -1;
+            mPath = std::move(other.mPath);
+            mFd = other.mFd;
+            other.mFd = -1;
         }
         return *this;
     }
     ~OpenedTemporaryParent()
     {
-        if (fd >= 0)
+        if (mFd >= 0)
         {
-            ::close(fd);
+            ::close(mFd);
         }
     }
+
+    const std::string& Path() const
+    {
+        return mPath;
+    }
+
+private:
+    std::string mPath;
+    int mFd;
 };
 
 inline Result<OpenedTemporaryParent> ValidateTemporaryDirectoryParent(const std::string& parent)
@@ -130,13 +144,13 @@ inline Result<OpenedTemporaryParent> ValidateTemporaryDirectoryParent(const std:
     }
 
     OpenedTemporaryParent opened("/", ::open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
-    if (opened.fd < 0)
+    if (opened.mFd < 0)
     {
         const int error = errno;
         return Error("Failed to open filesystem root: " + std::string(std::strerror(error)), error);
     }
 
-    auto validation = ValidateTemporaryDirectoryComponent(opened.fd, opened.path);
+    auto validation = ValidateTemporaryDirectoryComponent(opened.mFd, opened.mPath);
     if (!validation.HasValue())
     {
         return std::move(validation).Error();
@@ -157,15 +171,15 @@ inline Result<OpenedTemporaryParent> ValidateTemporaryDirectoryParent(const std:
             return Error("TMPDIR must not contain '.' or '..' path components", EINVAL);
         }
 
-        const std::string nextPath = opened.path == "/" ? "/" + component : opened.path + "/" + component;
-        const int child = ::openat(opened.fd, component.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        const std::string nextPath = opened.mPath == "/" ? "/" + component : opened.mPath + "/" + component;
+        const int child = ::openat(opened.mFd, component.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (child < 0)
         {
             const int error = errno;
             return Error("Failed to securely open temporary directory parent component " + component + ": " + std::strerror(error), error);
         }
         opened = OpenedTemporaryParent(nextPath, child);
-        validation = ValidateTemporaryDirectoryComponent(opened.fd, opened.path);
+        validation = ValidateTemporaryDirectoryComponent(opened.mFd, opened.mPath);
         if (!validation.HasValue())
         {
             return std::move(validation).Error();
@@ -237,13 +251,9 @@ inline bool RemoveTemporaryDirectoryContents(int directory)
 class TemporaryDirectory
 {
 public:
-    TemporaryDirectory(OpenedTemporaryParent parent, std::string name, int root)
-        : mPath(parent.path == "/" ? "/" + name : parent.path + "/" + name),
-          mName(std::move(name)),
-          mParent(std::move(parent)),
-          mRoot(root)
-    {
-    }
+    static Result<TemporaryDirectory> Make(const std::string& prefix);
+    static Result<TemporaryDirectory> MakeInParent(OpenedTemporaryParent openedParent, const std::string& prefix);
+
     TemporaryDirectory(const TemporaryDirectory&) = delete;
     TemporaryDirectory& operator=(const TemporaryDirectory&) = delete;
     TemporaryDirectory(TemporaryDirectory&& other) noexcept
@@ -279,13 +289,13 @@ public:
         {
             struct stat rootStatus;
             struct stat entryStatus;
-            if ((::fstat(mRoot, &rootStatus) != 0) || (::fstatat(mParent.fd, mName.c_str(), &entryStatus, AT_SYMLINK_NOFOLLOW) != 0) ||
+            if ((::fstat(mRoot, &rootStatus) != 0) || (::fstatat(mParent.mFd, mName.c_str(), &entryStatus, AT_SYMLINK_NOFOLLOW) != 0) ||
                 (rootStatus.st_dev != entryStatus.st_dev) || (rootStatus.st_ino != entryStatus.st_ino))
             {
                 break;
             }
             const bool contentsRemoved = RemoveTemporaryDirectoryContents(mRoot);
-            if (::unlinkat(mParent.fd, mName.c_str(), AT_REMOVEDIR) == 0)
+            if (::unlinkat(mParent.mFd, mName.c_str(), AT_REMOVEDIR) == 0)
             {
                 success = contentsRemoved;
                 break;
@@ -301,14 +311,26 @@ public:
     }
 
 private:
+    TemporaryDirectory(OpenedTemporaryParent parent, std::string name, int root)
+        : mPath(parent.mPath == "/" ? "/" + name : parent.mPath + "/" + name),
+          mName(std::move(name)),
+          mParent(std::move(parent)),
+          mRoot(root)
+    {
+    }
+
     std::string mPath;
     std::string mName;
     OpenedTemporaryParent mParent;
     int mRoot;
 };
 
-inline Result<TemporaryDirectory> CreateTemporaryDirectoryInParent(OpenedTemporaryParent openedParent, const std::string& prefix)
+inline Result<TemporaryDirectory> TemporaryDirectory::MakeInParent(OpenedTemporaryParent openedParent, const std::string& prefix)
 {
+    if (openedParent.mFd < 0)
+    {
+        return Error("Temporary directory parent is no longer open", EINVAL);
+    }
     if (prefix.empty() || (prefix == ".") || (prefix == "..") || (prefix.find('/') != std::string::npos))
     {
         return Error("Temporary directory prefix must be a single path component", EINVAL);
@@ -340,21 +362,21 @@ inline Result<TemporaryDirectory> CreateTemporaryDirectoryInParent(OpenedTempora
             name += hex[byte >> 4];
             name += hex[byte & 0x0f];
         }
-        if (::mkdirat(openedParent.fd, name.c_str(), 0700) != 0)
+        if (::mkdirat(openedParent.mFd, name.c_str(), 0700) != 0)
         {
             if (errno == EEXIST)
             {
                 continue;
             }
             const int error = errno;
-            return Error("Failed to create temporary directory beneath " + openedParent.path + ": " + std::strerror(error), error);
+            return Error("Failed to create temporary directory beneath " + openedParent.mPath + ": " + std::strerror(error), error);
         }
 
-        const int root = ::openat(openedParent.fd, name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        const int root = ::openat(openedParent.mFd, name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (root < 0)
         {
             const int error = errno;
-            (void)::unlinkat(openedParent.fd, name.c_str(), AT_REMOVEDIR);
+            (void)::unlinkat(openedParent.mFd, name.c_str(), AT_REMOVEDIR);
             return Error("Failed to open new temporary directory: " + std::string(std::strerror(error)), error);
         }
         return TemporaryDirectory(std::move(openedParent), std::move(name), root);
@@ -362,7 +384,7 @@ inline Result<TemporaryDirectory> CreateTemporaryDirectoryInParent(OpenedTempora
     return Error("Failed to allocate a unique temporary directory name", EEXIST);
 }
 
-inline Result<TemporaryDirectory> CreateTemporaryDirectory(const std::string& prefix)
+inline Result<TemporaryDirectory> TemporaryDirectory::Make(const std::string& prefix)
 {
     if (prefix.empty() || (prefix == ".") || (prefix == "..") || (prefix.find('/') != std::string::npos))
     {
@@ -379,7 +401,7 @@ inline Result<TemporaryDirectory> CreateTemporaryDirectory(const std::string& pr
         return std::move(validatedParent).Error();
     }
 
-    return CreateTemporaryDirectoryInParent(std::move(validatedParent).Value(), prefix);
+    return MakeInParent(std::move(validatedParent).Value(), prefix);
 }
 
 } // namespace Detail

@@ -47,7 +47,7 @@ TEST_F(ContextTest, DirectoryHasCorrectPrefix)
     ASSERT_TRUE(parent.HasValue()) << parent.Error().message;
     auto validatedParent = ComplianceEngine::Detail::ValidateTemporaryDirectoryParent(parent.Value());
     ASSERT_TRUE(validatedParent.HasValue()) << validatedParent.Error().message;
-    EXPECT_EQ(validatedParent.Value().path, statePath.substr(0, separator));
+    EXPECT_EQ(validatedParent.Value().Path(), statePath.substr(0, separator));
     EXPECT_EQ(0u, statePath.substr(separator + 1).rfind("kompli-cli.", 0));
 }
 

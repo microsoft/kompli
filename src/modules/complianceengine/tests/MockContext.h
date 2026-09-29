@@ -118,7 +118,7 @@ private:
     // throws as it's used by the constructor
     static ComplianceEngine::Detail::TemporaryDirectory CreateTempdir()
     {
-        auto result = ComplianceEngine::Detail::CreateTemporaryDirectory("ComplianceEngineTest");
+        auto result = ComplianceEngine::Detail::TemporaryDirectory::Make("ComplianceEngineTest");
         if (!result.HasValue())
         {
             throw std::runtime_error(result.Error().message);
