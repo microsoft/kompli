@@ -86,7 +86,7 @@ jobs:
         with:
           container: ${{ steps.container.outputs.id }}
           working-directory: ${{ env.MOUNT }}/build
-          cmd: ctest --verbose --parallel 8 > ../${{ matrix.target.name }}-${{ matrix.target.arch }}-sanitizer.log
+          cmd: bash ../.github/scripts/ctest-resources.sh ../${{ matrix.target.name }}-${{ matrix.target.arch }}-sanitizer.log --quiet
 
       - name: Generate test report
         uses: ./.github/actions/gtest-xml
@@ -101,6 +101,8 @@ jobs:
           name: unit-test-${{ matrix.target.name }}-${{ matrix.target.arch }}-sanitizer
           path: |
             ${{ matrix.target.name }}-${{ matrix.target.arch }}-sanitizer.log
+            ${{ matrix.target.name }}-${{ matrix.target.arch }}-sanitizer.log.resources
+            ${{ matrix.target.name }}-${{ matrix.target.arch }}-sanitizer.log.memory-samples
             ${{ matrix.target.name }}-${{ matrix.target.arch }}-sanitizer.xml
 
   report:

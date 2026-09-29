@@ -94,7 +94,7 @@ jobs:
         with:
           container: ${{ steps.container.outputs.id }}
           working-directory: ${{ env.MOUNT }}/build
-          cmd: ctest --verbose --parallel 8 | tee ../${{ matrix.target.name }}-${{ matrix.target.arch }}-ctest.log || true
+          cmd: bash ../.github/scripts/ctest-resources.sh ../${{ matrix.target.name }}-${{ matrix.target.arch }}-ctest.log || true
 
       - name: Run gcovr
         uses: ./.github/actions/container-exec
@@ -120,6 +120,8 @@ jobs:
           name: gcovr-${{ matrix.target.name }}-${{ matrix.target.arch }}
           path: |
             ${{ matrix.target.name }}-${{ matrix.target.arch }}-ctest.log
+            ${{ matrix.target.name }}-${{ matrix.target.arch }}-ctest.log.resources
+            ${{ matrix.target.name }}-${{ matrix.target.arch }}-ctest.log.memory-samples
             ${{ matrix.target.name }}-${{ matrix.target.arch }}-gcovr.log
             ${{ matrix.target.name }}-${{ matrix.target.arch }}/*
 

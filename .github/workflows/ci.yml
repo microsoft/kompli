@@ -93,7 +93,7 @@ jobs:
         with:
           container: ${{ steps.container.outputs.id }}
           working-directory: ${{ env.MOUNT }}/build
-          cmd: set -o pipefail && ctest --verbose --parallel 8 | tee ../${{ matrix.target.name }}-${{ matrix.target.arch }}.log
+          cmd: bash ../.github/scripts/ctest-resources.sh ../${{ matrix.target.name }}-${{ matrix.target.arch }}.log
 
       - name: Generate test report
         uses: ./.github/actions/gtest-xml
@@ -108,6 +108,8 @@ jobs:
           name: unit-test-${{ matrix.target.name }}-${{ matrix.target.arch }}
           path: |
             ${{ matrix.target.name }}-${{ matrix.target.arch }}.log
+            ${{ matrix.target.name }}-${{ matrix.target.arch }}.log.resources
+            ${{ matrix.target.name }}-${{ matrix.target.arch }}.log.memory-samples
             ${{ matrix.target.name }}-${{ matrix.target.arch }}.xml
 
   report:
