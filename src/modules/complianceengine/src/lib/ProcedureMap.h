@@ -75,6 +75,10 @@ inline const std::map<std::string, AksCommandOperation>& MapEnum<AksCommandOpera
         {"GeneralPolicies", AksCommandOperation::GeneralPolicies},
         {"PodSecurityStandards", AksCommandOperation::PodSecurityStandards},
         {"Kubelet", AksCommandOperation::Kubelet},
+        {"ServiceAccount", AksCommandOperation::ServiceAccount},
+        {"Pod", AksCommandOperation::Pod},
+        {"SecretsEnvironmentVariables", AksCommandOperation::SecretsEnvironmentVariables},
+        {"PrivateNodes", AksCommandOperation::PrivateNodes},
     };
     return map;
 }
@@ -317,9 +321,9 @@ template <>
 struct Bindings<AksCommandParams>
 {
     using T = AksCommandParams;
-    static constexpr size_t size = 6;
+    static constexpr size_t size = 9;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::operation, &T::clusterName, &T::resourceGroup, &T::nodeName, &T::pattern, &T::matchMeansCompliant);
+    static constexpr auto members = std::make_tuple(&T::operation, &T::clusterName, &T::resourceGroup, &T::nodeName, &T::namespaceName, &T::serviceAccountName, &T::podName, &T::pattern, &T::matchMeansCompliant);
 };
 
 // Defines the bindings for the ApparmorProfileStateParams structure.
