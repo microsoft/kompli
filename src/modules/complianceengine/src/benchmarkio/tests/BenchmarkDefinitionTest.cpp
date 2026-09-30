@@ -517,6 +517,20 @@ TEST(BenchmarkDefinitionParserTest, RejectsRulesNotAnArray)
 // Malformed rules
 // ---------------------------------------------------------------------------
 
+TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataNotAnObject)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("metadata": {
+        "description": "d",
+        "rationale": "r",
+        "fixtext": "f",
+        "severity": "Warning",
+        "references": "x"
+    })",
+        R"("metadata": [])");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
 TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingTitle)
 {
     const char* const rule = R"({

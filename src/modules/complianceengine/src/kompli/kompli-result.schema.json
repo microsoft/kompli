@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "kompli Result",
-  "description": "Canonical result JSON emitted by `kompli audit` / `remediate`. This is the Phase 3 shape: per-rule `tags` and inline `metadata` are echoed from the unified benchmark-definition input, alongside the Phase 1 fields.",
+  "description": "Canonical result JSON emitted by `kompli audit` / `remediate`. Per-rule `tags` and inline `metadata` are echoed from the unified benchmark-definition input.",
   "type": "object",
   "additionalProperties": true,
   "required": [
@@ -43,7 +43,7 @@
     "status": {
       "type": "string",
       "enum": ["Compliant", "NonCompliant", "NotApplicable"],
-      "description": "Overall status, aggregated across rules with the engine's allOf three-valued logic: NonCompliant if any rule is NonCompliant; otherwise NotApplicable if any rule is NotApplicable, or if no rules were evaluated (empty benchmark or a section filter that matched nothing); otherwise Compliant."
+      "description": "Overall status, aggregated across rules with the engine's allOf three-valued logic: NonCompliant if any rule is NonCompliant; otherwise NotApplicable if any rule is NotApplicable, or if a rule ID filter matched no rules; otherwise Compliant."
     },
     "rules": {
       "type": "array",
