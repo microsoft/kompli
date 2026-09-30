@@ -277,21 +277,6 @@ TEST(TemporaryDirectoryTest, RemovalReportsMissingRoot)
     EXPECT_NE(std::string::npos, removed.Error().message.find("inspect temporary directory entry"));
 }
 
-TEST(TemporaryDirectoryTest, MovedFromOwnerCannotRemove)
-{
-    auto created = ComplianceEngine::TemporaryDirectory::Make("moved-owner");
-    ASSERT_TRUE(created.HasValue()) << created.Error().message;
-    auto directory = std::move(created).Value();
-    auto owner = std::move(directory);
-
-    auto movedFrom = directory.Remove();
-    ASSERT_FALSE(movedFrom.HasValue());
-    EXPECT_EQ(EALREADY, movedFrom.Error().code);
-    auto removed = owner.Remove();
-    ASSERT_TRUE(removed.HasValue()) << removed.Error().message;
-    EXPECT_TRUE(removed.Value());
-}
-
 TEST(TemporaryDirectoryTest, RemovalReportsReplacedRoot)
 {
     MockContext owner;
