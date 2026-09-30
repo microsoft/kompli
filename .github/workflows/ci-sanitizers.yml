@@ -86,7 +86,12 @@ jobs:
         with:
           container: ${{ steps.container.outputs.id }}
           working-directory: ${{ env.MOUNT }}/build
-          cmd: bash ../.github/scripts/ctest-resources.sh ../${{ matrix.target.name }}-${{ matrix.target.arch }}-sanitizer.log --quiet
+          cmd: |
+            if ! jobs=$(nproc) || [[ ! "$jobs" =~ ^[1-9][0-9]*$ ]]; then
+              echo "Cannot determine a positive CTest job count from nproc" >&2
+              exit 1
+            fi
+            ctest --verbose --parallel "$jobs" > ../${{ matrix.target.name }}-${{ matrix.target.arch }}-sanitizer.log 2>&1
 
       - name: Generate test report
         uses: ./.github/actions/gtest-xml
@@ -101,8 +106,6 @@ jobs:
           name: unit-test-${{ matrix.target.name }}-${{ matrix.target.arch }}-sanitizer
           path: |
             ${{ matrix.target.name }}-${{ matrix.target.arch }}-sanitizer.log
-            ${{ matrix.target.name }}-${{ matrix.target.arch }}-sanitizer.log.resources
-            ${{ matrix.target.name }}-${{ matrix.target.arch }}-sanitizer.log.memory-samples
             ${{ matrix.target.name }}-${{ matrix.target.arch }}-sanitizer.xml
 
   report:

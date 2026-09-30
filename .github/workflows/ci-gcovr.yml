@@ -94,7 +94,12 @@ jobs:
         with:
           container: ${{ steps.container.outputs.id }}
           working-directory: ${{ env.MOUNT }}/build
-          cmd: bash ../.github/scripts/ctest-resources.sh ../${{ matrix.target.name }}-${{ matrix.target.arch }}-ctest.log || true
+          cmd: |
+            if ! jobs=$(nproc) || [[ ! "$jobs" =~ ^[1-9][0-9]*$ ]]; then
+              echo "Cannot determine a positive CTest job count from nproc" >&2
+              exit 1
+            fi
+            ctest --verbose --parallel "$jobs" 2>&1 | tee ../${{ matrix.target.name }}-${{ matrix.target.arch }}-ctest.log || true
 
       - name: Run gcovr
         uses: ./.github/actions/container-exec
@@ -120,8 +125,6 @@ jobs:
           name: gcovr-${{ matrix.target.name }}-${{ matrix.target.arch }}
           path: |
             ${{ matrix.target.name }}-${{ matrix.target.arch }}-ctest.log
-            ${{ matrix.target.name }}-${{ matrix.target.arch }}-ctest.log.resources
-            ${{ matrix.target.name }}-${{ matrix.target.arch }}-ctest.log.memory-samples
             ${{ matrix.target.name }}-${{ matrix.target.arch }}-gcovr.log
             ${{ matrix.target.name }}-${{ matrix.target.arch }}/*
 
