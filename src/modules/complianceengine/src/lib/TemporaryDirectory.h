@@ -6,6 +6,7 @@
 
 #include "Result.h"
 
+#include <cstddef>
 #include <string>
 
 namespace ComplianceEngine
@@ -29,6 +30,7 @@ public:
     Result<bool> Remove();
 
 private:
+    static Result<bool> RemoveContents(int directory, const std::string& path, std::size_t depth);
     TemporaryDirectory(std::string path, std::string name, int parent, int root);
 
     std::string mPath;
