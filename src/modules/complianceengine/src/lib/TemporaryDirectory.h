@@ -13,6 +13,7 @@ namespace ComplianceEngine
 {
 namespace Detail
 {
+// Available in the header to allow tests exposure
 Result<std::string> GetTemporaryDirectoryParent();
 } // namespace Detail
 
@@ -37,7 +38,6 @@ private:
     std::string mName;
     int mParent;
     int mRoot;
-    Result<bool> mRemovalResult{true};
 };
 } // namespace ComplianceEngine
 

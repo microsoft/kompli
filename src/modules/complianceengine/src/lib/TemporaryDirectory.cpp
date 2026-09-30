@@ -23,7 +23,7 @@ namespace
 {
 constexpr std::size_t sMaxTemporaryDirectoryDepth = 64;
 
-bool TemporaryParentContainsWhitespace(const std::string& parent)
+bool ContainsWhitespace(const std::string& parent)
 {
     for (unsigned char character : parent)
     {
@@ -35,6 +35,35 @@ bool TemporaryParentContainsWhitespace(const std::string& parent)
     return false;
 }
 
+Result<std::string> MakeRandomName(const std::string& prefix)
+{
+    unsigned char randomBytes[16];
+    std::size_t filled = 0;
+    while (filled < sizeof(randomBytes))
+    {
+        const ssize_t bytesRead = ::getrandom(randomBytes + filled, sizeof(randomBytes) - filled, 0);
+        if (bytesRead < 0 && errno == EINTR)
+        {
+            continue;
+        }
+        if (bytesRead <= 0)
+        {
+            const int error = (bytesRead < 0) ? errno : EIO;
+            return Error("Failed to generate temporary directory name: " + std::string(std::strerror(error)), error);
+        }
+        filled += static_cast<std::size_t>(bytesRead);
+    }
+
+    const char hex[] = "0123456789abcdef";
+    std::string name = prefix + ".";
+    for (unsigned char byte : randomBytes)
+    {
+        name += hex[byte >> 4];
+        name += hex[byte & 0x0f];
+    }
+    return name;
+}
+
 class ValidatedParent
 {
 public:
@@ -44,7 +73,7 @@ public:
         {
             return Error("TMPDIR must be an absolute path", EINVAL);
         }
-        if (TemporaryParentContainsWhitespace(parent))
+        if (ContainsWhitespace(parent))
         {
             return Error("TMPDIR must not contain whitespace", EINVAL);
         }
@@ -332,7 +361,7 @@ Result<std::string> GetTemporaryDirectoryParent()
     {
         return Error("TMPDIR must be an absolute path", EINVAL);
     }
-    if (TemporaryParentContainsWhitespace(tmpdir))
+    if (ContainsWhitespace(tmpdir))
     {
         return Error("TMPDIR must not contain whitespace", EINVAL);
     }
@@ -353,12 +382,10 @@ TemporaryDirectory::TemporaryDirectory(TemporaryDirectory&& other) noexcept
     : mPath(std::move(other.mPath)),
       mName(std::move(other.mName)),
       mParent(other.mParent),
-      mRoot(other.mRoot),
-      mRemovalResult(std::move(other.mRemovalResult))
+      mRoot(other.mRoot)
 {
     other.mParent = -1;
     other.mRoot = -1;
-    other.mRemovalResult = true;
 }
 
 TemporaryDirectory::~TemporaryDirectory()
@@ -382,7 +409,7 @@ Result<bool> TemporaryDirectory::Remove()
 {
     if (mRoot < 0)
     {
-        return mRemovalResult;
+        return Error("Temporary directory removal already attempted or ownership transferred: " + mPath, EALREADY);
     }
 
     Result<bool> result = true;
@@ -431,8 +458,7 @@ Result<bool> TemporaryDirectory::Remove()
     mRoot = -1;
     ::close(mParent);
     mParent = -1;
-    mRemovalResult = std::move(result);
-    return mRemovalResult;
+    return result;
 }
 
 Result<TemporaryDirectory> TemporaryDirectory::Make(const std::string& prefix)
@@ -453,52 +479,26 @@ Result<TemporaryDirectory> TemporaryDirectory::Make(const std::string& prefix)
     }
     auto parent = std::move(validatedParent).Value();
 
-    for (int attempt = 0; attempt < 32; ++attempt)
+    auto generatedName = MakeRandomName(prefix);
+    if (!generatedName.HasValue())
     {
-        unsigned char randomBytes[16];
-        std::size_t filled = 0;
-        while (filled < sizeof(randomBytes))
-        {
-            const ssize_t bytesRead = ::getrandom(randomBytes + filled, sizeof(randomBytes) - filled, 0);
-            if (bytesRead < 0 && errno == EINTR)
-            {
-                continue;
-            }
-            if (bytesRead <= 0)
-            {
-                const int error = (bytesRead < 0) ? errno : EIO;
-                return Error("Failed to generate temporary directory name: " + std::string(std::strerror(error)), error);
-            }
-            filled += static_cast<std::size_t>(bytesRead);
-        }
-
-        const char hex[] = "0123456789abcdef";
-        std::string name = prefix + ".";
-        for (unsigned char byte : randomBytes)
-        {
-            name += hex[byte >> 4];
-            name += hex[byte & 0x0f];
-        }
-        std::string path = parent.Path() == "/" ? "/" + name : parent.Path() + "/" + name;
-        if (::mkdirat(parent.Fd(), name.c_str(), 0700) != 0)
-        {
-            if (errno == EEXIST)
-            {
-                continue;
-            }
-            const int error = errno;
-            return Error("Failed to create temporary directory beneath " + parent.Path() + ": " + std::strerror(error), error);
-        }
-
-        const int root = ::openat(parent.Fd(), name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-        if (root < 0)
-        {
-            const int error = errno;
-            (void)::unlinkat(parent.Fd(), name.c_str(), AT_REMOVEDIR);
-            return Error("Failed to open new temporary directory: " + std::string(std::strerror(error)), error);
-        }
-        return TemporaryDirectory(std::move(path), std::move(name), parent.Release(), root);
+        return std::move(generatedName).Error();
     }
-    return Error("Failed to allocate a unique temporary directory name", EEXIST);
+    std::string name = std::move(generatedName).Value();
+    std::string path = (parent.Path() == "/") ? "/" + name : parent.Path() + "/" + name;
+    if (::mkdirat(parent.Fd(), name.c_str(), 0700) != 0)
+    {
+        const int error = errno;
+        return Error("Failed to create temporary directory beneath " + parent.Path() + ": " + std::strerror(error), error);
+    }
+
+    const int root = ::openat(parent.Fd(), name.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (root < 0)
+    {
+        const int error = errno;
+        (void)::unlinkat(parent.Fd(), name.c_str(), AT_REMOVEDIR);
+        return Error("Failed to open new temporary directory: " + std::string(std::strerror(error)), error);
+    }
+    return TemporaryDirectory(std::move(path), std::move(name), parent.Release(), root);
 }
 } // namespace ComplianceEngine

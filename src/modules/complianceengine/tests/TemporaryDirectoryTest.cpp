@@ -259,8 +259,8 @@ TEST(TemporaryDirectoryTest, CleanupUsesValidatedParentAfterPathReplacement)
     ASSERT_TRUE(removed.HasValue()) << removed.Error().message;
     EXPECT_TRUE(removed.Value());
     auto repeated = directory.Remove();
-    ASSERT_TRUE(repeated.HasValue()) << repeated.Error().message;
-    EXPECT_TRUE(repeated.Value());
+    ASSERT_FALSE(repeated.HasValue());
+    EXPECT_EQ(EALREADY, repeated.Error().code);
     EXPECT_NE(0, ::access((movedParent + "/" + name).c_str(), F_OK));
 }
 
@@ -275,6 +275,21 @@ TEST(TemporaryDirectoryTest, RemovalReportsMissingRoot)
     ASSERT_FALSE(removed.HasValue());
     EXPECT_EQ(ENOENT, removed.Error().code);
     EXPECT_NE(std::string::npos, removed.Error().message.find("inspect temporary directory entry"));
+}
+
+TEST(TemporaryDirectoryTest, MovedFromOwnerCannotRemove)
+{
+    auto created = ComplianceEngine::TemporaryDirectory::Make("moved-owner");
+    ASSERT_TRUE(created.HasValue()) << created.Error().message;
+    auto directory = std::move(created).Value();
+    auto owner = std::move(directory);
+
+    auto movedFrom = directory.Remove();
+    ASSERT_FALSE(movedFrom.HasValue());
+    EXPECT_EQ(EALREADY, movedFrom.Error().code);
+    auto removed = owner.Remove();
+    ASSERT_TRUE(removed.HasValue()) << removed.Error().message;
+    EXPECT_TRUE(removed.Value());
 }
 
 TEST(TemporaryDirectoryTest, RemovalReportsReplacedRoot)
@@ -296,7 +311,7 @@ TEST(TemporaryDirectoryTest, RemovalReportsReplacedRoot)
     EXPECT_NE(std::string::npos, removed.Error().message.find(original));
     auto repeated = directory.Remove();
     ASSERT_FALSE(repeated.HasValue());
-    EXPECT_EQ(ESTALE, repeated.Error().code);
+    EXPECT_EQ(EALREADY, repeated.Error().code);
     EXPECT_EQ(0, ::access(original.c_str(), F_OK));
 }
 
