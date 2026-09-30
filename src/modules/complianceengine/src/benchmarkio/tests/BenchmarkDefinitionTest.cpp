@@ -92,12 +92,24 @@ TEST(BenchmarkDefinitionParserTest, ParsesValidDocument)
     // The procedure is the rule's payload serialized as plain JSON.
     EXPECT_NE(res.procedure.find("KernelModuleUnavailable"), std::string::npos);
     EXPECT_NE(res.procedure.find("cramfs"), std::string::npos);
+    ASSERT_EQ(res.tags.size(), 1u);
+    EXPECT_EQ(res.tags[0], "level:l1");
+    ASSERT_TRUE(res.metadata.description.HasValue());
+    EXPECT_EQ(res.metadata.description.Value(), "d");
+    ASSERT_TRUE(res.metadata.rationale.HasValue());
+    EXPECT_EQ(res.metadata.rationale.Value(), "r");
+    ASSERT_TRUE(res.metadata.fixtext.HasValue());
+    EXPECT_EQ(res.metadata.fixtext.Value(), "f");
+    ASSERT_TRUE(res.metadata.severity.HasValue());
+    EXPECT_EQ(res.metadata.severity.Value(), "Warning");
+    ASSERT_TRUE(res.metadata.references.HasValue());
+    EXPECT_EQ(res.metadata.references.Value(), "x");
 }
 
 TEST(BenchmarkDefinitionParserTest, ParsesMultipleRulesInOrder)
 {
     const char* const secondRule =
-        R"({"id":"1.1.1.2","ruleId":"second-rule","ruleName":"SecondRule","title":"1.1.1.2 Second rule","payload":{"audit":{},"parameters":{}}})";
+        R"({"id":"1.1.1.2","ruleId":"second-rule","ruleName":"SecondRule","title":"1.1.1.2 Second rule","tags":[],"metadata":{},"payload":{"audit":{},"parameters":{}}})";
     const std::string rules = std::string("[") + kValidRule + "," + secondRule + "]";
     auto result = ParseString(MakeDoc(rules), nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
@@ -123,6 +135,8 @@ TEST(BenchmarkDefinitionParserTest, IgnoresUnknownFields)
         "ruleName": "EnsureCramfsKernelModuleIsNotAvailable",
         "title": "1.1.1.1 Ensure cramfs kernel module is not available",
         "unexpected": "ignored",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
         "payload": {"audit": {"X": {}}, "parameters": {}}
     })";
     auto result = ParseString(MakeDoc(std::string("[") + ruleWithExtras + "]"), nullptr);
@@ -138,6 +152,8 @@ TEST(BenchmarkDefinitionParserTest, ParsesLegacyRuleIdentity)
         "ruleId": "2b568469-ea61-c184-66ba-db6720414ddd",
         "ruleName": "EnsureCramfsKernelModuleIsNotAvailable",
         "title": "1.1.1.1 Ensure cramfs kernel module is not available",
+        "tags": [],
+        "metadata": {},
         "payload": {"audit": {"KernelModuleUnavailable": {"moduleName": "cramfs"}}, "parameters": {}}
     })";
     auto result = ParseString(MakeDoc(std::string("[") + legacyRule + "]"), nullptr);
@@ -155,6 +171,8 @@ TEST(BenchmarkDefinitionParserTest, LegacyPayloadKeyAllowsOptionalBenchmarkVersi
         "ruleId": "rule-id",
         "ruleName": "R",
         "title": "t",
+        "tags": [],
+        "metadata": {},
         "payload": {"audit": {}, "parameters": {}}
     })";
     const std::string metadata =
@@ -168,6 +186,7 @@ TEST(BenchmarkDefinitionParserTest, ParsesLegacyDocumentWithoutHoistedIdentity)
     const char* const legacyRule = R"({
         "section": "1.1.1.1", "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
         "ruleId": "rule-id", "ruleName": "R", "title": "t",
+        "tags": [], "metadata": {},
         "payload": {"audit": {}, "parameters": {}}
     })";
     auto result = ParseString(MakeDocWithMetadata(R"({"name":"legacy"})", std::string("[") + legacyRule + "]"), nullptr);
@@ -291,6 +310,20 @@ TEST(BenchmarkDefinitionParserTest, RejectsRulesNotAnArray)
 // ---------------------------------------------------------------------------
 // Malformed rules
 // ---------------------------------------------------------------------------
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataNotAnObject)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("metadata": {
+        "description": "d",
+        "rationale": "r",
+        "fixtext": "f",
+        "severity": "Warning",
+        "references": "x"
+    })",
+        R"("metadata": [])");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
 
 TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingTitle)
 {

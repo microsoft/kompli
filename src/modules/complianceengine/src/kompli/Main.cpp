@@ -442,8 +442,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    // A benchmark that evaluated no rules (an empty definition, or a section
-    // filter that matched nothing) checked nothing; report NotApplicable rather
+    // A section filter that matched no rules checked nothing; report NotApplicable rather
     // than a misleading Compliant. This is a terminal override, deliberately not
     // folded through CombineAllOf, whose NotApplicable is absorbing and would
     // otherwise poison any non-empty run if used as the seed.
