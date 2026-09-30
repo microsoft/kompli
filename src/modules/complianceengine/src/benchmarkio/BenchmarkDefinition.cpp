@@ -53,20 +53,54 @@ Result<string> ReadAllBounded(std::istream& stream)
     return content;
 }
 
+Result<string> ReadStringValue(const JSON_Value* jsonValue, const char* key, const string& context)
+{
+    string value(json_value_get_string(jsonValue), json_value_get_string_len(jsonValue));
+    if (string::npos != value.find('\0'))
+    {
+        return Error("Benchmark definition " + context + " has an embedded NUL in '" + string(key) + "'", EINVAL);
+    }
+    return value;
+}
+
 // Reads a required, non-empty string field from a JSON object. `context`
 // identifies the enclosing element for error messages.
 Result<string> RequiredString(const JSON_Object* object, const char* key, const string& context)
 {
-    const char* value = json_object_get_string(object, key);
-    if (nullptr == value)
+    const JSON_Value* jsonValue = json_object_get_value(object, key);
+    if (nullptr == jsonValue || JSONString != json_value_get_type(jsonValue))
     {
         return Error("Benchmark definition " + context + " is missing required string field '" + string(key) + "'", EINVAL);
     }
-    if (value[0] == '\0')
+    auto value = ReadStringValue(jsonValue, key, context);
+    if (!value.HasValue())
+    {
+        return value.Error();
+    }
+    if (value.Value().empty())
     {
         return Error("Benchmark definition " + context + " has an empty '" + string(key) + "' field", EINVAL);
     }
-    return string(value);
+    return value;
+}
+
+Result<Optional<string>> OptionalString(const JSON_Object* object, const char* key, const string& context)
+{
+    const JSON_Value* jsonValue = json_object_get_value(object, key);
+    if (nullptr == jsonValue)
+    {
+        return Optional<string>();
+    }
+    if (JSONString != json_value_get_type(jsonValue))
+    {
+        return Error("Benchmark definition " + context + " has a non-string '" + string(key) + "' field", EINVAL);
+    }
+    auto value = ReadStringValue(jsonValue, key, context);
+    if (!value.HasValue())
+    {
+        return value.Error();
+    }
+    return Optional<string>(std::move(value.Value()));
 }
 
 // Serializes a rule's `payload` object into the compact JSON the ComplianceEngine
@@ -89,6 +123,101 @@ Result<string> SerializeProcedure(const JSON_Object* ruleObject, const string& c
     string procedure(serialized);
     json_free_serialized_string(serialized);
     return procedure;
+}
+
+Result<std::vector<string>> ParseTags(const JSON_Object* ruleObject, const string& context)
+{
+    const JSON_Value* value = json_object_get_value(ruleObject, "tags");
+    if (nullptr == value || json_value_get_type(value) != JSONArray)
+    {
+        return Error("Benchmark definition " + context + " is missing an array 'tags' field", EINVAL);
+    }
+    const JSON_Array* array = json_value_get_array(value);
+    const size_t count = json_array_get_count(array);
+    std::vector<string> tags;
+    tags.reserve(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        const JSON_Value* tagValue = json_array_get_value(array, i);
+        if (nullptr == tagValue || JSONString != json_value_get_type(tagValue))
+        {
+            return Error("Benchmark definition " + context + " has a non-string 'tags' entry", EINVAL);
+        }
+        string tag(json_value_get_string(tagValue), json_value_get_string_len(tagValue));
+        if (string::npos != tag.find('\0'))
+        {
+            return Error("Benchmark definition " + context + " has an embedded NUL in a 'tags' entry", EINVAL);
+        }
+        const auto colon = tag.find(':');
+        if (string::npos == colon || 0 == colon || colon + 1 == tag.size() ||
+            !std::all_of(tag.begin(), tag.begin() + colon, [](char c) { return ('a' <= c && c <= 'z') || ('0' <= c && c <= '9') || c == '-'; }))
+        {
+            return Error("Benchmark definition " + context + " has an invalid 'tags' entry", EINVAL);
+        }
+        tags.push_back(std::move(tag));
+    }
+    return tags;
+}
+
+Result<BenchmarkIO::Metadata> ParseMetadata(const JSON_Object* ruleObject, const string& context)
+{
+    const JSON_Object* metadataObject = json_object_get_object(ruleObject, "metadata");
+    if (nullptr == metadataObject)
+    {
+        return Error("Benchmark definition " + context + " is missing an object 'metadata' field", EINVAL);
+    }
+    const string metadataContext = context + ".metadata";
+    auto description = OptionalString(metadataObject, "description", metadataContext);
+    if (!description.HasValue())
+    {
+        return description.Error();
+    }
+    auto rationale = OptionalString(metadataObject, "rationale", metadataContext);
+    if (!rationale.HasValue())
+    {
+        return rationale.Error();
+    }
+    auto fixtext = OptionalString(metadataObject, "fixtext", metadataContext);
+    if (!fixtext.HasValue())
+    {
+        return fixtext.Error();
+    }
+    auto severity = OptionalString(metadataObject, "severity", metadataContext);
+    if (!severity.HasValue())
+    {
+        return severity.Error();
+    }
+    auto references = OptionalString(metadataObject, "references", metadataContext);
+    if (!references.HasValue())
+    {
+        return references.Error();
+    }
+    BenchmarkIO::Metadata metadata;
+    metadata.description = std::move(description.Value());
+    metadata.rationale = std::move(rationale.Value());
+    metadata.fixtext = std::move(fixtext.Value());
+    metadata.severity = std::move(severity.Value());
+    metadata.references = std::move(references.Value());
+    for (size_t i = 0; i < json_object_get_count(metadataObject); ++i)
+    {
+        const char* name = json_object_get_name(metadataObject, i);
+        if (nullptr == name)
+        {
+            return Error("Benchmark definition " + metadataContext + " has an invalid property name", EINVAL);
+        }
+        const string key(name);
+        if (key == "description" || key == "rationale" || key == "fixtext" || key == "severity" || key == "references")
+        {
+            continue;
+        }
+        auto extra = OptionalString(metadataObject, name, metadataContext);
+        if (!extra.HasValue())
+        {
+            return extra.Error();
+        }
+        metadata.additional.emplace(key, std::move(extra.Value().Value()));
+    }
+    return metadata;
 }
 
 Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
@@ -125,6 +254,16 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
     {
         return procedure.Error();
     }
+    auto tags = ParseTags(ruleObject, context);
+    if (!tags.HasValue())
+    {
+        return tags.Error();
+    }
+    auto metadata = ParseMetadata(ruleObject, context);
+    if (!metadata.HasValue())
+    {
+        return metadata.Error();
+    }
 
     auto benchmarkInfo = CISBenchmarkInfo::Parse(payloadKey.Value());
     if (!benchmarkInfo.HasValue())
@@ -151,6 +290,8 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index)
     }
     resource.procedure = std::move(procedure.Value());
     resource.ruleName = std::move(ruleName.Value());
+    resource.tags = std::move(tags.Value());
+    resource.metadata = std::move(metadata.Value());
     // Every rule carries an init object.
     resource.hasInitAudit = true;
     // Definitions carry no desired object value; the payload is modelled as
@@ -182,8 +323,8 @@ Result<std::vector<Resource>> ParseString(const string& json, OsConfigLogHandle 
         return Error("Benchmark definition is not a JSON object", EINVAL);
     }
 
-    const auto* kind = json_object_get_string(root, "kind");
-    if (nullptr == kind || string(kind) != "BenchmarkDefinition")
+    auto kind = RequiredString(root, "kind", "document");
+    if (!kind.HasValue() || kind.Value() != "BenchmarkDefinition")
     {
         return Error("Benchmark definition has an unexpected or missing 'kind' (expected 'BenchmarkDefinition')", EINVAL);
     }

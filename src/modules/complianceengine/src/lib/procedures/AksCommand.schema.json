@@ -30,6 +30,15 @@
                 "nodeName": {
                   "type": "string"
                 },
+                "namespaceName": {
+                  "type": "string"
+                },
+                "serviceAccountName": {
+                  "type": "string"
+                },
+                "podName": {
+                  "type": "string"
+                },
                 "pattern": {
                   "type": "string"
                 },

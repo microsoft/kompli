@@ -11,8 +11,8 @@ namespace ComplianceEngine
 // AideAttributes.h:18
 const char* Bindings<AideAttributesParams>::names[] = {"configPath", "filename", "attributes"};
 
-// AksCommand.h:30
-const char* Bindings<AksCommandParams>::names[] = {"operation", "clusterName", "resourceGroup", "nodeName", "pattern", "matchMeansCompliant"};
+// AksCommand.h:37
+const char* Bindings<AksCommandParams>::names[] = {"operation", "clusterName", "resourceGroup", "nodeName", "namespaceName", "serviceAccountName", "podName", "pattern", "matchMeansCompliant"};
 
 // ApparmorProfileState.h:15
 const char* Bindings<ApparmorProfileStateParams>::names[] = {"enforce"};
