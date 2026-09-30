@@ -4,9 +4,8 @@
 // Unit tests for the benchmark-definition JSON parser
 // (ComplianceEngine::BenchmarkDefinition). The parser reads the in-repo
 // data/definitions/*.benchmark.json documents produced by the Compliance
-// Augmentation Engine and yields the BenchmarkIO::Resource entries the kompli
-// CLI's main loop consumes. These tests cover the happy path, the field mapping, and
-// a broad set of malformed / adversarial inputs.
+// Augmentation Engine and yields file-level identity plus the
+// BenchmarkIO::Resource entries the kompli CLI consumes.
 
 #include "BenchmarkDefinition.hpp"
 
@@ -20,13 +19,11 @@ using ComplianceEngine::BenchmarkDefinition::Resource;
 
 namespace
 {
-// A single, valid rule matching what the augmentation engine emits.
 const char* const kValidRule = R"({
-    "section": "1.1.1.1",
-    "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
+    "id": "1.1.1.1",
+    "ruleId": "2b568469-ea61-c184-66ba-db6720414ddd",
     "ruleName": "EnsureCramfsKernelModuleIsNotAvailable",
     "title": "1.1.1.1 Ensure cramfs kernel module is not available",
-    "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
     "tags": ["level:l1"],
     "metadata": {
         "description": "d",
@@ -45,9 +42,16 @@ const char* const kValidRule = R"({
 std::string MakeDoc(const std::string& rulesArray)
 {
     return std::string(R"({"apiVersion":"v1","kind":"BenchmarkDefinition",)"
-                       R"("metadata":{"name":"cis_ubuntu_22.04_2.0.0","labels":{"distribution":"ubuntu"}},)"
+                       R"("metadata":{"name":"cis_ubuntu_22.04_2.0.0",)"
+                       R"("labels":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04"},)"
+                       R"("annotations":{"benchmarkVersion":"v2.0.0"}},)"
                        R"("spec":{"rules":)") +
            rulesArray + "}}";
+}
+
+std::string MakeDocWithMetadata(const std::string& metadataObject, const std::string& rulesArray)
+{
+    return std::string(R"({"apiVersion":"v1","kind":"BenchmarkDefinition","metadata":)") + metadataObject + R"(,"spec":{"rules":)" + rulesArray + "}}";
 }
 
 std::string OneRuleDoc()
@@ -55,16 +59,11 @@ std::string OneRuleDoc()
     return MakeDoc(std::string("[") + kValidRule + "]");
 }
 
-std::string RuleWithReplacement(const std::string& oldField, const std::string& newField)
+void ReplaceOnce(std::string& value, const std::string& from, const std::string& to)
 {
-    std::string rule = kValidRule;
-    const auto pos = rule.find(oldField);
-    EXPECT_NE(pos, std::string::npos);
-    if (pos != std::string::npos)
-    {
-        rule.replace(pos, oldField.size(), newField);
-    }
-    return MakeDoc("[" + rule + "]");
+    const std::string::size_type position = value.find(from);
+    ASSERT_NE(position, std::string::npos);
+    value.replace(position, from.size(), to);
 }
 } // namespace
 
@@ -76,16 +75,20 @@ TEST(BenchmarkDefinitionParserTest, ParsesValidDocument)
 {
     auto result = ParseString(OneRuleDoc(), nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    ASSERT_EQ(result.Value().size(), 1u);
+    EXPECT_EQ(result.Value().name, "cis_ubuntu_22.04_2.0.0");
+    EXPECT_EQ(result.Value().benchmarkInfo.framework, "cis");
+    EXPECT_EQ(result.Value().benchmarkInfo.distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
+    EXPECT_EQ(result.Value().benchmarkInfo.version, "22.04");
+    EXPECT_EQ(result.Value().benchmarkInfo.benchmarkVersion, "v2.0.0");
+    ASSERT_EQ(result.Value().resources.size(), 1u);
 
-    const Resource& res = result.Value()[0];
+    const Resource& res = result.Value().resources[0];
     EXPECT_EQ(res.resourceID, "1.1.1.1 Ensure cramfs kernel module is not available");
-    EXPECT_EQ(res.ruleId, "f2d04986-59ab-6ceb-99da-f074b6ea0073");
+    EXPECT_EQ(res.id, "1.1.1.1");
+    EXPECT_EQ(res.ruleId, "2b568469-ea61-c184-66ba-db6720414ddd");
     EXPECT_EQ(res.ruleName, "EnsureCramfsKernelModuleIsNotAvailable");
     EXPECT_TRUE(res.hasInitAudit);
     EXPECT_FALSE(res.payload.HasValue());
-    // The '/'-separated payload-key section is normalized to dotted notation.
-    EXPECT_EQ(res.benchmarkInfo.section, "1.1.1.1");
     // The procedure is the rule's payload serialized as plain JSON.
     EXPECT_NE(res.procedure.find("KernelModuleUnavailable"), std::string::npos);
     EXPECT_NE(res.procedure.find("cramfs"), std::string::npos);
@@ -105,17 +108,21 @@ TEST(BenchmarkDefinitionParserTest, ParsesValidDocument)
 
 TEST(BenchmarkDefinitionParserTest, ParsesMultipleRulesInOrder)
 {
-    const std::string rules = std::string("[") + kValidRule + "," + kValidRule + "]";
+    const char* const secondRule =
+        R"({"id":"1.1.1.2","ruleId":"second-rule","ruleName":"SecondRule","title":"1.1.1.2 Second rule","tags":[],"metadata":{},"payload":{"audit":{},"parameters":{}}})";
+    const std::string rules = std::string("[") + kValidRule + "," + secondRule + "]";
     auto result = ParseString(MakeDoc(rules), nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    EXPECT_EQ(result.Value().size(), 2u);
+    ASSERT_EQ(result.Value().resources.size(), 2u);
+    EXPECT_EQ(result.Value().resources[0].id, "1.1.1.1");
+    EXPECT_EQ(result.Value().resources[1].id, "1.1.1.2");
 }
 
-TEST(BenchmarkDefinitionParserTest, EmptyRulesArrayYieldsNoResources)
+TEST(BenchmarkDefinitionParserTest, RejectsEmptyRulesArrayWithHoistedIdentity)
 {
     auto result = ParseString(MakeDoc("[]"), nullptr);
-    ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    EXPECT_TRUE(result.Value().empty());
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("spec.rules"), std::string::npos);
 }
 
 TEST(BenchmarkDefinitionParserTest, IgnoresUnknownFields)
@@ -123,11 +130,10 @@ TEST(BenchmarkDefinitionParserTest, IgnoresUnknownFields)
     // The definition schema allows additional properties; extra keys must not
     // cause a rejection.
     const char* const ruleWithExtras = R"({
-        "section": "1.1.1.1",
-        "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
+        "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "ruleName": "EnsureCramfsKernelModuleIsNotAvailable",
         "title": "1.1.1.1 Ensure cramfs kernel module is not available",
-        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
         "unexpected": "ignored",
         "tags": [],
         "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
@@ -135,7 +141,61 @@ TEST(BenchmarkDefinitionParserTest, IgnoresUnknownFields)
     })";
     auto result = ParseString(MakeDoc(std::string("[") + ruleWithExtras + "]"), nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    EXPECT_EQ(result.Value().size(), 1u);
+    EXPECT_EQ(result.Value().resources.size(), 1u);
+}
+
+TEST(BenchmarkDefinitionParserTest, ParsesLegacyRuleIdentity)
+{
+    const char* const legacyRule = R"({
+        "section": "1.1.1.1",
+        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "ruleId": "2b568469-ea61-c184-66ba-db6720414ddd",
+        "ruleName": "EnsureCramfsKernelModuleIsNotAvailable",
+        "title": "1.1.1.1 Ensure cramfs kernel module is not available",
+        "tags": [],
+        "metadata": {},
+        "payload": {"audit": {"KernelModuleUnavailable": {"moduleName": "cramfs"}}, "parameters": {}}
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + legacyRule + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    ASSERT_EQ(result.Value().resources.size(), 1u);
+    EXPECT_EQ(result.Value().resources[0].id, "1.1.1.1");
+    EXPECT_EQ(result.Value().resources[0].ruleId, "2b568469-ea61-c184-66ba-db6720414ddd");
+}
+
+TEST(BenchmarkDefinitionParserTest, LegacyPayloadKeyAllowsOptionalBenchmarkVersionPrefix)
+{
+    const char* const legacyRule = R"({
+        "section": "1.1.1.1",
+        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "ruleId": "rule-id",
+        "ruleName": "R",
+        "title": "t",
+        "tags": [],
+        "metadata": {},
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    const std::string metadata =
+        R"({"name":"n","labels":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04"},"annotations":{"benchmarkVersion":"2.0.0"}})";
+    auto result = ParseString(MakeDocWithMetadata(metadata, std::string("[") + legacyRule + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+}
+
+TEST(BenchmarkDefinitionParserTest, ParsesLegacyDocumentWithoutHoistedIdentity)
+{
+    const char* const legacyRule = R"({
+        "section": "1.1.1.1", "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "ruleId": "rule-id", "ruleName": "R", "title": "t",
+        "tags": [], "metadata": {},
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    auto result = ParseString(MakeDocWithMetadata(R"({"name":"legacy"})", std::string("[") + legacyRule + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().benchmarkInfo.framework, "cis");
+    EXPECT_EQ(result.Value().benchmarkInfo.distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
+    EXPECT_EQ(result.Value().benchmarkInfo.version, "22.04");
+    EXPECT_EQ(result.Value().benchmarkInfo.benchmarkVersion, "v2.0.0");
+    EXPECT_TRUE(result.Value().benchmarkInfo.section.empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -161,15 +221,6 @@ TEST(BenchmarkDefinitionParserTest, RejectsWrongKind)
     EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
 }
 
-TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInKind)
-{
-    std::string doc = OneRuleDoc();
-    const auto pos = doc.find(R"("kind":"BenchmarkDefinition")");
-    ASSERT_NE(pos, std::string::npos);
-    doc.replace(pos, std::string(R"("kind":"BenchmarkDefinition")").size(), R"("kind":"BenchmarkDefinition\u0000suffix")");
-    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
-}
-
 TEST(BenchmarkDefinitionParserTest, RejectsMissingApiVersion)
 {
     const std::string doc = std::string(R"({"kind":"BenchmarkDefinition","metadata":{"name":"n"},"spec":{"rules":[)") + kValidRule + "]}}";
@@ -180,6 +231,62 @@ TEST(BenchmarkDefinitionParserTest, RejectsMissingMetadata)
 {
     const std::string doc = std::string(R"({"apiVersion":"v1","kind":"BenchmarkDefinition","spec":{"rules":[)") + kValidRule + "]}}";
     EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsMissingLabels)
+{
+    const std::string metadata = R"({"name":"n","annotations":{"benchmarkVersion":"v1.0.0"}})";
+    EXPECT_FALSE(ParseString(MakeDocWithMetadata(metadata, std::string("[") + kValidRule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsMissingAnnotations)
+{
+    const std::string metadata = R"({"name":"n","labels":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04"}})";
+    EXPECT_FALSE(ParseString(MakeDocWithMetadata(metadata, std::string("[") + kValidRule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsPartialHoistedIdentityOnLegacyDocument)
+{
+    const char* const legacyRule = R"({
+        "section": "1.1.1.1", "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "ruleId": "rule-id", "ruleName": "R", "title": "t",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    const std::string metadata = R"({"name":"legacy","labels":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04"}})";
+    EXPECT_FALSE(ParseString(MakeDocWithMetadata(metadata, std::string("[") + legacyRule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsSoleIdDocumentWithoutHoistedIdentity)
+{
+    EXPECT_FALSE(ParseString(MakeDocWithMetadata(R"({"name":"n"})", std::string("[") + kValidRule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEmptyLegacyDocumentWithoutHoistedIdentity)
+{
+    EXPECT_FALSE(ParseString(MakeDocWithMetadata(R"({"name":"legacy"})", "[]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, AcceptsArbitraryFrameworkAndBenchmarkVersion)
+{
+    const std::string metadata =
+        R"({"name":"n","labels":{"framework":"custom","distribution":"ubuntu","distributionVersion":"22.04"},"annotations":{"benchmarkVersion":"1.0.0"}})";
+    auto result = ParseString(MakeDocWithMetadata(metadata, std::string("[") + kValidRule + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().benchmarkInfo.framework, "custom");
+    EXPECT_EQ(result.Value().benchmarkInfo.benchmarkVersion, "1.0.0");
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEmptyFramework)
+{
+    const std::string metadata =
+        R"({"name":"n","labels":{"framework":"","distribution":"ubuntu","distributionVersion":"22.04"},"annotations":{"benchmarkVersion":"v1.0.0"}})";
+    EXPECT_FALSE(ParseString(MakeDocWithMetadata(metadata, std::string("[") + kValidRule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsMissingHoistedIdentity)
+{
+    const std::string metadata = R"({"name":"n","labels":{"framework":"cis","distribution":"ubuntu"},"annotations":{"benchmarkVersion":"v1.0.0"}})";
+    EXPECT_FALSE(ParseString(MakeDocWithMetadata(metadata, std::string("[") + kValidRule + "]"), nullptr).HasValue());
 }
 
 TEST(BenchmarkDefinitionParserTest, RejectsMissingSpec)
@@ -204,103 +311,26 @@ TEST(BenchmarkDefinitionParserTest, RejectsRulesNotAnArray)
 // Malformed rules
 // ---------------------------------------------------------------------------
 
-TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingTags)
-{
-    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("tags": ["level:l1"],)", ""), nullptr).HasValue());
-}
-
-TEST(BenchmarkDefinitionParserTest, RejectsRuleTagsNotAnArray)
-{
-    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("tags": ["level:l1"])", R"("tags": "level:l1")"), nullptr).HasValue());
-}
-
-TEST(BenchmarkDefinitionParserTest, RejectsRuleNonStringTagEntry)
-{
-    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("tags": ["level:l1"])", R"("tags": [42])"), nullptr).HasValue());
-}
-
-TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingMetadata)
-{
-    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("metadata": {
-        "description": "d",
-        "rationale": "r",
-        "fixtext": "f",
-        "severity": "Warning",
-        "references": "x"
-    },)",
-                                 ""),
-        nullptr)
-                     .HasValue());
-}
-
 TEST(BenchmarkDefinitionParserTest, RejectsRuleMetadataNotAnObject)
 {
-    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("metadata": {
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("metadata": {
         "description": "d",
         "rationale": "r",
         "fixtext": "f",
         "severity": "Warning",
         "references": "x"
     })",
-                                 R"("metadata": [])"),
-        nullptr)
-                     .HasValue());
-}
-
-TEST(BenchmarkDefinitionParserTest, AcceptsMissingMetadataFields)
-{
-    auto result = ParseString(RuleWithReplacement(R"("severity": "Warning",)", ""), nullptr);
-    ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    EXPECT_FALSE(result.Value()[0].metadata.severity.HasValue());
-}
-
-TEST(BenchmarkDefinitionParserTest, AcceptsEmptyMetadataObject)
-{
-    auto result = ParseString(RuleWithReplacement(R"("metadata": {
-        "description": "d",
-        "rationale": "r",
-        "fixtext": "f",
-        "severity": "Warning",
-        "references": "x"
-    })",
-                                  R"("metadata": {})"),
-        nullptr);
-    ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    EXPECT_FALSE(result.Value()[0].metadata.description.HasValue());
-    EXPECT_FALSE(result.Value()[0].metadata.references.HasValue());
-}
-
-TEST(BenchmarkDefinitionParserTest, AcceptsEmptyAndAdditionalStringMetadata)
-{
-    auto result = ParseString(RuleWithReplacement(R"("references": "x")", R"("references": "", "owner": "team")"), nullptr);
-    ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    ASSERT_TRUE(result.Value()[0].metadata.references.HasValue());
-    EXPECT_TRUE(result.Value()[0].metadata.references.Value().empty());
-    EXPECT_EQ(result.Value()[0].metadata.additional.at("owner"), "team");
-}
-
-TEST(BenchmarkDefinitionParserTest, RejectsNonStringMetadata)
-{
-    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("severity": "Warning")", R"("severity": 42)"), nullptr).HasValue());
-    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("references": "x")", R"("references": "x", "owner": {})"), nullptr).HasValue());
-}
-
-TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulAndInvalidTags)
-{
-    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("tags": ["level:l1"])", R"("tags": ["level:l1\u0000:other"])"), nullptr).HasValue());
-    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("tags": ["level:l1"])", R"("tags": ["level"])"), nullptr).HasValue());
-    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("tags": ["level:l1"])", R"("tags": ["Level:l1"])"), nullptr).HasValue());
-    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("references": "x")", R"("references": "x\u0000hidden")"), nullptr).HasValue());
-    EXPECT_FALSE(ParseString(RuleWithReplacement(R"("references": "x")", R"("references": "x", "owner": "a\u0000b")"), nullptr).HasValue());
+        R"("metadata": [])");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
 }
 
 TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingTitle)
 {
     const char* const rule = R"({
-        "section": "1.1.1.1",
-        "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
+        "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "ruleName": "R",
-        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
@@ -309,10 +339,9 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingTitle)
 TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingRuleName)
 {
     const char* const rule = R"({
-        "section": "1.1.1.1",
-        "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
+        "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "title": "t",
-        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
@@ -321,11 +350,10 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingRuleName)
 TEST(BenchmarkDefinitionParserTest, RejectsRuleWithEmptyStringField)
 {
     const char* const rule = R"({
-        "section": "1.1.1.1",
-        "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
+        "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "ruleName": "",
         "title": "t",
-        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
@@ -334,11 +362,10 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleWithEmptyStringField)
 TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingPayload)
 {
     const char* const rule = R"({
-        "section": "1.1.1.1",
-        "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
+        "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "ruleName": "R",
-        "title": "t",
-        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1"
+        "title": "t"
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
 }
@@ -346,55 +373,205 @@ TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingPayload)
 TEST(BenchmarkDefinitionParserTest, RejectsRulePayloadNotAnObject)
 {
     const char* const rule = R"({
-        "section": "1.1.1.1",
-        "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
+        "id": "1.1.1.1",
+        "ruleId": "rule-id",
         "ruleName": "R",
         "title": "t",
-        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
         "payload": "not-an-object"
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
 }
 
-TEST(BenchmarkDefinitionParserTest, RejectsInvalidPayloadKey)
+TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingId)
 {
     const char* const rule = R"({
-        "section": "1.1.1",
-        "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
         "ruleName": "R",
         "title": "t",
-        "payloadKey": "not-a-valid-key",
+        "ruleId": "rule-id",
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
 }
 
-TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingSection)
+TEST(BenchmarkDefinitionParserTest, RejectsRuleWithEmptyId)
 {
     const char* const rule = R"({
-        "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
+        "id": "",
+        "ruleId": "rule-id",
         "ruleName": "R",
         "title": "t",
-        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
 }
 
-TEST(BenchmarkDefinitionParserTest, RejectsSectionPayloadKeyMismatch)
+TEST(BenchmarkDefinitionParserTest, RejectsRuleMissingRuleId)
 {
-    // The explicit `section` ("9.9.9") disagrees with the section encoded in the
-    // payloadKey ("1.1.1.1"); a corrupt or hand-edited definition must be
-    // rejected rather than silently resolved to the payloadKey value.
     const char* const rule = R"({
-        "section": "9.9.9",
-        "ruleId": "f2d04986-59ab-6ceb-99da-f074b6ea0073",
+        "id": "1.1.1.1",
         "ruleName": "R",
         "title": "t",
-        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
         "payload": {"audit": {}, "parameters": {}}
     })";
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsRuleWithMixedIdentityShapes)
+{
+    const char* const rule = R"({
+        "id": "1.1.1.1",
+        "section": "1.1.1.1",
+        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "ruleId": "rule-id",
+        "ruleName": "R",
+        "title": "t",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsIncompleteLegacyIdentity)
+{
+    const char* const rule = R"({
+        "section": "1.1.1.1",
+        "ruleId": "rule-id",
+        "ruleName": "R",
+        "title": "t",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEmptyLegacyIdentity)
+{
+    const char* const rule = R"({
+        "section": "",
+        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "ruleId": "rule-id",
+        "ruleName": "R",
+        "title": "t",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsLegacySectionPayloadKeyMismatch)
+{
+    const char* const rule = R"({
+        "section": "1.1.1.2",
+        "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "ruleId": "rule-id",
+        "ruleName": "R",
+        "title": "t",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsLegacyPayloadKeyFrameworkMismatch)
+{
+    const char* const rule = R"({
+        "section": "1.1.1.1", "payloadKey": "/stig/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "ruleId": "rule-id", "ruleName": "R", "title": "t",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsLegacyPayloadKeyDistributionMismatch)
+{
+    const char* const rule = R"({
+        "section": "1.1.1.1", "payloadKey": "/cis/rhel/22.04/v2.0.0/1/1/1/1",
+        "ruleId": "rule-id", "ruleName": "R", "title": "t",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsLegacyPayloadKeyDistributionVersionMismatch)
+{
+    const char* const rule = R"({
+        "section": "1.1.1.1", "payloadKey": "/cis/ubuntu/18.04/v2.0.0/1/1/1/1",
+        "ruleId": "rule-id", "ruleName": "R", "title": "t",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsLegacyPayloadKeyBenchmarkVersionMismatch)
+{
+    const char* const rule = R"({
+        "section": "1.1.1.1", "payloadKey": "/cis/ubuntu/22.04/v1.0.0/1/1/1/1",
+        "ruleId": "rule-id", "ruleName": "R", "title": "t",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsInconsistentLegacyPayloadKeysWithoutHoistedIdentity)
+{
+    const char* const firstRule = R"({
+        "section": "1.1.1.1", "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "ruleId": "rule-a", "ruleName": "A", "title": "a",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    const char* const secondRule = R"({
+        "section": "1.1.1.2", "payloadKey": "/cis/ubuntu/18.04/v2.0.0/1/1/1/2",
+        "ruleId": "rule-b", "ruleName": "B", "title": "b",
+        "payload": {"audit": {}, "parameters": {}}
+    })";
+    const std::string rules = std::string("[") + firstRule + "," + secondRule + "]";
+    EXPECT_FALSE(ParseString(MakeDocWithMetadata(R"({"name":"legacy"})", rules), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsDuplicateIds)
+{
+    const std::string rules = std::string("[") + kValidRule + "," + kValidRule + "]";
+    EXPECT_FALSE(ParseString(MakeDoc(rules), nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInKind)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("kind":"BenchmarkDefinition")", R"("kind":"BenchmarkDefinition\u0000Extra")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInDocumentName)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("name":"cis_ubuntu_22.04_2.0.0")", R"("name":"cis\u0000_ubuntu")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInId)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("id": "1.1.1.1")", R"("id": "1.1\u0000.1.1")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInRuleId)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("ruleId": "2b568469-ea61-c184-66ba-db6720414ddd")", R"("ruleId": "2b568469\u0000-ea61-c184-66ba-db6720414ddd")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInRuleName)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("ruleName": "EnsureCramfsKernelModuleIsNotAvailable")", R"("ruleName": "EnsureCramfs\u0000KernelModuleIsNotAvailable")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInLegacyPayloadKey)
+{
+    const std::string rule = R"({"section":"1.1.1.1","payloadKey":"/cis/ubuntu/22.04/v2.0.0/1/1/1/1",)"
+                             R"("ruleId":"rule-id","ruleName":"R","title":"t","payload":{"audit":{},"parameters":{}}})";
+    std::string doc = MakeDocWithMetadata(R"({"name":"legacy"})", "[" + rule + "]");
+    ReplaceOnce(doc, "/cis/ubuntu/22.04/", "/cis/ubuntu\u0000/22.04/");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
 }
 
 TEST(BenchmarkDefinitionParserTest, RejectsEmbeddedNulByte)

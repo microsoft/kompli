@@ -54,6 +54,14 @@ Kompli supports two integration scenarios that share the same ComplianceEngine m
 - **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The augmentation engine generates MOF files that drive audit and remediation per rule.
 - **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/kompli/`) that reads a benchmark-definition JSON file (supplied on disk as a required positional filename argument; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
 
+Benchmark definitions bind the file-level identity tuple (`framework`,
+`distribution`, `distributionVersion`, `benchmarkVersion`) in metadata. Each
+rule carries a framework-defined `id` for selection/display and the existing
+stable `ruleId` for external correlation. Framework is required and
+participates in identity, but it does not select parsing or execution behavior;
+all frameworks use the same definition shape. The Machine Configuration path
+continues to carry the same tuple plus its rule section in each payload key.
+
 # 3. kompli Agent
 
 Kompli will be able to run as a standalone daemon that can evaluate policy given requests from external sources.

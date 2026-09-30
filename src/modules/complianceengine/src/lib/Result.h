@@ -135,6 +135,7 @@ public:
         Reset();
     }
 
+private:
     void Reset() noexcept(NoexceptDestructible<T>())
     {
         if (mTag == Tag::Value)
@@ -156,6 +157,7 @@ public:
         mTag = Tag::Error;
     }
 
+public:
     Result& operator=(const Result& other)
     {
         if (this == &other)
