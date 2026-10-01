@@ -321,6 +321,12 @@ turns that JSON into one of the presentation formats.
 | `compact-list` | Single-line-per-rule text |
 | `debug` | Verbose diagnostic output |
 
+JUnit uses each rule's `id` as the testcase classname and its human-readable
+`title` as the testcase name. Non-compliant and skipped cases retain `ruleName`
+in their failure or skipped body; `NotApplicable` and `Skipped` both count as
+skipped, not passed. Non-empty rule `tags` appear as a `<tags>` block inside
+the testcase, with XML-escaped values.
+
 ### Security controls
 
 - The process umask is tightened to at least `S_IRWXG | S_IRWXO` at startup (preserving any stricter inherited mask), restricting file-creation permissions.

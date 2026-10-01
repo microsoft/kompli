@@ -97,12 +97,13 @@ void AppendIndicators(const JSON_Array* indicators, size_t depth, std::ostringst
     }
 }
 
-// Builds the human-readable failure body for a rule: a Parameters section
-// (present when the canonical JSON carries per-rule parameters) followed by an
-// indented Indicators tree.
-string BuildBody(const JSON_Object* rule)
+// Builds the human-readable failure body for a rule: the engine's `ruleName`,
+// a Parameters section (present when the canonical JSON carries per-rule
+// parameters) followed by an indented Indicators tree.
+string BuildBody(const JSON_Object* rule, const string& ruleName)
 {
     std::ostringstream body;
+    body << "Rule: " << ruleName << "\n\n";
 
     const JSON_Object* parameters = json_object_get_object(rule, "parameters");
     body << "Parameters:\n";
@@ -132,6 +133,27 @@ string BuildBody(const JSON_Object* rule)
     body << "\nIndicators:\n";
     AppendIndicators(json_object_get_array(rule, "indicators"), 0, body);
     return body.str();
+}
+
+// Renders a rule's `tags` array (flat "axis:value" strings) as a <tags> block
+// mirroring the definition's own field name, one <tag value="..."/> per
+// entry. Returns empty when there are no tags, so a bare passing testcase
+// with no tags can still self-close.
+string BuildTags(const JSON_Array* tags)
+{
+    if (nullptr == tags || json_array_get_count(tags) == 0)
+    {
+        return string();
+    }
+    std::ostringstream out;
+    out << "    <tags>\n";
+    const size_t count = json_array_get_count(tags);
+    for (size_t i = 0; i < count; ++i)
+    {
+        out << "      <tag value=\"" << EscapeXml(StringOrEmpty(json_array_get_string(tags, i))) << "\"/>\n";
+    }
+    out << "    </tags>\n";
+    return out.str();
 }
 } // anonymous namespace
 
@@ -175,36 +197,47 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             return Error("Canonical result JSON 'rules' entry is not an object", EINVAL);
         }
         const string id = StringOrEmpty(json_object_get_string(rule, "id"));
+        const string title = StringOrEmpty(json_object_get_string(rule, "title"));
         const string ruleName = StringOrEmpty(json_object_get_string(rule, "ruleName"));
         const string status = StringOrEmpty(json_object_get_string(rule, "status"));
 
         // Guard against schema drift / upstream bugs: an unrecognised or missing
-        // status must not be silently rendered as a passing test case.
-        if (status != "Compliant" && status != "NonCompliant" && status != "NotApplicable")
+        // status must not be silently rendered as a passing test case. `Skipped`
+        // is accepted ahead of its own landing (kompli-cli-completion M-4 item 5)
+        // so this renderer doesn't hard-fail the day it appears.
+        if (status != "Compliant" && status != "NonCompliant" && status != "NotApplicable" && status != "Skipped")
         {
             return Error("Canonical result JSON rule has invalid 'status' value: '" + status + "'", EINVAL);
         }
 
-        cases << "  <testcase classname=\"" << EscapeXml(id) << "\" name=\"" << EscapeXml(ruleName) << "\"";
+        const string tagsXml = BuildTags(json_object_get_array(rule, "tags"));
+
+        cases << "  <testcase classname=\"" << EscapeXml(id) << "\" name=\"" << EscapeXml(title) << "\"";
         if (status == "NonCompliant")
         {
             ++failureCount;
-            cases << ">\n";
-            cases << "    <failure message=\"Rule is non-compliant\" type=\"NonCompliant\">" << EscapeXml(BuildBody(rule)) << "</failure>\n";
+            cases << ">\n" << tagsXml;
+            cases << "    <failure message=\"Rule is non-compliant\" type=\"NonCompliant\">" << EscapeXml(BuildBody(rule, ruleName)) << "</failure>\n";
             cases << "  </testcase>\n";
         }
-        else if (status == "NotApplicable")
+        else if (status == "NotApplicable" || status == "Skipped")
         {
-            // A not-applicable rule is neither a pass nor a failure; JUnit models
-            // this as a skipped test case.
+            // Neither a pass nor a failure; JUnit models both as a skipped test case.
             ++skippedCount;
-            cases << ">\n";
-            cases << "    <skipped message=\"Rule is not applicable\">" << EscapeXml(BuildBody(rule)) << "</skipped>\n";
+            const string message = (status == "NotApplicable") ? "Rule is not applicable" : "Rule was skipped";
+            cases << ">\n" << tagsXml;
+            cases << "    <skipped message=\"" << message << "\">" << EscapeXml(BuildBody(rule, ruleName)) << "</skipped>\n";
+            cases << "  </testcase>\n";
+        }
+        else if (!tagsXml.empty())
+        {
+            // status == "Compliant" but tags are present: can't self-close.
+            cases << ">\n" << tagsXml;
             cases << "  </testcase>\n";
         }
         else
         {
-            // status == "Compliant": a bare passing test case.
+            // status == "Compliant", no tags: a bare passing test case.
             cases << "/>\n";
         }
     }
