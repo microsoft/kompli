@@ -18,7 +18,7 @@ Reviewed at kompli commits `834acde1` ("Support the new definitions format") and
 | 2 | `stdin` bypassed all input-integrity checks | Medium | Fixed — stdin removed for definitions |
 | 3 | Schema is not a runtime control; `tags`/`metadata` ignored by parser | Low | **Deferred** — follow-up PR |
 | 4 | Embedded NUL byte silently truncated the parse | Low | Fixed — fail-closed on NUL |
-| 5 | `apiVersion` value never validated | Low | Fixed — allowlist gate (M-27 kompli side) |
+| 5 | `apiVersion` value never validated | Low | Fixed — allowlist gate |
 | 6 | `fnmatch` version-glob hardening | Low | **Deferred** — shared-lib change |
 | 7 | Memory / recursion bounds | Low | Adjusted — input cap lowered to 8 MiB |
 | 8 | TOCTOU: parent-dir stat vs. open | Low | Pre-existing, documented, mitigated |

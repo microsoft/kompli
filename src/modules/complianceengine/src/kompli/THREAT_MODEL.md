@@ -131,11 +131,12 @@ See [SECURITY_REVIEW.md](./SECURITY_REVIEW.md) for the full findings list and th
 tracked follow-ups.
 
 - **Schema is not a runtime control.** `benchmark.schema.json` gates generation,
-  not execution: the parser requires file-level identity, `ruleId`, and either
-  `id` or the complete temporary legacy `section` + `payloadKey` identity, but
-  still ignores schema-required per-rule `tags` / `metadata`. Do not rely on
-  the schema to constrain what kompli executes.
-  (`tags` / `metadata` consumption is planned in a follow-up.)
-- **`apiVersion` is checked against the supported set** (currently `v1` only).
-  Unknown values are hard parse errors rather than being parsed best-effort.
-  The retention policy for future formats is not yet decided (ADR-0008 §4).
+  not execution. The parser independently validates the fields it consumes,
+  including required `tags` and `metadata`, but it does not execute the full
+  JSON Schema. Do not rely on schema-only constraints to govern what kompli
+  executes.
+- **`apiVersion` value is validated against an allowlist** (currently `v1`
+  only) — closes the version-skew gap: an unrecognised value is a hard parse
+  error, not a best-effort parse. Retention and removal criteria for future
+  formats remain undecided until another format is proposed. See
+  SECURITY_REVIEW.md #5.
