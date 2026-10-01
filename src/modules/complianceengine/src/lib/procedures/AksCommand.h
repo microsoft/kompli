@@ -17,6 +17,10 @@ enum class AksCommandOperation
     GeneralPolicies,
     PodSecurityStandards,
     Kubelet,
+    ServiceAccount,
+    Pod,
+    SecretsEnvironmentVariables,
+    PrivateNodes,
 };
 
 struct AksCommandParams
@@ -25,6 +29,9 @@ struct AksCommandParams
     Optional<std::string> clusterName;
     Optional<std::string> resourceGroup;
     Optional<std::string> nodeName;
+    Optional<std::string> namespaceName;
+    Optional<std::string> serviceAccountName;
+    Optional<std::string> podName;
     std::string pattern;
     Optional<bool> matchMeansCompliant = true;
 };

@@ -111,6 +111,8 @@ TEST(BenchmarkDefinitionParserTest, ParsesValidDocument)
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
     const BenchmarkDocument& doc = result.Value();
     EXPECT_EQ(doc.name, "cis_ubuntu_22.04_2.0.0");
+    EXPECT_EQ(doc.benchmarkInfo.framework, "cis");
+    EXPECT_EQ(doc.benchmarkInfo.distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
     EXPECT_EQ(doc.benchmarkInfo.version, "22.04");
     EXPECT_EQ(doc.benchmarkInfo.benchmarkVersion, "v2.0.0");
     ASSERT_EQ(doc.resources.size(), 1u);
@@ -644,6 +646,17 @@ TEST(BenchmarkDefinitionParserTest, RejectsLegacySectionPayloadKeyMismatch)
     EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + rule + "]"), nullptr).HasValue());
 }
 
+TEST(BenchmarkDefinitionParserTest, RejectsEmptyIdentityFields)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("id": "1.1.1.1")", R"("id": "")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+
+    const std::string legacyRule =
+        R"({"section":"","payloadKey":"/cis/ubuntu/22.04/v2.0.0/1/1/1/1","ruleId":"rule-id","ruleName":"R","title":"t","tags":[],"metadata":{},"payload":{"audit":{},"parameters":{}}})";
+    EXPECT_FALSE(ParseString(MakeDoc("[" + legacyRule + "]"), nullptr).HasValue());
+}
+
 TEST(BenchmarkDefinitionParserTest, RejectsLegacyPayloadKeyFrameworkMismatch)
 {
     const char* const rule = R"({
@@ -946,6 +959,15 @@ TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInDescriptiveMetadata)
 {
     std::string doc = OneRuleDoc();
     ReplaceOnce(doc, R"("references": "x")", R"("references": "x\u0000y")");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInLegacyPayloadKey)
+{
+    const std::string rule = R"({"section":"1.1.1.1","payloadKey":"/cis/ubuntu/22.04/v2.0.0/1/1/1/1",)"
+                             R"("ruleId":"rule-id","ruleName":"R","title":"t","tags":[],"metadata":{},"payload":{"audit":{},"parameters":{}}})";
+    std::string doc = MakeDocWithMetadata(R"({"name":"legacy"})", "[" + rule + "]");
+    ReplaceOnce(doc, "/cis/ubuntu/22.04/", "/cis/ubuntu\u0000/22.04/");
     EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
 }
 

@@ -164,6 +164,9 @@ TEST_F(BenchmarkInfoTest, FromMetadata_AcceptsArbitraryFramework)
     auto result = BenchmarkInfo::FromMetadata("custom", "ubuntu", "20.04", "v1.0.0");
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
     EXPECT_EQ(result.Value().framework, "custom");
+    EXPECT_EQ(result.Value().distribution, LinuxDistribution::Ubuntu);
+    EXPECT_EQ(result.Value().version, "20.04");
+    EXPECT_TRUE(result.Value().section.empty());
 }
 
 TEST_F(BenchmarkInfoTest, FromMetadata_RejectsEmptyFramework)

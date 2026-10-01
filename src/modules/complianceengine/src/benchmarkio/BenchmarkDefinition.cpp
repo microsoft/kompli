@@ -132,15 +132,18 @@ Result<string> RequiredString(const JSON_Object* object, const char* key, const 
     {
         return Error("Benchmark definition " + context + " is missing required string field '" + string(key) + "'", EINVAL);
     }
+
     auto value = ReadStringValue(jsonValue, key, context);
     if (!value.HasValue())
     {
         return value.Error();
     }
+
     if (value.Value().empty())
     {
         return Error("Benchmark definition " + context + " has an empty '" + string(key) + "' field", EINVAL);
     }
+
     return value;
 }
 
@@ -677,9 +680,6 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
     }
     else
     {
-        // TODO(robertwoj): Legacy payload handling is TEMPORARY
-        // and will be removed once the PR which
-        // adds the new functionality for hoisted identities is merged.
         for (size_t i = 0; i < ruleCount; ++i)
         {
             const JSON_Object* ruleObject = json_array_get_object(rules, i);

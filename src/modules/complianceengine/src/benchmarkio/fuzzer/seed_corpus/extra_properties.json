@@ -8,6 +8,7 @@
   },
   "extra": "definitions may carry additional properties the parser ignores",
   "spec": {
+    "version": "1.0.0",
     "generatedBy": "compliance-augmentation-engine",
     "rules": [
       {

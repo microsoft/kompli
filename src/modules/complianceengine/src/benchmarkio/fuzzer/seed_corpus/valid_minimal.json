@@ -7,12 +7,11 @@
     "annotations": { "benchmarkVersion": "v2.0.0" }
   },
   "spec": {
+    "version": "1.0.0",
     "rules": [
       {
         "ruleName": "EnsureCramfsKernelModuleIsNotAvailable",
         "title": "1.1.1.1 Ensure cramfs kernel module is not available",
-        "id": "1.1.1.1",
-        "ruleId": "2b568469-ea61-c184-66ba-db6720414ddd",
         "tags": ["level:l1"],
         "metadata": {
           "description": "d",
@@ -22,9 +21,15 @@
           "references": "x"
         },
         "payload": {
-          "audit": { "KernelModuleUnavailable": { "moduleName": "cramfs" } },
+          "audit": {
+            "KernelModuleUnavailable": {
+              "moduleName": "cramfs"
+            }
+          },
           "parameters": {}
-        }
+        },
+        "id": "1.1.1.1",
+        "ruleId": "2b568469-ea61-c184-66ba-db6720414ddd"
       }
     ]
   }

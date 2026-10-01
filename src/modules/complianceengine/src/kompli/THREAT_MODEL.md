@@ -30,7 +30,9 @@ The parser (`BenchmarkDefinition`) is strict:
 
 - It validates the resource envelope (`apiVersion` / `kind == "BenchmarkDefinition"`
   / `metadata` / `spec.rules`) and the per-rule field set the augmentation engine
-  emits (`title`, `ruleName`, `id`, `payload`).
+  emits (`title`, `ruleName`, `ruleId`, `tags`, `metadata`, `payload`),
+  either the rule's opaque `id` or complete legacy `section`/`payloadKey`,
+  and the file-level identity metadata for sole-id definitions.
 - It bounds the total input size (`kMaxInputBytes`) and the rule count (`kMaxRules`).
 - It **fails closed on an embedded NUL byte**: the underlying JSON parser is
   NUL-terminated (parses via `c_str()`), so a NUL would silently truncate the
@@ -46,7 +48,7 @@ The parser (`BenchmarkDefinition`) is strict:
 ## Input file integrity (positional filename)
 
 Definition input **must** be a verified on-disk file, supplied as the positional
-filename argument (`audit|remediate <file>`). The parser owns the file and
+filename argument (through a plan consumed by `run`). The parser owns the file and
 applies, in order:
 
 1. **Parent directory (stat):** must be root-owned and not writable by group or
@@ -79,8 +81,8 @@ applies, in order:
 
 ### stdin is not supported for definitions
 
-`audit` / `remediate` **require** a positional benchmark-definition file
-argument; a missing path or `-` is a hard error. stdin is deliberately
+`run` reads benchmark-definition paths from a plan, whose files must be on disk;
+stdin is deliberately
 unsupported so the integrity checks above can never be bypassed by piping data
 into the root process. (The root-free `render` subcommand, which only reformats
 a result JSON and performs none of these checks, still accepts stdin.)

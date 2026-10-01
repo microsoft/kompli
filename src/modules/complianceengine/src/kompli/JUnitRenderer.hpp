@@ -11,7 +11,7 @@ namespace ComplianceEngine
 {
 namespace Kompli
 {
-// Renders a canonical kompli result JSON (as emitted by `audit` / `remediate`)
+// Renders a canonical kompli result JSON (as emitted by `run`)
 // into a JUnit XML document.
 //
 // - one <testcase classname=<id> name=<title>> per rule (`ruleName`, the

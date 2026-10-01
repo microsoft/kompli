@@ -52,7 +52,7 @@ src/
 kompli supports two integration scenarios that share the same ComplianceEngine module:
 
 - **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The definitions generator produces MOF files that drive audit and remediation per rule.
-- **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/kompli/`) that reads a benchmark-definition JSON file (supplied on disk as a required positional filename argument; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
+- **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/kompli/`) that builds plans from on-disk benchmark-definition JSON files and executes per-rule audit or remediation via `run`, without platform or daemon involvement. Definition files cannot be piped through stdin.
 
 A third scenario, `komplid` (a native, systemd-managed daemon sharing the same ComplianceEngine core), runs a synchronous audit/remediate subset; see §3 and [src/komplid/README.md](../src/komplid/README.md) for its design.
 
@@ -78,6 +78,14 @@ flowchart TB
     CLI -->|direct calls| Engine
     Daemon -->|direct calls, synchronous| Engine
 ```
+
+Benchmark definitions bind the file-level identity tuple (`framework`,
+`distribution`, `distributionVersion`, `benchmarkVersion`) in metadata. Each
+rule carries a framework-defined `id` for selection/display and the existing
+stable `ruleId` for external correlation. Framework is required and
+participates in identity, but it does not select parsing or execution behavior;
+all frameworks use the same definition shape. The Machine Configuration path
+continues to carry the same tuple plus its rule section in each payload key.
 
 # 3. kompli Agent
 

@@ -83,7 +83,6 @@ Result<BenchmarkInfo> BenchmarkInfo::Parse(const string& payloadKey)
 Result<BenchmarkInfo> BenchmarkInfo::FromMetadata(const string& framework, const string& distribution, const string& distributionVersion, const string& benchmarkVersion)
 {
     BenchmarkInfo result;
-
     if (framework.empty())
     {
         return Error("Benchmark framework must not be empty", EINVAL);
@@ -113,7 +112,6 @@ Result<BenchmarkInfo> BenchmarkInfo::FromMetadata(const string& framework, const
         return Error("Benchmark version must not be empty", EINVAL);
     }
     result.benchmarkVersion = benchmarkVersion;
-
     return result;
 }
 

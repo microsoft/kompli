@@ -61,7 +61,7 @@ struct Resource
     std::string resourceID;
 
     // Human-facing, framework-defined identifier (the definition's `id`).
-    // Emitted in the canonical result JSON as `id`.
+    // Opaque and unique within the benchmark; emitted in results as `id`.
     std::string id;
 
     // Stable, benchmark-agnostic identifier (the definition's `ruleId`).

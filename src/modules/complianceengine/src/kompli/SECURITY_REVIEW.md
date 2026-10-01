@@ -2,7 +2,7 @@
 
 Security review of the benchmark-definition JSON parser that replaces the MOF
 input path (`BenchmarkDefinition.{cpp,hpp}`, `Resource.hpp`, and the
-`audit`/`remediate` wiring in `Main.cpp`). The parser runs **as root**; see
+`run` wiring in `Main.cpp`). The parser runs **as root**; see
 [THREAT_MODEL.md](./THREAT_MODEL.md) for the trust boundary and input-hardening
 posture. This document tracks the findings from that review and, in particular,
 the work deliberately deferred to follow-up PRs.
@@ -16,7 +16,7 @@ Reviewed at kompli commits `834acde1` ("Support the new definitions format") and
 |---|---------|----------|--------|
 | 1 | File integrity is the sole barrier to root code execution | High (by design) | Documented (threat model) |
 | 2 | `stdin` bypassed all input-integrity checks | Medium | Fixed — stdin removed for definitions |
-| 3 | Schema is not a runtime control; `tags`/`metadata` ignored by parser | Low | **Deferred** — follow-up PR |
+| 3 | Schema is not a runtime control; `tags`/`metadata` previously ignored by parser | Low | Partially fixed — fields validated; full schema validation deferred |
 | 4 | Embedded NUL byte silently truncated the parse | Low | Fixed — fail-closed on NUL |
 | 5 | `apiVersion` value never validated | Low | Fixed — allowlist gate (M-27) |
 | 6 | `fnmatch` version-glob hardening | Low | **Deferred** — shared-lib change |
@@ -26,8 +26,7 @@ Reviewed at kompli commits `834acde1` ("Support the new definitions format") and
 ## Fixed in this work
 
 ### 2. stdin is no longer accepted for definitions
-`audit` / `remediate` now require an on-disk file as the positional filename
-argument; a missing path or `-` is a hard error. This removes the ability to bypass the input-hardening
+`run` reads on-disk definition files from its plan. A missing path or `-` is a hard error. This removes the ability to bypass the input-hardening
 posture (root-owned, non-writable parent, `O_NOFOLLOW`, regular-file/ownership/
 mode checks) by piping data into the root process. The root-free `render`
 subcommand still accepts stdin because it performs none of those checks.
@@ -78,19 +77,16 @@ in THREAT_MODEL.md.
 > These are intentionally out of scope for the current change. Track them here so
 > they are not lost.
 
-### 3. Schema is not a runtime control; `tags` / `metadata` are ignored
-`benchmark.schema.json` gates *generation*, not *execution*. The parser only
-requires `title` / `ruleName` / `id` / `payload` and ignores
-the schema-required `tags` / `metadata`. Consequences:
+### 3. Schema is not a complete runtime control
+`benchmark.schema.json` gates *generation*, not *execution*. The parser
+requires `ruleId`, `tags`, `metadata`, and either `id` or complete legacy
+`section` + `payloadKey` identity, but does not implement every schema
+constraint (including the content-version contract). `id` is the opaque
+framework identifier; `ruleId` remains stable for external correlation.
+Do not assume a file rejected by the schema is necessarily rejected at runtime.
 
-- A file that would fail schema validation can still be executed by kompli.
-- `id` replaces the former `section` field for selection and display;
-  `ruleId` remains the stable external correlation identifier.
-
-**Planned:** `tags` and `metadata` consumption is intended in a follow-up PR.
-When that lands, decide whether the parser should also enforce their presence
-(closing the parser/schema divergence) or continue to treat the schema purely as
-a generation-time gate.
+**Planned:** Decide whether to enforce the remaining schema constraints at
+runtime or retain the schema purely as a generation-time gate.
 
 ### 6. `fnmatch` version-glob hardening (shared library)
 Applicability matching uses `fnmatch(version, VERSION_ID)` where `version` comes

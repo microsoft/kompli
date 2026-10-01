@@ -403,7 +403,6 @@ int main(int argc, char* argv[])
     // checked nothing, so a terminal override maps that case to
     // NotApplicable below.
     size_t evaluatedRules = 0;
-
     // `run` processes every benchmark entry in the plan (a plan can mix rules
     // from multiple files, e.g. from two different frameworks), each
     // independently applicability-checked, accumulating into one combined
