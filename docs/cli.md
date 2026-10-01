@@ -12,6 +12,45 @@ on-disk formats exposed by the `kompli` CLI.
 | `kompli run <plan-file>` | Execute a plan file (one or more benchmark files), emit one combined canonical result JSON. See §2. |
 | `kompli list <file>` | List every rule's `id`/`title`, one per line. See §2. |
 
+### Command and artifact flow
+
+```mermaid
+flowchart LR
+    definitions["Benchmark-definition JSON<br/>(one or more verified files)"]
+    list["kompli list &lt;file&gt;"]
+    inventory["Rule inventory<br/>id + title"]
+    plan["kompli plan &lt;file&gt;...<br/>toggles + --param"]
+    planFile["Plan JSON"]
+    run["kompli run &lt;plan-file&gt;"]
+    result["Canonical result JSON<br/>(run stdout)"]
+    resultFile["Canonical result JSON<br/>(file)"]
+    resultStdin["Canonical result JSON<br/>(stdin)"]
+    renderFile["kompli render &lt;file&gt;"]
+    renderStdin["kompli render<br/>or kompli render -"]
+    report["JUnit or text report"]
+
+    definitions --> list --> inventory
+    definitions --> plan --> planFile --> run
+    definitions -. "referenced by plan" .-> run
+    run --> result
+    result -- "shell redirect: &gt; result.json" --> resultFile --> renderFile --> report
+    result -- "pipe" --> resultStdin --> renderStdin --> report
+```
+
+`list` and `plan` inspect definitions without executing rules. `run` resolves
+the definition paths recorded by the plan and executes its per-rule choices.
+`render` is a separate, root-free presentation step and accepts canonical JSON
+from either a file or stdin. Omitting the filename and passing `-` both select
+stdin:
+
+```bash
+kompli run plan.json > result.json
+kompli render result.json
+kompli render < result.json
+kompli render - < result.json
+kompli run plan.json | kompli render
+```
+
 Common flags: `-h/--help`, `-V/--version`, `-v/--verbose`, `-d/--debug`.
 `-l/--log-file <path>` writes logs to a validated file instead of stderr.
 `run`-only: `-e/--continue-on-error`.
