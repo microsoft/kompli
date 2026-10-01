@@ -18,7 +18,7 @@ Reviewed at kompli commits `834acde1` ("Support the new definitions format") and
 | 2 | `stdin` bypassed all input-integrity checks | Medium | Fixed — stdin removed for definitions |
 | 3 | Schema is not a runtime control; `tags`/`metadata` previously ignored by parser | Low | Partially fixed — fields validated; full schema validation deferred |
 | 4 | Embedded NUL byte silently truncated the parse | Low | Fixed — fail-closed on NUL |
-| 5 | `apiVersion` value never validated | Low | Fixed — allowlist gate (M-27) |
+| 5 | `apiVersion` value never validated | Low | Fixed — allowlist gate |
 | 6 | `fnmatch` version-glob hardening | Low | **Deferred** — shared-lib change |
 | 7 | Memory / recursion bounds | Low | Adjusted — input cap lowered to 8 MiB |
 | 8 | TOCTOU: parent-dir stat vs. open | Low | Pre-existing, documented, mitigated |
@@ -39,13 +39,14 @@ silently truncate the document and hide everything after it. Because
 `ParseStream`, and the fuzzer. Covered by unit tests (`RejectsEmbeddedNulByte`,
 `RejectsLeadingNulByte`) and attested crash-free by the libFuzzer target.
 
-### 5. `apiVersion` value is now validated (M-27)
+### 5. `apiVersion` value is now validated
 `ParseString` now rejects any `apiVersion` outside a small allowlist
 (`kSupportedApiVersions`, currently just `"v1"`) with a clear error naming the
 offending value and the supported set, closing the version-skew gap: an
 incompatible future format is no longer parsed best-effort. Covered by
-`RejectsUnsupportedApiVersion`. See the definitions-versioning ADR (ADR-0008
-§4) and its TM-5 threat-model entry in the unified-definitions workspace docs.
+`RejectsUnsupportedApiVersion`. Retention and removal criteria for future
+formats are not yet decided; they must account for deployed versions and
+customers still using older definitions when a format change is proposed.
 
 ### 7. Input memory cap lowered
 JSON parsing is not streaming: the whole document is buffered and parsed at once
