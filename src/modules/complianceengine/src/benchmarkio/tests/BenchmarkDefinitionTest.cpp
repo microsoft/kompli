@@ -227,6 +227,58 @@ TEST(BenchmarkDefinitionParserTest, RejectsMissingApiVersion)
     EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
 }
 
+TEST(BenchmarkDefinitionParserTest, RejectsUnsupportedApiVersion)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("apiVersion":"v1")", R"("apiVersion":"v2")");
+    auto result = ParseString(doc, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("unsupported 'apiVersion'"), std::string::npos);
+    EXPECT_NE(result.Error().message.find("\"v2\""), std::string::npos);
+    EXPECT_NE(result.Error().message.find("supported: v1"), std::string::npos);
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsUnsupportedApiVersionForLegacyIdentity)
+{
+    const char* const legacyRule = R"({
+        "section": "1.1.1.1", "payloadKey": "/cis/ubuntu/22.04/v2.0.0/1/1/1/1",
+        "ruleId": "rule-id", "ruleName": "R", "title": "t",
+        "tags": [], "metadata": {}, "payload": {"audit": {}, "parameters": {}}
+    })";
+    std::string doc = MakeDocWithMetadata(R"({"name":"legacy"})", std::string("[") + legacyRule + "]");
+    ReplaceOnce(doc, R"("apiVersion":"v1")", R"("apiVersion":"v2")");
+    auto result = ParseString(doc, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("unsupported 'apiVersion'"), std::string::npos);
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEmptyApiVersion)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("apiVersion":"v1")", R"("apiVersion":"")");
+    auto result = ParseString(doc, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("empty 'apiVersion'"), std::string::npos);
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsNonStringApiVersion)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("apiVersion":"v1")", R"("apiVersion":1)");
+    auto result = ParseString(doc, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("required string field 'apiVersion'"), std::string::npos);
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInApiVersion)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("apiVersion":"v1")", R"("apiVersion":"v1\u0000")");
+    auto result = ParseString(doc, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("embedded NUL in 'apiVersion'"), std::string::npos);
+}
+
 TEST(BenchmarkDefinitionParserTest, RejectsMissingMetadata)
 {
     const std::string doc = std::string(R"({"apiVersion":"v1","kind":"BenchmarkDefinition","spec":{"rules":[)") + kValidRule + "]}}";

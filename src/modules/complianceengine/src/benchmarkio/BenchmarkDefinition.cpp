@@ -34,6 +34,22 @@ constexpr size_t kMaxInputBytes = static_cast<size_t>(8) * 1024 * 1024;
 // Upper bound on the number of rules parsed from a single definition.
 constexpr size_t kMaxRules = 100000;
 
+const std::set<string> kSupportedApiVersions = {"v1"};
+
+string JoinSet(const std::set<string>& values)
+{
+    string joined;
+    for (const auto& value : values)
+    {
+        if (!joined.empty())
+        {
+            joined += ", ";
+        }
+        joined += value;
+    }
+    return joined;
+}
+
 // Reads an entire stream into a string, refusing inputs larger than the cap.
 Result<string> ReadAllBounded(std::istream& stream)
 {
@@ -420,6 +436,10 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
     if (!apiVersion.HasValue())
     {
         return apiVersion.Error();
+    }
+    if (0 == kSupportedApiVersions.count(apiVersion.Value()))
+    {
+        return Error("Benchmark definition has an unsupported 'apiVersion' (\"" + apiVersion.Value() + "\"); supported: " + JoinSet(kSupportedApiVersions), EINVAL);
     }
 
     auto* metadata = json_object_get_object(root, "metadata");

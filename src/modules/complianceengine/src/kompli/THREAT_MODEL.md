@@ -136,6 +136,6 @@ tracked follow-ups.
   still ignores schema-required per-rule `tags` / `metadata`. Do not rely on
   the schema to constrain what kompli executes.
   (`tags` / `metadata` consumption is planned in a follow-up.)
-- **`apiVersion` value is not validated** — only required to be present and
-  non-empty. There is currently no version-skew detection; value pinning is
-  planned as a follow-up.
+- **`apiVersion` is checked against the supported set** (currently `v1` only).
+  Unknown values are hard parse errors rather than being parsed best-effort.
+  The retention policy for future formats is not yet decided (ADR-0008 §4).
