@@ -10,6 +10,7 @@ add_executable(kompli-cli-tests
     CliOptionsTest.cpp
     JUnitRendererTest.cpp
     TextRenderersTest.cpp
+    PlanTest.cpp
 )
 
 target_include_directories(kompli-cli-tests PRIVATE

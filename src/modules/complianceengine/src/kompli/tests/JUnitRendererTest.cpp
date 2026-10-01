@@ -116,6 +116,16 @@ TEST(JUnitRendererTest, NotApplicableRuleIsSkipped)
     EXPECT_FALSE(Contains(r.Value(), "<failure"));
 }
 
+TEST(JUnitRendererTest, SkippedStatusRendersAsSkipped)
+{
+    const std::string json = R"({"rules":[{"id":"4.2","ruleName":"R","status":"Skipped","indicators":[]}]})";
+    auto r = RenderJUnit(json, "s");
+    ASSERT_TRUE(r.HasValue()) << r.Error().message;
+    EXPECT_TRUE(Contains(r.Value(), "<skipped message=\"Rule was skipped\">"));
+    EXPECT_TRUE(Contains(r.Value(), "skipped=\"1\""));
+    EXPECT_FALSE(Contains(r.Value(), "<failure"));
+}
+
 TEST(JUnitRendererTest, InvalidJsonIsError)
 {
     EXPECT_FALSE(RenderJUnit("not json", "s").HasValue());

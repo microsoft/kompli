@@ -24,6 +24,16 @@ struct Metadata
     std::map<std::string, std::string> additional;
 };
 
+struct ParameterMetadata
+{
+    std::string defaultValue;
+    std::string type;
+    Optional<std::string> displayName;
+    Optional<std::string> validationRegex;
+    Optional<std::string> validationFailedMessage;
+    bool mandatory = false;
+};
+
 // A single parsed benchmark rule, as consumed by callers (the `kompli` CLI's
 // main loop and output formatters today; `komplid` in the future). Populated
 // by the benchmark-definition parser (BenchmarkDefinition) from one entry of a
@@ -57,6 +67,7 @@ struct Resource
 
     std::vector<std::string> tags;
     Metadata metadata;
+    std::map<std::string, ParameterMetadata> parameterMetadata;
 
     // True when the rule carries an init object (always true for definitions).
     bool hasInitAudit = false;

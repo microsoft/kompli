@@ -135,6 +135,81 @@ Result<string> SerializeProcedure(const JSON_Object* ruleObject, const string& c
     return procedure;
 }
 
+Result<std::map<string, BenchmarkIO::ParameterMetadata>> ParseParameterMetadata(const JSON_Object* ruleObject, const string& context)
+{
+    std::map<string, BenchmarkIO::ParameterMetadata> result;
+    const JSON_Value* value = json_object_get_value(ruleObject, "parameterMetadata");
+    if (nullptr == value)
+    {
+        return result;
+    }
+
+    if (json_value_get_type(value) != JSONObject)
+    {
+        return Error("Benchmark definition " + context + " has a 'parameterMetadata' field that is not a JSON object", EINVAL);
+    }
+
+    const JSON_Object* metadataObject = json_value_get_object(value);
+    const size_t count = json_object_get_count(metadataObject);
+    for (size_t i = 0; i < count; ++i)
+    {
+        const char* name = json_object_get_name(metadataObject, i);
+        if (nullptr == name || name[0] == '\0')
+        {
+            return Error("Benchmark definition " + context + " has a 'parameterMetadata' entry with an empty name", EINVAL);
+        }
+
+        const string entryContext = context + ".parameterMetadata." + string(name);
+        const JSON_Value* entryValue = json_object_get_value_at(metadataObject, i);
+        const JSON_Object* entryObject = (nullptr != entryValue) ? json_value_get_object(entryValue) : nullptr;
+        if (nullptr == entryObject)
+        {
+            return Error("Benchmark definition " + entryContext + " is not a JSON object", EINVAL);
+        }
+
+        auto defaultValue = RequiredString(entryObject, "default", entryContext);
+        if (!defaultValue.HasValue())
+        {
+            return defaultValue.Error();
+        }
+
+        auto type = RequiredString(entryObject, "type", entryContext);
+        if (!type.HasValue())
+        {
+            return type.Error();
+        }
+
+        BenchmarkIO::ParameterMetadata metadata;
+        metadata.defaultValue = std::move(defaultValue.Value());
+        metadata.type = std::move(type.Value());
+
+        auto displayName = OptionalString(entryObject, "displayName", entryContext);
+        if (!displayName.HasValue())
+        {
+            return displayName.Error();
+        }
+        metadata.displayName = std::move(displayName.Value());
+
+        auto validationRegex = OptionalString(entryObject, "validationRegex", entryContext);
+        if (!validationRegex.HasValue())
+        {
+            return validationRegex.Error();
+        }
+        metadata.validationRegex = std::move(validationRegex.Value());
+
+        auto validationFailedMessage = OptionalString(entryObject, "validationFailedMessage", entryContext);
+        if (!validationFailedMessage.HasValue())
+        {
+            return validationFailedMessage.Error();
+        }
+        metadata.validationFailedMessage = std::move(validationFailedMessage.Value());
+        metadata.mandatory = (1 == json_object_get_boolean(entryObject, "mandatory"));
+        result[name] = std::move(metadata);
+    }
+
+    return result;
+}
+
 string BenchmarkVersionWithoutOptionalPrefix(const string& version)
 {
     return (!version.empty() && version[0] == 'v') ? version.substr(1) : version;
@@ -296,6 +371,12 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index, const Be
         return procedure.Error();
     }
 
+    auto parameterMetadata = ParseParameterMetadata(ruleObject, context);
+    if (!parameterMetadata.HasValue())
+    {
+        return parameterMetadata.Error();
+    }
+
     const bool hasId = json_object_has_value(ruleObject, "id") == 1;
     const bool hasSection = json_object_has_value(ruleObject, "section") == 1;
     const bool hasPayloadKey = json_object_has_value(ruleObject, "payloadKey") == 1;
@@ -379,6 +460,7 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index, const Be
     resource.ruleName = std::move(ruleName.Value());
     resource.tags = std::move(tags.Value());
     resource.metadata = std::move(metadata.Value());
+    resource.parameterMetadata = std::move(parameterMetadata.Value());
     // Every rule carries an init object.
     resource.hasInitAudit = true;
     // Definitions carry no desired object value; the payload is modelled as

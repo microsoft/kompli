@@ -180,7 +180,7 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
 
         // Guard against schema drift / upstream bugs: an unrecognised or missing
         // status must not be silently rendered as a passing test case.
-        if (status != "Compliant" && status != "NonCompliant" && status != "NotApplicable")
+        if (status != "Compliant" && status != "NonCompliant" && status != "NotApplicable" && status != "Skipped")
         {
             return Error("Canonical result JSON rule has invalid 'status' value: '" + status + "'", EINVAL);
         }
@@ -193,13 +193,12 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             cases << "    <failure message=\"Rule is non-compliant\" type=\"NonCompliant\">" << EscapeXml(BuildBody(rule)) << "</failure>\n";
             cases << "  </testcase>\n";
         }
-        else if (status == "NotApplicable")
+        else if (status == "NotApplicable" || status == "Skipped")
         {
-            // A not-applicable rule is neither a pass nor a failure; JUnit models
-            // this as a skipped test case.
             ++skippedCount;
             cases << ">\n";
-            cases << "    <skipped message=\"Rule is not applicable\">" << EscapeXml(BuildBody(rule)) << "</skipped>\n";
+            cases << "    <skipped message=\"" << (status == "Skipped" ? "Rule was skipped" : "Rule is not applicable") << "\">"
+                  << EscapeXml(BuildBody(rule)) << "</skipped>\n";
             cases << "  </testcase>\n";
         }
         else
