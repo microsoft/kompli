@@ -3,10 +3,9 @@
 //
 // Tests for InputSecurity helpers.
 //
-// Files and directories are created inside a per-test mkdtemp() tree managed
-// by MockContext. The fixture removes the entire tree on teardown, so a crash
-// or early exit never leaves stale paths that clash with a subsequent run —
-// unlike hardcoded /tmp filenames that survive process death.
+// Files and directories are created inside a unique per-test tree managed
+// by MockContext. Normal teardown removes the tree; a crash can leave it
+// behind, but the next run uses a different name rather than colliding.
 //
 // Tests that require root (e.g. chown to root) are skipped when running as
 // non-root.
@@ -45,8 +44,8 @@ bool CreateFile(const std::string& path, mode_t mode)
 
 } // namespace
 
-// Base fixture: owns a MockContext whose mkdtemp() tree is removed on
-// TearDown. Helper methods delegate to it so test bodies stay concise.
+// Base fixture: owns a MockContext whose tree is removed on normal
+// destruction. Helper methods delegate to it so test bodies stay concise.
 // Per-suite subclasses preserve GTest suite names (e.g. OpenVerifiedInputTest.*).
 class InputSecurityFixture : public ::testing::Test
 {
@@ -215,6 +214,13 @@ TEST_F(RefuseWritableParentDirTest, NonExistentParentIsRefused)
 
 TEST_F(RefuseWritableParentDirTest, RootDirectoryIsAccepted)
 {
+    struct stat rootStatus;
+    ASSERT_EQ(0, ::stat("/", &rootStatus));
+    if (rootStatus.st_uid != 0)
+    {
+        GTEST_SKIP() << "This test requires / to be owned by root";
+    }
+
     // "/" is root-owned and not world-writable on any sane system.
     // No file is created; the function only stats the parent directory.
     EXPECT_FALSE(RefuseWritableParentDir("/foo.json", nullptr));
@@ -414,6 +420,13 @@ TEST_F(OpenVerifiedInputTest, FifoIsRefused)
 
 TEST_F(RefuseUnsafeLogFileTest, NonExistentPathInSafeParentIsAccepted)
 {
+    struct stat rootStatus;
+    ASSERT_EQ(0, ::stat("/", &rootStatus));
+    if (rootStatus.st_uid != 0)
+    {
+        GTEST_SKIP() << "This test requires / to be owned by root";
+    }
+
     // "/" is root-owned and not world-writable; a not-yet-existing log file
     // there is acceptable (it will be created in the validated directory).
     EXPECT_FALSE(RefuseUnsafeLogFile("/ipsec_test_new_log.log", nullptr));
