@@ -156,7 +156,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"RootPathSecurity", {MakeHandler(AuditRootPathSecurity), nullptr}},
     {"SCE", {MakeHandler(AuditSCE), MakeHandler(RemediateSCE)}},
     {"ShadowField", {MakeHandler(AuditShadowField), nullptr}},
-    {"ShellTimeout", {MakeHandler(AuditShellTimeout), nullptr}},
+    {"ShellTimeout", {MakeHandler(AuditShellTimeout), MakeHandler(RemediateShellTimeout)}},
     {"SshKeyPermissions", {MakeHandler(AuditSshKeyPermissions), MakeHandler(RemediateSshKeyPermissions)}},
     {"SshdOption", {MakeHandler(AuditSshdOption), nullptr}},
     {"SysctlValue", {MakeHandler(AuditSysctlValue), nullptr}},
