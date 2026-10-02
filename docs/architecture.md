@@ -321,11 +321,13 @@ turns that JSON into one of the presentation formats.
 | `compact-list` | Single-line-per-rule text |
 | `debug` | Verbose diagnostic output |
 
-JUnit uses each rule's `id` as the testcase classname and its human-readable
-`title` as the testcase name. Non-compliant and skipped cases retain `ruleName`
-in their failure or skipped body; `NotApplicable` and `Skipped` both count as
-skipped, not passed. Non-empty rule `tags` appear as a `<tags>` block inside
-the testcase, with XML-escaped values.
+JUnit uses a rule's `id` as the testcase classname and its `title` as the
+testcase name (`ruleName` for older results without `title`). Non-empty tags
+are rendered as XML-escaped `<tag value="..."/>` entries. A present malformed
+`tags` field, a non-string `title`, or text that cannot form valid XML 1.0
+causes `render` to fail rather than publish a misleading report.
+
+`run` always emits the canonical result JSON; `render` is what turns that JSON into one of the formats above.
 
 ### Security controls
 

@@ -26,6 +26,8 @@ namespace Kompli
 // - the failure/skipped body carries the rule's `ruleName`, Parameters, and
 //   Indicators, modelled on the augmentation engine's
 //   tests/reporting/junit.py.
+// - older results without `title` use `ruleName` as the testcase name;
+//   malformed tags, invalid UTF-8 and invalid XML 1.0 characters are errors.
 //
 // `id` is used verbatim as the classname; it is framework-agnostic (a
 // dotted CIS number or a STIG id), so the renderer makes no CIS-specific

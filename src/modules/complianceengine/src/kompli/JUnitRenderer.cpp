@@ -4,6 +4,7 @@
 #include <JUnitRenderer.hpp>
 #include <StringTools.h>
 #include <cerrno>
+#include <cstdint>
 #include <parson.h>
 #include <sstream>
 #include <string>
@@ -16,9 +17,8 @@ using std::string;
 
 namespace
 {
-// Escapes the five XML entities and neutralises control characters that are
-// illegal in XML 1.0 text (everything below 0x20 except tab/newline/carriage
-// return), so arbitrary indicator/parameter text cannot produce malformed XML.
+// Escapes XML entities and neutralises low control characters. The completed
+// document is checked for other invalid XML 1.0 characters and UTF-8 sequences.
 string EscapeXml(const string& in)
 {
     string out;
@@ -55,6 +55,60 @@ string EscapeXml(const string& in)
         }
     }
     return out;
+}
+
+bool HasValidXmlCharacters(const string& xml)
+{
+    for (size_t i = 0; i < xml.size();)
+    {
+        const auto first = static_cast<unsigned char>(xml[i]);
+        std::uint32_t codePoint = 0;
+        size_t length = 1;
+        if (0x80 > first)
+        {
+            codePoint = first;
+        }
+        else if ((0xC2 <= first) && (0xDF >= first))
+        {
+            codePoint = first & 0x1F;
+            length = 2;
+        }
+        else if ((0xE0 <= first) && (0xEF >= first))
+        {
+            codePoint = first & 0x0F;
+            length = 3;
+        }
+        else if ((0xF0 <= first) && (0xF4 >= first))
+        {
+            codePoint = first & 0x07;
+            length = 4;
+        }
+        else
+        {
+            return false;
+        }
+        if (length > xml.size() - i)
+        {
+            return false;
+        }
+        for (size_t j = 1; j < length; ++j)
+        {
+            const auto next = static_cast<unsigned char>(xml[i + j]);
+            if (0x80 != (next & 0xC0))
+            {
+                return false;
+            }
+            codePoint = (codePoint << 6) | (next & 0x3F);
+        }
+        if (((2 == length) && (0x80 > codePoint)) || ((3 == length) && (0x800 > codePoint)) || ((4 == length) && (0x10000 > codePoint)) ||
+            ((0xD800 <= codePoint) && (0xDFFF >= codePoint)) || (0x10FFFF < codePoint) ||
+            ((0x09 != codePoint) && (0x0A != codePoint) && (0x0D != codePoint) && (0x20 > codePoint)) || ((0xFFFE <= codePoint) && (0xFFFF >= codePoint)))
+        {
+            return false;
+        }
+        i += length;
+    }
+    return true;
 }
 
 // Recursively renders an indicators array into the readable indented style used
@@ -100,10 +154,10 @@ void AppendIndicators(const JSON_Array* indicators, size_t depth, std::ostringst
 // Builds the human-readable failure body for a rule: the engine's `ruleName`,
 // a Parameters section (present when the canonical JSON carries per-rule
 // parameters) followed by an indented Indicators tree.
-string BuildBody(const JSON_Object* rule, const string& ruleName)
+string BuildBody(const JSON_Object* rule)
 {
     std::ostringstream body;
-    body << "Rule: " << ruleName << "\n\n";
+    body << "Rule: " << StringOrEmpty(json_object_get_string(rule, "ruleName")) << "\n\n";
 
     const JSON_Object* parameters = json_object_get_object(rule, "parameters");
     body << "Parameters:\n";
@@ -139,9 +193,19 @@ string BuildBody(const JSON_Object* rule, const string& ruleName)
 // mirroring the definition's own field name, one <tag value="..."/> per
 // entry. Returns empty when there are no tags, so a bare passing testcase
 // with no tags can still self-close.
-string BuildTags(const JSON_Array* tags)
+Result<string> BuildTags(const JSON_Object* rule)
 {
-    if (nullptr == tags || json_array_get_count(tags) == 0)
+    const JSON_Value* tagsValue = json_object_get_value(rule, "tags");
+    if (nullptr == tagsValue)
+    {
+        return string();
+    }
+    const JSON_Array* tags = json_value_get_array(tagsValue);
+    if (nullptr == tags)
+    {
+        return Error("Canonical result JSON rule has a non-array 'tags' field", EINVAL);
+    }
+    if (0 == json_array_get_count(tags))
     {
         return string();
     }
@@ -150,7 +214,17 @@ string BuildTags(const JSON_Array* tags)
     const size_t count = json_array_get_count(tags);
     for (size_t i = 0; i < count; ++i)
     {
-        out << "      <tag value=\"" << EscapeXml(StringOrEmpty(json_array_get_string(tags, i))) << "\"/>\n";
+        const char* tag = json_array_get_string(tags, i);
+        if (nullptr == tag)
+        {
+            return Error("Canonical result JSON rule has a non-string tag", EINVAL);
+        }
+        const string value(tag, json_array_get_string_len(tags, i));
+        if (string::npos != value.find('\0'))
+        {
+            return Error("Canonical result JSON rule has a tag with an embedded NUL", EINVAL);
+        }
+        out << "      <tag value=\"" << EscapeXml(value) << "\"/>\n";
     }
     out << "    </tags>\n";
     return out.str();
@@ -197,8 +271,21 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             return Error("Canonical result JSON 'rules' entry is not an object", EINVAL);
         }
         const string id = StringOrEmpty(json_object_get_string(rule, "id"));
-        const string title = StringOrEmpty(json_object_get_string(rule, "title"));
-        const string ruleName = StringOrEmpty(json_object_get_string(rule, "ruleName"));
+        const JSON_Value* titleValue = json_object_get_value(rule, "title");
+        if (nullptr != titleValue && JSONString != json_value_get_type(titleValue))
+        {
+            return Error("Canonical result JSON rule has a non-string 'title'", EINVAL);
+        }
+        const JSON_Value* nameValue = (nullptr != titleValue) ? titleValue : json_object_get_value(rule, "ruleName");
+        if (nullptr == nameValue || JSONString != json_value_get_type(nameValue))
+        {
+            return Error("Canonical result JSON rule has neither a string 'title' nor a string 'ruleName'", EINVAL);
+        }
+        const string title(json_value_get_string(nameValue), json_value_get_string_len(nameValue));
+        if (string::npos != title.find('\0'))
+        {
+            return Error("Canonical result JSON rule has an embedded NUL in its testcase name", EINVAL);
+        }
         const string status = StringOrEmpty(json_object_get_string(rule, "status"));
 
         // Guard against schema drift / upstream bugs: an unrecognised or missing
@@ -210,14 +297,18 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             return Error("Canonical result JSON rule has invalid 'status' value: '" + status + "'", EINVAL);
         }
 
-        const string tagsXml = BuildTags(json_object_get_array(rule, "tags"));
+        auto tagsXml = BuildTags(rule);
+        if (!tagsXml.HasValue())
+        {
+            return tagsXml.Error();
+        }
 
         cases << "  <testcase classname=\"" << EscapeXml(id) << "\" name=\"" << EscapeXml(title) << "\"";
         if (status == "NonCompliant")
         {
             ++failureCount;
-            cases << ">\n" << tagsXml;
-            cases << "    <failure message=\"Rule is non-compliant\" type=\"NonCompliant\">" << EscapeXml(BuildBody(rule, ruleName)) << "</failure>\n";
+            cases << ">\n" << tagsXml.Value();
+            cases << "    <failure message=\"Rule is non-compliant\" type=\"NonCompliant\">" << EscapeXml(BuildBody(rule)) << "</failure>\n";
             cases << "  </testcase>\n";
         }
         else if (status == "NotApplicable" || status == "Skipped")
@@ -225,14 +316,14 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             // Neither a pass nor a failure; JUnit models both as a skipped test case.
             ++skippedCount;
             const string message = (status == "NotApplicable") ? "Rule is not applicable" : "Rule was skipped";
-            cases << ">\n" << tagsXml;
-            cases << "    <skipped message=\"" << message << "\">" << EscapeXml(BuildBody(rule, ruleName)) << "</skipped>\n";
+            cases << ">\n" << tagsXml.Value();
+            cases << "    <skipped message=\"" << message << "\">" << EscapeXml(BuildBody(rule)) << "</skipped>\n";
             cases << "  </testcase>\n";
         }
-        else if (!tagsXml.empty())
+        else if (!tagsXml.Value().empty())
         {
             // status == "Compliant" but tags are present: can't self-close.
-            cases << ">\n" << tagsXml;
+            cases << ">\n" << tagsXml.Value();
             cases << "  </testcase>\n";
         }
         else
@@ -250,7 +341,12 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
     out << cases.str();
     out << "  </testsuite>\n";
     out << "</testsuites>\n";
-    return out.str();
+    const string xml = out.str();
+    if (!HasValidXmlCharacters(xml))
+    {
+        return Error("Canonical result contains invalid XML 1.0 characters or UTF-8", EINVAL);
+    }
+    return xml;
 }
 
 } // namespace Kompli
