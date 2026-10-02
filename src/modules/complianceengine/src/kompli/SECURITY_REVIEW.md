@@ -16,7 +16,7 @@ Reviewed at kompli commits `834acde1` ("Support the new definitions format") and
 |---|---------|----------|--------|
 | 1 | File integrity is the sole barrier to root code execution | High (by design) | Documented (threat model) |
 | 2 | `stdin` bypassed all input-integrity checks | Medium | Fixed — stdin removed for definitions |
-| 3 | Schema is not a runtime control; `tags`/`metadata` ignored by parser | Low | **Deferred** — follow-up PR |
+| 3 | Schema constraints not fully enforced at runtime | Low | Required `tags`/`metadata` validated; remaining constraints deferred |
 | 4 | Embedded NUL byte silently truncated the parse | Low | Fixed — fail-closed on NUL |
 | 5 | `apiVersion` value never validated | Low | Fixed — allowlist gate |
 | 6 | `fnmatch` version-glob hardening | Low | **Deferred** — shared-lib change |
@@ -43,10 +43,14 @@ silently truncate the document and hide everything after it. Because
 ### 5. `apiVersion` value is now validated
 `ParseString` rejects versions outside the supported set (currently `"v1"`)
 before parsing metadata or rules, rather than best-effort parsing an unknown
-format. The error names the rejected version and supported set. The existing
-required-string and NUL checks still reject malformed versions. Both legacy
-and new rule identities remain supported for `v1`. Format retention and removal
-policy for a future schema change remains open (ADR-0008 §4).
+format. The error names the supported set but does not echo the supplied value
+into logs, where control characters or an unreasonably long value could be
+misleading. The existing required-string and NUL checks still reject malformed
+versions. Both legacy and new rule identities remain supported for `v1`.
+Covered by `RejectsUnsupportedApiVersion` and
+`DoesNotEchoUnsupportedApiVersionInError`. Retention and removal criteria for
+future formats are not yet decided; they must account for deployed versions
+and customers still using older definitions when a format change is proposed.
 
 ### 7. Input memory cap lowered
 JSON parsing is not streaming: the whole document is buffered and parsed at once
@@ -78,17 +82,15 @@ in THREAT_MODEL.md.
 > These are intentionally out of scope for the current change. Track them here so
 > they are not lost.
 
-### 3. Schema is not a runtime control; `tags` / `metadata` are ignored
+### 3. Schema is not a complete runtime control
 `benchmark.schema.json` gates *generation*, not *execution*. The parser
-requires file-level identity, `ruleId`, and either `id` or the complete
-temporary legacy `section` + `payloadKey` identity, but ignores the
-schema-required per-rule `tags` / `metadata`. Consequences:
+requires and validates file-level identity, `ruleId`, `tags`, `metadata`,
+and either `id` or the complete legacy `section` + `payloadKey` identity,
+but does not implement every schema constraint. A file rejected by the
+schema is not necessarily rejected at runtime.
 
-- A file that would fail schema validation can still be executed by kompli.
-**Planned:** `tags` and `metadata` consumption is intended in a follow-up PR.
-When that lands, decide whether the parser should also enforce their presence
-(closing the parser/schema divergence) or continue to treat the schema purely as
-a generation-time gate.
+**Planned:** Decide whether to enforce the remaining schema constraints at
+runtime or retain the schema purely as a generation-time gate.
 
 ### 6. `fnmatch` version-glob hardening (shared library)
 Applicability matching uses `fnmatch(version, VERSION_ID)` where `version` comes

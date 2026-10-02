@@ -234,8 +234,8 @@ TEST(BenchmarkDefinitionParserTest, RejectsUnsupportedApiVersion)
     auto result = ParseString(doc, nullptr);
     ASSERT_FALSE(result.HasValue());
     EXPECT_NE(result.Error().message.find("unsupported 'apiVersion'"), std::string::npos);
-    EXPECT_NE(result.Error().message.find("\"v2\""), std::string::npos);
     EXPECT_NE(result.Error().message.find("supported: v1"), std::string::npos);
+    EXPECT_EQ(result.Error().message.find("\"v2\""), std::string::npos);
 }
 
 TEST(BenchmarkDefinitionParserTest, RejectsUnsupportedApiVersionForLegacyIdentity)
@@ -277,6 +277,25 @@ TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInApiVersion)
     auto result = ParseString(doc, nullptr);
     ASSERT_FALSE(result.HasValue());
     EXPECT_NE(result.Error().message.find("embedded NUL in 'apiVersion'"), std::string::npos);
+}
+
+TEST(BenchmarkDefinitionParserTest, DoesNotEchoUnsupportedApiVersionInError)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("apiVersion":"v1")", R"("apiVersion":"v2\n\u001b[31m")");
+    auto result = ParseString(doc, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("supported: v1"), std::string::npos);
+    EXPECT_EQ(result.Error().message.find("v2"), std::string::npos);
+    EXPECT_EQ(result.Error().message.find('\n'), std::string::npos);
+    EXPECT_EQ(result.Error().message.find('\x1b'), std::string::npos);
+
+    doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("apiVersion":"v1")", R"("apiVersion":")" + std::string(4096, 'x') + R"(")");
+    auto longResult = ParseString(doc, nullptr);
+    ASSERT_FALSE(longResult.HasValue());
+    EXPECT_NE(longResult.Error().message.find("supported: v1"), std::string::npos);
+    EXPECT_LT(longResult.Error().message.size(), 256u);
 }
 
 TEST(BenchmarkDefinitionParserTest, RejectsMissingMetadata)
