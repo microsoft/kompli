@@ -25,6 +25,15 @@ TEST_F(RegexFallbackTest, NoMatch)
     EXPECT_EQ(match.size(), 0u);
 }
 
+TEST_F(RegexFallbackTest, RejectsStackedRepetitionOperators)
+{
+    EXPECT_THROW(regex("value+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"), regex_error);
+    EXPECT_NO_THROW(regex(R"([+*?]+)"));
+    EXPECT_NO_THROW(regex(R"([]+*?]+)"));
+    EXPECT_NO_THROW(regex(R"([^^]+)"));
+    EXPECT_NO_THROW(regex(R"(value\+*)"));
+}
+
 TEST_F(RegexFallbackTest, RangeSearchCapturesAndAnchors)
 {
     const std::string contents = "ignored\nvalue=42\n";
