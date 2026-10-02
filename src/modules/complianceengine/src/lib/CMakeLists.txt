@@ -160,6 +160,7 @@ add_custom_target(complianceengineschema
 set_property(TARGET complianceengineschema PROPERTY OUTPUT ComplianceEngineSchema.zip)
 
 add_library(complianceenginelib STATIC
+    AtomicFile.cpp
     Base64.cpp
     BenchmarkInfo.cpp
     BindingParsers.cpp

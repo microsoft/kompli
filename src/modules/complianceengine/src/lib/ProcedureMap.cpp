@@ -137,7 +137,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"IptablesOpenPorts", {MakeHandler(AuditIptablesOpenPorts), nullptr}},
     {"KernelModuleUnavailable", {MakeHandler(AuditKernelModuleUnavailable), nullptr}},
     {"LogFilePermissions", {MakeHandler(AuditLogFilePermissions), MakeHandler(RemediateLogFilePermissions)}},
-    {"LoginDefsOption", {MakeHandler(AuditLoginDefsOption), nullptr}},
+    {"LoginDefsOption", {MakeHandler(AuditLoginDefsOption), MakeHandler(RemediateLoginDefsOption)}},
     {"MountPointExists", {MakeHandler(AuditMountPointExists), nullptr}},
     {"MtaLocalOnly", {MakeHandler(AuditMtaLocalOnly), nullptr}},
     {"NetworkInterfaceFlag", {MakeHandler(AuditNetworkInterfaceFlag), nullptr}},
@@ -170,7 +170,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"UserDotFilePermissions", {MakeHandler(AuditUserDotFilePermissions), MakeHandler(RemediateUserDotFilePermissions)}},
     {"UserHomeDirectoryPermissions", {MakeHandler(AuditUserHomeDirectoryPermissions), MakeHandler(RemediateUserHomeDirectoryPermissions)}},
     {"WirelessDisabled", {MakeHandler(AuditWirelessDisabled), nullptr}},
-    {"XdmcpDisabled", {MakeHandler(AuditXdmcpDisabled), nullptr}},
+    {"XdmcpDisabled", {MakeHandler(AuditXdmcpDisabled), MakeHandler(RemediateXdmcpDisabled)}},
 };
 } // namespace ComplianceEngine
 
