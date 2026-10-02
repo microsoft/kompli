@@ -159,7 +159,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"ShellTimeout", {MakeHandler(AuditShellTimeout), MakeHandler(RemediateShellTimeout)}},
     {"SshKeyPermissions", {MakeHandler(AuditSshKeyPermissions), MakeHandler(RemediateSshKeyPermissions)}},
     {"SshdOption", {MakeHandler(AuditSshdOption), nullptr}},
-    {"SysctlValue", {MakeHandler(AuditSysctlValue), nullptr}},
+    {"SysctlValue", {MakeHandler(AuditSysctlValue), MakeHandler(RemediateSysctlValue)}},
     {"SystemAccountShell", {MakeHandler(AuditSystemAccountShell), nullptr}},
     {"SystemdConfigValue", {MakeHandler(AuditSystemdConfigValue), nullptr}},
     {"SystemdUnitState", {MakeHandler(AuditSystemdUnitState), nullptr}},
