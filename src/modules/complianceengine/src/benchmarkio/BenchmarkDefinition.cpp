@@ -207,7 +207,12 @@ Result<std::vector<string>> ParseTags(const JSON_Object* ruleObject, const strin
         {
             return Error("Benchmark definition " + context + " has a non-string 'tags' entry", EINVAL);
         }
-        string tag(json_value_get_string(tagValue), json_value_get_string_len(tagValue));
+        const size_t tagLength = json_value_get_string_len(tagValue);
+        if (256 < tagLength)
+        {
+            return Error("Benchmark definition " + context + " has a 'tags' entry exceeding 256 bytes", E2BIG);
+        }
+        string tag(json_value_get_string(tagValue), tagLength);
         if (string::npos != tag.find('\0'))
         {
             return Error("Benchmark definition " + context + " has an embedded NUL in a 'tags' entry", EINVAL);
