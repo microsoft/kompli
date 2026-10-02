@@ -161,7 +161,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"SshdOption", {MakeHandler(AuditSshdOption), nullptr}},
     {"SysctlValue", {MakeHandler(AuditSysctlValue), MakeHandler(RemediateSysctlValue)}},
     {"SystemAccountShell", {MakeHandler(AuditSystemAccountShell), nullptr}},
-    {"SystemdConfigValue", {MakeHandler(AuditSystemdConfigValue), nullptr}},
+    {"SystemdConfigValue", {MakeHandler(AuditSystemdConfigValue), MakeHandler(RemediateSystemdConfigValue)}},
     {"SystemdUnitState", {MakeHandler(AuditSystemdUnitState), nullptr}},
     {"UfwOpenPorts", {MakeHandler(AuditUfwOpenPorts), nullptr}},
     {"UfwStatus", {MakeHandler(AuditUfwStatus), nullptr}},
