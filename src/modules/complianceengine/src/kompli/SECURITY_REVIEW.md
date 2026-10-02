@@ -16,7 +16,7 @@ Reviewed at kompli commits `834acde1` ("Support the new definitions format") and
 |---|---------|----------|--------|
 | 1 | File integrity is the sole barrier to root code execution | High (by design) | Documented (threat model) |
 | 2 | `stdin` bypassed all input-integrity checks | Medium | Fixed — stdin removed for definitions |
-| 3 | Schema is not a runtime control; `tags`/`metadata` previously ignored by parser | Low | Partially fixed — fields validated; full schema validation deferred |
+| 3 | Schema constraints not fully enforced at runtime | Low | Required `tags`/`metadata` validated; remaining constraints deferred |
 | 4 | Embedded NUL byte silently truncated the parse | Low | Fixed — fail-closed on NUL |
 | 5 | `apiVersion` value never validated | Low | Fixed — allowlist gate |
 | 6 | `fnmatch` version-glob hardening | Low | **Deferred** — shared-lib change |
@@ -41,12 +41,14 @@ silently truncate the document and hide everything after it. Because
 
 ### 5. `apiVersion` value is now validated
 `ParseString` now rejects any `apiVersion` outside a small allowlist
-(`kSupportedApiVersions`, currently just `"v1"`) with a clear error naming the
-offending value and the supported set, closing the version-skew gap: an
-incompatible future format is no longer parsed best-effort. Covered by
-`RejectsUnsupportedApiVersion`. Retention and removal criteria for future
-formats are not yet decided; they must account for deployed versions and
-customers still using older definitions when a format change is proposed.
+(`kSupportedApiVersions`, currently just `"v1"`) with an error naming the
+supported set, closing the version-skew gap: an incompatible future format is
+no longer parsed best-effort. The supplied value is not echoed into logs,
+because it could contain control characters or be unreasonably long. Covered
+by `RejectsUnsupportedApiVersion` and
+`DoesNotEchoUnsupportedApiVersionInError`. Retention and removal criteria for
+future formats are not yet decided; they must account for deployed versions
+and customers still using older definitions when a format change is proposed.
 
 ### 7. Input memory cap lowered
 JSON parsing is not streaming: the whole document is buffered and parsed at once
@@ -80,11 +82,12 @@ in THREAT_MODEL.md.
 
 ### 3. Schema is not a complete runtime control
 `benchmark.schema.json` gates *generation*, not *execution*. The parser
-requires `ruleId`, `tags`, `metadata`, and either `id` or complete legacy
-`section` + `payloadKey` identity, but does not implement every schema
-constraint (including the content-version contract). `id` is the opaque
-framework identifier; `ruleId` remains stable for external correlation.
-Do not assume a file rejected by the schema is necessarily rejected at runtime.
+now requires and validates `ruleId`, `tags`, `metadata`, and either `id` or
+complete legacy `section` + `payloadKey` identity, but does not implement
+every schema constraint (including the content-version contract). `id` is the
+opaque framework identifier; `ruleId` remains stable for external
+correlation. Do not assume a file rejected by the schema is necessarily
+rejected at runtime.
 
 **Planned:** Decide whether to enforce the remaining schema constraints at
 runtime or retain the schema purely as a generation-time gate.

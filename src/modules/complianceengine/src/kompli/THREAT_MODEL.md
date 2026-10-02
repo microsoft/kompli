@@ -128,6 +128,7 @@ tracked follow-ups.
   executes.
 - **`apiVersion` value is validated against an allowlist** (currently `v1`
   only) — closes the version-skew gap: an unrecognised value is a hard parse
-  error, not a best-effort parse. Retention and removal criteria for future
-  formats remain undecided until another format is proposed. See
+  error, not a best-effort parse. The error names the supported set without
+  echoing the supplied version into logs. Retention and removal criteria for
+  future formats remain undecided until another format is proposed. See
   SECURITY_REVIEW.md #5.
