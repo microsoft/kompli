@@ -114,7 +114,7 @@ const char* Bindings<UniqueGroupIdParams>::names[] = {"groupName", "gid"};
 const char* Bindings<UniqueUserIdParams>::names[] = {"username", "uid", "gid"};
 
 const ProcedureMap Evaluator::mProcedureMap = {
-    {"AideAttributes", {MakeHandler(AuditAideAttributes), nullptr}},
+    {"AideAttributes", {MakeHandler(AuditAideAttributes), MakeHandler(RemediateAideAttributes)}},
     {"AksCommand", {MakeHandler(AuditAksCommand), nullptr}},
     {"ApparmorProfileState", {MakeHandler(AuditApparmorProfileState), nullptr}},
     {"AuditFailure", {MakeHandler(AuditAuditFailure), nullptr}},
