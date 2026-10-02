@@ -10,19 +10,14 @@
 
 namespace ComplianceEngine
 {
-// Defines the type of the benchmark, e.g., CIS
-enum class BenchmarkType
+// Defines the identity and applicability information shared by every rule in a
+// benchmark.
+struct BenchmarkInfo
 {
-    CIS,
-    STIG,
-};
+    // Opaque framework identity, e.g. "cis" or "stig". Framework does not
+    // select parsing or execution behavior.
+    std::string framework;
 
-// Defines CIS benchmark information
-// Note: For now only CIS is supported, but when new benchmark types are added,
-// intention is to make this struct generic and use a variant type,
-// which needs to be implemented for this purpose.
-struct CISBenchmarkInfo
-{
     // Defines the Linux distribution, e.g., Ubuntu, CentOS
     LinuxDistribution distribution;
 
@@ -32,11 +27,16 @@ struct CISBenchmarkInfo
     // Defines the version of the benchmark, e.g., v1.0.0
     std::string benchmarkVersion;
 
-    // Defines the benchmark section, e.g. 1.1.1
+    // Defines the benchmark section, e.g. 1.1.1. Only populated by Parse()
+    // for the full-payload-key MOF/NRP path.
     std::string section;
 
-    // Parses payload key and converts it to the benchmark information
-    static Result<CISBenchmarkInfo> Parse(const std::string& payloadKey);
+    // Parses a full payload key and converts it to benchmark information.
+    static Result<BenchmarkInfo> Parse(const std::string& payloadKey);
+
+    // Builds file-level identity from benchmark-definition metadata.
+    static Result<BenchmarkInfo> FromMetadata(const std::string& framework, const std::string& distribution, const std::string& distributionVersion,
+        const std::string& benchmarkVersion);
 
     // Match the benchmark information against detected distribution information.
     // Returns true in case of a match.
@@ -84,8 +84,7 @@ struct CISBenchmarkInfo
 
 namespace std
 {
-std::string to_string(ComplianceEngine::BenchmarkType benchmarkType);           // NOLINT(*-identifier-naming)
-std::string to_string(const ComplianceEngine::CISBenchmarkInfo& benchmarkInfo); // NOLINT(*-identifier-naming)
+std::string to_string(const ComplianceEngine::BenchmarkInfo& benchmarkInfo); // NOLINT(*-identifier-naming)
 } // namespace std
 
 #endif // COMPLIANCEENGINE_BENCHMARK_INFO_H

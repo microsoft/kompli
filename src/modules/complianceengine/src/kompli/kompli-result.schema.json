@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "kompli Result",
-  "description": "Canonical result JSON emitted by `kompli audit` / `remediate`. Per-rule `tags` and inline `metadata` are echoed from the unified benchmark-definition input.",
+  "description": "Canonical result JSON emitted by `kompli audit` / `remediate`. Per-rule `tags` and inline `metadata` are echoed from the unified benchmark-definition input; additional properties are permitted for forward compatibility.",
   "type": "object",
   "additionalProperties": true,
   "required": [
@@ -49,7 +49,7 @@
     "status": {
       "type": "string",
       "enum": ["Compliant", "NonCompliant", "NotApplicable"],
-      "description": "Overall status, aggregated across rules with the engine's allOf three-valued logic: NonCompliant if any rule is NonCompliant; otherwise NotApplicable if any rule is NotApplicable, or if no rules were evaluated (empty benchmark or a section filter that matched nothing); otherwise Compliant."
+      "description": "Overall status, aggregated across rules with the engine's allOf three-valued logic: NonCompliant if any rule is NonCompliant; otherwise NotApplicable if any rule is NotApplicable, or if a section (rule ID prefix) filter matched no rules; otherwise Compliant."
     },
     "rules": {
       "type": "array",
@@ -66,8 +66,8 @@
       "required": [
         "indicators",
         "title",
+        "id",
         "ruleId",
-        "section",
         "ruleName",
         "status",
         "tags",
@@ -83,13 +83,15 @@
           "type": "string",
           "description": "Human-readable rule title (the ResourceID; reuses the definition's field name)."
         },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The rule's externally-quoted, framework-defined identifier, opaque and unique within its benchmark definition."
+        },
         "ruleId": {
           "type": "string",
-          "description": "Stable, benchmark-agnostic rule identifier (UUID derived from the payload key)."
-        },
-        "section": {
-          "type": "string",
-          "description": "Externally-quoted per-rule identifier (dotted CIS number or STIG id)."
+          "minLength": 1,
+          "description": "Stable, benchmark-agnostic rule identifier preserved from the benchmark definition for external correlation."
         },
         "ruleName": {
           "type": "string",

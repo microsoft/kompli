@@ -10,9 +10,40 @@
     "metadata",
     "spec"
   ],
+  "allOf": [
+    {
+      "anyOf": [
+        {
+          "properties": {
+            "metadata": {
+              "required": ["labels", "annotations"]
+            }
+          }
+        },
+        {
+          "properties": {
+            "spec": {
+              "properties": {
+                "rules": {
+                  "items": {
+                    "required": ["section", "payloadKey"],
+                    "not": {
+                      "required": ["id"]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
   "properties": {
     "apiVersion": {
       "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\u0000]*$",
       "description": "API version string, e.g. 'v1'. Versions the file format, independently of the benchmark's own version."
     },
     "kind": {
@@ -26,21 +57,63 @@
       "required": [
         "name"
       ],
+      "oneOf": [
+        {
+          "required": ["labels", "annotations"]
+        },
+        {
+          "not": {
+            "anyOf": [
+              { "required": ["labels"] },
+              { "required": ["annotations"] }
+            ]
+          }
+        }
+      ],
       "properties": {
         "name": {
           "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
           "description": "Stable benchmark identifier (the benchmark selector label)."
         },
         "labels": {
           "type": "object",
-          "description": "Selectable identity axes (framework, os, distribution, distributionVersion, ...). Architecture-agnostic; the scanned host's arch is recorded in the kompli result, not here.",
+          "description": "Selectable identity axes. Required for sole-id definitions; legacy definitions may derive the same identity from their payload keys.",
+          "required": ["framework", "distribution", "distributionVersion"],
+          "properties": {
+            "framework": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\u0000]*$",
+              "description": "Required opaque benchmark framework identity. It does not select parsing or execution behavior."
+            },
+            "distribution": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\u0000]*$"
+            },
+            "distributionVersion": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\u0000]*$"
+            }
+          },
           "additionalProperties": {
             "type": "string"
           }
         },
         "annotations": {
           "type": "object",
-          "description": "Non-selectable descriptive fields (e.g. displayName, benchmarkVersion).",
+          "description": "Non-selectable descriptive fields.",
+          "required": ["benchmarkVersion"],
+          "properties": {
+            "benchmarkVersion": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\u0000]*$"
+            }
+          },
           "additionalProperties": {
             "type": "string"
           }
@@ -56,6 +129,7 @@
       "properties": {
         "rules": {
           "type": "array",
+          "minItems": 1,
           "description": "One entry per rule in the selected benchmark.",
           "items": {
             "$ref": "#/definitions/rule"
@@ -69,35 +143,66 @@
       "type": "object",
       "additionalProperties": true,
       "required": [
-        "section",
-        "ruleId",
         "ruleName",
         "title",
-        "payloadKey",
+        "ruleId",
         "tags",
         "metadata",
         "payload"
       ],
+      "oneOf": [
+        {
+          "required": ["section", "payloadKey"],
+          "not": {
+            "required": ["id"]
+          }
+        },
+        {
+          "required": ["id"],
+          "not": {
+            "anyOf": [
+              { "required": ["section"] },
+              { "required": ["payloadKey"] }
+            ]
+          }
+        }
+      ],
       "properties": {
         "section": {
           "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
           "description": "Externally-quoted per-rule identifier (dotted CIS number or STIG id). Unique within a benchmark."
         },
         "ruleId": {
           "type": "string",
-          "description": "Stable, benchmark-agnostic rule identifier (UUID derived from the payload key)."
+          "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
+          "description": "Stable, benchmark-agnostic rule identifier retained unchanged for external correlation."
         },
         "ruleName": {
           "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
           "description": "PascalCase ComplianceEngine rule name."
         },
         "title": {
           "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
           "description": "Human-readable rule title (section prefix + rule name)."
         },
         "payloadKey": {
           "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
           "description": "The rule's payload key, e.g. '/cis/ubuntu/22.04/v2.0.0/1/1/1/1'."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\u0000]*$",
+          "description": "The rule's externally-quoted, framework-defined identifier, opaque and unique within its benchmark definition."
         },
         "tags": {
           "type": "array",
@@ -156,18 +261,22 @@
               },
               "default": {
                 "type": "string",
+                "pattern": "^[^\\u0000]*$",
                 "description": "Default value applied when the parameter is not overridden."
               },
               "displayName": {
                 "type": "string",
+                "pattern": "^[^\\u0000]*$",
                 "description": "Human-readable parameter name for UI presentation."
               },
               "validationRegex": {
                 "type": "string",
+                "pattern": "^[^\\u0000]*$",
                 "description": "Regular expression the parameter value must match."
               },
               "validationFailedMessage": {
                 "type": "string",
+                "pattern": "^[^\\u0000]*$",
                 "description": "Message shown when validationRegex does not match."
               },
               "mandatory": {

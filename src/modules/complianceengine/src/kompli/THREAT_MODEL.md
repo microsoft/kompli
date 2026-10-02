@@ -29,7 +29,8 @@ The parser (`BenchmarkDefinition`) is strict:
 
 - It validates the resource envelope (`apiVersion` / `kind == "BenchmarkDefinition"`
   / `metadata` / `spec.rules`) and the per-rule field set the augmentation engine
-  emits (`title`, `ruleId`, `ruleName`, `payloadKey`, `payload`).
+  emits (`title`, `id`, `ruleName`, `payload`) plus the file-level benchmark
+  identity metadata.
 - It bounds the total input size (`kMaxInputBytes`) and the rule count (`kMaxRules`).
 - It **fails closed on an embedded NUL byte**: the underlying JSON parser is
   NUL-terminated (parses via `c_str()`), so a NUL would silently truncate the
@@ -115,7 +116,7 @@ a result JSON and performs none of these checks, still accepts stdin.)
 
 Before running a rule, kompli checks the benchmark's
 distribution/version against the detected system via
-`CISBenchmarkInfo::Match`. This is the **same shared code**
+`BenchmarkInfo::Match`. This is the **same shared code**
 (`lib/BenchmarkInfo.cpp`) used by the module interface's
 `ComplianceEngineCheckApplicability`, so kompli and the engine agree by
 construction. Version matching uses `fnmatch(3)` against the system `VERSION_ID`;
@@ -130,9 +131,10 @@ See [SECURITY_REVIEW.md](./SECURITY_REVIEW.md) for the full findings list and th
 tracked follow-ups.
 
 - **Schema is not a runtime control.** `benchmark.schema.json` gates generation,
-  not execution: the parser only requires `title` / `ruleId` / `ruleName` /
-  `payloadKey` / `payload` and ignores schema-required `section` / `tags` /
-  `metadata`. Do not rely on the schema to constrain what kompli executes.
+  not execution: the parser requires file-level identity, `ruleId`, and either
+  `id` or the complete temporary legacy `section` + `payloadKey` identity, but
+  still ignores schema-required per-rule `tags` / `metadata`. Do not rely on
+  the schema to constrain what kompli executes.
   (`tags` / `metadata` consumption is planned in a follow-up.)
 - **`apiVersion` value is not validated** — only required to be present and
   non-empty. There is currently no version-skew detection; value pinning is

@@ -300,13 +300,25 @@ int main(int argc, char* argv[])
     // regular-file/ownership/mode checks) and owns the file. stdin is
     // deliberately unsupported for definitions so those integrity checks can
     // never be bypassed by piping data in.
-    auto resourcesResult = ParseFile(options.input, logHandle.get());
-    if (!resourcesResult.HasValue())
+    auto documentResult = ParseFile(options.input, logHandle.get());
+    if (!documentResult.HasValue())
     {
-        OsConfigLogError(logHandle.get(), "Failed to parse benchmark definition input: %s", resourcesResult.Error().message.c_str());
+        OsConfigLogError(logHandle.get(), "Failed to parse benchmark definition input: %s", documentResult.Error().message.c_str());
         return 1;
     }
-    const auto& resources = resourcesResult.Value();
+    const auto& document = documentResult.Value();
+
+    if (!document.benchmarkInfo.Match(distributionInfo))
+    {
+        OsConfigLogError(logHandle.get(), "Benchmark is not applicable for the current distribution");
+        OsConfigLogError(logHandle.get(), "Current system identification: %s", std::to_string(distributionInfo).c_str());
+        auto overridden = distributionInfo;
+        overridden.distribution = document.benchmarkInfo.distribution;
+        overridden.version = document.benchmarkInfo.SanitizedVersion();
+        OsConfigLogError(logHandle.get(), "To override this detection, place the following line inside the '%s' file: %s",
+            DistributionInfo::cDefaultOverrideFilePath, std::to_string(overridden).c_str());
+        return 1;
+    }
 
     auto status = Status::Compliant;
     bool hasError = false;
@@ -315,32 +327,11 @@ int main(int argc, char* argv[])
     // benchmark that checked nothing, so a terminal override maps that case to
     // NotApplicable below.
     size_t evaluatedRules = 0;
-    for (const auto& entry : resources)
+    for (const auto& entry : document.resources)
     {
-        // Abort as soon as we encounter a rule that does not target the detected
-        // distribution/version. This mirrors ComplianceEngineCheckApplicability
-        // in the module interface: the benchmark's distribution must match and
-        // its version glob must match the running system's VERSION_ID. Every
-        // rule in a definition belongs to the same benchmark, so a single
-        // mismatch means the whole definition targets another system (or this
-        // system was misdetected); running any of its rules would report
-        // spurious results.
-        const auto& distributionInfo = engine.GetDistributionInfo().Value();
-        if (!entry.benchmarkInfo.Match(distributionInfo))
-        {
-            OsConfigLogError(logHandle.get(), "Aborting on entry %s: benchmark is not applicable for the current distribution", entry.resourceID.c_str());
-            OsConfigLogError(logHandle.get(), "Current system identification: %s", std::to_string(distributionInfo).c_str());
-            auto overridden = distributionInfo;
-            overridden.distribution = entry.benchmarkInfo.distribution;
-            overridden.version = entry.benchmarkInfo.SanitizedVersion();
-            OsConfigLogError(logHandle.get(), "To override this detection, place the following line inside the '%s' file: %s",
-                DistributionInfo::cDefaultOverrideFilePath, std::to_string(overridden).c_str());
-            return 1;
-        }
-
         if (options.section.HasValue())
         {
-            if (entry.benchmarkInfo.section.find(options.section.Value()) != 0)
+            if (entry.id.find(options.section.Value()) != 0)
             {
                 OsConfigLogDebug(logHandle.get(), "Skipping entry %s as it does not match section %s", entry.resourceID.c_str(), options.section.Value().c_str());
                 continue;
@@ -458,8 +449,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    // A benchmark that evaluated no rules (an empty definition, or a section
-    // filter that matched nothing) checked nothing; report NotApplicable rather
+    // A section filter that matched no rules checked nothing; report NotApplicable rather
     // than a misleading Compliant. This is a terminal override, deliberately not
     // folded through CombineAllOf, whose NotApplicable is absorbing and would
     // otherwise poison any non-empty run if used as the seed.
