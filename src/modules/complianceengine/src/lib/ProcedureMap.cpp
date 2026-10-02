@@ -124,7 +124,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"AuditdRules", {MakeHandler(AuditAuditdRules), nullptr}},
     {"CommandOutputMatch", {MakeHandler(AuditCommandOutputMatch), nullptr}},
     {"DconfValue", {MakeHandler(AuditDconfValue), nullptr}},
-    {"DefaultUmask", {MakeHandler(AuditDefaultUmask), nullptr}},
+    {"DefaultUmask", {MakeHandler(AuditDefaultUmask), MakeHandler(RemediateDefaultUmask)}},
     {"FileExists", {MakeHandler(AuditFileExists), nullptr}},
     {"FilePermissions", {MakeHandler(AuditFilePermissions), MakeHandler(RemediateFilePermissions)}},
     {"FilePermissionsCollection", {MakeHandler(AuditFilePermissionsCollection), MakeHandler(RemediateFilePermissionsCollection)}},
