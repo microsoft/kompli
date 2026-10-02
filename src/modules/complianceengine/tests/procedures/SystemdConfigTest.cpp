@@ -4,19 +4,38 @@
 #include "MockContext.h"
 
 #include <SystemdConfig.h>
+#include <cerrno>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <limits>
 #include <string>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 using ComplianceEngine::AuditSystemdConfigValue;
 using ComplianceEngine::Error;
 using ComplianceEngine::IndicatorsTree;
+using ComplianceEngine::RemediateSystemdConfigValue;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 using ComplianceEngine::SystemdConfigValueOperator;
 using ComplianceEngine::SystemdConfigValueParams;
 using ::testing::Return;
+
+namespace
+{
+Result<std::string> ReadTestFile(const std::string& path)
+{
+    std::ifstream input(path);
+    if (!input.is_open())
+    {
+        return Error("Failed to read test file", errno);
+    }
+    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+} // namespace
 
 class SystemdConfigTest : public ::testing::Test
 {
@@ -43,6 +62,208 @@ TEST_F(SystemdConfigTest, NeitherFileNorDirProvided)
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
     ASSERT_EQ(result.Error().message, "Neither 'file' nor 'dir' argument is provided");
+}
+
+TEST_F(SystemdConfigTest, RemediateExactValueInExistingBlock)
+{
+    const std::string logicalPath = "/etc/systemd/system.conf";
+    const auto configPath = mContext.MakeTempfile(
+        "[Manager]\n"
+        "DefaultLimitNOFILE=1024\n");
+    mContext.SetSpecialFilePath(logicalPath, configPath);
+    EXPECT_CALL(mContext, GetFileContents(configPath)).WillRepeatedly(::testing::Invoke([](const std::string& path) { return ReadTestFile(path); }));
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr("cat-config \"" + logicalPath + "\"")))
+        .WillRepeatedly(::testing::Invoke([configPath, logicalPath](const std::string&) {
+            auto contents = ReadTestFile(configPath);
+            if (!contents.HasValue())
+            {
+                return contents;
+            }
+            return Result<std::string>("# " + logicalPath + "\n" + contents.Value());
+        }));
+
+    SystemdConfigValueParams params;
+    params.parameter = "DefaultLimitNOFILE";
+    params.op = SystemdConfigValueOperator::Equal;
+    params.value = "65536";
+    params.file = logicalPath;
+    params.block = "Manager";
+
+    auto result = RemediateSystemdConfigValue(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    auto contents = ReadTestFile(configPath);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(contents.Value(), "[Manager]\nDefaultLimitNOFILE=65536\n");
+}
+
+TEST_F(SystemdConfigTest, RemediateAddsMissingValueToExistingBlock)
+{
+    const std::string logicalPath = "/etc/systemd/system.conf";
+    const auto configPath = mContext.MakeTempfile(
+        "[Manager]\n"
+        "DefaultTimeoutStopSec=90s\n"
+        "[Sleep]\n"
+        "AllowSuspend=yes\n");
+    mContext.SetSpecialFilePath(logicalPath, configPath);
+    EXPECT_CALL(mContext, GetFileContents(configPath)).WillRepeatedly(::testing::Invoke([](const std::string& path) { return ReadTestFile(path); }));
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr("cat-config \"" + logicalPath + "\"")))
+        .WillRepeatedly(::testing::Invoke([configPath, logicalPath](const std::string&) {
+            auto contents = ReadTestFile(configPath);
+            if (!contents.HasValue())
+            {
+                return contents;
+            }
+            return Result<std::string>("# " + logicalPath + "\n" + contents.Value());
+        }));
+
+    SystemdConfigValueParams params;
+    params.parameter = "DefaultLimitNOFILE";
+    params.op = SystemdConfigValueOperator::Equal;
+    params.value = "65536";
+    params.file = logicalPath;
+    params.block = "Manager";
+
+    auto result = RemediateSystemdConfigValue(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    auto contents = ReadTestFile(configPath);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(contents.Value(),
+        "[Manager]\n"
+        "DefaultTimeoutStopSec=90s\n"
+        "DefaultLimitNOFILE=65536\n"
+        "[Sleep]\n"
+        "AllowSuspend=yes\n");
+}
+
+TEST_F(SystemdConfigTest, RemediateLeavesCompliantFileUnchanged)
+{
+    const std::string logicalPath = "/etc/systemd/system.conf";
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr("cat-config \"" + logicalPath + "\"")))
+        .WillOnce(Return(Result<std::string>("# /etc/systemd/system.conf\n"
+                                             "[Manager]\n"
+                                             "DefaultLimitNOFILE=65536\n")));
+    EXPECT_CALL(mContext, GetFileContents(::testing::_)).Times(0);
+
+    SystemdConfigValueParams params;
+    params.parameter = "DefaultLimitNOFILE";
+    params.op = SystemdConfigValueOperator::Equal;
+    params.value = "65536";
+    params.file = logicalPath;
+    params.block = "Manager";
+
+    auto result = RemediateSystemdConfigValue(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(SystemdConfigTest, RemediateRollsBackWhenPostAuditFails)
+{
+    const std::string logicalPath = "/etc/systemd/system.conf";
+    const std::string original =
+        "[Manager]\n"
+        "DefaultLimitNOFILE=1024\n";
+    const auto configPath = mContext.MakeTempfile(original);
+    mContext.SetSpecialFilePath(logicalPath, configPath);
+    EXPECT_CALL(mContext, GetFileContents(configPath)).WillRepeatedly(::testing::Invoke([](const std::string& path) { return ReadTestFile(path); }));
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr("cat-config \"" + logicalPath + "\"")))
+        .WillRepeatedly(Return(Result<std::string>("# /usr/lib/systemd/system.conf\n"
+                                                   "[Manager]\n"
+                                                   "DefaultLimitNOFILE=1024\n")));
+
+    SystemdConfigValueParams params;
+    params.parameter = "DefaultLimitNOFILE";
+    params.op = SystemdConfigValueOperator::Equal;
+    params.value = "65536";
+    params.file = logicalPath;
+    params.block = "Manager";
+
+    auto result = RemediateSystemdConfigValue(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    auto contents = ReadTestFile(configPath);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(contents.Value(), original);
+}
+
+TEST_F(SystemdConfigTest, RemediateRejectsIntermediateSymlink)
+{
+    const std::string logicalPath = "/etc/systemd/redirect/system.conf";
+    const std::string outsideDirectory = mContext.GetTempdirPath() + "/outside";
+    ASSERT_EQ(mkdir(outsideDirectory.c_str(), 0700), 0);
+    const std::string targetPath = outsideDirectory + "/system.conf";
+    {
+        std::ofstream target(targetPath);
+        target << "[Manager]\nDefaultLimitNOFILE=1024\n";
+    }
+    const std::string redirect = mContext.GetTempdirPath() + "/redirect";
+    ASSERT_EQ(symlink(outsideDirectory.c_str(), redirect.c_str()), 0);
+    const std::string configPath = redirect + "/system.conf";
+    mContext.SetSpecialFilePath(logicalPath, configPath);
+
+    EXPECT_CALL(mContext, GetFileContents(configPath)).WillOnce(::testing::Invoke([](const std::string& path) { return ReadTestFile(path); }));
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr("cat-config \"" + logicalPath + "\"")))
+        .WillOnce(Return(Result<std::string>("# " + logicalPath +
+                                             "\n"
+                                             "[Manager]\n"
+                                             "DefaultLimitNOFILE=1024\n")));
+
+    SystemdConfigValueParams params;
+    params.parameter = "DefaultLimitNOFILE";
+    params.op = SystemdConfigValueOperator::Equal;
+    params.value = "65536";
+    params.file = logicalPath;
+    params.block = "Manager";
+
+    auto result = RemediateSystemdConfigValue(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+
+    auto contents = ReadTestFile(targetPath);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(contents.Value(), "[Manager]\nDefaultLimitNOFILE=1024\n");
+}
+
+TEST_F(SystemdConfigTest, RemediateRejectsRegexAndAmbiguousTargets)
+{
+    SystemdConfigValueParams params;
+    params.parameter = "DefaultLimitNOFILE";
+    params.valueRegex = regex("^[0-9]+$");
+    params.file = "/etc/systemd/system.conf";
+    params.block = "Manager";
+
+    auto regexResult = RemediateSystemdConfigValue(params, mIndicators, mContext);
+    ASSERT_FALSE(regexResult.HasValue());
+    EXPECT_EQ(regexResult.Error().code, ENOTSUP);
+
+    params.valueRegex.Reset();
+    params.value = "65536";
+    params.op = SystemdConfigValueOperator::GreaterOrEqual;
+    auto rangeResult = RemediateSystemdConfigValue(params, mIndicators, mContext);
+    ASSERT_FALSE(rangeResult.HasValue());
+    EXPECT_EQ(rangeResult.Error().code, ENOTSUP);
+
+    params.op = SystemdConfigValueOperator::Equal;
+    params.file = "system.conf";
+    auto relativePathResult = RemediateSystemdConfigValue(params, mIndicators, mContext);
+    ASSERT_FALSE(relativePathResult.HasValue());
+    EXPECT_EQ(relativePathResult.Error().code, ENOTSUP);
+
+    params.file = "/tmp/system.conf";
+    auto outsideSystemdResult = RemediateSystemdConfigValue(params, mIndicators, mContext);
+    ASSERT_FALSE(outsideSystemdResult.HasValue());
+    EXPECT_EQ(outsideSystemdResult.Error().code, ENOTSUP);
+
+    params.file = "/etc/systemd/../shadow";
+    auto traversalResult = RemediateSystemdConfigValue(params, mIndicators, mContext);
+    ASSERT_FALSE(traversalResult.HasValue());
+    EXPECT_EQ(traversalResult.Error().code, ENOTSUP);
+
+    params.file = "/etc/systemd/system.conf";
+    params.block.Reset();
+    auto missingBlockResult = RemediateSystemdConfigValue(params, mIndicators, mContext);
+    ASSERT_FALSE(missingBlockResult.HasValue());
+    EXPECT_EQ(missingBlockResult.Error().code, ENOTSUP);
 }
 
 TEST_F(SystemdConfigTest, BothFileAndDirProvided)
