@@ -3,6 +3,7 @@
 
 include(GoogleTest)
 find_package(GTest CONFIG REQUIRED)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 add_executable(kompli-cli-tests
     KompliResultSchemaTest.cpp
@@ -32,3 +33,6 @@ target_link_libraries(kompli-cli-tests
 )
 
 gtest_discover_tests(kompli-cli-tests XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR})
+
+add_test(NAME JUnitRendererXmlSmokeTest
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/JUnitRendererXmlSmoke.py $<TARGET_FILE:kompli>)

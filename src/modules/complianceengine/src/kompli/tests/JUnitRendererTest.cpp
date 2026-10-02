@@ -1,7 +1,10 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+#include <BenchmarkFormatter.hpp>
+#include <DistributionInfo.h>
 #include <JUnitRenderer.hpp>
+#include <Resource.hpp>
 #include <RuleFilters.hpp>
 #include <gtest/gtest.h>
 #include <string>
@@ -169,6 +172,63 @@ TEST(JUnitRendererTest, AbsentTagsOmitTagsBlock)
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
     EXPECT_FALSE(Contains(r.Value(), "<tags>"));
+}
+
+TEST(JUnitRendererTest, RejectsMalformedTagsWithoutMisreportingThem)
+{
+    // TM-17: malformed result tags cannot become a passing-looking JUnit report.
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":null}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":"level:l1"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":["level:l1",42]}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":["a:\u0000b"]}]})", "s").HasValue());
+}
+
+TEST(JUnitRendererTest, LegacyResultUsesRuleNameWhenTitleIsAbsent)
+{
+    auto result = RenderJUnit(R"({"rules":[{"id":"1","ruleName":"LegacyRule","status":"Compliant"}]})", "s");
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_TRUE(Contains(result.Value(), "<testcase classname=\"1\" name=\"LegacyRule\"/>"));
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","title":null,"ruleName":"R","status":"Compliant"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","status":"Compliant"}]})", "s").HasValue());
+}
+
+TEST(JUnitRendererTest, RejectsInvalidXmlCharactersAndUtf8)
+{
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"bad\uFFFE","status":"Compliant"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":["a:\uFFFF"]}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"NonCompliant","indicators":[{"message":"bad\uFFFE"}]}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[]})", std::string("bad\xC3\x28", 5)).HasValue());
+
+    auto valid = RenderJUnit(R"({"rules":[{"id":"1","title":"\u00E9\uD83D\uDE00","status":"Compliant"}]})", "s");
+    ASSERT_TRUE(valid.HasValue()) << valid.Error().message;
+}
+
+TEST(JUnitRendererTest, CanonicalFormatterResultRendersTitleTagsAndSkippedRules)
+{
+    using ComplianceEngine::Status;
+    using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
+    using ComplianceEngine::BenchmarkIO::Resource;
+
+    auto begun = BenchmarkFormatter::Begin(ComplianceEngine::DistributionInfo{});
+    ASSERT_TRUE(begun.HasValue()) << begun.Error().message;
+    auto& formatter = begun.Value();
+    Resource rule;
+    rule.id = "1.1";
+    rule.resourceID = "Human-readable rule";
+    rule.ruleName = "EngineRule";
+    rule.ruleId = "rule-1.1";
+    rule.tags = {"level:l1", "severity:critical"};
+    ASSERT_FALSE(formatter.AddSkippedEntry(rule, {}).HasValue());
+    auto canonical = std::move(formatter).Finish(Status::NotApplicable);
+    ASSERT_TRUE(canonical.HasValue()) << canonical.Error().message;
+
+    auto rendered = RenderJUnit(canonical.Value(), "suite");
+    ASSERT_TRUE(rendered.HasValue()) << rendered.Error().message;
+    EXPECT_TRUE(Contains(rendered.Value(), "<testcase classname=\"1.1\" name=\"Human-readable rule\">"));
+    EXPECT_TRUE(Contains(rendered.Value(), "<tag value=\"level:l1\"/>"));
+    EXPECT_TRUE(Contains(rendered.Value(), "<tag value=\"severity:critical\"/>"));
+    EXPECT_TRUE(Contains(rendered.Value(), "<skipped message=\"Rule was skipped\">Rule: EngineRule"));
+    EXPECT_TRUE(Contains(rendered.Value(), "tests=\"1\" failures=\"0\" skipped=\"1\""));
 }
 
 TEST(JUnitRendererTest, InvalidJsonIsError)
