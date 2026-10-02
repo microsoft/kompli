@@ -40,7 +40,7 @@ Result<Status> AuditDconfValue(const DconfValueParams& params, IndicatorsTree& i
     auto dconfVal = dconfRead.Value();
 
     // remove newline character
-    if (*dconfVal.rbegin() == '\n')
+    if (!dconfVal.empty() && *dconfVal.rbegin() == '\n')
     {
         dconfVal.erase(dconfVal.size() - 1);
     }
@@ -58,7 +58,33 @@ Result<Status> AuditDconfValue(const DconfValueParams& params, IndicatorsTree& i
     {
         return indicators.NonCompliant("Dconf read " + key + " " + std::to_string(params.operation) + " value " + params.value);
     }
-    return indicators.NonCompliant("Dconf read " + key + " " + std::to_string(params.operation) + " value " + params.value + " Imposible");
+}
+
+Result<Status> RemediateDconfValue(const DconfValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
+{
+    if (params.operation != DconfOperation::Eq)
+    {
+        return Error("Cannot safely remediate a non-equality dconf operation", ENOTSUP);
+    }
+    if (params.key.empty() || params.value.empty() || params.key.find('\0') != std::string::npos || params.value.find('\0') != std::string::npos)
+    {
+        return Error("Dconf key and value must be specified", EINVAL);
+    }
+
+    auto audit = AuditDconfValue(params, indicators, context);
+    if (!audit.HasValue() || audit.Value() == Status::Compliant)
+    {
+        return audit;
+    }
+
+    const auto key = EscapeForShell(params.key);
+    const auto value = EscapeForShell(params.value);
+    auto write = context.ExecuteCommand("dconf write \"" + key + "\" \"" + value + "\"");
+    if (!write.HasValue())
+    {
+        return Error("Failed to execute dconf write " + params.key + ": " + write.Error().message, write.Error().code);
+    }
+    return AuditDconfValue(params, indicators, context);
 }
 
 } // namespace ComplianceEngine

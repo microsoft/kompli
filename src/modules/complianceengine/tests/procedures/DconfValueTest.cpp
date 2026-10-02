@@ -6,6 +6,7 @@
 #include <DconfValue.h>
 #include <ProcedureMap.h>
 #include <TypedComparison.h>
+#include <cerrno>
 #include <gtest/gtest.h>
 #include <limits>
 
@@ -75,6 +76,7 @@ using ComplianceEngine::DconfOperation;
 using ComplianceEngine::DconfValueParams;
 using ComplianceEngine::Error;
 using ComplianceEngine::IndicatorsTree;
+using ComplianceEngine::RemediateDconfValue;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 
@@ -198,4 +200,54 @@ TEST_F(EnsureDconf, InvalidDirectOperationReturnsErrorWithoutCommandOrIndicator)
     EXPECT_EQ(result.Error().code, EINVAL);
     EXPECT_EQ(result.Error().message, "Not supported operation 100");
     EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+TEST_F(EnsureDconf, RemediateEqualValue)
+{
+    mParams.key = "/org/gnome/login-screen/banner-message-text";
+    mParams.operation = DconfOperation::Eq;
+    mParams.value = "'Authorized users only'";
+    EXPECT_CALL(mContext, ExecuteCommand(DconfRead()))
+        .WillOnce(::testing::Return(Result<std::string>("'Old banner'")))
+        .WillOnce(::testing::Return(Result<std::string>(mParams.value)));
+    EXPECT_CALL(mContext, ExecuteCommand("dconf write \"/org/gnome/login-screen/banner-message-text\" \"'Authorized users only'\""))
+        .WillOnce(::testing::Return(Result<std::string>("")));
+
+    auto result = RemediateDconfValue(mParams, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureDconf, RemediateEqualCompliantIsNoOp)
+{
+    mParams.key = "/org/gnome/login-screen/banner-message-text";
+    mParams.operation = DconfOperation::Eq;
+    mParams.value = "'Authorized users only'";
+    EXPECT_CALL(mContext, ExecuteCommand(DconfRead())).WillOnce(::testing::Return(Result<std::string>(mParams.value)));
+
+    auto result = RemediateDconfValue(mParams, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureDconf, RemediateNotEqualIsUnsupported)
+{
+    mParams.key = "/org/gnome/login-screen/banner-message-text";
+    mParams.operation = DconfOperation::Ne;
+    mParams.value = "'Old banner'";
+
+    auto result = RemediateDconfValue(mParams, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, ENOTSUP);
+}
+
+TEST_F(EnsureDconf, AuditEmptyValueDoesNotDereferenceEmptyString)
+{
+    mParams.key = "/org/gnome/login-screen/banner-message-text";
+    mParams.operation = DconfOperation::Eq;
+    mParams.value = "'Authorized users only'";
+    EXPECT_CALL(mContext, ExecuteCommand(DconfRead())).WillOnce(::testing::Return(Result<std::string>("")));
+
+    auto result = AuditDconfValue(mParams, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
 }
