@@ -27,7 +27,7 @@ using std::string;
 class FileRegexMatchTest : public ::testing::Test
 {
 protected:
-    char mTempdir[PATH_MAX] = "/tmp/FileRegexMatchTest.XXXXXX";
+    std::string mTempdir;
     MockContext mContext;
     IndicatorsTree mIndicators;
     std::vector<string> mTempfiles;
@@ -35,16 +35,8 @@ protected:
     void SetUp() override
     {
         mIndicators.Push("FileRegexMatch");
-        ASSERT_NE(mkdtemp(mTempdir), nullptr);
-    }
-
-    void TearDown() override
-    {
-        for (const auto& file : mTempfiles)
-        {
-            remove(file.c_str());
-        }
-        remove(mTempdir);
+        mTempdir = mContext.GetTempdirPath() + "/file-regex";
+        ASSERT_EQ(0, mkdir(mTempdir.c_str(), 0700));
     }
 
     void MakeTempfile(const string& content)

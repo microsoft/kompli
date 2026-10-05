@@ -54,14 +54,14 @@ protected:
 
 TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, NoEtcPasswdFile)
 {
-    mContext.SetSpecialFilePath("/etc/passwd", "/tmp/somenonexistentfilename");
+    mContext.SetSpecialFilePath("/etc/passwd", mContext.GetTempdirPath() + "/missing-passwd");
     auto result = AuditSystemAccountShell(mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
 }
 
 TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, NoLoginDefsFile_1)
 {
-    mContext.SetSpecialFilePath("/etc/login.defs", "/tmp/somenonexistentfilename");
+    mContext.SetSpecialFilePath("/etc/login.defs", mContext.GetTempdirPath() + "/missing-login-defs");
     mContext.SetSpecialFilePath("/etc/passwd", mContext.MakeTempfile(""));
     auto result = AuditSystemAccountShell(mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
@@ -71,7 +71,7 @@ TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, NoLoginDefsFile_1)
 
 TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, NoLoginDefsFile_2)
 {
-    mContext.SetSpecialFilePath("/etc/login.defs", "/tmp/somenonexistentfilename");
+    mContext.SetSpecialFilePath("/etc/login.defs", mContext.GetTempdirPath() + "/missing-login-defs");
     auto filename = CreateTestPasswdFile(1001, "/bin/bash");
     mContext.SetSpecialFilePath("/etc/passwd", filename);
     auto result = AuditSystemAccountShell(mIndicators, mContext);
@@ -82,7 +82,7 @@ TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, NoLoginDefsFile_2)
 
 TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, NoLoginDefsFile_3)
 {
-    mContext.SetSpecialFilePath("/etc/login.defs", "/tmp/somenonexistentfilename");
+    mContext.SetSpecialFilePath("/etc/login.defs", mContext.GetTempdirPath() + "/missing-login-defs");
     auto result = AuditSystemAccountShell(mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
     // Min UID is 1000 as there's no /etc/login.defs file

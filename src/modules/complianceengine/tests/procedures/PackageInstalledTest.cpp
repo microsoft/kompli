@@ -67,8 +67,6 @@ static const std::string rpmDetectOutput = "rpm-4.14.2.1-1.el8\n";
 class PackageInstalledTest : public ::testing::Test
 {
 protected:
-    char dirTemplate[PATH_MAX] = "/tmp/packageCacheTest.XXXXXX";
-    std::string dir;
     std::string cacheFile;
     MockContext mContext;
     CompactListFormatter mFormatter;

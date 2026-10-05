@@ -83,6 +83,7 @@ add_executable(complianceenginetests
     RegexTest.cpp
     ResultTest.cpp
     StringToolsTest.cpp
+    TemporaryDirectoryTest.cpp
     UsersIteratorTest.cpp
     ${PROCEDURES}
 )
@@ -108,4 +109,8 @@ target_include_directories(file_regex_match_fallback_compile PRIVATE $<TARGET_PR
 target_link_libraries(file_regex_match_fallback_compile PRIVATE complianceenginelib)
 add_dependencies(complianceenginetests file_regex_match_fallback_compile)
 
-gtest_discover_tests(complianceenginetests XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR})
+gtest_discover_tests(complianceenginetests
+    XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR}
+    TEST_LIST complianceenginetests_TESTS
+)
+set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/CTestProperties.cmake)
