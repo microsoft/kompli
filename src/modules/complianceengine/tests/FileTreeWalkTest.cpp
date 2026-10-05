@@ -3,12 +3,10 @@
 
 #include "FileTreeWalk.h"
 
+#include "TemporaryDirectory.h"
+
 #include <algorithm>
 #include <cerrno>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <dirent.h>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <stdexcept>
@@ -27,76 +25,26 @@ using ComplianceEngine::InterfaceInfo;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 using ComplianceEngine::Telemetry;
+using ComplianceEngine::TemporaryDirectory;
 
 namespace
 {
-void RemoveTree(const std::string& path)
-{
-    struct stat pathStat;
-    if (0 != lstat(path.c_str(), &pathStat))
-    {
-        return;
-    }
-
-    if (!S_ISDIR(pathStat.st_mode))
-    {
-        (void)unlink(path.c_str());
-        return;
-    }
-
-    DIR* directory = opendir(path.c_str());
-    if (nullptr != directory)
-    {
-        for (struct dirent* entry = readdir(directory); nullptr != entry; entry = readdir(directory))
-        {
-            if ((0 == strcmp(entry->d_name, ".")) || (0 == strcmp(entry->d_name, "..")))
-            {
-                continue;
-            }
-
-            RemoveTree(path + "/" + entry->d_name);
-        }
-        closedir(directory);
-    }
-
-    (void)rmdir(path.c_str());
-}
-
 class TestDirectory
 {
 public:
     TestDirectory()
+        : mOwner(Create())
     {
-        const char* tempRoot = getenv("TMPDIR");
-        if ((nullptr == tempRoot) || ('\0' == tempRoot[0]))
-        {
-            throw std::runtime_error("TMPDIR must be set for FileTreeWalk tests");
-        }
-
-        std::string pathTemplate = std::string(tempRoot) + "/FileTreeWalkTest.XXXXXX";
-        std::vector<char> buffer(pathTemplate.begin(), pathTemplate.end());
-        buffer.push_back('\0');
-        char* createdPath = mkdtemp(buffer.data());
-        if (nullptr == createdPath)
-        {
-            throw std::runtime_error("Failed to create FileTreeWalk test directory: " + std::string(strerror(errno)));
-        }
-        mPath = createdPath;
-    }
-
-    ~TestDirectory()
-    {
-        RemoveTree(mPath);
     }
 
     const std::string& Path() const
     {
-        return mPath;
+        return mOwner.Path();
     }
 
     std::string MakeDirectory(const std::string& relativePath) const
     {
-        const std::string path = mPath + "/" + relativePath;
+        const std::string path = Path() + "/" + relativePath;
         if (0 != mkdir(path.c_str(), 0700))
         {
             throw std::runtime_error("Failed to create directory '" + path + "': " + strerror(errno));
@@ -106,7 +54,7 @@ public:
 
     std::string MakeFile(const std::string& relativePath) const
     {
-        const std::string path = mPath + "/" + relativePath;
+        const std::string path = Path() + "/" + relativePath;
         std::ofstream file(path.c_str());
         file << "data";
         file.close();
@@ -119,7 +67,7 @@ public:
 
     std::string MakeSymlink(const std::string& target, const std::string& relativePath) const
     {
-        const std::string path = mPath + "/" + relativePath;
+        const std::string path = Path() + "/" + relativePath;
         if (0 != symlink(target.c_str(), path.c_str()))
         {
             throw std::runtime_error("Failed to create symlink '" + path + "': " + strerror(errno));
@@ -128,7 +76,17 @@ public:
     }
 
 private:
-    std::string mPath;
+    static TemporaryDirectory Create()
+    {
+        Result<TemporaryDirectory> result = TemporaryDirectory::Make("FileTreeWalkTest");
+        if (!result.HasValue())
+        {
+            throw std::runtime_error(result.Error().message);
+        }
+        return std::move(result).Value();
+    }
+
+    TemporaryDirectory mOwner;
 };
 
 class TestContext : public ContextInterface
