@@ -25,6 +25,10 @@
                   "type": "string",
                   "description": "value of systemd ActiveState of unitName to match"
                 },
+                "subState": {
+                  "type": "string",
+                  "description": "value of systemd SubState of unitName to match"
+                },
                 "loadState": {
                   "type": "string",
                   "description": "value of systemd LoadState of unitName to match"

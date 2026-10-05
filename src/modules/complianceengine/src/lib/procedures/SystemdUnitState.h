@@ -17,6 +17,9 @@ struct SystemdUnitStateParams
     /// value of systemd ActiveState of unitName to match
     Optional<Pattern> activeState;
 
+    /// value of systemd SubState of unitName to match
+    Optional<Pattern> subState;
+
     /// value of systemd LoadState of unitName to match
     Optional<Pattern> loadState;
 
