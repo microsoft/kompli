@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iterator>
 #include <sys/stat.h>
+#include <sys/xattr.h>
 
 using ComplianceEngine::AuditLoginDefsOption;
 using ComplianceEngine::ComparisonOperation;
@@ -769,6 +770,29 @@ TEST_F(LoginDefsOptionTest, RemediateUpdatesEffectiveValueAndPreservesOtherConte
         "PASS_MAX_DAYS 99999 # old default\n"
         "PASS_MIN_DAYS 7\n"
         "PASS_MAX_DAYS 365 # effective\n");
+}
+
+TEST_F(LoginDefsOptionTest, RemediatePreservesExtendedAttributes)
+{
+    const auto path = mContext.MakeTempfile("PASS_MAX_DAYS 99999\n");
+    const string attribute = "preserved";
+    ASSERT_EQ(setxattr(path.c_str(), "user.kompli-test", attribute.data(), attribute.size(), 0), 0);
+    mContext.SetSpecialFilePath(cLoginDefsPath, path);
+    EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::Equal;
+
+    auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    char value[32];
+    const ssize_t size = getxattr(path.c_str(), "user.kompli-test", value, sizeof(value));
+    ASSERT_EQ(size, static_cast<ssize_t>(attribute.size()));
+    EXPECT_EQ(string(value, static_cast<size_t>(size)), attribute);
 }
 
 TEST_F(LoginDefsOptionTest, RemediateRollsBackWhenPostAuditFails)

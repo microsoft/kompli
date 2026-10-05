@@ -135,7 +135,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"GsettingsValue", {MakeHandler(AuditGsettingsValue), MakeHandler(RemediateGsettingsValue)}},
     {"Ip6tablesOpenPorts", {MakeHandler(AuditIp6tablesOpenPorts), nullptr}},
     {"IptablesOpenPorts", {MakeHandler(AuditIptablesOpenPorts), nullptr}},
-    {"KernelModuleUnavailable", {MakeHandler(AuditKernelModuleUnavailable), nullptr}},
+    {"KernelModuleUnavailable", {MakeHandler(AuditKernelModuleUnavailable), MakeHandler(RemediateKernelModuleUnavailable)}},
     {"LogFilePermissions", {MakeHandler(AuditLogFilePermissions), MakeHandler(RemediateLogFilePermissions)}},
     {"LoginDefsOption", {MakeHandler(AuditLoginDefsOption), MakeHandler(RemediateLoginDefsOption)}},
     {"MountPointExists", {MakeHandler(AuditMountPointExists), nullptr}},
