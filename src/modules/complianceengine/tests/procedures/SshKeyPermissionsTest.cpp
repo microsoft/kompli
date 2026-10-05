@@ -6,6 +6,7 @@
 #include "MockContext.h"
 
 #include <SshKeyPermissions.h>
+#include <cerrno>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <map>
@@ -75,6 +76,19 @@ TEST_F(EnsureSshKeyPermsTest, PublicKeyCompliant)
     auto result = AuditSshKeyPermissions(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureSshKeyPermsTest, RegularFileRootPropagatesTraversalError)
+{
+    const auto root = mContext.GetTempdirPath() + "/ssh-root-file";
+    std::ofstream(root) << "not a directory\n";
+    mContext.SetSpecialFilePath("/etc/ssh", root);
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Public;
+
+    const auto result = AuditSshKeyPermissions(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(ENOTDIR, result.Error().code);
 }
 
 TEST_F(EnsureSshKeyPermsTest, PublicKeyNonCompliantBitMask)

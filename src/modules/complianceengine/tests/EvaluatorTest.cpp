@@ -7,7 +7,11 @@
 #include "MockContext.h"
 #include "parson.h"
 
+#include <cerrno>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <sys/stat.h>
+#include <vector>
 
 using ComplianceEngine::action_func_t;
 using ComplianceEngine::Error;
@@ -249,6 +253,98 @@ TEST_F(EvaluatorTest, ExecuteAudit_12)
     auto result = evaluator1.ExecuteAudit(mFormatter);
     ASSERT_FALSE(result);
     ASSERT_EQ(result.Error().message, std::string("invalid argument"));
+}
+
+TEST_F(EvaluatorTest, ReachedFileRegexErrorSurvivesRuleOperators)
+{
+    const auto filename = mContext.GetTempdirPath() + "/result-evaluation.txt";
+    std::ofstream(filename) << "key=ok\n";
+    const std::string leaf =
+        "{\"FileRegexMatch\":{\"path\":\"" + mContext.GetTempdirPath() + "\",\"filenamePattern\":\"result-evaluation.txt\",\"matchPattern\":\"(?i)\"}}";
+    const std::vector<std::string> expressions = {
+        "{\"not\":" + leaf + "}",
+        "{\"allOf\":[{\"AuditSuccess\":{}}," + leaf + "]}",
+        "{\"anyOf\":[" + leaf + ",{\"AuditSuccess\":{}}]}",
+        "{\"allOf\":[{\"AuditSuccess\":{}},{\"not\":" + leaf + "}]}",
+    };
+    for (const auto& expression : expressions)
+    {
+        auto json = JsonWrapper::FromString(expression);
+        ASSERT_TRUE(json.HasValue()) << expression;
+        Evaluator evaluator("test", json_value_get_object(json->get()), mParameters, mContext);
+        const auto result = evaluator.ExecuteAudit(mFormatter);
+        ASSERT_FALSE(result.HasValue()) << expression;
+        EXPECT_EQ(EINVAL, result.Error().code) << expression;
+    }
+    auto json = JsonWrapper::FromString("{\"anyOf\":[{\"AuditSuccess\":{}}," + leaf + "]}");
+    ASSERT_TRUE(json.HasValue());
+    Evaluator evaluator("test", json_value_get_object(json->get()), mParameters, mContext);
+    const auto result = evaluator.ExecuteAudit(mFormatter);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value().status);
+}
+
+TEST_F(EvaluatorTest, SerializedRegexSelectionAndBehaviorReachNativeHandler)
+{
+    const auto filename = mContext.GetTempdirPath() + "/result-evaluation.conf";
+    std::ofstream(filename) << "key=ok\n";
+    const std::string arguments = "\"path\":\"" + mContext.GetTempdirPath() +
+                                  "\",\"filenamePattern\":\"\\\\.conf$\",\"filenameSearch\":\"true\","
+                                  "\"matchPattern\":\"^key=(.*)$\",\"statePattern\":\"^forbidden$\",\"noneMatches\":\"true\"";
+    auto json = JsonWrapper::FromString("{\"FileRegexMatch\":{" + arguments + ",\"behavior\":\"at_least_one_exists\"}}");
+    ASSERT_TRUE(json.HasValue());
+    Evaluator evaluator("test", json_value_get_object(json->get()), mParameters, mContext);
+    auto result = evaluator.ExecuteAudit(mFormatter);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value().status);
+
+    std::ofstream(filename) << "key=forbidden\n";
+    Evaluator forbiddenEvaluator("test", json_value_get_object(json->get()), mParameters, mContext);
+    result = forbiddenEvaluator.ExecuteAudit(mFormatter);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value().status);
+
+    auto invalid = JsonWrapper::FromString("{\"FileRegexMatch\":{" + arguments + ",\"behavior\":\"invalid\"}}");
+    ASSERT_TRUE(invalid.HasValue());
+    Evaluator invalidEvaluator("test", json_value_get_object(invalid->get()), mParameters, mContext);
+    EXPECT_FALSE(invalidEvaluator.ExecuteAudit(mFormatter).HasValue());
+
+    std::ofstream(filename) << "key=forbidden\nkey=ok\n";
+    const std::string allArguments = "\"path\":\"" + mContext.GetTempdirPath() +
+                                     "\",\"filenamePattern\":\"\\\\.conf$\",\"filenameSearch\":\"true\","
+                                     "\"matchPattern\":\"^key=(.*)$\",\"statePattern\":\"^forbidden$\","
+                                     "\"allMatches\":\"true\",\"behavior\":\"at_least_one_exists\"";
+    auto all = JsonWrapper::FromString("{\"FileRegexMatch\":{" + allArguments + "}}");
+    ASSERT_TRUE(all.HasValue());
+    Evaluator allEvaluator("test", json_value_get_object(all->get()), mParameters, mContext);
+    const auto allResult = allEvaluator.ExecuteAudit(mFormatter);
+    ASSERT_TRUE(allResult.HasValue());
+    EXPECT_EQ(Status::NonCompliant, allResult.Value().status);
+}
+
+TEST_F(EvaluatorTest, SerializedCollectionRegexSelectsOnlyMatchingFilenames)
+{
+    const auto directory = mContext.GetTempdirPath() + "/result-evaluation";
+    ASSERT_EQ(0, mkdir(directory.c_str(), 0700));
+    std::ofstream(directory + "/selected.conf") << "value\n";
+    const std::string arguments = "\"directory\":\"" + directory +
+                                  "\",\"filePattern\":\".*\\\\.conf\",\"filePatternIsRegex\":\"true\","
+                                  "\"behavior\":\"at_least_one_exists\"";
+    auto json = JsonWrapper::FromString("{\"FilePermissionsCollection\":{" + arguments + "}}");
+    ASSERT_TRUE(json.HasValue());
+    Evaluator evaluator("test", json_value_get_object(json->get()), mParameters, mContext);
+    const auto result = evaluator.ExecuteAudit(mFormatter);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value().status);
+
+    auto unselected = JsonWrapper::FromString("{\"FilePermissionsCollection\":{\"directory\":\"" + directory +
+                                              "\",\"filePattern\":\".*\\\\.txt\",\"filePatternIsRegex\":\"true\","
+                                              "\"behavior\":\"at_least_one_exists\"}}");
+    ASSERT_TRUE(unselected.HasValue());
+    Evaluator unselectedEvaluator("test", json_value_get_object(unselected->get()), mParameters, mContext);
+    const auto absent = unselectedEvaluator.ExecuteAudit(mFormatter);
+    ASSERT_TRUE(absent.HasValue());
+    EXPECT_EQ(Status::NonCompliant, absent.Value().status);
 }
 
 TEST_F(EvaluatorTest, ExecuteRemediation_1)

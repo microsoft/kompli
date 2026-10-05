@@ -5,6 +5,7 @@
 #include "MockContext.h"
 
 #include <LogFilePermissions.h>
+#include <cerrno>
 #include <dirent.h>
 #include <fstream>
 #include <grp.h>
@@ -109,6 +110,18 @@ TEST_F(EnsureLogfileAccessTest, AuditMissingDirectory)
     auto result = AuditLogFilePermissions(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant); // Missing directory should be compliant
+}
+
+TEST_F(EnsureLogfileAccessTest, AuditRegularFileRootPropagatesTraversalError)
+{
+    const auto root = testDir + "/root-file";
+    std::ofstream(root) << "not a directory\n";
+    LogFilePermissionsParams params;
+    params.path = root;
+
+    const auto result = AuditLogFilePermissions(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(ENOTDIR, result.Error().code);
 }
 
 // Test audit with default path (using test directory)
@@ -238,6 +251,31 @@ TEST_F(EnsureLogfileAccessTest, AuditRecursiveDirectories)
     auto result = AuditLogFilePermissions(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureLogfileAccessTest, NestedViolationIsAuditedAndRemediated)
+{
+    CreateSubdir("nested");
+    CreateLogFile("nested/auth.log", "bin", "bin", 0777);
+    LogFilePermissionsParams params;
+    params.path = testDir;
+
+    const auto audit = AuditLogFilePermissions(params, indicators, mContext);
+
+    ASSERT_TRUE(audit.HasValue());
+    EXPECT_EQ(Status::NonCompliant, audit.Value());
+
+    const auto remediation = RemediateLogFilePermissions(params, indicators, mContext);
+
+    ASSERT_TRUE(remediation.HasValue());
+    EXPECT_EQ(Status::Compliant, remediation.Value());
+    struct stat status;
+    ASSERT_EQ(0, ::stat((testDir + "/nested/auth.log").c_str(), &status));
+    EXPECT_EQ(static_cast<mode_t>(0640), status.st_mode & 0777);
+
+    const auto postAudit = AuditLogFilePermissions(params, indicators, mContext);
+    ASSERT_TRUE(postAudit.HasValue());
+    EXPECT_EQ(Status::Compliant, postAudit.Value());
 }
 
 // Test remediation of incorrect mask

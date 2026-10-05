@@ -4,6 +4,7 @@
 #include "MockContext.h"
 
 #include <FilePermissions.h>
+#include <cerrno>
 #include <dirent.h>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -1489,4 +1490,295 @@ TEST_F(EnsureFilePermissionsTest, AuditCollectionMissingDirectoryAtLeastOneExist
     ASSERT_TRUE(mFormatter.Format(indicators).Value().find("At least one file") != std::string::npos);
 
     ASSERT_TRUE(mFormatter.Format(indicators).Value().find("did not match required permissions but it should") != std::string::npos);
+}
+
+TEST_F(EnsureFilePermissionsTest, AuditCheckIfExistsDistinguishesMissingFileAndBadMask)
+{
+    FilePermissionsParams params;
+    params.path = testDir + "/missing.conf";
+    params.behavior = Behavior::CheckIfExists;
+    params.mask = 0022;
+
+    auto result = AuditFilePermissions(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    auto formatted = mFormatter.Format(indicators);
+    ASSERT_TRUE(formatted.HasValue());
+    EXPECT_NE(formatted.Value().find("does not exist as it should"), std::string::npos);
+
+    CreateFileInDir("present.conf", 0, 0, 0666);
+    params.path = testDir + "/present.conf";
+    result = AuditFilePermissions(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    formatted = mFormatter.Format(indicators);
+    ASSERT_TRUE(formatted.HasValue());
+    EXPECT_NE(formatted.Value().find("Invalid permissions on '" + params.path + "'"), std::string::npos);
+}
+
+TEST_F(EnsureFilePermissionsTest, AuditCollectionCheckIfExistsDistinguishesEmptyGoodAndBad)
+{
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = "*.conf";
+    params.behavior = Behavior::CheckIfExists;
+    params.mask = 0022;
+
+    auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    auto formatted = mFormatter.Format(indicators);
+    ASSERT_TRUE(formatted.HasValue());
+    EXPECT_NE(formatted.Value().find("All matching files in"), std::string::npos);
+
+    CreateFileInDir("good.conf", 0, 0, 0600);
+    result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    formatted = mFormatter.Format(indicators);
+    ASSERT_TRUE(formatted.HasValue());
+    EXPECT_NE(formatted.Value().find("good.conf"), std::string::npos);
+
+    CreateFileInDir("bad.conf", 0, 0, 0666);
+    result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    formatted = mFormatter.Format(indicators);
+    ASSERT_TRUE(formatted.HasValue());
+    EXPECT_NE(formatted.Value().find("Invalid permissions on '" + testDir + "/bad.conf'"), std::string::npos);
+}
+
+TEST_F(EnsureFilePermissionsTest, CollectionInvalidChildPermissionsErrorDoesNotChangeMode)
+{
+    CreateFileInDir("bad.conf", 0, 0, 0600);
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = "bad.conf";
+    params.permissions = 0200;
+    params.mask = 0200;
+
+    auto audit = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_FALSE(audit.HasValue());
+    EXPECT_NE(audit.Error().message.find("Invalid permissions and mask"), std::string::npos);
+
+    struct stat before;
+    ASSERT_EQ(stat((testDir + "/bad.conf").c_str(), &before), 0);
+    auto remediation = RemediateFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_FALSE(remediation.HasValue());
+    EXPECT_EQ(remediation.Error().code, EINVAL);
+    EXPECT_NE(remediation.Error().message.find("Invalid permissions and mask"), std::string::npos);
+    struct stat after;
+    ASSERT_EQ(stat((testDir + "/bad.conf").c_str(), &after), 0);
+    EXPECT_EQ(after.st_mode & 07777, before.st_mode & 07777);
+}
+
+TEST_F(EnsureFilePermissionsTest, CollectionOnlyOneExistsCountsSelectedFiles)
+{
+    CreateFileInDir("good.conf", 0, 0, 0600);
+    CreateFileInDir("decoy.log", 0, 0, 0666);
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = "*.conf";
+    params.mask = 0022;
+    params.behavior = Behavior::OnlyOneExists;
+
+    auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    auto formatted = mFormatter.Format(indicators);
+    ASSERT_TRUE(formatted.HasValue());
+    EXPECT_EQ(formatted.Value().find("decoy.log"), std::string::npos);
+
+    CreateFileInDir("bad.conf", 0, 0, 0666);
+    result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    formatted = mFormatter.Format(indicators);
+    ASSERT_TRUE(formatted.HasValue());
+    EXPECT_NE(formatted.Value().find("bad.conf"), std::string::npos);
+}
+
+TEST_F(EnsureFilePermissionsTest, CollectionNoneExistRejectsSelectedBadFile)
+{
+    CreateFileInDir("bad.conf", 0, 0, 0666);
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = "*.conf";
+    params.mask = 0022;
+    params.behavior = Behavior::NoneExist;
+
+    auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(EnsureFilePermissionsTest, CollectionMixedPermissionsFailInBothCreationOrders)
+{
+    for (bool goodFirst : {true, false})
+    {
+        const std::string directory = testDir + (goodFirst ? "/good-first" : "/bad-first");
+        ASSERT_EQ(mkdir(directory.c_str(), 0700), 0);
+        if (goodFirst)
+        {
+            CreateFileInDir("good-first/good.conf", 0, 0, 0600);
+            CreateFileInDir("good-first/bad.conf", 0, 0, 0666);
+        }
+        else
+        {
+            CreateFileInDir("bad-first/bad.conf", 0, 0, 0666);
+            CreateFileInDir("bad-first/good.conf", 0, 0, 0600);
+        }
+
+        FilePermissionsCollectionParams params;
+        params.directory = directory;
+        params.filePattern = "*.conf";
+        params.mask = 0022;
+        for (auto behavior : {Behavior::AtLeastOneExists, Behavior::AnyExist})
+        {
+            params.behavior = behavior;
+            IndicatorsTree caseIndicators;
+            caseIndicators.Push("EnsureFilePermissions");
+            auto result = AuditFilePermissionsCollection(params, caseIndicators, mContext);
+            ASSERT_TRUE(result.HasValue());
+            EXPECT_EQ(result.Value(), Status::NonCompliant);
+            auto formatted = mFormatter.Format(caseIndicators);
+            ASSERT_TRUE(formatted.HasValue());
+            EXPECT_NE(formatted.Value().find("bad.conf"), std::string::npos);
+        }
+    }
+}
+
+TEST_F(EnsureFilePermissionsTest, CollectionAuditRemediateAuditRepairsBothFiles)
+{
+    CreateFileInDir("first.conf", 0, 0, 0666);
+    CreateFileInDir("second.conf", 0, 0, 0622);
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = "*.conf";
+    params.mask = 0022;
+    params.behavior = Behavior::AtLeastOneExists;
+
+    auto before = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(before.HasValue());
+    EXPECT_EQ(before.Value(), Status::NonCompliant);
+    auto remediation = RemediateFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(remediation.HasValue());
+    EXPECT_EQ(remediation.Value(), Status::Compliant);
+    for (const auto& name : {"first.conf", "second.conf"})
+    {
+        struct stat metadata;
+        ASSERT_EQ(stat((testDir + "/" + name).c_str(), &metadata), 0);
+        EXPECT_EQ(metadata.st_mode & 0777, 0600u);
+    }
+    IndicatorsTree afterIndicators;
+    afterIndicators.Push("EnsureFilePermissions");
+    auto after = AuditFilePermissionsCollection(params, afterIndicators, mContext);
+    ASSERT_TRUE(after.HasValue());
+    EXPECT_EQ(after.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureFilePermissionsTest, NumericOwnershipMixedThresholdsAndExcludedEntries)
+{
+    CreateFileInDir("good", 0, 0, 0600);
+    CreateFileInDir("bad", 1000, 1001, 0600);
+    const std::string linkPath = testDir + "/link";
+    ASSERT_EQ(symlink("missing-target", linkPath.c_str()), 0);
+    ASSERT_EQ(lchown(linkPath.c_str(), 1001, 1001), 0);
+    const std::string directoryPath = testDir + "/directory";
+    ASSERT_EQ(mkdir(directoryPath.c_str(), 0700), 0);
+    ASSERT_EQ(chown(directoryPath.c_str(), 1001, 1001), 0);
+
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = "*";
+    params.allFileTypes = true;
+    params.excludeSymlinks = true;
+    params.excludeDirectories = true;
+    params.maximumUid = 999;
+    params.maximumGid = 1000;
+    params.behavior = Behavior::AnyExist;
+
+    auto result = AuditFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    auto formatted = mFormatter.Format(indicators);
+    ASSERT_TRUE(formatted.HasValue());
+    EXPECT_NE(formatted.Value().find("bad'"), std::string::npos);
+    EXPECT_EQ(formatted.Value().find("link'"), std::string::npos);
+    EXPECT_EQ(formatted.Value().find("directory'"), std::string::npos);
+
+    ASSERT_EQ(chown((testDir + "/bad").c_str(), 999, 1000), 0);
+    IndicatorsTree afterIndicators;
+    afterIndicators.Push("EnsureFilePermissions");
+    result = AuditFilePermissionsCollection(params, afterIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    params.excludeDirectories = false;
+    result = AuditFilePermissionsCollection(params, afterIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    params.excludeDirectories = true;
+    params.excludeSymlinks = false;
+    result = AuditFilePermissionsCollection(params, afterIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(EnsureFilePermissionsTest, NumericOwnershipRejectsInvalidCombinationsAndRemediation)
+{
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = "*";
+    params.maximumUid = 0;
+    params.behavior = Behavior::AnyExist;
+    auto expectInvalid = [&](const FilePermissionsCollectionParams& invalid) {
+        auto result = AuditFilePermissionsCollection(invalid, indicators, mContext);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(result.Error().code, EINVAL);
+    };
+
+    auto invalid = params;
+    invalid.maximumUid = -1;
+    expectInvalid(invalid);
+    invalid = params;
+    invalid.maximumGid = -1;
+    expectInvalid(invalid);
+    invalid = params;
+    invalid.behavior = Behavior::CheckIfExists;
+    expectInvalid(invalid);
+    invalid = params;
+    invalid.permissions = 0600;
+    expectInvalid(invalid);
+    invalid = params;
+    invalid.mask = 0022;
+    expectInvalid(invalid);
+    invalid = params;
+    auto owner = Pattern::Make("root");
+    ASSERT_TRUE(owner.HasValue());
+    invalid.owner = {{std::move(owner.Value())}};
+    expectInvalid(invalid);
+    invalid = params;
+    auto group = Pattern::Make("root");
+    ASSERT_TRUE(group.HasValue());
+    invalid.group = {{std::move(group.Value())}};
+    expectInvalid(invalid);
+    invalid = params;
+    invalid.directoriesOnly = true;
+    invalid.allFileTypes = true;
+    expectInvalid(invalid);
+    invalid = params;
+    invalid.maximumUid.Reset();
+    invalid.allFileTypes = true;
+    expectInvalid(invalid);
+    invalid = params;
+    invalid.excludeSymlinks = true;
+    expectInvalid(invalid);
+    invalid = params;
+    invalid.excludeDirectories = true;
+    expectInvalid(invalid);
+
+    auto remediation = RemediateFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_FALSE(remediation.HasValue());
+    EXPECT_EQ(remediation.Error().code, ENOTSUP);
 }
