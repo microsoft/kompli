@@ -28,7 +28,30 @@
       ]
     },
     "remediation": {
-      "anyOf": []
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "KernelModuleUnavailable"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "KernelModuleUnavailable": {
+              "type": "object",
+              "required": [
+                "moduleName"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "moduleName": {
+                  "type": "string",
+                  "description": "Name of the kernel module"
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }
