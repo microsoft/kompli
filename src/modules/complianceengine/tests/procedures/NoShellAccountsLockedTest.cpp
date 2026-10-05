@@ -77,7 +77,7 @@ protected:
 
 TEST_F(EnsureAccountsWithoutShellAreLockedTest, NoEtcShadowFile)
 {
-    mContext.SetSpecialFilePath("/etc/shadow", "/tmp/somenonexistentfilename");
+    mContext.SetSpecialFilePath("/etc/shadow", mContext.GetTempdirPath() + "/missing-shadow");
     NoShellAccountsLockedParams params;
     auto result = AuditNoShellAccountsLocked(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
@@ -85,8 +85,8 @@ TEST_F(EnsureAccountsWithoutShellAreLockedTest, NoEtcShadowFile)
 
 TEST_F(EnsureAccountsWithoutShellAreLockedTest, NoEtcPasswdFile)
 {
-    mContext.SetSpecialFilePath("/etc/shadow", "/tmp/somenonexistentfilename");
-    mContext.SetSpecialFilePath("/etc/passwd", "/tmp/somenonexistentfilename");
+    mContext.SetSpecialFilePath("/etc/shadow", mContext.GetTempdirPath() + "/missing-shadow");
+    mContext.SetSpecialFilePath("/etc/passwd", mContext.GetTempdirPath() + "/missing-passwd");
     NoShellAccountsLockedParams params;
     auto result = AuditNoShellAccountsLocked(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());

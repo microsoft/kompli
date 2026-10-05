@@ -45,7 +45,6 @@ class EnsureWirelessIsDisabledTest : public ::testing::Test
     };
 
 protected:
-    char dirTemplate[PATH_MAX] = "/tmp/ensureWirelessSysfs.XXXXXX";
     std::string dir;    // " sysfs base (/sys)
     std::string sysDir; // " sysfs base (/sys)
     std::set<std::string, LengthComparator> sysDirs;
@@ -58,8 +57,8 @@ protected:
     void SetUp() override
     {
         int ret = -1;
-        dir = mkdtemp(dirTemplate);
-        ASSERT_TRUE(dir != "");
+        dir = mContext.GetTempdirPath() + "/wireless-sysfs";
+        ASSERT_EQ(0, mkdir(dir.c_str(), 0700));
         auto class_dir = dir + std::string("/class");
         ret = ::mkdir(class_dir.c_str(), 0777);
         ASSERT_TRUE((ret == 0) || (ret != 0 && (errno == EEXIST)));
