@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 #include <FileTreeWalk.h>
+#include <ScopeGuard.h>
 #include <dirent.h>
 
 namespace ComplianceEngine
@@ -28,6 +29,7 @@ Result<Status> FileTreeWalk(const std::string& path, FtwCallback callback, Break
         OsConfigLogError(context.GetLogHandle(), "Failed to open directory '%s': %s", path.c_str(), strerror(status));
         return Error("Failed to open directory '" + path + "': " + strerror(status), status);
     }
+    ScopeGuard closeDirectory([dir]() { closedir(dir); });
 
     Result<Status> result = Status::Compliant;
     Result<Status> subResult = Status::Compliant;
@@ -90,7 +92,6 @@ Result<Status> FileTreeWalk(const std::string& path, FtwCallback callback, Break
     }
 
     int status = errno;
-    closedir(dir);
     if (!result.HasValue())
     {
         OsConfigLogDebug(context.GetLogHandle(), "Iteration failed with an error: %s", result.Error().message.c_str());

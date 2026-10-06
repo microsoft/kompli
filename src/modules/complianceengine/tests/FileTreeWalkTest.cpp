@@ -93,7 +93,7 @@ class TestContext : public ContextInterface
 {
 public:
     explicit TestContext(const TestDirectory& directory)
-        : mScanner(directory.Path(), directory.Path() + "/cache", directory.Path() + "/lock", 0, 0, 0)
+        : mScanner(directory.Path(), directory.Path() + "/cache", directory.Path() + "/lock", 60, 120, 10)
     {
     }
 
@@ -333,6 +333,46 @@ TEST(FileTreeWalkTest, TreatsMissingRootAsCompliantWithoutCallbacks)
 
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(Status::Compliant, result.Value());
+    EXPECT_EQ(0u, callbackCount);
+}
+
+TEST(FileTreeWalkTest, ReturnsErrorForRegularFileRootWithoutCallbacks)
+{
+    TestDirectory directory;
+    const std::string rootFile = directory.MakeFile("root.txt");
+    TestContext context(directory);
+    size_t callbackCount = 0;
+
+    const Result<Status> result = FileTreeWalk(
+        rootFile,
+        [&callbackCount](const std::string&, const std::string&, const struct stat&) -> Result<Status> {
+            ++callbackCount;
+            return Status::Compliant;
+        },
+        BreakOnNonCompliant::False, context);
+
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(ENOTDIR, result.Error().code);
+    EXPECT_EQ(0u, callbackCount);
+}
+
+TEST(FileTreeWalkTest, ReturnsErrorForRootSymlinkLoopWithoutCallbacks)
+{
+    TestDirectory directory;
+    const std::string rootLink = directory.MakeSymlink("root-link", "root-link");
+    TestContext context(directory);
+    size_t callbackCount = 0;
+
+    const Result<Status> result = FileTreeWalk(
+        rootLink,
+        [&callbackCount](const std::string&, const std::string&, const struct stat&) -> Result<Status> {
+            ++callbackCount;
+            return Status::Compliant;
+        },
+        BreakOnNonCompliant::False, context);
+
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(ELOOP, result.Error().code);
     EXPECT_EQ(0u, callbackCount);
 }
 

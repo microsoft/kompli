@@ -310,6 +310,30 @@ TEST_F(AuditdRulesCheckTest, PersistentRulesUseNaturalOrderAndPrependActions)
     }
 }
 
+TEST_F(AuditdRulesCheckTest, PersistentRulesIgnoreNestedNonRulesAndDirectorySymlinks)
+{
+    const std::string auditing = "-a always,exit -F arch=b64 -S execve\n";
+    const std::string suppressing = "-a never,exit -F arch=b64 -S execve\n";
+    const std::string directory = MakeTempDir();
+    ASSERT_FALSE(directory.empty());
+    const std::string nested = directory + "/nested";
+    ASSERT_EQ(0, ::mkdir(nested.c_str(), 0700));
+    WriteFile(directory + "/audit.rules", auditing);
+    WriteFile(directory + "/ignored.conf", suppressing);
+    WriteFile(nested + "/nested.rules", suppressing);
+    ASSERT_EQ(0, ::symlink(nested.c_str(), (directory + "/nested-link").c_str()));
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", directory);
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(auditing)));
+    AuditdRulesParams params;
+    params.searchItem = "-S execve";
+    params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)"};
+
+    const auto result = AuditAuditdRules(params, indicators, mContext);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+}
+
 TEST_F(AuditdRulesCheckTest, EarlierDisjointSuppressionDoesNotInvalidateRule)
 {
     const std::string rules =

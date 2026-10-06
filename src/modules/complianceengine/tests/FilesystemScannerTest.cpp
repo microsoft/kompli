@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 using ComplianceEngine::Error;
@@ -79,6 +80,42 @@ TEST_F(FilesystemScannerTest, InitialCacheBuildWaitsAndSucceeds)
     }
     ASSERT_TRUE(res) << "Cache should be available after wait window: " << (res ? "" : res.Error().message);
     ASSERT_GT(res.Value()->entries.size(), 0u);
+}
+
+TEST_F(FilesystemScannerTest, RecordsExactTreeMetadataWithoutFollowingInteriorSymlink)
+{
+    const std::string targetDir = rootDir + "/target";
+    const std::string targetFile = targetDir + "/target.txt";
+    const std::string linkPath = rootDir + "/target-link";
+    ASSERT_EQ(0, ::mkdir(targetDir.c_str(), 0700));
+    TouchFile(targetFile);
+    ASSERT_EQ(0, ::symlink(targetDir.c_str(), linkPath.c_str()));
+
+    const std::string externalCache = mContext.GetTempdirPath() + "/exact-tree-cache";
+    const std::string externalLock = mContext.GetTempdirPath() + "/exact-tree-lock";
+    FilesystemScanner scanner(rootDir, externalCache, externalLock, 60, 120, 10);
+    auto result = scanner.GetFullFilesystem();
+
+    ASSERT_TRUE(result.HasValue()) << (result.HasValue() ? "" : result.Error().message);
+    std::vector<std::string> paths;
+    for (const auto& entry : result.Value()->entries)
+    {
+        paths.push_back(entry.first);
+    }
+    const std::vector<std::string> expected = {
+        rootDir + "/a.txt",
+        rootDir + "/sub",
+        rootDir + "/sub/b.txt",
+        targetDir,
+        linkPath,
+        targetFile,
+    };
+    EXPECT_EQ(expected, paths);
+
+    EXPECT_TRUE(S_ISREG(result.Value()->entries.at(rootDir + "/a.txt").st.st_mode));
+    EXPECT_TRUE(S_ISDIR(result.Value()->entries.at(rootDir + "/sub").st.st_mode));
+    EXPECT_TRUE(S_ISREG(result.Value()->entries.at(rootDir + "/sub/b.txt").st.st_mode));
+    EXPECT_TRUE(S_ISLNK(result.Value()->entries.at(linkPath).st.st_mode));
 }
 
 TEST_F(FilesystemScannerTest, BackgroundScanLeavesNoChild)
@@ -282,4 +319,28 @@ TEST_F(FilesystemScannerTest, LegacyCacheFormatStillLoads)
         }
     }
     EXPECT_EQ(found, (size_t)2);
+}
+
+TEST_F(FilesystemScannerTest, MalformedCacheRowsAreNotLoadedAsEntries)
+{
+    const time_t now = ::time(nullptr);
+    struct stat rootStatus;
+    ASSERT_EQ(0, ::lstat(rootDir.c_str(), &rootStatus));
+    {
+        std::ofstream cache(cachePath.c_str(), std::ios::out | std::ios::trunc);
+        cache << "# FilesystemScanCache-V1 " << static_cast<long>(now - 1) << ' ' << static_cast<long>(now - 1) << "\n";
+        cache << rootDir + "/valid" << ' ' << static_cast<unsigned long long>(rootStatus.st_dev) << ' ' << static_cast<unsigned long long>(rootStatus.st_ino)
+              << ' ' << static_cast<unsigned>(rootStatus.st_mode) << ' ' << static_cast<unsigned>(rootStatus.st_nlink) << ' '
+              << static_cast<long long>(rootStatus.st_uid) << ' ' << static_cast<long>(rootStatus.st_gid) << ' ' << static_cast<long long>(rootStatus.st_size)
+              << ' ' << static_cast<long>(rootStatus.st_blksize) << ' ' << static_cast<long long>(rootStatus.st_blocks) << "\n";
+        cache << rootDir + "/malformed"
+              << " missing fields\n";
+    }
+
+    FilesystemScanner scanner(rootDir, cachePath, lockPath, 60, 120, 1);
+    const auto result = scanner.GetFullFilesystem();
+
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(1u, result.Value()->entries.size());
+    EXPECT_EQ(rootDir + "/valid", result.Value()->entries.begin()->first);
 }

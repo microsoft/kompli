@@ -153,3 +153,35 @@ TEST_F(EnsureSshKeyPermsTest, RemediationNoKeys)
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
+
+TEST_F(EnsureSshKeyPermsTest, NestedRecognizedKeyIsChecked)
+{
+    const std::string nested = mSshDir + "/nested";
+    ASSERT_EQ(0, ::mkdir(nested.c_str(), 0755));
+    const std::string keyPath = nested + "/host-key";
+    std::ofstream(keyPath) << kPrivateKeyHeader << "payload\n";
+    ASSERT_EQ(0, ::chmod(keyPath.c_str(), 0777));
+    EXPECT_CALL(mContext, GetFileContents(keyPath)).WillOnce(::testing::Return(ComplianceEngine::Result<std::string>(std::string(kPrivateKeyHeader) + "payload\n")));
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Private;
+
+    const auto result = AuditSshKeyPermissions(params, mIndicators, mContext);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+}
+
+TEST_F(EnsureSshKeyPermsTest, SimilarlyNamedNonKeyIsIgnored)
+{
+    const std::string decoyPath = mSshDir + "/host-key.pub";
+    std::ofstream(decoyPath) << "not a key\n";
+    ASSERT_EQ(0, ::chmod(decoyPath.c_str(), 0777));
+    EXPECT_CALL(mContext, GetFileContents(decoyPath)).WillOnce(::testing::Return(ComplianceEngine::Result<std::string>("not a key\n")));
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Public;
+
+    const auto result = AuditSshKeyPermissions(params, mIndicators, mContext);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+}

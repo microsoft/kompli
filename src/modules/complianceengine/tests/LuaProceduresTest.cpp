@@ -92,16 +92,18 @@ TEST_F(LuaProceduresTest, GetFilesystemEntriesWithPermsBasic)
 
     LuaEvaluator evaluator;
 
-    auto runScript = [&](const std::string& luaScript) {
+    auto runScript = [&](const std::string& luaScript, const std::string& expectedPath) {
         auto res = evaluator.Evaluate(luaScript.c_str(), mIndicators, mContext, Action::Audit);
         ASSERT_TRUE(res.HasValue());
         EXPECT_EQ(res.Value(), Status::Compliant);
+        ASSERT_FALSE(mIndicators.GetRootNode()->indicators.empty());
+        EXPECT_EQ(expectedPath, mIndicators.GetRootNode()->indicators.back().message);
     };
 
     // First script: require owner execute, exclude group write
-    runScript(MakePermsScript("00001", "00020"));
+    runScript(MakePermsScript("00001", "00020"), execPath);
     // Second script: exclude owner execute (select non-exec file)
-    runScript(MakePermsScript("0", "00001"));
+    runScript(MakePermsScript("0", "00001"), readPath);
 }
 
 TEST_F(LuaProceduresTest, ListDirectory_NonRecursiveAllFiles)
@@ -110,11 +112,8 @@ TEST_F(LuaProceduresTest, ListDirectory_NonRecursiveAllFiles)
     auto script = MakeScript(mTempRoot, "", false);
     auto result = evaluator.Evaluate(script, mIndicators, mContext, Action::Audit);
     ASSERT_TRUE(result.HasValue());
-    // Expect only top-level files a.txt and b.log (no directories, no recursion)
     auto& msg = mIndicators.GetRootNode()->indicators.back().message;
-    EXPECT_NE(msg.find("a.txt;"), std::string::npos);
-    EXPECT_NE(msg.find("b.log;"), std::string::npos);
-    EXPECT_EQ(msg.find("c.conf"), std::string::npos); // not recursive
+    EXPECT_EQ("a.txt;b.log;", msg);
 }
 
 TEST_F(LuaProceduresTest, ListDirectory_PatternFilter)
@@ -124,8 +123,7 @@ TEST_F(LuaProceduresTest, ListDirectory_PatternFilter)
     auto result = evaluator.Evaluate(script, mIndicators, mContext, Action::Audit);
     ASSERT_TRUE(result.HasValue());
     auto& msg = mIndicators.GetRootNode()->indicators.back().message;
-    EXPECT_NE(msg.find("a.txt;"), std::string::npos);
-    EXPECT_EQ(msg.find("b.log"), std::string::npos); // filtered
+    EXPECT_EQ("a.txt;", msg);
 }
 
 TEST_F(LuaProceduresTest, ListDirectory_RecursivePattern)
@@ -135,9 +133,7 @@ TEST_F(LuaProceduresTest, ListDirectory_RecursivePattern)
     auto result = evaluator.Evaluate(script, mIndicators, mContext, Action::Audit);
     ASSERT_TRUE(result.HasValue());
     auto& msg = mIndicators.GetRootNode()->indicators.back().message;
-    EXPECT_NE(msg.find("a.txt;"), std::string::npos);
-    EXPECT_NE(msg.find("sub1/nested/d.txt;"), std::string::npos);
-    EXPECT_EQ(msg.find("c.conf"), std::string::npos); // pattern mismatch
+    EXPECT_EQ("a.txt;sub1/nested/d.txt;", msg);
 }
 
 TEST_F(LuaProceduresTest, ListDirectory_RecursiveAll)
@@ -147,11 +143,30 @@ TEST_F(LuaProceduresTest, ListDirectory_RecursiveAll)
     auto result = evaluator.Evaluate(script, mIndicators, mContext, Action::Audit);
     ASSERT_TRUE(result.HasValue());
     auto& msg = mIndicators.GetRootNode()->indicators.back().message;
-    EXPECT_NE(msg.find("a.txt;"), std::string::npos);
-    EXPECT_NE(msg.find("b.log;"), std::string::npos);
-    EXPECT_NE(msg.find("sub1/c.conf;"), std::string::npos);
-    EXPECT_NE(msg.find("sub1/nested/d.txt;"), std::string::npos);
-    EXPECT_NE(msg.find("sub2/ignore.tmp;"), std::string::npos);
+    EXPECT_EQ("a.txt;b.log;sub1/c.conf;sub1/nested/d.txt;sub2/ignore.tmp;", msg);
+}
+
+TEST_F(LuaProceduresTest, ListDirectory_DoesNotFollowInteriorDirectorySymlink)
+{
+    ASSERT_EQ(0, ::symlink((mTempRoot + "/sub1").c_str(), (mTempRoot + "/sub1-link").c_str()));
+    LuaEvaluator evaluator;
+    auto script = MakeScript(mTempRoot, "*.txt", true);
+
+    auto result = evaluator.Evaluate(script, mIndicators, mContext, Action::Audit);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ("a.txt;sub1/nested/d.txt;", mIndicators.GetRootNode()->indicators.back().message);
+}
+
+TEST_F(LuaProceduresTest, ListDirectory_InvalidRootReturnsError)
+{
+    LuaEvaluator evaluator;
+    auto script = MakeScript(mTempRoot + "/a.txt", "", true);
+
+    const auto result = evaluator.Evaluate(script, mIndicators, mContext, Action::Audit);
+
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(std::string::npos, result.Error().message.find("ListDirectory failed to open"));
 }
 
 TEST_F(LuaProceduresTest, ListDirectory_DirectoriesNotReturned)
