@@ -11,6 +11,7 @@
 #include <linux/limits.h>
 #include <string>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 using ComplianceEngine::AuditFilePermissions;
@@ -1664,11 +1665,11 @@ TEST_F(EnsureFilePermissionsTest, CollectionAuditRemediateAuditRepairsBothFiles)
     auto remediation = RemediateFilePermissionsCollection(params, indicators, mContext);
     ASSERT_TRUE(remediation.HasValue());
     EXPECT_EQ(remediation.Value(), Status::Compliant);
-    for (const auto& name : {"first.conf", "second.conf"})
+    for (const auto& expected : {std::make_pair("first.conf", 0644u), std::make_pair("second.conf", 0600u)})
     {
         struct stat metadata;
-        ASSERT_EQ(stat((testDir + "/" + name).c_str(), &metadata), 0);
-        EXPECT_EQ(metadata.st_mode & 0777, 0600u);
+        ASSERT_EQ(stat((testDir + "/" + expected.first).c_str(), &metadata), 0);
+        EXPECT_EQ(metadata.st_mode & 0777, expected.second);
     }
     IndicatorsTree afterIndicators;
     afterIndicators.Push("EnsureFilePermissions");
