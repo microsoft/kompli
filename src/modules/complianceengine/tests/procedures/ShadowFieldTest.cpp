@@ -683,7 +683,148 @@ TEST_F(EnsureShadowContainsTest, PasswordStringComparisonsPreserveOperandDirecti
         EXPECT_EQ(result.Value(), test.expected) << test.supplied;
         ASSERT_EQ(indicators.Back().indicators.size(), test.expected == Status::Compliant ? 2U : 1U);
         EXPECT_EQ(indicators.Back().indicators.front().status, test.expected);
+        EXPECT_EQ(indicators.Back().indicators.front().message, test.expected == Status::Compliant ?
+                                                                    "encrypted password matches expected value for user 'testuser'" :
+                                                                    "encrypted password does not match expected value for user 'testuser'");
+        if (test.expected == Status::Compliant)
+        {
+            EXPECT_EQ(indicators.Back().indicators.back().message, "encrypted password matches expected value for all tested users");
+        }
     }
+}
+
+TEST_F(EnsureShadowContainsTest, IntegerEndpointsPreserveSignedComparisons)
+{
+    struct Case
+    {
+        int actual;
+        string expected;
+        ComparisonOperation operation;
+        Status status;
+    };
+    const Case cases[] = {
+        {0, "-2147483648", ComparisonOperation::Equal, Status::NonCompliant},
+        {0, "-2147483648", ComparisonOperation::LessThan, Status::NonCompliant},
+        {0, "-2147483648", ComparisonOperation::GreaterThan, Status::Compliant},
+        {0, "-2147483648", ComparisonOperation::GreaterOrEqual, Status::Compliant},
+        {0, "0", ComparisonOperation::Equal, Status::Compliant},
+        {0, "0", ComparisonOperation::LessOrEqual, Status::Compliant},
+        {0, "1", ComparisonOperation::LessThan, Status::Compliant},
+        {2147483647, "2147483647", ComparisonOperation::Equal, Status::Compliant},
+        {2147483647, "2147483647", ComparisonOperation::GreaterThan, Status::NonCompliant},
+        {2147483647, "2147483647", ComparisonOperation::GreaterOrEqual, Status::Compliant},
+        {2147483647, "2147483646", ComparisonOperation::GreaterThan, Status::Compliant},
+    };
+    for (const auto& test : cases)
+    {
+        const auto path = CreateTestShadowFile("testuser", string("$y$"), test.actual);
+        ASSERT_FALSE(path.empty());
+        ScopeGuard cleanup([&] { RemoveTestShadowFile(path); });
+        mContext.SetSpecialFilePath("/etc/shadow", path);
+        ShadowFieldParams params;
+        params.username = "testuser";
+        params.field = Field::LastChange;
+        params.value = test.expected;
+        params.operation = test.operation;
+        IndicatorsTree indicators;
+        indicators.Push("ShadowContains");
+        auto result = AuditShadowField(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), test.status);
+        ASSERT_EQ(indicators.Back().indicators.size(), test.status == Status::Compliant ? 2U : 1U);
+        EXPECT_EQ(indicators.Back().indicators.front().status, test.status);
+        EXPECT_EQ(indicators.Back().indicators.front().message, test.status == Status::Compliant ?
+                                                                    "last password change date matches expected value for user 'testuser'" :
+                                                                    "last password change date does not match expected value for user 'testuser'");
+    }
+}
+
+TEST_F(EnsureShadowContainsTest, UsernameOperatorSelectionPreservesComparisonDirection)
+{
+    struct Case
+    {
+        ComparisonOperation operation;
+        string supplied;
+        Status status;
+        string firstMessage;
+        std::size_t indicatorCount;
+    };
+    const Case cases[] = {
+        {ComparisonOperation::Equal, "alpha", Status::Compliant, "last password change date matches expected value for user 'alpha'", 2},
+        {ComparisonOperation::NotEqual, "alpha", Status::NonCompliant, "last password change date does not match expected value for user 'beta'", 1},
+        {ComparisonOperation::LessThan, "alpha", Status::NonCompliant, "last password change date does not match expected value for user 'beta'", 1},
+        {ComparisonOperation::LessOrEqual, "alpha", Status::NonCompliant, "last password change date matches expected value for user 'alpha'", 2},
+        {ComparisonOperation::GreaterThan, "beta", Status::Compliant, "last password change date matches expected value for user 'alpha'", 2},
+        {ComparisonOperation::GreaterOrEqual, "beta", Status::NonCompliant, "last password change date matches expected value for user 'alpha'", 2},
+        {ComparisonOperation::LessThan, "omega", Status::Compliant, "last password change date matches expected value for all tested users", 1},
+    };
+    const auto path = CreateTestShadowFile("alpha:$y$:5::::::\nbeta:$y$:4::::::\n");
+    ASSERT_FALSE(path.empty());
+    ScopeGuard cleanup([&] { RemoveTestShadowFile(path); });
+    mContext.SetSpecialFilePath("/etc/shadow", path);
+    for (const auto& test : cases)
+    {
+        ShadowFieldParams params;
+        params.username = test.supplied;
+        params.usernameOperation = test.operation;
+        params.field = Field::LastChange;
+        params.value = "5";
+        params.operation = ComparisonOperation::Equal;
+        IndicatorsTree indicators;
+        indicators.Push("ShadowContains");
+        auto result = AuditShadowField(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), test.status) << test.supplied;
+        ASSERT_EQ(indicators.Back().indicators.size(), test.indicatorCount);
+        EXPECT_EQ(indicators.Back().indicators.front().message, test.firstMessage);
+        if ((test.status == Status::NonCompliant) && (test.indicatorCount == 2))
+        {
+            EXPECT_EQ(indicators.Back().indicators.back().message, "last password change date does not match expected value for user 'beta'");
+        }
+    }
+}
+
+TEST_F(EnsureShadowContainsTest, EncryptionMethodEqualityKeepsDomainValidation)
+{
+    const auto path = CreateTestShadowFile("testuser", string("$6$salt$hash"));
+    ASSERT_FALSE(path.empty());
+    ScopeGuard cleanup([&] { RemoveTestShadowFile(path); });
+    mContext.SetSpecialFilePath("/etc/shadow", path);
+    ShadowFieldParams params;
+    params.username = "testuser";
+    params.field = Field::EncryptionMethod;
+    struct Case
+    {
+        string value;
+        ComparisonOperation operation;
+        Status status;
+    };
+    const Case cases[] = {
+        {"SHA-512", ComparisonOperation::NotEqual, Status::NonCompliant},
+        {"SHA-256", ComparisonOperation::Equal, Status::NonCompliant},
+        {"SHA-512", ComparisonOperation::Equal, Status::Compliant},
+    };
+    for (const auto& test : cases)
+    {
+        params.value = test.value;
+        params.operation = test.operation;
+        IndicatorsTree indicators;
+        indicators.Push("ShadowContains");
+        auto result = AuditShadowField(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), test.status);
+        ASSERT_EQ(indicators.Back().indicators.size(), test.status == Status::Compliant ? 2U : 1U);
+        EXPECT_EQ(indicators.Back().indicators.front().status, test.status);
+    }
+
+    params.operation = ComparisonOperation::LessThan;
+    IndicatorsTree unsupported;
+    unsupported.Push("ShadowContains");
+    auto result = AuditShadowField(params, unsupported, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().message, "Unsupported comparison operation for encryption method");
+    EXPECT_TRUE(unsupported.Back().indicators.empty());
 }
 
 TEST_F(EnsureShadowContainsTest, UsernameSelectionAndMultipleEntriesRetainVerdict)

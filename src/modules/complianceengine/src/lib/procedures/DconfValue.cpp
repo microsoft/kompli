@@ -3,20 +3,15 @@
 
 #include <ProcedureMap.h>
 #include <StringTools.h>
+#include <TypedComparison.h>
 #include <algorithm>
-#include <functional>
-#include <map>
 
 namespace ComplianceEngine
 {
 Result<Status> AuditDconfValue(const DconfValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
     const auto key = EscapeForShell(params.key);
-    static const std::map<DconfOperation, std::function<bool(const std::string&, const std::string&)>> ops{
-        {DconfOperation::Eq, [](const std::string& x, const std::string& y) { return x == y; }},
-        {DconfOperation::Ne, [](const std::string& x, const std::string& y) { return x != y; }}};
-    const auto op = ops.find(params.operation);
-    if (op == ops.end())
+    if ((params.operation != DconfOperation::Eq) && (params.operation != DconfOperation::Ne))
     {
         return Error("Not supported operation '" + std::to_string(params.operation) + "'", EINVAL);
     }
@@ -34,8 +29,13 @@ Result<Status> AuditDconfValue(const DconfValueParams& params, IndicatorsTree& i
         dconfVal.erase(dconfVal.size() - 1);
     }
 
-    auto isCompliant = op->second(dconfVal, params.value);
-    if (isCompliant)
+    auto comparison =
+        CompareTyped(dconfVal, params.value, params.operation == DconfOperation::Eq ? TypedComparisonOperation::Equal : TypedComparisonOperation::NotEqual);
+    if (!comparison.HasValue())
+    {
+        return comparison.Error();
+    }
+    if (comparison.Value())
     {
         return indicators.Compliant("Dconf read " + key + " " + std::to_string(params.operation) + " value " + params.value);
     }

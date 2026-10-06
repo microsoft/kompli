@@ -5,7 +5,69 @@
 
 #include <DconfValue.h>
 #include <ProcedureMap.h>
+#include <TypedComparison.h>
 #include <gtest/gtest.h>
+#include <limits>
+
+TEST(TypedComparisonTest, EvaluatesAllOperatorsOnTypedIntegersAndStrings)
+{
+    using ComplianceEngine::CompareTyped;
+    using ComplianceEngine::TypedComparisonOperation;
+    struct Case
+    {
+        TypedComparisonOperation operation;
+        bool less;
+        bool equal;
+        bool greater;
+    };
+    const Case cases[] = {
+        {TypedComparisonOperation::Equal, false, true, false},
+        {TypedComparisonOperation::NotEqual, true, false, true},
+        {TypedComparisonOperation::LessThan, true, false, false},
+        {TypedComparisonOperation::LessOrEqual, true, true, false},
+        {TypedComparisonOperation::GreaterThan, false, false, true},
+        {TypedComparisonOperation::GreaterOrEqual, false, true, true},
+    };
+
+    for (const auto& test : cases)
+    {
+        auto lessInt = CompareTyped(-1, 0, test.operation);
+        auto equalInt = CompareTyped(0, 0, test.operation);
+        auto greaterInt = CompareTyped(1, 0, test.operation);
+        auto lessString = CompareTyped(std::string("A"), std::string("a"), test.operation);
+        auto equalString = CompareTyped(std::string("a"), std::string("a"), test.operation);
+        auto greaterString = CompareTyped(std::string("b"), std::string("a"), test.operation);
+        ASSERT_TRUE(lessInt.HasValue());
+        ASSERT_TRUE(equalInt.HasValue());
+        ASSERT_TRUE(greaterInt.HasValue());
+        ASSERT_TRUE(lessString.HasValue());
+        ASSERT_TRUE(equalString.HasValue());
+        ASSERT_TRUE(greaterString.HasValue());
+        EXPECT_EQ(lessInt.Value(), test.less);
+        EXPECT_EQ(equalInt.Value(), test.equal);
+        EXPECT_EQ(greaterInt.Value(), test.greater);
+        EXPECT_EQ(lessString.Value(), test.less);
+        EXPECT_EQ(equalString.Value(), test.equal);
+        EXPECT_EQ(greaterString.Value(), test.greater);
+    }
+}
+
+TEST(TypedComparisonTest, PreservesIntegerLimitsAndRejectsUnknownOperation)
+{
+    using ComplianceEngine::CompareTyped;
+    using ComplianceEngine::TypedComparisonOperation;
+    const auto minimum = std::numeric_limits<long>::min();
+    const auto maximum = std::numeric_limits<long>::max();
+    auto less = CompareTyped(minimum, maximum, TypedComparisonOperation::LessThan);
+    auto greater = CompareTyped(maximum, minimum, TypedComparisonOperation::GreaterThan);
+    auto invalid = CompareTyped(1, 1, static_cast<TypedComparisonOperation>(100));
+    ASSERT_TRUE(less.HasValue());
+    ASSERT_TRUE(greater.HasValue());
+    EXPECT_TRUE(less.Value());
+    EXPECT_TRUE(greater.Value());
+    ASSERT_FALSE(invalid.HasValue());
+    EXPECT_EQ(invalid.Error().code, EINVAL);
+}
 
 using ComplianceEngine::AuditDconfValue;
 using ComplianceEngine::DconfOperation;

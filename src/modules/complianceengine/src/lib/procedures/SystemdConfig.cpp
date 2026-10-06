@@ -3,6 +3,7 @@
 
 #include <StringTools.h>
 #include <SystemdConfig.h>
+#include <TypedComparison.h>
 #include <algorithm>
 #include <cstdlib>
 #include <fts.h>
@@ -233,7 +234,12 @@ Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, I
 
         if (op == SystemdConfigValueOperator::Equal)
         {
-            comparisonResult = (actualValue == expectedValue);
+            auto result = CompareTyped(actualValue, expectedValue, TypedComparisonOperation::Equal);
+            if (!result.HasValue())
+            {
+                return result.Error();
+            }
+            comparisonResult = result.Value();
         }
         else
         {
@@ -250,22 +256,34 @@ Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, I
                 return Error("Failed to convert values to numbers for comparison: actual='" + actualValue + "', expected='" + expectedValue + "'");
             }
 
+            TypedComparisonOperation typedOp;
+            bool supported = true;
             switch (op)
             {
                 case SystemdConfigValueOperator::LessThan:
-                    comparisonResult = (actualNum < expectedNum);
+                    typedOp = TypedComparisonOperation::LessThan;
                     break;
                 case SystemdConfigValueOperator::LessOrEqual:
-                    comparisonResult = (actualNum <= expectedNum);
+                    typedOp = TypedComparisonOperation::LessOrEqual;
                     break;
                 case SystemdConfigValueOperator::GreaterThan:
-                    comparisonResult = (actualNum > expectedNum);
+                    typedOp = TypedComparisonOperation::GreaterThan;
                     break;
                 case SystemdConfigValueOperator::GreaterOrEqual:
-                    comparisonResult = (actualNum >= expectedNum);
+                    typedOp = TypedComparisonOperation::GreaterOrEqual;
                     break;
                 default:
+                    supported = false;
                     break;
+            }
+            if (supported)
+            {
+                auto result = CompareTyped(actualNum, expectedNum, typedOp);
+                if (!result.HasValue())
+                {
+                    return result.Error();
+                }
+                comparisonResult = result.Value();
             }
         }
 

@@ -503,9 +503,15 @@ TEST_F(LoginDefsOptionTest, StringComparisonPreservesCasePolicyAndUnsupportedOrd
         params.option = test.option;
         params.value = test.expected;
         params.comparison = test.operation;
-        auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+        IndicatorsTree indicators;
+        indicators.Push("LoginDefsOption");
+        auto result = AuditLoginDefsOption(params, indicators, mContext);
         ASSERT_TRUE(result.HasValue());
         EXPECT_EQ(result.Value(), test.status);
+        ASSERT_EQ(indicators.Back().indicators.size(), 1U);
+        EXPECT_EQ(indicators.Back().indicators.front().status, test.status);
+        EXPECT_EQ(indicators.Back().indicators.front().message, test.option + " = " + test.actual + (test.status == Status::Compliant ? " (" : " (expected ") +
+                                                                    std::to_string(test.operation) + " " + test.expected + ")");
     }
 
     SetLoginDefsContent("OTHER yescrypt\n");
@@ -517,6 +523,45 @@ TEST_F(LoginDefsOptionTest, StringComparisonPreservesCasePolicyAndUnsupportedOrd
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, EINVAL);
     EXPECT_EQ(result.Error().message, "Unsupported comparison operation for string value (only eq and ne are supported)");
+}
+
+TEST_F(LoginDefsOptionTest, NumericEndpointsPreserveBothOperandDirections)
+{
+    struct Case
+    {
+        string actual;
+        string expected;
+        ComparisonOperation operation;
+        Status status;
+    };
+    const Case cases[] = {
+        {"-2147483648", "-2147483648", ComparisonOperation::Equal, Status::Compliant},
+        {"-2147483648", "-2147483648", ComparisonOperation::LessThan, Status::NonCompliant},
+        {"-2147483648", "-2147483648", ComparisonOperation::LessOrEqual, Status::Compliant},
+        {"-2147483648", "-2147483647", ComparisonOperation::LessThan, Status::Compliant},
+        {"0", "-2147483648", ComparisonOperation::GreaterThan, Status::Compliant},
+        {"2147483647", "2147483647", ComparisonOperation::Equal, Status::Compliant},
+        {"2147483647", "2147483647", ComparisonOperation::GreaterThan, Status::NonCompliant},
+        {"2147483647", "2147483647", ComparisonOperation::GreaterOrEqual, Status::Compliant},
+        {"2147483647", "2147483646", ComparisonOperation::GreaterThan, Status::Compliant},
+    };
+    for (const auto& test : cases)
+    {
+        SetLoginDefsContent("PASS_MAX_DAYS " + test.actual + "\n");
+        LoginDefsOptionParams params;
+        params.option = "PASS_MAX_DAYS";
+        params.value = test.expected;
+        params.comparison = test.operation;
+        IndicatorsTree indicators;
+        indicators.Push("LoginDefsOption");
+        auto result = AuditLoginDefsOption(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), test.status);
+        ASSERT_EQ(indicators.Back().indicators.size(), 1U);
+        EXPECT_EQ(indicators.Back().indicators.front().status, test.status);
+        EXPECT_EQ(indicators.Back().indicators.front().message, "PASS_MAX_DAYS = " + test.actual + (test.status == Status::Compliant ? " (" : " (expected ") +
+                                                                    std::to_string(test.operation) + " " + test.expected + ")");
+    }
 }
 
 TEST_F(LoginDefsOptionTest, OverflowFallsBackToStringComparison)

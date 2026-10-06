@@ -378,6 +378,49 @@ TEST_F(EnsureGsettings, QuotedStringComparisonsAndMalformedOutput)
         EXPECT_EQ(result.Value(), test.expected) << test.output;
         ASSERT_EQ(indicators.Back().indicators.size(), 1U);
         EXPECT_EQ(indicators.Back().indicators.front().status, test.expected);
+        EXPECT_EQ(indicators.Back().indicators.front().message,
+            "Gsettings key org.gnome.desktop.interface cursor-theme " + std::to_string(test.operation) + " value Adwaita");
+    }
+}
+
+TEST_F(EnsureGsettings, RepresentableNumericEndpointsRetainComparison)
+{
+    struct Case
+    {
+        std::string type;
+        std::string actual;
+        std::string expected;
+        GsettingsOperationType operation;
+        Status status;
+    };
+    const Case cases[] = {
+        {"type i\n", "-2147483648", "-2147483648", GsettingsOperationType::Equal, Status::Compliant},
+        {"type i\n", "-2147483648", "-2147483648", GsettingsOperationType::LessThan, Status::NonCompliant},
+        {"type i\n", "-2147483648", "-2147483647", GsettingsOperationType::LessThan, Status::Compliant},
+        {"type i\n", "0", "-1", GsettingsOperationType::GreaterThan, Status::Compliant},
+        {"type i\n", "2147483647", "2147483647", GsettingsOperationType::Equal, Status::Compliant},
+        {"type i\n", "2147483647", "2147483647", GsettingsOperationType::GreaterThan, Status::NonCompliant},
+        {"type u\n", "uint32 0", "0", GsettingsOperationType::Equal, Status::Compliant},
+        {"type u\n", "uint32 2147483647", "2147483646", GsettingsOperationType::GreaterThan, Status::Compliant},
+    };
+    mParams.schema = "org.gnome.desktop.interface";
+    mParams.key = "cursor-size";
+    mParams.keyType = GsettingsKeyType::Number;
+    for (const auto& test : cases)
+    {
+        mParams.operation = test.operation;
+        mParams.value = test.expected;
+        EXPECT_CALL(mContext, ExecuteCommand(GsettingsRangeCmd())).WillOnce(::testing::Return(Result<std::string>(test.type)));
+        EXPECT_CALL(mContext, ExecuteCommand(GsettingsGetCmd())).WillOnce(::testing::Return(Result<std::string>(test.actual)));
+        IndicatorsTree indicators;
+        indicators.Push("EnsureGsettings");
+        auto result = AuditGsettingsValue(mParams, indicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), test.status);
+        ASSERT_EQ(indicators.Back().indicators.size(), 1U);
+        EXPECT_EQ(indicators.Back().indicators.front().status, test.status);
+        EXPECT_EQ(indicators.Back().indicators.front().message,
+            "Gsettings key org.gnome.desktop.interface cursor-size " + std::to_string(test.operation) + " value " + test.expected);
     }
 }
 
