@@ -6,11 +6,10 @@
 
 #include "CommonContext.h"
 #include "Logging.h"
+#include "TemporaryDirectory.h"
 
-#include <cstdlib>
-#include <ftw.h>
-#include <stdexcept>
-#include <unistd.h>
+#include <memory>
+#include <utility>
 
 namespace ComplianceEngine
 {
@@ -24,9 +23,14 @@ namespace Cli
 class Context : public CommonContext
 {
 public:
-    Context(OsConfigLogHandle log, const int fd = -1)
-        : CommonContext(log, CreateTempDir(), fd)
+    static Result<std::unique_ptr<Context>> Make(OsConfigLogHandle log, const int telemetryFileDescriptor = -1)
     {
+        auto state = TemporaryDirectory::Make("kompli-cli");
+        if (!state.HasValue())
+        {
+            return std::move(state).Error();
+        }
+        return std::unique_ptr<Context>(new Context(log, std::move(state).Value(), telemetryFileDescriptor));
     }
     Context(const Context&) = delete;
     Context& operator=(const Context&) = delete;
@@ -35,33 +39,21 @@ public:
 
     ~Context() override
     {
-        const std::string statePath = GetStatePath();
-        nftw(
-            statePath.c_str(),
-            [](const char* fpath, const struct stat*, int typeflag, struct FTW*) -> int {
-                if (typeflag == FTW_DP)
-                {
-                    (void)rmdir(fpath);
-                }
-                else
-                {
-                    (void)unlink(fpath);
-                }
-                return 0; // best-effort cleanup: keep walking even if a removal fails
-            },
-            64, FTW_DEPTH | FTW_PHYS);
+        auto result = mTemporaryDirectory.Remove();
+        if (!result.HasValue())
+        {
+            OsConfigLogError(GetLogHandle(), "%s", result.Error().message.c_str());
+        }
     }
 
 private:
-    static std::string CreateTempDir()
+    Context(OsConfigLogHandle log, TemporaryDirectory state, const int telemetryFileDescriptor)
+        : CommonContext(log, state.Path(), telemetryFileDescriptor),
+          mTemporaryDirectory(std::move(state))
     {
-        char tmpl[] = "/tmp/kompli-cli.XXXXXX";
-        if (mkdtemp(tmpl) == nullptr)
-        {
-            throw std::runtime_error("Cli::Context: failed to create temporary state directory");
-        }
-        return std::string(tmpl);
     }
+
+    TemporaryDirectory mTemporaryDirectory;
 };
 
 } // namespace Cli

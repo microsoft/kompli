@@ -25,7 +25,6 @@ using ::testing::Return;
 class EnsureFilesystemOptionTest : public ::testing::Test
 {
 protected:
-    char dirTemplate[PATH_MAX] = "/tmp/fsoptionTest.XXXXXX";
     std::string dir;
     std::string fstabFile;
     std::string mtabFile;
@@ -34,8 +33,8 @@ protected:
 
     void SetUp() override
     {
-        dir = mkdtemp(dirTemplate);
-        ASSERT_TRUE(dir != "");
+        dir = mContext.GetTempdirPath() + "/filesystem-mount-option";
+        ASSERT_EQ(0, mkdir(dir.c_str(), 0700));
         fstabFile = dir + "/fstab";
         mtabFile = dir + "/mtab";
         indicators.Push("EnsureFilesystemOption");
@@ -52,12 +51,6 @@ protected:
         mtab << "/dev/sda1 / ext4 rw,nodev,noatime 0 0\n";
         mtab << "/dev/sda2 /home ext4 rw,relatime,data=ordered 0 0\n";
         mtab.close();
-    }
-
-    void TearDown() override
-    {
-        remove(fstabFile.c_str());
-        remove(mtabFile.c_str());
     }
 };
 

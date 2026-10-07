@@ -17,7 +17,7 @@ protected:
 
 TEST_F(UsersIteratorTest, NonExistentFile)
 {
-    auto result = UsersRange::Make("/tmp/somenoneexistentfilename", mContext.GetLogHandle());
+    auto result = UsersRange::Make(mContext.GetTempdirPath() + "/missing-passwd", mContext.GetLogHandle());
     ASSERT_FALSE(result.HasValue());
     ASSERT_EQ(result.Error().code, ENOENT);
     ASSERT_EQ(result.Error().message, "Failed to create UsersRange: No such file or directory");

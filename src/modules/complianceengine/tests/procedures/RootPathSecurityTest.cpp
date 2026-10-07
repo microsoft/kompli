@@ -26,20 +26,21 @@ protected:
 
     void SetUp() override
     {
-        char tmppath[MAXPATHLEN] = "/tmp/pathTestXXXXXX";
-        ASSERT_TRUE(nullptr != mkdtemp(tmppath));
-        path = tmppath;
+        path = mContext.GetTempdirPath() + "/root-path";
+        ASSERT_EQ(0, mkdir(path.c_str(), 0700));
         indicators.Push("EnsureRootPath");
-    }
-
-    void TearDown() override
-    {
-        rmdir(path.c_str());
     }
 };
 
 TEST_F(EnsureRootPathTest, AuditRootPathCompliant)
 {
+    struct stat rootStatus;
+    ASSERT_EQ(0, ::stat("/", &rootStatus));
+    if (rootStatus.st_uid != 0)
+    {
+        GTEST_SKIP() << "This test requires / to be owned by root";
+    }
+
     EXPECT_CALL(mContext, ExecuteCommand("sudo -n -Hiu root env")).WillOnce(Return(Result<std::string>("PATH=/bin:/usr/bin:/sbin:/usr/sbin")));
 
     auto result = AuditRootPathSecurity(indicators, mContext);

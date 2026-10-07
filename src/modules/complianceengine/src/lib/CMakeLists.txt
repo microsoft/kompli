@@ -190,6 +190,7 @@ add_library(complianceenginelib STATIC
     StringTools.cpp
     SystemdCatConfig.cpp
     Telemetry.cpp
+    TemporaryDirectory.cpp
     Users.cpp
     UsersIterator.cpp
     ${PROCEDURES}

@@ -39,6 +39,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <utility>
 #include <version.h>
 
 using ComplianceEngine::Action;
@@ -253,7 +254,13 @@ int main(int argc, char* argv[])
     }
 #endif // BUILD_TELEMETRY
 
-    auto context = std::unique_ptr<Context>(new Context(logHandle.get(), telemetry_fd));
+    auto contextResult = Context::Make(logHandle.get(), telemetry_fd);
+    if (!contextResult.HasValue())
+    {
+        OsConfigLogError(logHandle.get(), "Failed to create CLI context: %s", contextResult.Error().message.c_str());
+        return 1;
+    }
+    auto context = std::move(contextResult).Value();
     // The Engine takes ownership of a PayloadFormatter and uses it polymorphically
     // to render each rule's indicators. Pass the JSON one explicitly: the
     // constructor's default is a DebugFormatter, whose text output could not be

@@ -17,10 +17,11 @@ protected:
 
 TEST_F(DistributionInfoTest, NonExistentFile)
 {
-    auto result = DistributionInfo::ParseEtcOsRelease("/tmp/somenoneexistentfilename");
+    const auto missingPath = mContext.GetTempdirPath() + "/missing-os-release";
+    auto result = DistributionInfo::ParseEtcOsRelease(missingPath);
     ASSERT_FALSE(result.HasValue());
     ASSERT_EQ(result.Error().code, ENOENT);
-    ASSERT_EQ(result.Error().message, "Failed to open /tmp/somenoneexistentfilename");
+    ASSERT_EQ(result.Error().message, "Failed to open " + missingPath);
 }
 
 TEST_F(DistributionInfoTest, EmptyFile)

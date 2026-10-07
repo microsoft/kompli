@@ -2,15 +2,15 @@
 // Licensed under the MIT License.
 
 #include "ContextInterface.h"
+#include "TemporaryDirectory.h"
 
 #include <cstdio>
-#include <cstring>
-#include <dirent.h>
 #include <fstream>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <iostream>
 #include <map>
+#include <stdexcept>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <utility>
@@ -50,90 +50,31 @@ struct MockContext : public ComplianceEngine::ContextInterface
     }
 
     MockContext()
+        : mTempOwner(CreateTempdir()),
+          mTempdir(mTempOwner.Path())
     {
-        strcpy(mTempdir, "/tmp/ComplianceEngineTest.XXXXXX");
-        if (mkdtemp(mTempdir) == nullptr)
-        {
-            throw std::runtime_error("Failed to create temporary directory");
-        }
-        mTempRootDir = std::string(mTempdir) + "/rootfs";
+        mTempRootDir = mTempdir + "/rootfs";
         ::mkdir(mTempRootDir.c_str(), 0755);
 
-        std::string mCachePath = std::string(mTempdir) + "/fsscanner-cache";
-        std::string mLockfilePath = std::string(mTempdir) + "/fsscanner-lock";
+        std::string mCachePath = mTempdir + "/fsscanner-cache";
+        std::string mLockfilePath = mTempdir + "/fsscanner-lock";
         mFsScannerp =
             std::unique_ptr<ComplianceEngine::FilesystemScanner>(new ComplianceEngine::FilesystemScanner(mTempRootDir, mCachePath, mLockfilePath, 60, 120, 10));
     }
 
     ~MockContext() override
     {
-        // Remove files tracked explicitly
-        for (const auto& file : mTempfiles)
+        if (!mTempOwner.Remove())
         {
-            if (0 != remove(file.c_str()))
-            {
-                std::cerr << "Failed to remove temporary file: " << file << ", error: " << std::strerror(errno) << std::endl;
-            }
+            std::cerr << "Failed to remove temporary directory: " << mTempdir << std::endl;
         }
-
-        // Recursively remove any directories created under the temp root (e.g., modulesRoot tree)
-        RecursiveRemove(mTempdir);
-        if (0 != rmdir(mTempdir))
-        {
-            // If directory not empty (race), best-effort second pass
-            RecursiveRemove(mTempdir);
-            if (0 != rmdir(mTempdir))
-            {
-                std::cerr << "Failed to remove temporary directory: " << mTempdir << ", error: " << std::strerror(errno) << std::endl;
-            }
-        }
-    }
-
-    void RecursiveRemove(const std::string& path) const
-    {
-        DIR* dir = opendir(path.c_str());
-        if (!dir)
-        {
-            return;
-        }
-        struct dirent* ent;
-        while ((ent = readdir(dir)) != nullptr)
-        {
-            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
-            {
-                continue;
-            }
-            std::string child = path + "/" + ent->d_name;
-            struct stat st;
-
-            if (0 == lstat(child.c_str(), &st))
-            {
-                if (S_ISDIR(st.st_mode))
-                {
-                    RecursiveRemove(child);
-                    if (0 != rmdir(child.c_str()))
-                    {
-                        std::cerr << "Failed to remove directory: " << child << ", error: " << std::strerror(errno) << std::endl;
-                    }
-                }
-                else
-                {
-                    if (0 != remove(child.c_str()))
-                    {
-                        std::cerr << "Failed to remove file: " << child << ", error: " << std::strerror(errno) << std::endl;
-                    }
-                }
-            }
-        }
-        closedir(dir);
     }
 
     std::string MakeTempfile(const std::string& content, const std::string& extension = "")
     {
-        std::string filename = std::string(mTempdir) + "/" + std::to_string(mTempfiles.size() + 1) + extension;
+        std::string filename = mTempdir + "/" + std::to_string(++mTempfileCount) + extension;
         std::ofstream file(filename);
         file << content;
-        mTempfiles.push_back(filename);
         return filename;
     }
 
@@ -174,9 +115,21 @@ struct MockContext : public ComplianceEngine::ContextInterface
     }
 
 private:
-    char mTempdir[PATH_MAX];
+    // throws as it's used by the constructor
+    static ComplianceEngine::TemporaryDirectory CreateTempdir()
+    {
+        auto result = ComplianceEngine::TemporaryDirectory::Make("ComplianceEngineTest");
+        if (!result.HasValue())
+        {
+            throw std::runtime_error(result.Error().message);
+        }
+        return std::move(result).Value();
+    }
+
+    ComplianceEngine::TemporaryDirectory mTempOwner;
+    std::string mTempdir;
     std::string mTempRootDir;
-    std::vector<std::string> mTempfiles;
+    std::size_t mTempfileCount{0};
     std::map<std::string, std::string> mSpecialFilesMap;
     std::unique_ptr<ComplianceEngine::FilesystemScanner> mFsScannerp;
     ComplianceEngine::Result<std::string> mRunningKernelRelease{std::string("5.15.test")};

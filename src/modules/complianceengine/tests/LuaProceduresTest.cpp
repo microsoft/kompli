@@ -27,10 +27,8 @@ protected:
     void SetUp() override
     {
         mIndicators.Push("LuaProceduresTest");
-        char tmpl[] = "/tmp/lua_proc_testXXXXXX";
-        char* dir = mkdtemp(tmpl);
-        ASSERT_NE(dir, nullptr) << "mkdtemp failed: " << strerror(errno);
-        mTempRoot = dir;
+        mTempRoot = mContext.GetTempdirPath() + "/lua-procedures";
+        ASSERT_EQ(0, mkdir(mTempRoot.c_str(), 0700));
         // helper lambdas
         auto mkdirp = [](const std::string& p) {
             if (mkdir(p.c_str(), 0700) != 0 && errno != EEXIST)
@@ -52,21 +50,6 @@ protected:
         std::ofstream(mTempRoot + "/sub1/nested/d.txt") << "D";
         mkdirp(mTempRoot + "/sub2");
         std::ofstream(mTempRoot + "/sub2/ignore.tmp") << "I";
-    }
-
-    void TearDown() override
-    {
-        // Best-effort recursive removal (only files/dirs we created)
-        auto unlinkIf = [](const std::string& p) { unlink(p.c_str()); };
-        unlinkIf(mTempRoot + "/a.txt");
-        unlinkIf(mTempRoot + "/b.log");
-        unlinkIf(mTempRoot + "/sub1/c.conf");
-        unlinkIf(mTempRoot + "/sub1/nested/d.txt");
-        unlinkIf(mTempRoot + "/sub2/ignore.tmp");
-        rmdir((mTempRoot + "/sub1/nested").c_str());
-        rmdir((mTempRoot + "/sub1").c_str());
-        rmdir((mTempRoot + "/sub2").c_str());
-        rmdir(mTempRoot.c_str());
     }
 
     std::string MakeScript(const std::string& path, const std::string& pattern, bool recursive)

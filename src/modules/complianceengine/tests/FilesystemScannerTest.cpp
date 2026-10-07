@@ -3,6 +3,8 @@
 
 #include "FilesystemScanner.h"
 
+#include "MockContext.h"
+
 #include <cerrno>
 #include <cstring>
 #include <fstream>
@@ -19,17 +21,6 @@ using ComplianceEngine::Result;
 
 namespace
 {
-std::string MakeTempDir()
-{
-    char templ[] = "/tmp/fs_scanner_testXXXXXX";
-    char* p = ::mkdtemp(templ);
-    if (!p)
-    {
-        throw std::runtime_error("mkdtemp failed");
-    }
-    return std::string(p);
-}
-
 void TouchFile(const std::string& path)
 {
     std::ofstream ofs(path.c_str());
@@ -59,28 +50,18 @@ protected:
     std::string rootDir;
     std::string cachePath;
     std::string lockPath;
+    MockContext mContext;
 
     void SetUp() override
     {
-        rootDir = MakeTempDir();
+        rootDir = mContext.GetTempdirPath() + "/filesystem-scanner";
+        ASSERT_EQ(0, ::mkdir(rootDir.c_str(), 0700));
         // create some files
         ::mkdir((rootDir + "/sub").c_str(), 0755);
         TouchFile(rootDir + "/a.txt");
         TouchFile(rootDir + "/sub/b.txt");
         cachePath = rootDir + "/cache.txt"; // place cache within temp dir
         lockPath = rootDir + "/lock.lck";
-    }
-
-    void TearDown() override
-    {
-        // Best-effort cleanup
-        ::unlink(cachePath.c_str());
-        ::unlink((cachePath + ".tmp").c_str());
-        ::unlink(lockPath.c_str());
-        ::unlink((rootDir + "/a.txt").c_str());
-        ::unlink((rootDir + "/sub/b.txt").c_str());
-        ::rmdir((rootDir + "/sub").c_str());
-        ::rmdir(rootDir.c_str());
     }
 };
 
@@ -224,7 +205,7 @@ TEST_F(FilesystemScannerTest, HardTimeoutWithWaitMayReturnFreshCache)
 TEST_F(FilesystemScannerTest, LoadCacheSkipsOverHardTimeout)
 {
     // Keep the initial cache comfortably below the soft timeout. With a
-    // one-second timeout, whole-second timestamps can make a fresh cache look
+    // short timeout, whole-second timestamps can make a fresh cache look
     // soft-expired and start a refresh that races with the stale-header write.
     FilesystemScanner scanner(rootDir, cachePath, lockPath, 3600, 7200, 0);
     // Build initial cache
@@ -235,18 +216,29 @@ TEST_F(FilesystemScannerTest, LoadCacheSkipsOverHardTimeout)
         res = scanner.GetFullFilesystem();
     }
     ASSERT_TRUE(res);
+    std::ifstream cache(cachePath.c_str());
+    ASSERT_TRUE(cache.is_open());
+    std::string originalHeader;
+    std::string originalEntry;
+    ASSERT_TRUE(static_cast<bool>(std::getline(cache, originalHeader)));
+    ASSERT_TRUE(static_cast<bool>(std::getline(cache, originalEntry)));
+    cache.close();
+
     // Manually modify header to simulate old cache beyond hard timeout
     {
         std::ofstream ofs(cachePath.c_str(), std::ios::out | std::ios::trunc);
         long oldStart = (long)::time(nullptr) - 10000;
         long oldEnd = oldStart - 1; // ensure earlier
         ofs << "# FilesystemScanCache-V1 " << oldStart << ' ' << oldEnd << "\n";
+        ofs << originalEntry << "\n";
+        ASSERT_TRUE(ofs.good());
         ofs.close();
     }
     // Second scanner to test LoadCache rejection
     FilesystemScanner scanner2(rootDir, cachePath, lockPath, 3600, 7200, 0);
     auto res2 = scanner2.GetFullFilesystem();
-    ASSERT_FALSE(res2); // should treat stale cache as unusable and error (background scan kicked)
+    ASSERT_FALSE(res2);
+    EXPECT_EQ(res2.Error().message, "filesystem cache unavailable; background scan started");
 }
 
 TEST_F(FilesystemScannerTest, LegacyCacheFormatStillLoads)

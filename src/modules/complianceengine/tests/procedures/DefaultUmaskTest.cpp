@@ -29,13 +29,14 @@ protected:
     void SetUp() override
     {
         mIndicators.Push("EnsurePasswordChangeIsInPast");
-        mContext.SetSpecialFilePath("/etc/bashrc", "/tmp/somenonexistentfilename");
-        mContext.SetSpecialFilePath("/etc/bash.bashrc", "/tmp/somenonexistentfilename");
-        mContext.SetSpecialFilePath("/etc/profile", "/tmp/somenonexistentfilename");
+        const auto missingPath = mContext.GetTempdirPath() + "/missing-config";
+        mContext.SetSpecialFilePath("/etc/bashrc", missingPath);
+        mContext.SetSpecialFilePath("/etc/bash.bashrc", missingPath);
+        mContext.SetSpecialFilePath("/etc/profile", missingPath);
         mContext.SetSpecialFilePath("/etc/profile.d/", mContext.GetTempdirPath());
-        mContext.SetSpecialFilePath("/etc/pam.d/postlogin", "/tmp/somenonexistentfilename");
-        mContext.SetSpecialFilePath("/etc/login.defs", "/tmp/somenonexistentfilename");
-        mContext.SetSpecialFilePath("/etc/default/login", "/tmp/somenonexistentfilename");
+        mContext.SetSpecialFilePath("/etc/pam.d/postlogin", missingPath);
+        mContext.SetSpecialFilePath("/etc/login.defs", missingPath);
+        mContext.SetSpecialFilePath("/etc/default/login", missingPath);
     }
 
     void TearDown() override
