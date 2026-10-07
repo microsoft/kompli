@@ -183,3 +183,19 @@ TEST_F(BindingsTest, InvalidValues_1)
     ASSERT_TRUE(params.optionalIntValue.HasValue());
     EXPECT_EQ(params.optionalIntValue.Value(), -3);
 }
+
+TEST_F(BindingsTest, IntegerBindingRejectsMalformedSuffix)
+{
+    map<string, string> args{
+        {"intValue", "0junk"},
+        {"boolValue", "true"},
+        {"stringValue", "test"},
+        {"regexValue", "test"},
+        {"patternValue", "test"},
+        {"octalValue", "0755"},
+        {"separatedValue", "foo"},
+    };
+    const auto result = ParseArguments<BuiltinTypesParams>(args);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+}

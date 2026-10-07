@@ -373,6 +373,42 @@ TEST_F(EnsureSshdOptionTest, OperationNumericGe_NonCompliant)
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
 
+TEST_F(EnsureSshdOptionTest, NumericOperationRejectsSuffixButTrimsOutputWhitespace)
+{
+    struct Case
+    {
+        std::string actual;
+        std::string expected;
+        Status status;
+        std::string message;
+    };
+    const Case cases[] = {
+        {"4junk", "5", Status::NonCompliant,
+            "Option 'maxauthtries' has non-numeric value '4junk' or comparison target '5' (cannot apply numeric operation 'lt')"},
+        {"4", "5junk", Status::NonCompliant,
+            "Option 'maxauthtries' has non-numeric value '4' or comparison target '5junk' (cannot apply numeric operation 'lt')"},
+        {"4  \t", "5", Status::Compliant, "Option 'maxauthtries' has a compliant numeric value '4' (less than '5')"},
+    };
+    for (const auto& test : cases)
+    {
+        const auto output = "port 22\nmaxauthtries " + test.actual + "\n";
+        EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(output)));
+        EXPECT_CALL(mContext, ExecuteCommand(sshdSimpleCommand)).WillOnce(Return(Result<std::string>(output)));
+        SshdOptionParams params;
+        params.option = {{"maxauthtries"}};
+        params.value = test.expected;
+        params.op = SshdOptionOperation::LessThan;
+        IndicatorsTree indicators;
+        indicators.Push("EnsureSshdOption");
+        const auto result = AuditSshdOption(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue()) << test.actual;
+        EXPECT_EQ(result.Value(), test.status) << test.actual;
+        ASSERT_FALSE(indicators.Back().indicators.empty());
+        EXPECT_EQ(indicators.Back().indicators.front().status, test.status);
+        EXPECT_EQ(indicators.Back().indicators.front().message, test.message);
+    }
+}
+
 TEST_F(EnsureSshdOptionTest, MaxStartups_Compliant)
 {
     EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(sshdSpecialOptionsOutput)));
