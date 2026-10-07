@@ -45,6 +45,7 @@ set(PROCEDURES
     procedures/XdmcpDisabledTest.cpp
     procedures/CommandOutputMatchTest.cpp
     procedures/FileRegexMatchTest.cpp
+    procedures/FileRegexMatchErrorsTest.cpp
     procedures/PackageInstalledTest.cpp
     procedures/SystemdConfigTest.cpp
     procedures/SystemdUnitStateTest.cpp
@@ -78,10 +79,14 @@ add_executable(complianceenginetests
     LuaEvaluatorTest.cpp
     LuaProceduresTest.cpp
     NetworkToolsTest.cpp
+    NumericFileGroupTest.cpp
     OptionalTest.cpp
+    OvalVariableEvidenceTest.cpp
+    OvalVariableResolverTest.cpp
     RegexFallbackTest.cpp
     RegexTest.cpp
     ResultTest.cpp
+    StigTextQuantifierSemanticsTest.cpp
     StringToolsTest.cpp
     TemporaryDirectoryTest.cpp
     UsersIteratorTest.cpp
