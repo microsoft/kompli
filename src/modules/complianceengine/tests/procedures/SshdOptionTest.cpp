@@ -373,6 +373,85 @@ TEST_F(EnsureSshdOptionTest, OperationNumericGe_NonCompliant)
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
 
+TEST_F(EnsureSshdOptionTest, NumericOperatorBoundariesAndIndicators)
+{
+    struct Case
+    {
+        std::string actual;
+        std::string expected;
+        SshdOptionOperation operation;
+        Status status;
+        std::string expectation;
+    };
+    const Case cases[] = {
+        {"4", "4", SshdOptionOperation::LessThan, Status::NonCompliant, "less than"},
+        {"4", "4", SshdOptionOperation::LessOrEqual, Status::Compliant, "less than or equal to"},
+        {"4", "4", SshdOptionOperation::GreaterThan, Status::NonCompliant, "greater than"},
+        {"4", "4", SshdOptionOperation::GreaterOrEqual, Status::Compliant, "greater than or equal to"},
+        {"3", "4", SshdOptionOperation::LessThan, Status::Compliant, "less than"},
+        {"5", "4", SshdOptionOperation::GreaterThan, Status::Compliant, "greater than"},
+        {"-2147483648", "-2147483647", SshdOptionOperation::LessThan, Status::Compliant, "less than"},
+        {"2147483647", "2147483646", SshdOptionOperation::GreaterThan, Status::Compliant, "greater than"},
+    };
+    for (const auto& test : cases)
+    {
+        const std::string output = "port 22\nmaxauthtries " + test.actual + "\n";
+        EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(output)));
+        EXPECT_CALL(mContext, ExecuteCommand(sshdSimpleCommand)).WillOnce(Return(Result<std::string>(output)));
+        SshdOptionParams params;
+        params.option = {{"maxauthtries"}};
+        params.value = test.expected;
+        params.op = test.operation;
+        IndicatorsTree indicators;
+        indicators.Push("EnsureSshdOption");
+        auto result = AuditSshdOption(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue()) << test.actual;
+        EXPECT_EQ(result.Value(), test.status) << test.actual;
+        ASSERT_EQ(indicators.Back().indicators.size(), test.status == Status::Compliant ? 2U : 1U);
+        const auto& indicator = indicators.Back().indicators.front();
+        EXPECT_EQ(indicator.status, test.status);
+        EXPECT_EQ(indicator.message,
+            test.status == Status::Compliant ?
+                "Option 'maxauthtries' has a compliant numeric value '" + test.actual + "' (" + test.expectation + " '" + test.expected + "')" :
+                "Option 'maxauthtries' has numeric value '" + test.actual + "' which is not " + test.expectation + " '" + test.expected + "'");
+        if (test.status == Status::Compliant)
+        {
+            EXPECT_EQ(indicators.Back().indicators.back().message, "All options are compliant");
+        }
+    }
+}
+
+TEST_F(EnsureSshdOptionTest, NumericOperationKeepsMissingAndInvalidValuePolicies)
+{
+    SshdOptionParams params;
+    params.option = {{"missingoption"}};
+    params.value = "4";
+    params.op = SshdOptionOperation::LessOrEqual;
+    EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(sshdWithoutMatchGroupOutput)));
+    EXPECT_CALL(mContext, ExecuteCommand(sshdSimpleCommand)).WillOnce(Return(Result<std::string>(sshdWithoutMatchGroupOutput)));
+    IndicatorsTree missing;
+    missing.Push("EnsureSshdOption");
+    auto result = AuditSshdOption(params, missing, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    ASSERT_EQ(missing.Back().indicators.size(), 1U);
+    EXPECT_EQ(missing.Back().indicators.front().message, "Option 'missingoption' not found in SSH daemon configuration");
+
+    params.option = {{"maxauthtries"}};
+    params.value = "not-a-number";
+    params.op = SshdOptionOperation::GreaterThan;
+    EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(sshdWithoutMatchGroupOutput)));
+    EXPECT_CALL(mContext, ExecuteCommand(sshdSimpleCommand)).WillOnce(Return(Result<std::string>(sshdWithoutMatchGroupOutput)));
+    IndicatorsTree invalid;
+    invalid.Push("EnsureSshdOption");
+    result = AuditSshdOption(params, invalid, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    ASSERT_EQ(invalid.Back().indicators.size(), 1U);
+    EXPECT_EQ(invalid.Back().indicators.front().message,
+        "Option 'maxauthtries' has non-numeric value '4' or comparison target 'not-a-number' (cannot apply numeric operation 'gt')");
+}
+
 TEST_F(EnsureSshdOptionTest, MaxStartups_Compliant)
 {
     EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(sshdSpecialOptionsOutput)));

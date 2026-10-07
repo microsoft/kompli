@@ -6,6 +6,7 @@
 #include <LoginDefsOption.h>
 #include <ProcedureMap.h>
 #include <StringTools.h>
+#include <TypedComparison.h>
 #include <sstream>
 #include <string>
 
@@ -15,42 +16,45 @@ namespace ComplianceEngine
 {
 namespace
 {
-Result<bool> NumericComparison(int lhs, int rhs, ComparisonOperation operation)
+Result<TypedComparisonOperation> MapComparison(ComparisonOperation operation)
 {
     switch (operation)
     {
         case ComparisonOperation::Equal:
-            return lhs == rhs;
+            return TypedComparisonOperation::Equal;
         case ComparisonOperation::NotEqual:
-            return lhs != rhs;
+            return TypedComparisonOperation::NotEqual;
         case ComparisonOperation::LessThan:
-            return lhs < rhs;
+            return TypedComparisonOperation::LessThan;
         case ComparisonOperation::LessOrEqual:
-            return lhs <= rhs;
+            return TypedComparisonOperation::LessOrEqual;
         case ComparisonOperation::GreaterThan:
-            return lhs > rhs;
+            return TypedComparisonOperation::GreaterThan;
         case ComparisonOperation::GreaterOrEqual:
-            return lhs >= rhs;
+            return TypedComparisonOperation::GreaterOrEqual;
         default:
             break;
     }
+    return Error("Unsupported comparison operation", EINVAL);
+}
 
-    return Error("Unsupported comparison operation for numeric value", EINVAL);
+Result<bool> NumericComparison(int lhs, int rhs, ComparisonOperation operation)
+{
+    auto mapped = MapComparison(operation);
+    if (!mapped.HasValue())
+    {
+        return Error("Unsupported comparison operation for numeric value", EINVAL);
+    }
+    return CompareTyped(lhs, rhs, mapped.Value());
 }
 
 Result<bool> StringComparison(const string& lhs, const string& rhs, ComparisonOperation operation)
 {
-    switch (operation)
+    if ((operation != ComparisonOperation::Equal) && (operation != ComparisonOperation::NotEqual))
     {
-        case ComparisonOperation::Equal:
-            return lhs == rhs;
-        case ComparisonOperation::NotEqual:
-            return lhs != rhs;
-        default:
-            break;
+        return Error("Unsupported comparison operation for string value (only eq and ne are supported)", EINVAL);
     }
-
-    return Error("Unsupported comparison operation for string value (only eq and ne are supported)", EINVAL);
+    return CompareTyped(lhs, rhs, operation == ComparisonOperation::Equal ? TypedComparisonOperation::Equal : TypedComparisonOperation::NotEqual);
 }
 
 Optional<string> FindLoginDefsValue(const string& fileContents, const string& optionName, OsConfigLogHandle logHandle)
