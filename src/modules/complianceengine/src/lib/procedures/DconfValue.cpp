@@ -8,12 +8,28 @@
 
 namespace ComplianceEngine
 {
+namespace
+{
+Result<TypedComparisonOperation> MapComparison(DconfOperation operation)
+{
+    switch (operation)
+    {
+        case DconfOperation::Eq:
+            return TypedComparisonOperation::Equal;
+        case DconfOperation::Ne:
+            return TypedComparisonOperation::NotEqual;
+    }
+    return Error("Not supported operation", EINVAL);
+}
+} // namespace
+
 Result<Status> AuditDconfValue(const DconfValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
     const auto key = EscapeForShell(params.key);
-    if ((params.operation != DconfOperation::Eq) && (params.operation != DconfOperation::Ne))
+    auto mapped = MapComparison(params.operation);
+    if (!mapped.HasValue())
     {
-        return Error("Not supported operation", EINVAL);
+        return mapped.Error();
     }
 
     Result<std::string> dconfRead = context.ExecuteCommand("dconf read \"" + key + "\"");
@@ -29,8 +45,7 @@ Result<Status> AuditDconfValue(const DconfValueParams& params, IndicatorsTree& i
         dconfVal.erase(dconfVal.size() - 1);
     }
 
-    auto comparison =
-        CompareTyped(dconfVal, params.value, params.operation == DconfOperation::Eq ? TypedComparisonOperation::Equal : TypedComparisonOperation::NotEqual);
+    auto comparison = CompareTyped(dconfVal, params.value, mapped.Value());
     if (!comparison.HasValue())
     {
         return comparison.Error();
