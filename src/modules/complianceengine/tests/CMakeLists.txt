@@ -86,6 +86,7 @@ add_executable(complianceenginetests
     OptionalTest.cpp
     OvalVariableEvidenceTest.cpp
     OvalVariableResolverTest.cpp
+    parsers/LoginDefsTest.cpp
     RegexFallbackTest.cpp
     RegexTest.cpp
     ResultTest.cpp
