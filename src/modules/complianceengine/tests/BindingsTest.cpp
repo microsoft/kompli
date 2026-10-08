@@ -204,3 +204,14 @@ TEST_F(BindingsTest, OctalModeKeepsLeadingWhitespaceAndSigns)
         EXPECT_EQ(result.Value(), input == "-1" ? static_cast<mode_t>(-1) : static_cast<mode_t>(0755));
     }
 }
+
+TEST_F(BindingsTest, OctalModePreservesInvalidAndOverflowErrors)
+{
+    for (const string input : {"invalid", "07777777777777777777777777777777777777"})
+    {
+        const auto result = ComplianceEngine::BindingParsers::Parse<mode_t>(input);
+        ASSERT_FALSE(result.HasValue()) << input;
+        EXPECT_EQ(result.Error().code, EINVAL);
+        EXPECT_EQ(result.Error().message, "Failed to parse octal value '" + input + "': stol");
+    }
+}
