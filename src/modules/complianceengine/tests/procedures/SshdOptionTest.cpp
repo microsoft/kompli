@@ -933,9 +933,43 @@ TEST_F(EnsureSshdOptionTest, Match_NumericLt_NonCompliant)
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
 
-TEST_F(EnsureSshdOptionTest, Match_FileReadFailure_NoMatchesReturnsCompliant)
+TEST_F(EnsureSshdOptionTest, Match_RequiredConfigReadFailureReturnsError)
 {
-    EXPECT_CALL(mContext, GetFileContents("/etc/ssh/sshd_config")).WillOnce(Return(Result<std::string>(Error("read error", -1))));
+    EXPECT_CALL(mContext, GetFileContents("/etc/ssh/sshd_config")).WillOnce(Return(Result<std::string>(Error("read error", EACCES))));
+
+    SshdOptionParams params;
+    params.option = {{"permitrootlogin"}};
+    params.value = "no";
+    params.mode = SshdOptionMode::AllMatches;
+
+    auto result = AuditSshdOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EACCES);
+    EXPECT_NE(result.Error().message.find("/etc/ssh/sshd_config"), std::string::npos);
+    EXPECT_NE(result.Error().message.find("read error"), std::string::npos);
+}
+
+TEST_F(EnsureSshdOptionTest, Match_IncludedConfigReadFailureReturnsError)
+{
+    EXPECT_CALL(mContext, GetFileContents("/etc/ssh/sshd_config"))
+        .WillOnce(Return(Result<std::string>("Include /etc/ssh/sshd_config.d/child.conf\nMatch User alice\n")));
+    EXPECT_CALL(mContext, GetFileContents("/etc/ssh/sshd_config.d/child.conf")).WillOnce(Return(Result<std::string>(Error("read error", EACCES))));
+
+    SshdOptionParams params;
+    params.option = {{"permitrootlogin"}};
+    params.value = "no";
+    params.mode = SshdOptionMode::AllMatches;
+
+    auto result = AuditSshdOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EACCES);
+    EXPECT_NE(result.Error().message.find("/etc/ssh/sshd_config.d/child.conf"), std::string::npos);
+    EXPECT_NE(result.Error().message.find("read error"), std::string::npos);
+}
+
+TEST_F(EnsureSshdOptionTest, Match_ReadableConfigWithoutMatchBlocksIsCompliant)
+{
+    EXPECT_CALL(mContext, GetFileContents("/etc/ssh/sshd_config")).WillOnce(Return(Result<std::string>("Port 22\n")));
 
     SshdOptionParams params;
     params.option = {{"permitrootlogin"}};
@@ -944,8 +978,7 @@ TEST_F(EnsureSshdOptionTest, Match_FileReadFailure_NoMatchesReturnsCompliant)
 
     auto result = AuditSshdOption(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
-    // No matches => loop skipped => Compliant per current implementation
-    ASSERT_EQ(result.Value(), Status::Compliant);
+    EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
 // Reproduces the aadsshlogin failure: the installer appends
