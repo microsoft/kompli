@@ -86,6 +86,7 @@ add_executable(complianceenginetests
     RegexFallbackTest.cpp
     RegexTest.cpp
     ResultTest.cpp
+    ResultEvidenceTest.cpp
     StigTextQuantifierSemanticsTest.cpp
     StringToolsTest.cpp
     TemporaryDirectoryTest.cpp
