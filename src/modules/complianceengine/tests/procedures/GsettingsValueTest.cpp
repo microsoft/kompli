@@ -444,6 +444,17 @@ TEST_F(EnsureGsettings, StringOrderingStillFailsAndIsUnlockedKeepsOwnOperation)
     EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(EnsureGsettings, InvalidDirectOperationReturnsErrorWithoutCommandOrIndicator)
+{
+    mParams.operation = static_cast<GsettingsOperationType>(100);
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::_)).Times(0);
+    const auto result = AuditGsettingsValue(mParams, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().message, "Unsupported operation");
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
 TEST_F(EnsureGsettings, SignedNegativeOrderingAndUnsignedPrefixPreserveCallerPolicy)
 {
     mParams.schema = "org.gnome.desktop.interface";
