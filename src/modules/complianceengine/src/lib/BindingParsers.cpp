@@ -3,8 +3,9 @@
 
 #include <BindingParsers.h>
 #include <StringTools.h>
+#include <cerrno>
+#include <cstdlib>
 #include <cstring>
-#include <stdexcept>
 
 namespace ComplianceEngine
 {
@@ -62,20 +63,19 @@ Result<bool> Parse<bool>(const string& input)
 template <>
 Result<mode_t> Parse<mode_t>(const string& input)
 {
-    try
+    errno = 0;
+    char* end = nullptr;
+    const auto value = std::strtol(input.c_str(), &end, 8);
+    if (errno == ERANGE || end == input.c_str())
     {
-        size_t consumed = 0;
-        const auto value = std::stol(input, &consumed, 8);
-        if (consumed != input.size())
-        {
-            throw std::invalid_argument("Unconsumed suffix in octal value");
-        }
-        return static_cast<mode_t>(value);
+        // Preserve the error detail previously returned by std::stol.
+        return Error("Failed to parse octal value '" + input + "': stol", EINVAL);
     }
-    catch (const std::exception& e)
+    if (end != input.c_str() + input.size())
     {
-        return Error("Failed to parse octal value '" + input + "': " + e.what(), EINVAL);
+        return Error("Failed to parse octal value '" + input + "': Unconsumed suffix in octal value", EINVAL);
     }
+    return static_cast<mode_t>(value);
 }
 } // namespace BindingParsers
 } // namespace ComplianceEngine
