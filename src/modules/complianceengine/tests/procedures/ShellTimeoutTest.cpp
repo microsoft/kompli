@@ -68,6 +68,17 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, IncorrectValue)
     EXPECT_EQ(root->indicators.back().message, string("TMOUT is set to an incorrect value in ") + path);
 }
 
+TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, MalformedNumericSuffixReturnsConversionError)
+{
+    const auto path = mContext.MakeTempfile("TMOUT=900junk\nreadonly TMOUT\nexport TMOUT\n");
+    mContext.SetSpecialFilePath("/etc/bashrc", path);
+    const auto result = AuditShellTimeout(mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().message, "Invalid integer value: 900junk");
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
 TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, NoReadonly)
 {
     auto path = mContext.MakeTempfile("TMOUT=900\n");

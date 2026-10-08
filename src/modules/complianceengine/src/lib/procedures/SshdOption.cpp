@@ -186,7 +186,7 @@ Result<std::map<std::string, std::string>> GetSshdOptions(ContextInterface& cont
         {
             std::string optionValue;
             std::getline(lineStream, optionValue);
-            optionValue.erase(0, optionValue.find_first_not_of(" \t"));
+            optionValue = TrimWhiteSpaces(optionValue);
             currentOption = ToLower(currentOption);
             optionValue = ToLower(optionValue);
             options[currentOption] = optionValue;

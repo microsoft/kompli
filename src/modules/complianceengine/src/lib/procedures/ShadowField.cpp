@@ -7,6 +7,7 @@
 #include <Regex.h>
 #include <ScopeGuard.h>
 #include <ShadowField.h>
+#include <StringTools.h>
 #include <TypedComparison.h>
 #include <shadow.h>
 #include <vector>
@@ -81,22 +82,6 @@ const string& PrettyFieldName(Field field)
 {
     assert(fieldNamesMap.find(field) != fieldNamesMap.end());
     return fieldNamesMap.at(field);
-}
-
-Result<int> AsInt(const string& value)
-{
-    try
-    {
-        return std::stoi(value);
-    }
-    catch (const std::invalid_argument&)
-    {
-        return Error("Invalid integer value: " + value, EINVAL);
-    }
-    catch (const std::out_of_range&)
-    {
-        return Error("Integer value out of range: " + value, ERANGE);
-    }
 }
 
 Result<TypedComparisonOperation> MapComparison(ComparisonOperation operation)
@@ -246,7 +231,7 @@ Result<bool> CompareUserEntry(const spwd& entry, Field field, const string& valu
             break;
     }
 
-    auto intValue = AsInt(value);
+    auto intValue = TryStringToInt(value);
     if (!intValue.HasValue())
     {
         return Error("invalid " + PrettyFieldName(field) + " parameter value", EINVAL);

@@ -41,13 +41,19 @@ std::string StringOrEmpty(const char* s)
 
 std::string TrimWhiteSpaces(const std::string& str)
 {
-    auto start = std::find_if_not(str.begin(), str.end(), ::isspace);
-    auto end = std::find_if_not(str.rbegin(), str.rend(), ::isspace).base();
+    const auto isWhitespace = [](unsigned char character) { return std::isspace(character); };
+    auto start = std::find_if_not(str.begin(), str.end(), isWhitespace);
+    auto end = std::find_if_not(str.rbegin(), str.rend(), isWhitespace).base();
     if (start < end)
     {
         return std::string(start, end);
     }
     return std::string();
+}
+
+std::string StripComment(const std::string& str)
+{
+    return str.substr(0, str.find('#'));
 }
 
 std::string ToLower(std::string value)
@@ -60,7 +66,13 @@ Result<int> TryStringToInt(const std::string& str, int base)
 {
     try
     {
-        return std::stoi(str, nullptr, base);
+        std::size_t consumed = 0;
+        const int value = std::stoi(str, &consumed, base);
+        if (str.size() != consumed)
+        {
+            return Error("Invalid integer value: " + str, EINVAL);
+        }
+        return value;
     }
     catch (const std::invalid_argument&)
     {
