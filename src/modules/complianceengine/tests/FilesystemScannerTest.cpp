@@ -4,12 +4,18 @@
 #include "FilesystemScanner.h"
 
 #include "MockContext.h"
+#include "ScopeGuard.h"
 
 #include <cerrno>
 #include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <string>
+#include <sys/file.h>
+#include <sys/inotify.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -156,24 +162,102 @@ TEST_F(FilesystemScannerTest, BackgroundScanOutlivesLaunchingProcess)
 
 TEST_F(FilesystemScannerTest, KilledBackgroundScanIsReplaced)
 {
-    FilesystemScanner scanner("/", cachePath, lockPath, 5, 10, 0);
+    const std::string externalCache = mContext.GetTempdirPath() + "/killed-scan-cache";
+    const std::string externalLock = mContext.GetTempdirPath() + "/killed-scan-lock";
+    const std::string temporaryCache = externalCache + ".tmp";
+    // Hold the first worker after its successful walk, while it still owns the lock.
+    ASSERT_EQ(::mkfifo(temporaryCache.c_str(), 0600), 0);
+    pid_t activeWorker = -1;
+    int lockFd = -1;
+    ScopeGuard cleanup([&] {
+        if (activeWorker > 0)
+        {
+            ::kill(activeWorker, SIGKILL);
+        }
+        // Unblock a worker whose PID was not observed before an assertion failed.
+        const int reader = ::open(temporaryCache.c_str(), O_RDONLY | O_NONBLOCK);
+        const auto waitUntilReleased = [&]() {
+            for (int attempt = 0; attempt < 300; ++attempt)
+            {
+                const int probe = ::open(externalLock.c_str(), O_RDONLY);
+                if (probe >= 0)
+                {
+                    const bool released = (::flock(probe, LOCK_EX | LOCK_NB) == 0);
+                    if (released)
+                    {
+                        ::flock(probe, LOCK_UN);
+                    }
+                    ::close(probe);
+                    if (released)
+                    {
+                        return true;
+                    }
+                }
+                ::usleep(10 * 1000);
+            }
+            return false;
+        };
+        const bool released = waitUntilReleased();
+        if (!released)
+        {
+            ADD_FAILURE() << "Scanner lock remained held during FIFO cleanup";
+        }
+        if (reader >= 0 && released)
+        {
+            ::close(reader);
+        }
+        if (lockFd >= 0)
+        {
+            ::close(lockFd);
+        }
+        if (released)
+        {
+            ::unlink(temporaryCache.c_str());
+        }
+    });
+    FilesystemScanner scanner(rootDir, externalCache, externalLock, 5, 10, 0);
     ASSERT_FALSE(scanner.GetFullFilesystem());
 
-    pid_t firstScannerPid = WaitForScannerPid(lockPath);
+    pid_t firstScannerPid = WaitForScannerPid(externalLock);
     ASSERT_GT(firstScannerPid, 0);
+    activeWorker = firstScannerPid;
     ASSERT_EQ(::kill(firstScannerPid, SIGKILL), 0);
+    activeWorker = -1;
 
-    pid_t replacementScannerPid = -1;
-    for (int attempt = 0; (attempt < 300) && (replacementScannerPid < 0); ++attempt)
-    {
-        ASSERT_FALSE(scanner.GetFullFilesystem());
-        replacementScannerPid = WaitForScannerPid(lockPath, firstScannerPid);
-    }
+    lockFd = ::open(externalLock.c_str(), O_RDONLY);
+    ASSERT_GE(lockFd, 0);
+    const auto waitForLockRelease = [&]() {
+        for (int attempt = 0; attempt < 300; ++attempt)
+        {
+            if (::flock(lockFd, LOCK_EX | LOCK_NB) == 0)
+            {
+                ::flock(lockFd, LOCK_UN);
+                return true;
+            }
+            ::usleep(10 * 1000);
+        }
+        return false;
+    };
+    ASSERT_TRUE(waitForLockRelease());
 
+    ASSERT_FALSE(scanner.GetFullFilesystem());
+    pid_t replacementScannerPid = WaitForScannerPid(externalLock, firstScannerPid);
     ASSERT_GT(replacementScannerPid, 0);
+    activeWorker = replacementScannerPid;
     EXPECT_NE(replacementScannerPid, firstScannerPid);
     EXPECT_EQ(::kill(replacementScannerPid, 0), 0);
-    EXPECT_EQ(::kill(replacementScannerPid, SIGKILL), 0);
+    ASSERT_EQ(::kill(replacementScannerPid, SIGKILL), 0);
+    activeWorker = -1;
+    ASSERT_TRUE(waitForLockRelease());
+    ASSERT_EQ(::close(lockFd), 0);
+    lockFd = -1;
+    ASSERT_EQ(::unlink(temporaryCache.c_str()), 0);
+    cleanup.Dismiss();
+
+    FilesystemScanner waitingScanner(rootDir, externalCache, externalLock, 5, 10, 3);
+    auto result = waitingScanner.GetFullFilesystem();
+    ASSERT_TRUE(result.HasValue()) << (result.HasValue() ? "" : result.Error().message);
+    EXPECT_NE(result.Value()->entries.find(rootDir + "/a.txt"), result.Value()->entries.end());
 }
 
 TEST_F(FilesystemScannerTest, SoftTimeoutTriggersBackgroundButReturnsData)
@@ -343,4 +427,96 @@ TEST_F(FilesystemScannerTest, MalformedCacheRowsAreNotLoadedAsEntries)
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(1u, result.Value()->entries.size());
     EXPECT_EQ(rootDir + "/valid", result.Value()->entries.begin()->first);
+}
+
+TEST_F(FilesystemScannerTest, PartialScanDoesNotReplaceExistingCache)
+{
+    const std::string filePath = rootDir + "/a.txt";
+    ASSERT_EQ(0, ::mkdir((rootDir + "/sub/next").c_str(), 0700));
+    ASSERT_EQ(0, ::mkdir((rootDir + "/sub/next/last").c_str(), 0700));
+    const int notificationFd = ::inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    ASSERT_GE(notificationFd, 0);
+    ScopeGuard closeNotification([&] { ::close(notificationFd); });
+    ASSERT_GE(::inotify_add_watch(notificationFd, (rootDir + "/sub/next").c_str(), IN_OPEN), 0);
+    struct stat metadata;
+    ASSERT_EQ(0, ::lstat(filePath.c_str(), &metadata));
+    const time_t cacheTime = ::time(nullptr) + 1;
+    const std::string header = "# FilesystemScanCache-V1 " + std::to_string(static_cast<long>(cacheTime)) + " " + std::to_string(static_cast<long>(cacheTime));
+    const std::string entry = filePath + " " + std::to_string(static_cast<unsigned long long>(metadata.st_dev)) + " " +
+                              std::to_string(static_cast<unsigned long long>(metadata.st_ino)) + " " +
+                              std::to_string(static_cast<unsigned>(metadata.st_mode)) + " " + std::to_string(static_cast<unsigned>(metadata.st_nlink)) +
+                              " " + std::to_string(static_cast<long long>(metadata.st_uid)) + " " + std::to_string(static_cast<long>(metadata.st_gid)) +
+                              " " + std::to_string(static_cast<long long>(metadata.st_size)) + " " +
+                              std::to_string(static_cast<long>(metadata.st_blksize)) + " " + std::to_string(static_cast<long long>(metadata.st_blocks));
+    {
+        std::ofstream cache(cachePath.c_str());
+        cache << header << '\n' << entry << '\n';
+        ASSERT_TRUE(cache.good());
+    }
+    std::ifstream originalCache(cachePath.c_str(), std::ios::binary);
+    ASSERT_TRUE(originalCache.is_open());
+    const std::string original((std::istreambuf_iterator<char>(originalCache)), std::istreambuf_iterator<char>());
+
+    FilesystemScanner scanner(rootDir, cachePath, lockPath, 2, 3600, 0);
+    auto result = scanner.GetFullFilesystem();
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value()->entries.size(), 1u);
+
+    ::sleep(4);
+    struct rlimit originalLimit;
+    ASSERT_EQ(0, ::getrlimit(RLIMIT_NOFILE, &originalLimit));
+    ASSERT_GE(originalLimit.rlim_cur, 4u);
+    struct rlimit limited = originalLimit;
+    // The scan child closes inherited descriptors: its lock and three directory opens exhaust this limit.
+    limited.rlim_cur = 4;
+    {
+        struct RestoreLimit
+        {
+            const struct rlimit& original;
+            ~RestoreLimit()
+            {
+                ::setrlimit(RLIMIT_NOFILE, &original);
+            }
+        } restore{originalLimit};
+        ASSERT_EQ(0, ::setrlimit(RLIMIT_NOFILE, &limited));
+        result = scanner.GetFullFilesystem();
+    }
+    struct rlimit restored;
+    ASSERT_EQ(0, ::getrlimit(RLIMIT_NOFILE, &restored));
+    ASSERT_EQ(originalLimit.rlim_cur, restored.rlim_cur);
+    ASSERT_TRUE(result.HasValue());
+
+    ASSERT_GT(WaitForScannerPid(lockPath), 0);
+    const int lockFd = ::open(lockPath.c_str(), O_RDONLY);
+    ASSERT_GE(lockFd, 0);
+    bool finished = false;
+    for (int attempt = 0; attempt < 300; ++attempt)
+    {
+        if (::flock(lockFd, LOCK_EX | LOCK_NB) == 0)
+        {
+            finished = true;
+            ASSERT_EQ(0, ::flock(lockFd, LOCK_UN));
+            break;
+        }
+        ::usleep(10 * 1000);
+    }
+    ASSERT_EQ(0, ::close(lockFd));
+    ASSERT_TRUE(finished);
+
+    alignas(struct inotify_event) char events[4096];
+    const ssize_t eventBytes = ::read(notificationFd, events, sizeof(events));
+    ASSERT_GT(eventBytes, 0) << "The scanner did not open the interior directory";
+    bool visitedInterior = false;
+    for (ssize_t offset = 0; offset < eventBytes;)
+    {
+        const auto* event = reinterpret_cast<const struct inotify_event*>(events + offset);
+        visitedInterior |= (event->mask & IN_OPEN) != 0;
+        offset += sizeof(*event) + event->len;
+    }
+    ASSERT_TRUE(visitedInterior);
+
+    std::ifstream cache(cachePath.c_str(), std::ios::binary);
+    ASSERT_TRUE(cache.is_open());
+    const std::string after((std::istreambuf_iterator<char>(cache)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(after, original);
 }
