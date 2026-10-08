@@ -7,10 +7,11 @@
 #include <Regex.h>
 #include <SshdOption.h>
 #include <TypedComparison.h>
+#include <cerrno>
+#include <cstdlib>
 #include <fnmatch.h>
 #include <fts.h>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -203,52 +204,53 @@ static Result<Status> EvaluateDelimitedNumericLimits(const std::string& option, 
     // Parse realValue using provided delimiter, value always uses ':' per specification.
     std::vector<long long> realParts(numFields, 0);
     std::vector<long long> limitParts(numFields, 0);
-    const auto parseToken = [](const std::string& token) {
-        size_t consumed = 0;
-        const auto parsed = std::stoll(token, &consumed);
-        if (consumed != token.size())
+    const auto parseToken = [](const std::string& token) -> Result<long long> {
+        errno = 0;
+        char* end = nullptr;
+        const auto parsed = std::strtoll(token.c_str(), &end, 10);
+        if (errno == ERANGE || end == token.c_str())
         {
-            throw std::invalid_argument("Unconsumed suffix in numeric token '" + token + "'");
+            // Preserve the error detail previously returned by std::stoll.
+            return Error("stoll", EINVAL);
+        }
+        if (end != token.c_str() + token.size())
+        {
+            return Error("Unconsumed suffix in numeric token '" + token + "'", EINVAL);
         }
         return parsed;
     };
 
-    try
+    std::istringstream realStream(realValue);
+    std::string token;
+    size_t idx = 0;
+    while ((idx < numFields) && std::getline(realStream, token, delimiter))
     {
-        std::istringstream realStream(realValue);
-        std::string token;
-        size_t idx = 0;
-        while ((idx < numFields) && std::getline(realStream, token, delimiter))
+        if (!token.empty())
         {
-            if (!token.empty())
+            auto parsed = parseToken(token);
+            if (!parsed.HasValue())
             {
-                realParts[idx] = parseToken(token);
+                return Error("Failed to parse " + option + " value '" + realValue + "': " + parsed.Error().message, parsed.Error().code);
             }
-            ++idx;
+            realParts[idx] = parsed.Value();
         }
-    }
-    catch (const std::exception& e)
-    {
-        return Error("Failed to parse " + option + " value '" + realValue + "': " + e.what(), EINVAL);
+        ++idx;
     }
 
-    try
+    std::istringstream limitStream(value);
+    idx = 0;
+    while ((idx < numFields) && std::getline(limitStream, token, ':'))
     {
-        std::istringstream limitStream(value);
-        std::string token;
-        size_t idx = 0;
-        while ((idx < numFields) && std::getline(limitStream, token, ':'))
+        if (!token.empty())
         {
-            if (!token.empty())
+            auto parsed = parseToken(token);
+            if (!parsed.HasValue())
             {
-                limitParts[idx] = parseToken(token);
+                return Error("Failed to parse " + option + " limit '" + value + "': " + parsed.Error().message, parsed.Error().code);
             }
-            ++idx;
+            limitParts[idx] = parsed.Value();
         }
-    }
-    catch (const std::exception& e)
-    {
-        return Error("Failed to parse " + option + " limit '" + value + "': " + e.what(), EINVAL);
+        ++idx;
     }
 
     for (size_t i = 0; i < numFields; ++i)

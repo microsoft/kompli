@@ -5,6 +5,7 @@
 #include "MockContext.h"
 
 #include <SshdOption.h>
+#include <cerrno>
 #include <gtest/gtest.h>
 #include <string>
 
@@ -555,6 +556,40 @@ TEST_F(EnsureSshdOptionTest, DelimitedNumericLimitsRejectMalformedSuffixes)
         ASSERT_FALSE(result.HasValue()) << test.option << " " << test.actual << " " << test.limit;
         EXPECT_EQ(result.Error().code, EINVAL);
         EXPECT_EQ(result.Error().message.find(test.errorPrefix), 0U);
+        EXPECT_TRUE(indicators.Back().indicators.empty());
+    }
+}
+
+TEST_F(EnsureSshdOptionTest, DelimitedNumericLimitsPreserveInvalidAndOverflowErrors)
+{
+    struct Case
+    {
+        std::string actual;
+        std::string limit;
+        std::string message;
+    };
+    const Case cases[] = {
+        {"nope:30:60", "15:40:70", "Failed to parse maxstartups value 'nope:30:60': stoll"},
+        {"10:30:60", "nope:40:70", "Failed to parse maxstartups limit 'nope:40:70': stoll"},
+        {"999999999999999999999999:30:60", "15:40:70", "Failed to parse maxstartups value '999999999999999999999999:30:60': stoll"},
+        {"10:30:60", "999999999999999999999999:40:70", "Failed to parse maxstartups limit '999999999999999999999999:40:70': stoll"},
+    };
+    for (const auto& test : cases)
+    {
+        const auto output = "port 22\nmaxstartups " + test.actual + "\n";
+        EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(output)));
+        EXPECT_CALL(mContext, ExecuteCommand(sshdSimpleCommand)).WillOnce(Return(Result<std::string>(output)));
+        SshdOptionParams params;
+        params.option = {{"maxstartups"}};
+        params.value = test.limit;
+        params.op = SshdOptionOperation::Match;
+        IndicatorsTree indicators;
+        indicators.Push("EnsureSshdOption");
+
+        const auto result = AuditSshdOption(params, indicators, mContext);
+        ASSERT_FALSE(result.HasValue()) << test.actual << " " << test.limit;
+        EXPECT_EQ(result.Error().code, EINVAL);
+        EXPECT_EQ(result.Error().message, test.message);
         EXPECT_TRUE(indicators.Back().indicators.empty());
     }
 }
