@@ -13,7 +13,7 @@ Result<Status> AuditDconfValue(const DconfValueParams& params, IndicatorsTree& i
     const auto key = EscapeForShell(params.key);
     if ((params.operation != DconfOperation::Eq) && (params.operation != DconfOperation::Ne))
     {
-        return Error("Not supported operation '" + std::to_string(params.operation) + "'", EINVAL);
+        return Error("Not supported operation", EINVAL);
     }
 
     Result<std::string> dconfRead = context.ExecuteCommand("dconf read \"" + key + "\"");

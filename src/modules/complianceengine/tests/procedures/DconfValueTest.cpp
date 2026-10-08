@@ -187,3 +187,14 @@ TEST_F(EnsureDconf, CommandFailurePropagatesWithoutIndicator)
     EXPECT_EQ(result.Error().message, "Failed to execute dconf read /org/gnome/login-screen/banner-message-text error: unavailable");
     EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }
+
+TEST_F(EnsureDconf, InvalidDirectOperationReturnsErrorWithoutCommandOrIndicator)
+{
+    mParams.operation = static_cast<DconfOperation>(100);
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::_)).Times(0);
+    const auto result = AuditDconfValue(mParams, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().message, "Not supported operation");
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
