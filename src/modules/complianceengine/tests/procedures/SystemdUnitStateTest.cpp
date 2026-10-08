@@ -408,8 +408,13 @@ TEST_F(SystemdUnitStateTest, ActiveAndRunningBothRequired)
         {"SubState=running\nActiveState=active", true, Status::Compliant},
         {"ActiveState=active\nSubState=dead\n", true, Status::NonCompliant},
         {"ActiveState=inactive\nSubState=running\n", true, Status::NonCompliant},
+        {"ActiveState=inactive\nSubState=dead\n", true, Status::NonCompliant},
         {"", false, Status::NonCompliant},
         {"ActiveState=active\n", false, Status::NonCompliant},
+        {"ActiveState=inactive\n", false, Status::NonCompliant},
+        {"ActiveState=inactive\nSubState", false, Status::NonCompliant},
+        {"ActiveState=inactive\nSubState=\n", false, Status::NonCompliant},
+        {"ActiveState=inactive\nOtherState=running\n", false, Status::NonCompliant},
         {"SubState=running\n", false, Status::NonCompliant},
         {"ActiveState=active\nActiveState=active\n", false, Status::NonCompliant},
         {"ActiveState=active\nSubState=\n", false, Status::NonCompliant},
@@ -486,6 +491,43 @@ TEST_F(SystemdUnitStateTest, NegatedCisPredicateDoesNotAcceptInvalidOutput)
     {
         EXPECT_CALL(mContext, ExecuteCommand(command)).WillOnce(::testing::Return(Result<std::string>(testCase.output)));
         Evaluator evaluator("CIS systemd service check", json_value_get_object(json->get()), {}, mContext);
+        auto result = evaluator.ExecuteAudit(ComplianceEngine::DebugFormatter{});
+        if (testCase.valid)
+        {
+            ASSERT_TRUE(result.HasValue()) << testCase.output;
+            EXPECT_EQ(result.Value().status, testCase.expected) << testCase.output;
+        }
+        else
+        {
+            EXPECT_FALSE(result.HasValue()) << "Invalid output: " << testCase.output;
+        }
+    }
+}
+
+TEST_F(SystemdUnitStateTest, NegatedMultiPropertyMismatchRequiresCompleteOutput)
+{
+    auto json = JsonWrapper::FromString(R"({"not":{"SystemdUnitState":{"unitName":"auditd.service","activeState":"active","subState":"running"}}})");
+    ASSERT_TRUE(json.HasValue());
+    ASSERT_TRUE(json->get());
+    const std::string command = "systemctl show -p ActiveState -p SubState \"auditd.service\"";
+    struct Case
+    {
+        std::string output;
+        bool valid;
+        Status expected;
+    };
+    const Case cases[] = {
+        {"ActiveState=active\nSubState=running\n", true, Status::NonCompliant},
+        {"ActiveState=inactive\nSubState=running\n", true, Status::Compliant},
+        {"ActiveState=inactive\n", false, Status::NonCompliant},
+        {"ActiveState=inactive\nSubState", false, Status::NonCompliant},
+        {"ActiveState=inactive\nSubState=\n", false, Status::NonCompliant},
+        {"ActiveState=inactive\nOtherState=running\n", false, Status::NonCompliant},
+    };
+    for (const auto& testCase : cases)
+    {
+        EXPECT_CALL(mContext, ExecuteCommand(command)).WillOnce(::testing::Return(Result<std::string>(testCase.output)));
+        Evaluator evaluator("negated auditd state", json_value_get_object(json->get()), {}, mContext);
         auto result = evaluator.ExecuteAudit(ComplianceEngine::DebugFormatter{});
         if (testCase.valid)
         {

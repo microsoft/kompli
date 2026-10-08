@@ -83,6 +83,7 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
     }
     std::string line;
     std::istringstream sysctlValues(systemCtlOutput.Value());
+    std::string mismatchMessage;
 
     while (std::getline(sysctlValues, line))
     {
@@ -106,18 +107,21 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
                 OsConfigLogError(log, "Empty systemctl property '%s' for unit '%s'", name.c_str(), params.unitName.c_str());
                 return Error("Empty systemctl property '" + name + "' for unit '" + params.unitName + "'");
             }
+            param.observed = true;
             if (!regex_match(value, param.pattern->GetRegex()))
             {
                 // OsConfigLogDebug(log, "Failed to match systemctl unit name '%s' for name '%s' for pattern '%s'  for value '%s' ",
                 // params.unitName.c_str(), name.c_str(), param.value.c_str(), value.c_str());
                 OsConfigLogDebug(log, "Failed to match systemctl unit name '%s' for name '%s' for pattern '%s'", params.unitName.c_str(), name.c_str(),
                     value.c_str());
-                return indicators.NonCompliant("Failed to match systemctl unit name '" + params.unitName + "' field '" + name + "' value '" + value +
-                                               "' with pattern '" + param.pattern->GetPattern() + "'");
+                if (mismatchMessage.empty())
+                {
+                    mismatchMessage = "Failed to match systemctl unit name '" + params.unitName + "' field '" + name + "' value '" + value +
+                                      "' with pattern '" + param.pattern->GetPattern() + "'";
+                }
             }
             else
             {
-                param.observed = true;
                 indicators.Compliant("Successfully matched systemctl unit name '" + params.unitName + "' field '" + name + "' value '" + value +
                                      "' with pattern '" + param.pattern->GetPattern() + "'");
             }
@@ -137,6 +141,11 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
             OsConfigLogError(log, "Missing requested systemctl property '%s' for unit '%s'", param.argName.c_str(), params.unitName.c_str());
             return Error("Missing requested systemctl property '" + param.argName + "' for unit '" + params.unitName + "'");
         }
+    }
+
+    if (!mismatchMessage.empty())
+    {
+        return indicators.NonCompliant(mismatchMessage);
     }
 
     OsConfigLogDebug(log, "Success to match systemctl unit name '%s' for name all params ", params.unitName.c_str());
