@@ -3,7 +3,6 @@
 
 #include <BindingParsers.h>
 #include <StringTools.h>
-#include <cctype>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -78,12 +77,7 @@ Result<mode_t> Parse<mode_t>(const string& input)
     {
         return Error("Failed to parse octal value '" + input + "': Unconsumed suffix in octal value", EINVAL);
     }
-    const char* first = input.c_str();
-    while (std::isspace(static_cast<unsigned char>(*first)))
-    {
-        ++first;
-    }
-    if (*first == '-')
+    if (value < 0)
     {
         return Error("Failed to parse octal value '" + input + "': Negative octal value", EINVAL);
     }
