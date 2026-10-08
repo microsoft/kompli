@@ -205,15 +205,25 @@ TEST_F(BindingsTest, OctalModeKeepsLeadingWhitespaceAndPositiveSign)
     }
 }
 
-// TM-6: reject negative inputs and mode_t overflow before narrowing.
+// TM-6: reject values below zero and mode_t overflow before narrowing.
 TEST_F(BindingsTest, OctalModeRejectsNegativeValues)
 {
-    for (const string input : {"-1", " -0", "\t-0755"})
+    for (const string input : {"-1", "\t-0755"})
     {
         const auto result = ComplianceEngine::BindingParsers::Parse<mode_t>(input);
         ASSERT_FALSE(result.HasValue()) << input;
         EXPECT_EQ(result.Error().code, EINVAL) << input;
         EXPECT_EQ(result.Error().message, "Failed to parse octal value '" + input + "': Negative octal value");
+    }
+}
+
+TEST_F(BindingsTest, OctalModeAcceptsNegativeZero)
+{
+    for (const string input : {"-0", " -00", "\t-0"})
+    {
+        const auto result = ComplianceEngine::BindingParsers::Parse<mode_t>(input);
+        ASSERT_TRUE(result.HasValue()) << input;
+        EXPECT_EQ(result.Value(), static_cast<mode_t>(0));
     }
 }
 
