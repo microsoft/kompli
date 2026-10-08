@@ -199,3 +199,24 @@ TEST_F(BindingsTest, IntegerBindingRejectsMalformedSuffix)
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, EINVAL);
 }
+
+TEST_F(BindingsTest, OctalModeRejectsUnconsumedSuffixes)
+{
+    for (const string input : {"0755junk", "08", "0755 "})
+    {
+        const auto result = ComplianceEngine::BindingParsers::Parse<mode_t>(input);
+        ASSERT_FALSE(result.HasValue()) << input;
+        EXPECT_EQ(result.Error().code, EINVAL) << input;
+        EXPECT_EQ(result.Error().message, "Failed to parse octal value '" + input + "': Unconsumed suffix in octal value");
+    }
+}
+
+TEST_F(BindingsTest, OctalModeKeepsLeadingWhitespaceAndSigns)
+{
+    for (const string input : {"0755", "  +0755", "-1"})
+    {
+        const auto result = ComplianceEngine::BindingParsers::Parse<mode_t>(input);
+        ASSERT_TRUE(result.HasValue()) << input;
+        EXPECT_EQ(result.Value(), input == "-1" ? static_cast<mode_t>(-1) : static_cast<mode_t>(0755));
+    }
+}

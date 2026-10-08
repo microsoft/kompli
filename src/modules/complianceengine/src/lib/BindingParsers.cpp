@@ -4,6 +4,7 @@
 #include <BindingParsers.h>
 #include <StringTools.h>
 #include <cstring>
+#include <stdexcept>
 
 namespace ComplianceEngine
 {
@@ -63,7 +64,13 @@ Result<mode_t> Parse<mode_t>(const string& input)
 {
     try
     {
-        return static_cast<mode_t>(std::stol(input, nullptr, 8));
+        size_t consumed = 0;
+        const auto value = std::stol(input, &consumed, 8);
+        if (consumed != input.size())
+        {
+            throw std::invalid_argument("Unconsumed suffix in octal value");
+        }
+        return static_cast<mode_t>(value);
     }
     catch (const std::exception& e)
     {
