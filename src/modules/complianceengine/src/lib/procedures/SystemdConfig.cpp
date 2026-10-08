@@ -22,6 +22,24 @@ namespace
 // Maps (block, parameter) -> (value, sourceFile)
 typedef std::map<std::pair<std::string, std::string>, std::pair<std::string, std::string>> SystemdConfigMap_t;
 
+Result<TypedComparisonOperation> MapNumericComparison(SystemdConfigValueOperator operation)
+{
+    switch (operation)
+    {
+        case SystemdConfigValueOperator::LessThan:
+            return TypedComparisonOperation::LessThan;
+        case SystemdConfigValueOperator::LessOrEqual:
+            return TypedComparisonOperation::LessOrEqual;
+        case SystemdConfigValueOperator::GreaterThan:
+            return TypedComparisonOperation::GreaterThan;
+        case SystemdConfigValueOperator::GreaterOrEqual:
+            return TypedComparisonOperation::GreaterOrEqual;
+        case SystemdConfigValueOperator::Equal:
+            break;
+    }
+    return Error("Unsupported numeric comparison operation", EINVAL);
+}
+
 Result<bool> GetSystemdConfig(SystemdConfigMap_t& config, const std::string& filename, ContextInterface& context)
 {
     auto escapedFilename = EscapeForShell(filename);
@@ -243,6 +261,12 @@ Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, I
         }
         else
         {
+            auto mapped = MapNumericComparison(op);
+            if (!mapped.HasValue())
+            {
+                return mapped.Error();
+            }
+
             // Numerical comparison for lt, le, gt, ge
             char* endActual = nullptr;
             char* endExpected = nullptr;
@@ -256,35 +280,12 @@ Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, I
                 return Error("Failed to convert values to numbers for comparison: actual='" + actualValue + "', expected='" + expectedValue + "'");
             }
 
-            TypedComparisonOperation typedOp;
-            bool supported = true;
-            switch (op)
+            auto result = CompareTyped(actualNum, expectedNum, mapped.Value());
+            if (!result.HasValue())
             {
-                case SystemdConfigValueOperator::LessThan:
-                    typedOp = TypedComparisonOperation::LessThan;
-                    break;
-                case SystemdConfigValueOperator::LessOrEqual:
-                    typedOp = TypedComparisonOperation::LessOrEqual;
-                    break;
-                case SystemdConfigValueOperator::GreaterThan:
-                    typedOp = TypedComparisonOperation::GreaterThan;
-                    break;
-                case SystemdConfigValueOperator::GreaterOrEqual:
-                    typedOp = TypedComparisonOperation::GreaterOrEqual;
-                    break;
-                default:
-                    supported = false;
-                    break;
+                return result.Error();
             }
-            if (supported)
-            {
-                auto result = CompareTyped(actualNum, expectedNum, typedOp);
-                if (!result.HasValue())
-                {
-                    return result.Error();
-                }
-                comparisonResult = result.Value();
-            }
+            comparisonResult = result.Value();
         }
 
         if (comparisonResult)
