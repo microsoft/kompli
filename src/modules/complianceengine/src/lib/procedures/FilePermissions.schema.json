@@ -29,6 +29,10 @@
                   "type": "string",
                   "description": "Required group of the file, single or | separated, first one is used for remediation"
                 },
+                "groupId": {
+                  "type": "string",
+                  "description": "Required numeric group ID (audit only), distinct from the named group selector"
+                },
                 "permissions": {
                   "type": "string",
                   "description": "Required octal permissions of the file",
@@ -102,6 +106,10 @@
                 "group": {
                   "type": "string",
                   "description": "Required group of the file, single or | separated, first one is used for remediation"
+                },
+                "groupId": {
+                  "type": "string",
+                  "description": "Required numeric group ID (audit only), distinct from the named group selector"
                 },
                 "permissions": {
                   "type": "string",
@@ -151,6 +159,10 @@
                   "type": "string",
                   "description": "Required group of the file, single or | separated, first one is used for remediation"
                 },
+                "groupId": {
+                  "type": "string",
+                  "description": "Required numeric group ID (audit only), distinct from the named group selector"
+                },
                 "permissions": {
                   "type": "string",
                   "description": "Required octal permissions of the file",
@@ -224,6 +236,10 @@
                 "group": {
                   "type": "string",
                   "description": "Required group of the file, single or | separated, first one is used for remediation"
+                },
+                "groupId": {
+                  "type": "string",
+                  "description": "Required numeric group ID (audit only), distinct from the named group selector"
                 },
                 "permissions": {
                   "type": "string",
