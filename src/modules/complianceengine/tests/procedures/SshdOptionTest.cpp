@@ -523,6 +523,42 @@ TEST_F(EnsureSshdOptionTest, RekeyLimit_NonCompliant)
     ASSERT_TRUE(formatted.find("Option 'rekeylimit' has value '10 123' which exceeds limits '5:150'") != std::string::npos);
 }
 
+TEST_F(EnsureSshdOptionTest, DelimitedNumericLimitsRejectMalformedSuffixes)
+{
+    struct Case
+    {
+        std::string option;
+        std::string actual;
+        std::string limit;
+        std::string errorPrefix;
+    };
+    const Case cases[] = {
+        {"maxstartups", "10junk:30:60", "15:40:70", "Failed to parse maxstartups value '10junk:30:60':"},
+        {"maxstartups", "10:30:60", "15junk:40:70", "Failed to parse maxstartups limit '15junk:40:70':"},
+        {"rekeylimit", "10junk 123", "15:150", "Failed to parse rekeylimit value '10junk 123':"},
+        {"rekeylimit", "10 123junk", "15:150", "Failed to parse rekeylimit value '10 123junk':"},
+        {"rekeylimit", "10 123", "15:150junk", "Failed to parse rekeylimit limit '15:150junk':"},
+    };
+    for (const auto& test : cases)
+    {
+        const auto output = "port 22\n" + test.option + " " + test.actual + "\n";
+        EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(output)));
+        EXPECT_CALL(mContext, ExecuteCommand(sshdSimpleCommand)).WillOnce(Return(Result<std::string>(output)));
+        SshdOptionParams params;
+        params.option = {{test.option}};
+        params.value = test.limit;
+        params.op = SshdOptionOperation::Match;
+        IndicatorsTree indicators;
+        indicators.Push("EnsureSshdOption");
+
+        const auto result = AuditSshdOption(params, indicators, mContext);
+        ASSERT_FALSE(result.HasValue()) << test.option << " " << test.actual << " " << test.limit;
+        EXPECT_EQ(result.Error().code, EINVAL);
+        EXPECT_EQ(result.Error().message.find(test.errorPrefix), 0U);
+        EXPECT_TRUE(indicators.Back().indicators.empty());
+    }
+}
+
 // ========================= Adapted legacy NoOption scenarios using EnsureSshdOption (op=not_match) =========================
 
 TEST_F(EnsureSshdOptionTest, NoOption_AllOptionsAbsent_Adapted)

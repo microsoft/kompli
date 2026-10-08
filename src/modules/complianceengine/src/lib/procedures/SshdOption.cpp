@@ -10,6 +10,7 @@
 #include <fnmatch.h>
 #include <fts.h>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -202,6 +203,15 @@ static Result<Status> EvaluateDelimitedNumericLimits(const std::string& option, 
     // Parse realValue using provided delimiter, value always uses ':' per specification.
     std::vector<long long> realParts(numFields, 0);
     std::vector<long long> limitParts(numFields, 0);
+    const auto parseToken = [](const std::string& token) {
+        size_t consumed = 0;
+        const auto parsed = std::stoll(token, &consumed);
+        if (consumed != token.size())
+        {
+            throw std::invalid_argument("Unconsumed suffix in numeric token '" + token + "'");
+        }
+        return parsed;
+    };
 
     try
     {
@@ -212,7 +222,7 @@ static Result<Status> EvaluateDelimitedNumericLimits(const std::string& option, 
         {
             if (!token.empty())
             {
-                realParts[idx] = std::stoll(token);
+                realParts[idx] = parseToken(token);
             }
             ++idx;
         }
@@ -231,7 +241,7 @@ static Result<Status> EvaluateDelimitedNumericLimits(const std::string& option, 
         {
             if (!token.empty())
             {
-                limitParts[idx] = std::stoll(token);
+                limitParts[idx] = parseToken(token);
             }
             ++idx;
         }
