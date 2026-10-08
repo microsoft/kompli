@@ -195,14 +195,34 @@ TEST_F(BindingsTest, OctalModeRejectsUnconsumedSuffixes)
     }
 }
 
-TEST_F(BindingsTest, OctalModeKeepsLeadingWhitespaceAndSigns)
+TEST_F(BindingsTest, OctalModeKeepsLeadingWhitespaceAndPositiveSign)
 {
-    for (const string input : {"0755", "  +0755", "-1"})
+    for (const string input : {"0755", "  +0755"})
     {
         const auto result = ComplianceEngine::BindingParsers::Parse<mode_t>(input);
         ASSERT_TRUE(result.HasValue()) << input;
-        EXPECT_EQ(result.Value(), input == "-1" ? static_cast<mode_t>(-1) : static_cast<mode_t>(0755));
+        EXPECT_EQ(result.Value(), static_cast<mode_t>(0755));
     }
+}
+
+// TM-6: reject negative inputs and mode_t overflow before narrowing.
+TEST_F(BindingsTest, OctalModeRejectsNegativeValues)
+{
+    for (const string input : {"-1", " -0", "\t-0755"})
+    {
+        const auto result = ComplianceEngine::BindingParsers::Parse<mode_t>(input);
+        ASSERT_FALSE(result.HasValue()) << input;
+        EXPECT_EQ(result.Error().code, EINVAL) << input;
+        EXPECT_EQ(result.Error().message, "Failed to parse octal value '" + input + "': Negative octal value");
+    }
+}
+
+TEST_F(BindingsTest, OctalModeRejectsModeTypeOverflow)
+{
+    const string input = "040000000000";
+    const auto result = ComplianceEngine::BindingParsers::Parse<mode_t>(input);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
 }
 
 TEST_F(BindingsTest, OctalModePreservesInvalidAndOverflowErrors)
