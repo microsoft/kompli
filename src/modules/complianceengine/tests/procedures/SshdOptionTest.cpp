@@ -560,6 +560,73 @@ TEST_F(EnsureSshdOptionTest, DelimitedNumericLimitsRejectMalformedSuffixes)
     }
 }
 
+TEST_F(EnsureSshdOptionTest, DelimitedNumericLimitsRejectExtraFieldsAndTrailingDelimiters)
+{
+    struct Case
+    {
+        std::string option;
+        std::string actual;
+        std::string limit;
+        std::string error;
+    };
+    const Case cases[] = {
+        {"maxstartups", "10:30:60:junk", "15:40:70", "Failed to parse maxstartups value '10:30:60:junk': Unexpected extra field or trailing delimiter"},
+        {"maxstartups", "10:30:60:", "15:40:70", "Failed to parse maxstartups value '10:30:60:': Unexpected extra field or trailing delimiter"},
+        {"maxstartups", "10:30:", "15:40:70", "Failed to parse maxstartups value '10:30:': Unexpected extra field or trailing delimiter"},
+        {"maxstartups", "10:30:60", "15:40:70:junk", "Failed to parse maxstartups limit '15:40:70:junk': Unexpected extra field or trailing delimiter"},
+        {"maxstartups", "10:30:60", "15:40:70:", "Failed to parse maxstartups limit '15:40:70:': Unexpected extra field or trailing delimiter"},
+        {"maxstartups", "10:30:60", "15:40:", "Failed to parse maxstartups limit '15:40:': Unexpected extra field or trailing delimiter"},
+        {"rekeylimit", "10 123 junk", "15:150", "Failed to parse rekeylimit value '10 123 junk': Unexpected extra field or trailing delimiter"},
+        {"rekeylimit", "10 123", "15:150:junk", "Failed to parse rekeylimit limit '15:150:junk': Unexpected extra field or trailing delimiter"},
+        {"rekeylimit", "10 123", "15:150:", "Failed to parse rekeylimit limit '15:150:': Unexpected extra field or trailing delimiter"},
+    };
+    for (const auto& test : cases)
+    {
+        const auto output = "port 22\n" + test.option + " " + test.actual + "\n";
+        EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(output)));
+        EXPECT_CALL(mContext, ExecuteCommand(sshdSimpleCommand)).WillOnce(Return(Result<std::string>(output)));
+        SshdOptionParams params;
+        params.option = {{test.option}};
+        params.value = test.limit;
+        params.op = SshdOptionOperation::Match;
+        IndicatorsTree indicators;
+        indicators.Push("EnsureSshdOption");
+
+        const auto result = AuditSshdOption(params, indicators, mContext);
+        ASSERT_FALSE(result.HasValue()) << test.option << " " << test.actual << " " << test.limit;
+        EXPECT_EQ(result.Error().code, EINVAL);
+        EXPECT_EQ(result.Error().message, test.error);
+        EXPECT_TRUE(indicators.Back().indicators.empty());
+    }
+}
+
+TEST_F(EnsureSshdOptionTest, DelimitedNumericLimitsKeepShorterValues)
+{
+    struct Case
+    {
+        std::string option;
+        std::string actual;
+        std::string limit;
+    };
+    const Case cases[] = {{"maxstartups", "10:30", "15:40"}, {"rekeylimit", "10", "15"}};
+    for (const auto& test : cases)
+    {
+        const auto output = "port 22\n" + test.option + " " + test.actual + "\n";
+        EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(output)));
+        EXPECT_CALL(mContext, ExecuteCommand(sshdSimpleCommand)).WillOnce(Return(Result<std::string>(output)));
+        SshdOptionParams params;
+        params.option = {{test.option}};
+        params.value = test.limit;
+        params.op = SshdOptionOperation::Match;
+        IndicatorsTree indicators;
+        indicators.Push("EnsureSshdOption");
+
+        const auto result = AuditSshdOption(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue()) << test.option;
+        EXPECT_EQ(result.Value(), Status::Compliant);
+    }
+}
+
 TEST_F(EnsureSshdOptionTest, DelimitedNumericLimitsPreserveInvalidAndOverflowErrors)
 {
     struct Case

@@ -236,6 +236,10 @@ static Result<Status> EvaluateDelimitedNumericLimits(const std::string& option, 
         }
         ++idx;
     }
+    if ((idx == numFields && !realStream.eof()) || (!realValue.empty() && realValue.back() == delimiter))
+    {
+        return Error("Failed to parse " + option + " value '" + realValue + "': Unexpected extra field or trailing delimiter", EINVAL);
+    }
 
     std::istringstream limitStream(value);
     idx = 0;
@@ -251,6 +255,10 @@ static Result<Status> EvaluateDelimitedNumericLimits(const std::string& option, 
             limitParts[idx] = parsed.Value();
         }
         ++idx;
+    }
+    if ((idx == numFields && !limitStream.eof()) || (!value.empty() && value.back() == ':'))
+    {
+        return Error("Failed to parse " + option + " limit '" + value + "': Unexpected extra field or trailing delimiter", EINVAL);
     }
 
     for (size_t i = 0; i < numFields; ++i)
