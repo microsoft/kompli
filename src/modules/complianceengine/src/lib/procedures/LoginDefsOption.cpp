@@ -87,6 +87,11 @@ Optional<string> FindLoginDefsValue(const string& fileContents, const string& op
 
     return foundValue;
 }
+
+bool IsNumericLoginDefsOption(const string& option)
+{
+    return (option == "PASS_MAX_DAYS") || (option == "PASS_MIN_DAYS") || (option == "PASS_WARN_AGE") || (option == "UID_MIN") || (option == "UID_MAX");
+}
 } // anonymous namespace
 
 Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, IndicatorsTree& indicators, ContextInterface& context)
@@ -102,6 +107,13 @@ Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, Indicat
         return fileContents.Error();
     }
 
+    const bool numericOption = IsNumericLoginDefsOption(params.option);
+    auto rhsInt = TryStringToInt(params.value);
+    if ((numericOption) && (!rhsInt.HasValue()))
+    {
+        return Error("Invalid " + params.option + " comparison target: " + rhsInt.Error().message, rhsInt.Error().code);
+    }
+
     auto foundValue = FindLoginDefsValue(fileContents.Value(), params.option, context.GetLogHandle());
     if (!foundValue.HasValue())
     {
@@ -110,7 +122,14 @@ Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, Indicat
 
     // Try numeric comparison first
     auto lhsInt = TryStringToInt(foundValue.Value());
-    auto rhsInt = TryStringToInt(params.value);
+
+    if (numericOption)
+    {
+        if (!lhsInt.HasValue())
+        {
+            return Error("Invalid " + params.option + " value: " + lhsInt.Error().message, lhsInt.Error().code);
+        }
+    }
 
     if (lhsInt.HasValue() && rhsInt.HasValue())
     {
