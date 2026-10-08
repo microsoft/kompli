@@ -709,6 +709,23 @@ TEST_F(SystemdConfigTest, NumericOperatorKeepsMissingAndConversionPolicies)
     EXPECT_TRUE(invalid.Back().indicators.empty());
 }
 
+TEST_F(SystemdConfigTest, InvalidDirectNumericOperationReturnsErrorWithoutIndicator)
+{
+    EXPECT_CALL(mContext, ExecuteCommand("/usr/bin/systemd-analyze cat-config \"test.conf\""))
+        .WillOnce(Return(Result<std::string>("# /etc/systemd/test.conf\nTestParam=1\n")));
+    SystemdConfigValueParams params;
+    params.parameter = "TestParam";
+    params.file = "test.conf";
+    params.op = static_cast<SystemdConfigValueOperator>(100);
+    params.value = "0";
+
+    auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().message, "Unsupported numeric comparison operation");
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
 // --- Tests for block parameter ---
 
 TEST_F(SystemdConfigTest, BlockParameterFoundInCorrectBlock)
