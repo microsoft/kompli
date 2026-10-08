@@ -3,9 +3,12 @@
 
 #include <BindingParsers.h>
 #include <StringTools.h>
+#include <cctype>
 #include <cerrno>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 
 namespace ComplianceEngine
 {
@@ -74,6 +77,19 @@ Result<mode_t> Parse<mode_t>(const string& input)
     if (end != input.c_str() + input.size())
     {
         return Error("Failed to parse octal value '" + input + "': Unconsumed suffix in octal value", EINVAL);
+    }
+    const char* first = input.c_str();
+    while (std::isspace(static_cast<unsigned char>(*first)))
+    {
+        ++first;
+    }
+    if (*first == '-')
+    {
+        return Error("Failed to parse octal value '" + input + "': Negative octal value", EINVAL);
+    }
+    if (static_cast<std::uintmax_t>(value) > static_cast<std::uintmax_t>(std::numeric_limits<mode_t>::max()))
+    {
+        return Error("Failed to parse octal value '" + input + "': Octal value out of range for mode_t", EINVAL);
     }
     return static_cast<mode_t>(value);
 }
