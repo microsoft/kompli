@@ -498,7 +498,7 @@ TEST_F(LoginDefsOptionTest, MalformedNumericValueReturnsError)
 
 TEST_F(LoginDefsOptionTest, EqualMalformedNumericValuesCannotPass)
 {
-    for (const string option : {"PASS_MAX_DAYS", "PASS_MIN_DAYS", "PASS_WARN_AGE"})
+    for (const string option : {"PASS_MAX_DAYS", "PASS_MIN_DAYS", "PASS_WARN_AGE", "UID_MIN", "UID_MAX"})
     {
         SetLoginDefsContent(option + " 5junk\n");
         LoginDefsOptionParams params;
@@ -509,6 +509,55 @@ TEST_F(LoginDefsOptionTest, EqualMalformedNumericValuesCannotPass)
         ASSERT_FALSE(result.HasValue()) << option;
         EXPECT_EQ(result.Error().code, EINVAL) << option;
         EXPECT_TRUE(mIndicators.Back().indicators.empty()) << option;
+    }
+}
+
+TEST_F(LoginDefsOptionTest, UidRangeOptionsRejectMalformedTargetsEvenWhenMissing)
+{
+    for (const string option : {"UID_MIN", "UID_MAX"})
+    {
+        SetLoginDefsContent("ENCRYPT_METHOD SHA512\n");
+        LoginDefsOptionParams params;
+        params.option = option;
+        params.value = "5junk";
+        params.comparison = ComparisonOperation::Equal;
+        const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+        ASSERT_FALSE(result.HasValue()) << option;
+        EXPECT_EQ(result.Error().code, EINVAL) << option;
+        EXPECT_EQ(result.Error().message, "Invalid " + option + " comparison target: Invalid integer value: 5junk");
+        EXPECT_TRUE(mIndicators.Back().indicators.empty()) << option;
+    }
+}
+
+TEST_F(LoginDefsOptionTest, UidRangeOptionsRejectOverflowingValues)
+{
+    for (const string option : {"UID_MIN", "UID_MAX"})
+    {
+        SetLoginDefsContent(option + " 2147483648\n");
+        LoginDefsOptionParams params;
+        params.option = option;
+        params.value = "5";
+        params.comparison = ComparisonOperation::Equal;
+        const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+        ASSERT_FALSE(result.HasValue()) << option;
+        EXPECT_EQ(result.Error().code, ERANGE) << option;
+        EXPECT_EQ(result.Error().message, "Invalid " + option + " value: Integer value out of range: 2147483648");
+        EXPECT_TRUE(mIndicators.Back().indicators.empty()) << option;
+    }
+}
+
+TEST_F(LoginDefsOptionTest, UidRangeOptionsKeepValidNumericComparisons)
+{
+    for (const string option : {"UID_MIN", "UID_MAX"})
+    {
+        SetLoginDefsContent(option + " 1000\n");
+        LoginDefsOptionParams params;
+        params.option = option;
+        params.value = "900";
+        params.comparison = ComparisonOperation::GreaterOrEqual;
+        const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue()) << option;
+        EXPECT_EQ(result.Value(), Status::Compliant) << option;
     }
 }
 

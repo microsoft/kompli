@@ -86,7 +86,7 @@ Optional<string> FindLoginDefsValue(const string& fileContents, const string& op
 
 bool IsNumericLoginDefsOption(const string& option)
 {
-    return (option == "PASS_MAX_DAYS") || (option == "PASS_MIN_DAYS") || (option == "PASS_WARN_AGE");
+    return (option == "PASS_MAX_DAYS") || (option == "PASS_MIN_DAYS") || (option == "PASS_WARN_AGE") || (option == "UID_MIN") || (option == "UID_MAX");
 }
 } // anonymous namespace
 
