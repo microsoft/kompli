@@ -205,6 +205,10 @@ Result<Status> RemediateUserHomeDirectoryPermissionsWithPasswdFile(IndicatorsTre
         }
         indicators.Back().status = subResult.Value();
         indicators.Pop();
+        if (subResult.Value() == Status::NonCompliant)
+        {
+            result = Status::NonCompliant;
+        }
     }
     return result;
 }

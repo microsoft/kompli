@@ -899,3 +899,84 @@ TEST(UserHomeDirectoryPermissionsErrorsTest, SuccessfulChildRetainsOrdinaryVerdi
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(Status::Compliant, result.Value());
 }
+
+namespace
+{
+void CheckHomeRemediationResults(const std::vector<std::string>& outcomes, Status expectedStatus, bool expectError = false)
+{
+    MockContext context;
+    ComplianceEngine::IndicatorsTree indicators;
+    indicators.Push("UserHomeDirectoryPermissions");
+    context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    const auto* group = getgrnam("root");
+    ASSERT_NE(nullptr, group);
+    std::string accounts;
+    for (size_t i = 0; i < outcomes.size(); ++i)
+    {
+        const std::string home = context.GetTempdirPath() + "/" + outcomes[i] + std::to_string(i);
+        ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+        accounts += "fixture" + std::to_string(i) + ":x:" + std::to_string(getuid()) + ":" + std::to_string(group->gr_gid) + "::" + home + ":/bin/sh\n";
+    }
+    const auto passwd = context.MakeTempfile(accounts);
+    const auto remediate = [](const ComplianceEngine::FilePermissionsParams& params, ComplianceEngine::IndicatorsTree& tree,
+                               ComplianceEngine::ContextInterface&) -> ComplianceEngine::Result<Status> {
+        const auto homeName = params.path.substr(params.path.find_last_of('/') + 1);
+        if (homeName.rfind("error", 0) == 0)
+        {
+            return Error("Simulated child remediation failure", EIO);
+        }
+        const auto status = homeName.rfind("bad", 0) == 0 ? Status::NonCompliant : Status::Compliant;
+        tree.AddIndicator("Fixture child result", status);
+        return status;
+    };
+
+    const auto result = ComplianceEngine::RemediateUserHomeDirectoryPermissionsWithPasswdFile(indicators, context, passwd, remediate);
+    if (expectError)
+    {
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EIO, result.Error().code);
+    }
+    else
+    {
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(expectedStatus, result.Value());
+    }
+    EXPECT_EQ("UserHomeDirectoryPermissions", indicators.Back().procedureName);
+    const auto& children = indicators.Back().children;
+    ASSERT_EQ(outcomes.size(), children.size());
+    for (size_t i = 0; i < outcomes.size(); ++i)
+    {
+        EXPECT_EQ("EnsureFilePermissions", children[i]->procedureName);
+        if (outcomes[i] == "error")
+        {
+            EXPECT_TRUE(children[i]->indicators.empty());
+            continue;
+        }
+        const auto status = outcomes[i] == "bad" ? Status::NonCompliant : Status::Compliant;
+        EXPECT_EQ(status, children[i]->status);
+        ASSERT_EQ(1U, children[i]->indicators.size());
+        EXPECT_EQ(status, children[i]->indicators[0].status);
+    }
+}
+} // namespace
+
+TEST(UserHomeDirectoryPermissionsErrorsTest, NonCompliantChildRemainsNonCompliant)
+{
+    CheckHomeRemediationResults({"bad"}, Status::NonCompliant);
+}
+
+TEST(UserHomeDirectoryPermissionsErrorsTest, MixedChildrenRemainNonCompliantInEitherOrder)
+{
+    CheckHomeRemediationResults({"bad", "good"}, Status::NonCompliant);
+    CheckHomeRemediationResults({"good", "bad"}, Status::NonCompliant);
+}
+
+TEST(UserHomeDirectoryPermissionsErrorsTest, AllCompliantChildrenRemainCompliant)
+{
+    CheckHomeRemediationResults({"good", "good"}, Status::Compliant);
+}
+
+TEST(UserHomeDirectoryPermissionsErrorsTest, ErrorAfterNonCompliantChildPropagates)
+{
+    CheckHomeRemediationResults({"bad", "error"}, Status::NonCompliant, true);
+}
