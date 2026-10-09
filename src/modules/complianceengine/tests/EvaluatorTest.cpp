@@ -7,10 +7,15 @@
 #include "MockContext.h"
 #include "parson.h"
 
+#include <UserDotFilePermissions.h>
+#include <UserPermissionsTestSeams.h>
 #include <cerrno>
 #include <fstream>
+#include <grp.h>
 #include <gtest/gtest.h>
+#include <pwd.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 using ComplianceEngine::action_func_t;
@@ -760,4 +765,83 @@ TEST_F(EvaluatorTest, ThreeValuedLogic_AnyOf_NotApplicable_Compliant)
     auto result = evaluator.ExecuteAudit(mFormatter);
     ASSERT_TRUE(result);
     EXPECT_EQ(result.Value().status, Status::Compliant);
+}
+
+TEST(UserDotFilePermissionsErrorsTest, InvalidAccountPatternRemainsError)
+{
+    MockContext context;
+    ComplianceEngine::IndicatorsTree indicators;
+    indicators.Push("UserDotFilePermissions");
+    const std::string home = context.GetTempdirPath() + "/home";
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    std::ofstream(home + "/.config") << "settings\n";
+    context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    const auto* group = getgrnam("root");
+    ASSERT_NE(nullptr, group);
+    const std::string passwd =
+        context.MakeTempfile("(:x:" + std::to_string(getuid()) + ":" + std::to_string(group->gr_gid) + "::" + home + ":/bin/sh\n");
+
+    const auto result = ComplianceEngine::AuditUserDotFilePermissionsWithPasswdFile(indicators, context, passwd);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+    EXPECT_NE(std::string::npos, result.Error().message.find("Regular expression"));
+}
+
+TEST(UserDotFilePermissionsErrorsTest, ForbiddenDotFileRemainsOrdinaryVerdict)
+{
+    MockContext context;
+    ComplianceEngine::IndicatorsTree indicators;
+    indicators.Push("UserDotFilePermissions");
+    const std::string home = context.GetTempdirPath() + "/home";
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    std::ofstream(home + "/.rhosts") << "host\n";
+    context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    const auto* group = getgrnam("root");
+    ASSERT_NE(nullptr, group);
+    const std::string passwd =
+        context.MakeTempfile("fixture:x:" + std::to_string(getuid()) + ":" + std::to_string(group->gr_gid) + "::" + home + ":/bin/sh\n");
+
+    const auto result = ComplianceEngine::AuditUserDotFilePermissionsWithPasswdFile(indicators, context, passwd);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+}
+
+TEST(UserDotFilePermissionsErrorsTest, NonDirectoryHomeRemainsWalkError)
+{
+    MockContext context;
+    ComplianceEngine::IndicatorsTree indicators;
+    indicators.Push("UserDotFilePermissions");
+    const std::string home = context.MakeTempfile("not a directory");
+    context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    const auto* group = getgrnam("root");
+    ASSERT_NE(nullptr, group);
+    const std::string passwd =
+        context.MakeTempfile("fixture:x:" + std::to_string(getuid()) + ":" + std::to_string(group->gr_gid) + "::" + home + ":/bin/sh\n");
+
+    const auto result = ComplianceEngine::AuditUserDotFilePermissionsWithPasswdFile(indicators, context, passwd);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(ENOTDIR, result.Error().code);
+}
+
+TEST(UserDotFilePermissionsErrorsTest, RegularDotFileRetainsPermissionVerdict)
+{
+    MockContext context;
+    ComplianceEngine::IndicatorsTree indicators;
+    indicators.Push("UserDotFilePermissions");
+    const std::string home = context.GetTempdirPath() + "/home";
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    const std::string filename = home + "/.config";
+    std::ofstream(filename) << "settings\n";
+    ASSERT_EQ(0, chmod(filename.c_str(), 0666));
+    context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    const auto* user = getpwuid(getuid());
+    ASSERT_NE(nullptr, user);
+    const auto* group = getgrgid(user->pw_gid);
+    ASSERT_NE(nullptr, group);
+    const std::string passwd = context.MakeTempfile(std::string(user->pw_name) + ":x:" + std::to_string(user->pw_uid) + ":" +
+                                                    std::to_string(group->gr_gid) + "::" + home + ":/bin/sh\n");
+
+    const auto result = ComplianceEngine::AuditUserDotFilePermissionsWithPasswdFile(indicators, context, passwd);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
 }
