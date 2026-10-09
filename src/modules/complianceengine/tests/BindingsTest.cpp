@@ -184,6 +184,22 @@ TEST_F(BindingsTest, InvalidValues_1)
     EXPECT_EQ(params.optionalIntValue.Value(), -3);
 }
 
+TEST_F(BindingsTest, IntegerBindingRejectsMalformedSuffix)
+{
+    map<string, string> args{
+        {"intValue", "0junk"},
+        {"boolValue", "true"},
+        {"stringValue", "test"},
+        {"regexValue", "test"},
+        {"patternValue", "test"},
+        {"octalValue", "0755"},
+        {"separatedValue", "foo"},
+    };
+    const auto result = ParseArguments<BuiltinTypesParams>(args);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+}
+
 TEST_F(BindingsTest, OctalModeRejectsUnconsumedSuffixes)
 {
     for (const string input : {"0755junk", "08", "0755 "})

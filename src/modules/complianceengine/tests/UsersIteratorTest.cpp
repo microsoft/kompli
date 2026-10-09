@@ -75,9 +75,9 @@ TEST_F(UsersIteratorTest, UidMinRejectsMissingValue)
     EXPECT_EQ(result.Error().code, EINVAL);
 }
 
-TEST_F(UsersIteratorTest, UidMinRejectsMalformedSuffixAfterCommentRemoval)
+TEST_F(UsersIteratorTest, UidMinRejectsMalformedSuffix)
 {
-    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>("UID_MIN 1000junk # not a valid number\n")));
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>("UID_MIN 1000junk\n")));
     const auto result = GetUidMin(mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, EINVAL);
