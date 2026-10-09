@@ -10,6 +10,8 @@
 namespace ComplianceEngine
 {
 Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicators, ContextInterface& context, const std::string& passwdPath);
+Result<Status> RemediateUserHomeDirectoryPermissionsWithPasswdFile(IndicatorsTree& indicators, ContextInterface& context, const std::string& passwdPath,
+    Result<Status> (*remediatePermissions)(const FilePermissionsParams&, IndicatorsTree&, ContextInterface&));
 } // namespace ComplianceEngine
 
 #endif // COMPLIANCEENGINE_USER_PERMISSIONS_TEST_SEAMS_H

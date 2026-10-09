@@ -5,6 +5,7 @@
 #include <ListValidShells.h>
 #include <Result.h>
 #include <UserHomeDirectoryPermissions.h>
+#include <UserPermissionsTestSeams.h>
 #include <UsersIterator.h>
 #include <fcntl.h>
 #include <fstream>
@@ -113,6 +114,16 @@ Result<Status> AuditUserHomeDirectoryPermissions(IndicatorsTree& indicators, Con
 
 Result<Status> RemediateUserHomeDirectoryPermissions(IndicatorsTree& indicators, ContextInterface& context)
 {
+    return RemediateUserHomeDirectoryPermissionsWithPasswdFile(indicators, context, "/etc/passwd", RemediateFilePermissions);
+}
+
+Result<Status> RemediateUserHomeDirectoryPermissionsWithPasswdFile(IndicatorsTree& indicators, ContextInterface& context, const string& passwdPath,
+    Result<Status> (*remediatePermissions)(const FilePermissionsParams&, IndicatorsTree&, ContextInterface&))
+{
+    if (remediatePermissions == nullptr)
+    {
+        return Error("Missing home-directory permissions remediator", EINVAL);
+    }
     const auto validShells = ListValidShells(context);
     if (!validShells.HasValue())
     {
@@ -121,7 +132,7 @@ Result<Status> RemediateUserHomeDirectoryPermissions(IndicatorsTree& indicators,
     }
 
     auto result = Status::Compliant;
-    auto users = UsersRange::Make(context.GetLogHandle());
+    auto users = UsersRange::Make(passwdPath, context.GetLogHandle());
     if (!users.HasValue())
     {
         return users.Error();
@@ -184,12 +195,13 @@ Result<Status> RemediateUserHomeDirectoryPermissions(IndicatorsTree& indicators,
         params.owner = {{std::move(pwdPattern.Value())}};
         params.group = {{std::move(groupPattern.Value())}};
         indicators.Push("EnsureFilePermissions");
-        auto subResult = RemediateFilePermissions(params, indicators, context);
+        auto subResult = remediatePermissions(params, indicators, context);
         if (!subResult.HasValue())
         {
             OsConfigLogError(context.GetLogHandle(), "Failed to remediate permissions for home directory '%s' for user '%s': %s", pwd.pw_dir,
                 pwd.pw_name, subResult.Error().message.c_str());
-            result = Status::NonCompliant;
+            indicators.Pop();
+            return subResult.Error();
         }
         indicators.Back().status = subResult.Value();
         indicators.Pop();

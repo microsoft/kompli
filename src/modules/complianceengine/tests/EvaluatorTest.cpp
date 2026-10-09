@@ -8,6 +8,7 @@
 #include "parson.h"
 
 #include <UserDotFilePermissions.h>
+#include <UserHomeDirectoryPermissions.h>
 #include <UserPermissionsTestSeams.h>
 #include <cerrno>
 #include <fstream>
@@ -844,4 +845,57 @@ TEST(UserDotFilePermissionsErrorsTest, RegularDotFileRetainsPermissionVerdict)
     const auto result = ComplianceEngine::AuditUserDotFilePermissionsWithPasswdFile(indicators, context, passwd);
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(Status::NonCompliant, result.Value());
+}
+
+TEST(UserHomeDirectoryPermissionsErrorsTest, FailedChildRemediationPropagatesWithoutMutatingHome)
+{
+    MockContext context;
+    ComplianceEngine::IndicatorsTree indicators;
+    indicators.Push("UserHomeDirectoryPermissions");
+    const std::string home = context.GetTempdirPath() + "/home";
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    const auto* group = getgrnam("root");
+    ASSERT_NE(nullptr, group);
+    const std::string passwd =
+        context.MakeTempfile("fixture:x:" + std::to_string(getuid()) + ":" + std::to_string(group->gr_gid) + "::" + home + ":/bin/sh\n");
+    struct stat before;
+    ASSERT_EQ(0, stat(home.c_str(), &before));
+    const auto failRemediation = [](const ComplianceEngine::FilePermissionsParams&, ComplianceEngine::IndicatorsTree&,
+                                     ComplianceEngine::ContextInterface&) -> ComplianceEngine::Result<Status> {
+        return Error("Simulated child remediation failure", EIO);
+    };
+
+    const auto result = ComplianceEngine::RemediateUserHomeDirectoryPermissionsWithPasswdFile(indicators, context, passwd, failRemediation);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EIO, result.Error().code);
+    EXPECT_EQ("Simulated child remediation failure", result.Error().message);
+    EXPECT_EQ("UserHomeDirectoryPermissions", indicators.Back().procedureName);
+    ASSERT_EQ(1U, indicators.Back().children.size());
+    struct stat after;
+    ASSERT_EQ(0, stat(home.c_str(), &after));
+    EXPECT_EQ(before.st_ino, after.st_ino);
+    EXPECT_EQ(before.st_uid, after.st_uid);
+    EXPECT_EQ(before.st_gid, after.st_gid);
+    EXPECT_EQ(before.st_mode, after.st_mode);
+}
+
+TEST(UserHomeDirectoryPermissionsErrorsTest, SuccessfulChildRetainsOrdinaryVerdict)
+{
+    MockContext context;
+    ComplianceEngine::IndicatorsTree indicators;
+    indicators.Push("UserHomeDirectoryPermissions");
+    const std::string home = context.GetTempdirPath() + "/home";
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    const auto* group = getgrnam("root");
+    ASSERT_NE(nullptr, group);
+    const std::string passwd =
+        context.MakeTempfile("fixture:x:" + std::to_string(getuid()) + ":" + std::to_string(group->gr_gid) + "::" + home + ":/bin/sh\n");
+    const auto compliant = [](const ComplianceEngine::FilePermissionsParams&, ComplianceEngine::IndicatorsTree&,
+                               ComplianceEngine::ContextInterface&) -> ComplianceEngine::Result<Status> { return Status::Compliant; };
+
+    const auto result = ComplianceEngine::RemediateUserHomeDirectoryPermissionsWithPasswdFile(indicators, context, passwd, compliant);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
 }
