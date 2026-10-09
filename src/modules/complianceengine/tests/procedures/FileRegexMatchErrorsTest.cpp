@@ -66,3 +66,34 @@ TEST(FileRegexMatchErrorsTest, MissingDirectoryRetainsAbsencePolicy)
     ASSERT_TRUE(optionalResult.HasValue());
     EXPECT_EQ(Status::Compliant, optionalResult.Value());
 }
+
+TEST(FileRegexMatchErrorsTest, InvalidPatternsFailWithoutSelectedFiles)
+{
+    MockContext context;
+    IndicatorsTree indicators;
+    indicators.Push("FileRegexMatch");
+    const std::string path = context.GetTempdirPath() + "/regex-input";
+    ASSERT_EQ(0, mkdir(path.c_str(), 0700));
+
+    FileRegexMatchParams params;
+    params.path = path;
+    params.filenamePattern = regex("selected");
+    params.matchPattern = "(";
+    params.behavior = Behavior::NoneExist;
+
+    for (const auto& inputPath : {path, context.GetTempdirPath() + "/missing"})
+    {
+        params.path = inputPath;
+        const auto result = AuditFileRegexMatch(params, indicators, context);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EINVAL, result.Error().code);
+    }
+
+    std::ofstream(path + "/unselected") << "key=value\n";
+    params.path = path;
+    params.matchPattern = "key";
+    params.statePattern = "(";
+    const auto stateResult = AuditFileRegexMatch(params, indicators, context);
+    ASSERT_FALSE(stateResult.HasValue());
+    EXPECT_EQ(EINVAL, stateResult.Error().code);
+}
