@@ -296,13 +296,14 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
     auto* dir = opendir(params.path.c_str());
     if (dir == nullptr)
     {
-        int status = errno;
+        const int status = errno;
+        if (status != ENOENT)
+        {
+            OsConfigLogError(context.GetLogHandle(), "Failed to open directory '%s': %s", params.path.c_str(), strerror(status));
+            return Error("Failed to open directory '" + params.path + "': " + strerror(status), status);
+        }
         if (params.allMatches.Value() || params.noneMatches.Value())
         {
-            if (status != ENOENT)
-            {
-                return Error("Failed to open directory '" + params.path + "'", status);
-            }
             if (behavior == Behavior::AnyExist)
             {
                 return indicators.Compliant("No selected settings in missing directory '" + params.path + "'");
