@@ -147,6 +147,25 @@ TEST_F(EnsureShadowContainsTest, InvalidArguments_4)
     ASSERT_EQ(result.Error().message, string("invalid last password change date parameter value"));
 }
 
+TEST_F(EnsureShadowContainsTest, MalformedIntegerOperandReturnsFieldErrorWithoutIndicator)
+{
+    const auto path = CreateTestShadowFile("testuser", string("$y$"), 5);
+    ASSERT_FALSE(path.empty());
+    mContext.SetSpecialFilePath("/etc/shadow", path);
+    ShadowFieldParams params;
+    params.username = "testuser";
+    params.field = Field::LastChange;
+    params.value = "5junk";
+    params.operation = ComparisonOperation::Equal;
+
+    const auto result = AuditShadowField(params, mIndicators, mContext);
+    RemoveTestShadowFile(path);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().message, "invalid last password change date parameter value");
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
 TEST_F(EnsureShadowContainsTest, SpecificUser_1)
 {
     ShadowFieldParams params;
@@ -892,7 +911,7 @@ TEST_F(EnsureShadowContainsTest, IntegerParsingAndUnsupportedOperationKeepErrors
     ShadowFieldParams params;
     params.username = "testuser";
     params.field = Field::LastChange;
-    params.value = "5junk";
+    params.value = "5";
     params.operation = ComparisonOperation::Equal;
     auto result = AuditShadowField(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());

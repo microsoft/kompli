@@ -3,7 +3,11 @@
 
 #include <BindingParsers.h>
 #include <StringTools.h>
+#include <cerrno>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <limits>
 
 namespace ComplianceEngine
 {
@@ -61,14 +65,27 @@ Result<bool> Parse<bool>(const string& input)
 template <>
 Result<mode_t> Parse<mode_t>(const string& input)
 {
-    try
+    errno = 0;
+    char* end = nullptr;
+    const auto value = std::strtol(input.c_str(), &end, 8);
+    if (errno == ERANGE || end == input.c_str())
     {
-        return static_cast<mode_t>(std::stol(input, nullptr, 8));
+        // Preserve the error detail previously returned by std::stol.
+        return Error("Failed to parse octal value '" + input + "': stol", EINVAL);
     }
-    catch (const std::exception& e)
+    if (end != input.c_str() + input.size())
     {
-        return Error("Failed to parse octal value '" + input + "': " + e.what(), EINVAL);
+        return Error("Failed to parse octal value '" + input + "': Unconsumed suffix in octal value", EINVAL);
     }
+    if (value < 0)
+    {
+        return Error("Failed to parse octal value '" + input + "': Negative octal value", EINVAL);
+    }
+    if (static_cast<std::uintmax_t>(value) > static_cast<std::uintmax_t>(std::numeric_limits<mode_t>::max()))
+    {
+        return Error("Failed to parse octal value '" + input + "': Octal value out of range for mode_t", EINVAL);
+    }
+    return static_cast<mode_t>(value);
 }
 } // namespace BindingParsers
 } // namespace ComplianceEngine

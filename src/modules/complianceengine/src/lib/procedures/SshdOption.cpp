@@ -7,6 +7,8 @@
 #include <Regex.h>
 #include <SshdOption.h>
 #include <TypedComparison.h>
+#include <cerrno>
+#include <cstdlib>
 #include <fnmatch.h>
 #include <fts.h>
 #include <sstream>
@@ -184,7 +186,7 @@ Result<std::map<std::string, std::string>> GetSshdOptions(ContextInterface& cont
         {
             std::string optionValue;
             std::getline(lineStream, optionValue);
-            optionValue.erase(0, optionValue.find_first_not_of(" \t"));
+            optionValue = TrimWhiteSpaces(optionValue);
             currentOption = ToLower(currentOption);
             optionValue = ToLower(optionValue);
             options[currentOption] = optionValue;
@@ -202,43 +204,59 @@ static Result<Status> EvaluateDelimitedNumericLimits(const std::string& option, 
     // Parse realValue using provided delimiter, value always uses ':' per specification.
     std::vector<long long> realParts(numFields, 0);
     std::vector<long long> limitParts(numFields, 0);
-
-    try
-    {
-        std::istringstream realStream(realValue);
-        std::string token;
-        size_t idx = 0;
-        while ((idx < numFields) && std::getline(realStream, token, delimiter))
+    const auto parseToken = [](const std::string& token) -> Result<long long> {
+        errno = 0;
+        char* end = nullptr;
+        const auto parsed = std::strtoll(token.c_str(), &end, 10);
+        if (errno == ERANGE || end == token.c_str())
         {
-            if (!token.empty())
-            {
-                realParts[idx] = std::stoll(token);
-            }
-            ++idx;
+            // Preserve the error detail previously returned by std::stoll.
+            return Error("stoll", EINVAL);
         }
-    }
-    catch (const std::exception& e)
+        if (end != token.c_str() + token.size())
+        {
+            return Error("Unconsumed suffix in numeric token '" + token + "'", EINVAL);
+        }
+        return parsed;
+    };
+
+    std::istringstream realStream(realValue);
+    std::string token;
+    size_t idx = 0;
+    while ((idx < numFields) && std::getline(realStream, token, delimiter))
     {
-        return Error("Failed to parse " + option + " value '" + realValue + "': " + e.what(), EINVAL);
+        auto parsed = parseToken(token);
+        if (!parsed.HasValue())
+        {
+            return Error("Failed to parse " + option + " value '" + realValue + "': " + parsed.Error().message, parsed.Error().code);
+        }
+        realParts[idx] = parsed.Value();
+        ++idx;
+    }
+    if (idx == 0)
+    {
+        return Error("Failed to parse " + option + " value '" + realValue + "': No numeric fields", EINVAL);
+    }
+    if ((idx == numFields && !realStream.eof()) || (!realValue.empty() && realValue.back() == delimiter))
+    {
+        return Error("Failed to parse " + option + " value '" + realValue + "': Unexpected extra field or trailing delimiter", EINVAL);
     }
 
-    try
+    std::istringstream limitStream(value);
+    idx = 0;
+    while ((idx < numFields) && std::getline(limitStream, token, ':'))
     {
-        std::istringstream limitStream(value);
-        std::string token;
-        size_t idx = 0;
-        while ((idx < numFields) && std::getline(limitStream, token, ':'))
+        auto parsed = parseToken(token);
+        if (!parsed.HasValue())
         {
-            if (!token.empty())
-            {
-                limitParts[idx] = std::stoll(token);
-            }
-            ++idx;
+            return Error("Failed to parse " + option + " limit '" + value + "': " + parsed.Error().message, parsed.Error().code);
         }
+        limitParts[idx] = parsed.Value();
+        ++idx;
     }
-    catch (const std::exception& e)
+    if ((idx == numFields && !limitStream.eof()) || (!value.empty() && value.back() == ':'))
     {
-        return Error("Failed to parse " + option + " limit '" + value + "': " + e.what(), EINVAL);
+        return Error("Failed to parse " + option + " limit '" + value + "': Unexpected extra field or trailing delimiter", EINVAL);
     }
 
     for (size_t i = 0; i < numFields; ++i)
