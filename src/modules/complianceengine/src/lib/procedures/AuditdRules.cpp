@@ -8,6 +8,7 @@
 #include <StringTools.h>
 #include <Users.h>
 #include <cctype>
+#include <cerrno>
 #include <cstring>
 #include <fstream>
 #include <fts.h>
@@ -284,6 +285,10 @@ Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree&
     auto uidMin = GetUidMin(context);
     if (!uidMin.HasValue())
     {
+        if (E2BIG == uidMin.Error().code)
+        {
+            return uidMin.Error();
+        }
         const int defaultUidMin = 1000;
         uidMin = defaultUidMin;
         OsConfigLogWarning(context.GetLogHandle(), "UID_MIN not found in /etc/login.defs, using default ");
