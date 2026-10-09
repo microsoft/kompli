@@ -52,8 +52,19 @@ is part of `complianceenginelib`, not a procedure or a generated interface.
 It parses supplied bytes and a logical source identity without opening files,
 returning ordered records, raw spans and located diagnostics. Exact-key
 first/last/all queries do not decide duplicate precedence, numeric conversion,
-missing-file behavior or compliance; existing assessment callers are not yet
-migrated. The parser rejects exhausted byte, line, record or diagnostic
+missing-file behavior or compliance. `LoginDefsOption`, `GetUidMin` and
+`SystemAccountShell` consume the ordered records while retaining their
+respective last/first/first selection, first-token versus whole-value
+interpretation, and distinct missing-input policies. The UID readers reject
+inline-hash numeric values rather than stripping an undocumented comment;
+the SystemAccountShell lookup no longer matches key substrings. When supplied
+bytes retain an embedded NUL in a selected record, callers reject it before
+assessment. The existing `CommonContext` acquisition can truncate at NUL
+before `LoginDefsOption` or `GetUidMin` sees the bytes; fixing that reader
+remains M-38 work, so this is not an end-to-end NUL guarantee.
+`SystemAccountShell` bounds its existing direct file read and checks completion
+before parsing; generic reader replacement remains separate. The parser
+rejects exhausted byte, line, record or diagnostic
 budgets with `E2BIG` rather than returning partial evidence. Its direct native
 tests and independent parser-only libFuzzer target are registered separately;
 the latter builds only with `BUILD_FUZZER`. An audited local fuzz-run recipe

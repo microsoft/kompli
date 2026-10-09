@@ -122,6 +122,52 @@ TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, LoginDefs_4)
     ASSERT_TRUE(result.HasValue());
 }
 
+TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, UidMinMatchesExactKeyNotSubstring)
+{
+    mContext.SetSpecialFilePath("/etc/login.defs", mContext.MakeTempfile("NOT_UID_MIN 2000\n"));
+    mContext.SetSpecialFilePath("/etc/passwd", CreateTestPasswdFile(1500, "/bin/bash"));
+    const auto result = AuditSystemAccountShell(mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+    const auto* root = mIndicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    EXPECT_TRUE(root->indicators.empty());
+}
+
+TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, UidMinRejectsInlineHashWithoutIndicators)
+{
+    mContext.SetSpecialFilePath("/etc/login.defs", mContext.MakeTempfile("UID_MIN 100#note\n"));
+    const auto result = AuditSystemAccountShell(mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+    const auto* root = mIndicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    EXPECT_TRUE(root->indicators.empty());
+}
+
+TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, UidMinRejectsSelectedEmbeddedNul)
+{
+    const string contents("UID_MIN 100 \0ignored\n", 21);
+    mContext.SetSpecialFilePath("/etc/login.defs", mContext.MakeTempfile(contents));
+    const auto result = AuditSystemAccountShell(mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+    const auto* root = mIndicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    EXPECT_TRUE(root->indicators.empty());
+}
+
+TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, UidMinSelectsFirstExactOccurrence)
+{
+    mContext.SetSpecialFilePath("/etc/login.defs", mContext.MakeTempfile("UID_MIN 100\nUID_MIN 2000\n"));
+    const auto result = AuditSystemAccountShell(mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+    const auto* root = mIndicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    EXPECT_TRUE(root->indicators.empty());
+}
+
 TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, AllowlistedAccount_1)
 {
     auto filename = CreateTestPasswdFile(0, "/bin/bash", "root");

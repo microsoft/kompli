@@ -104,6 +104,8 @@ TEST(LoginDefsTest, EmbeddedNulDoesNotTruncateLaterBytesOrLines)
     EXPECT_EQ(1U, doc.diagnostics[0].line);
     EXPECT_EQ(13U, doc.diagnostics[0].column);
     EXPECT_EQ(12U, doc.diagnostics[0].span.offset);
+    EXPECT_TRUE(doc.HasEmbeddedNul(doc.records[0]));
+    EXPECT_FALSE(doc.HasEmbeddedNul(doc.records[1]));
 }
 
 TEST(LoginDefsTest, ByteBudgetRejectsOversizeInsteadOfReturningPartialDocument)

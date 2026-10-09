@@ -13,10 +13,13 @@ namespace ComplianceEngine
 {
 namespace LoginDefs
 {
-constexpr std::size_t MaxBytes = 1024 * 1024;
-constexpr std::size_t MaxLineBytes = 16 * 1024;
-constexpr std::size_t MaxRecords = 8192;
-constexpr std::size_t MaxDiagnostics = 8192;
+enum : std::size_t
+{
+    MaxBytes = 1024 * 1024,
+    MaxLineBytes = 16 * 1024,
+    MaxRecords = 8192,
+    MaxDiagnostics = 8192
+};
 
 struct Span
 {
@@ -60,6 +63,7 @@ struct Document
     std::vector<const Record*> FindAll(const std::string& key) const;
     const Record* FindFirst(const std::string& key) const;
     const Record* FindLast(const std::string& key) const;
+    bool HasEmbeddedNul(const Record& record) const;
 };
 
 // Offsets and columns count bytes, not characters. Lines and columns are 1-based.

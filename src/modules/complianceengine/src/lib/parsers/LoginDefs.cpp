@@ -64,6 +64,19 @@ const Record* Document::FindLast(const std::string& key) const
     return nullptr;
 }
 
+bool Document::HasEmbeddedNul(const Record& record) const
+{
+    for (const auto& diagnostic : diagnostics)
+    {
+        if ((Diagnostic::Kind::EmbeddedNul == diagnostic.kind) && (record.lineSpan.offset <= diagnostic.span.offset) &&
+            (diagnostic.span.offset - record.lineSpan.offset < record.lineSpan.length))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 Result<Document> Parse(const std::string& bytes, const std::string& source)
 {
     if (MaxBytes < bytes.size())

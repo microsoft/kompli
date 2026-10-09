@@ -7,6 +7,7 @@
 #include <ProcedureMap.h>
 #include <StringTools.h>
 #include <TypedComparison.h>
+#include <parsers/LoginDefs.h>
 #include <sstream>
 #include <string>
 
@@ -57,32 +58,17 @@ Result<bool> StringComparison(const string& lhs, const string& rhs, ComparisonOp
     return CompareTyped(lhs, rhs, operation == ComparisonOperation::Equal ? TypedComparisonOperation::Equal : TypedComparisonOperation::NotEqual);
 }
 
-Optional<string> FindLoginDefsValue(const string& fileContents, const string& optionName, OsConfigLogHandle logHandle)
+Optional<string> FindLoginDefsValue(const LoginDefs::Document& document, const string& optionName, OsConfigLogHandle logHandle)
 {
-    std::istringstream stream(fileContents);
-    string line;
     Optional<string> foundValue;
 
-    while (std::getline(stream, line))
+    for (const auto* record : document.FindAll(optionName))
     {
-        auto trimmedLine = TrimWhiteSpaces(line);
-        if (trimmedLine.empty() || trimmedLine[0] == '#')
-        {
-            continue;
-        }
-
-        // Parse KEY VALUE format
-        std::istringstream iss(trimmedLine);
-        string key;
+        std::istringstream valueStream(document.Text(record->valueSpan));
         string value;
-        iss >> key >> value;
-
-        if (key == optionName)
-        {
-            foundValue = value;
-            OsConfigLogDebug(logHandle, "LoginDefsOption: found '%s' = '%s'", optionName.c_str(), value.c_str());
-            // Don't break — last occurrence wins (login.defs standard behavior)
-        }
+        valueStream >> value;
+        foundValue = value;
+        OsConfigLogDebug(logHandle, "LoginDefsOption: found '%s' = '%s'", optionName.c_str(), value.c_str());
     }
 
     return foundValue;
@@ -114,7 +100,17 @@ Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, Indicat
         return Error("Invalid " + params.option + " comparison target: " + rhsInt.Error().message, rhsInt.Error().code);
     }
 
-    auto foundValue = FindLoginDefsValue(fileContents.Value(), params.option, context.GetLogHandle());
+    const auto parsed = LoginDefs::Parse(fileContents.Value(), filePath);
+    if (!parsed.HasValue())
+    {
+        return parsed.Error();
+    }
+    const auto* selected = parsed.Value().FindLast(params.option);
+    if ((nullptr != selected) && parsed.Value().HasEmbeddedNul(*selected))
+    {
+        return Error("Invalid " + params.option + " value: embedded NUL", EINVAL);
+    }
+    auto foundValue = FindLoginDefsValue(parsed.Value(), params.option, context.GetLogHandle());
     if (!foundValue.HasValue())
     {
         return indicators.NonCompliant("Option '" + params.option + "' is not set in " + filePath);

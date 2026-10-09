@@ -268,6 +268,36 @@ TEST_F(LoginDefsOptionTest, LastOccurrenceWins)
     EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(LoginDefsOptionTest, MalformedLastOccurrenceCannotFallBackToEarlierValue)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 180\nPASS_MAX_DAYS\n");
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, SelectedEmbeddedNulCannotProduceIndicator)
+{
+    SetLoginDefsContent(string("PASS_MAX_DAYS 180 \0ignored\n", 27));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
 TEST_F(LoginDefsOptionTest, TabSeparated)
 {
     SetLoginDefsContent("PASS_MAX_DAYS\t\t365\n");
