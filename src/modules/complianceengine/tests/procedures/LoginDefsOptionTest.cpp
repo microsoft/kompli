@@ -5,6 +5,7 @@
 #include "MockContext.h"
 
 #include <LoginDefsOption.h>
+#include <ProcedureMap.h>
 
 using ComplianceEngine::AuditLoginDefsOption;
 using ComplianceEngine::ComparisonOperation;
@@ -215,6 +216,9 @@ TEST_F(LoginDefsOptionTest, OptionNotFound_NonCompliant)
     auto result = AuditLoginDefsOption(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(result.Value(), Status::NonCompliant);
+    ASSERT_EQ(mIndicators.Back().indicators.size(), 1U);
+    EXPECT_EQ(mIndicators.Back().indicators.front().status, Status::NonCompliant);
+    EXPECT_EQ(mIndicators.Back().indicators.front().message, "Option 'PASS_MAX_DAYS' is not set in /etc/login.defs");
 }
 
 TEST_F(LoginDefsOptionTest, FileNotFound_ReturnsError)
@@ -228,6 +232,8 @@ TEST_F(LoginDefsOptionTest, FileNotFound_ReturnsError)
 
     auto result = AuditLoginDefsOption(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().message, "Failed to load file contents");
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }
 
 TEST_F(LoginDefsOptionTest, CommentSkipped)
@@ -424,4 +430,297 @@ TEST_F(LoginDefsOptionTest, RealisticLoginDefs)
         ASSERT_TRUE(result.HasValue());
         EXPECT_EQ(result.Value(), Status::Compliant);
     }
+}
+
+TEST_F(LoginDefsOptionTest, NumericComparisonPreservesAllOperatorsAndIndicators)
+{
+    struct Case
+    {
+        ComparisonOperation operation;
+        string actual;
+        Status expected;
+    };
+    const Case cases[] = {
+        {ComparisonOperation::Equal, "5", Status::Compliant},
+        {ComparisonOperation::Equal, "4", Status::NonCompliant},
+        {ComparisonOperation::NotEqual, "4", Status::Compliant},
+        {ComparisonOperation::NotEqual, "5", Status::NonCompliant},
+        {ComparisonOperation::LessThan, "4", Status::Compliant},
+        {ComparisonOperation::LessThan, "5", Status::NonCompliant},
+        {ComparisonOperation::LessOrEqual, "5", Status::Compliant},
+        {ComparisonOperation::LessOrEqual, "6", Status::NonCompliant},
+        {ComparisonOperation::GreaterThan, "6", Status::Compliant},
+        {ComparisonOperation::GreaterThan, "5", Status::NonCompliant},
+        {ComparisonOperation::GreaterOrEqual, "5", Status::Compliant},
+        {ComparisonOperation::GreaterOrEqual, "4", Status::NonCompliant},
+        {ComparisonOperation::LessThan, "-2147483648", Status::Compliant},
+        {ComparisonOperation::GreaterThan, "2147483647", Status::Compliant},
+    };
+
+    for (const auto& test : cases)
+    {
+        SetLoginDefsContent("PASS_MAX_DAYS " + test.actual + "\n");
+        LoginDefsOptionParams params;
+        params.option = "PASS_MAX_DAYS";
+        params.value = "5";
+        params.comparison = test.operation;
+        IndicatorsTree indicators;
+        indicators.Push("LoginDefsOption");
+        auto result = AuditLoginDefsOption(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue()) << test.actual;
+        EXPECT_EQ(result.Value(), test.expected) << test.actual;
+        auto formatted = mFormatter.Format(indicators);
+        ASSERT_TRUE(formatted.HasValue());
+        ASSERT_EQ(indicators.Back().indicators.size(), 1U);
+        const auto& indicator = indicators.Back().indicators.front();
+        EXPECT_EQ(indicator.status, test.expected);
+        const string message =
+            "PASS_MAX_DAYS = " + test.actual + (test.expected == Status::Compliant ? " (" : " (expected ") + std::to_string(test.operation) + " 5)";
+        EXPECT_EQ(indicator.message, message);
+    }
+}
+
+TEST_F(LoginDefsOptionTest, StringComparisonPreservesCasePolicyAndUnsupportedOrdering)
+{
+    struct Case
+    {
+        string option;
+        string actual;
+        string expected;
+        ComparisonOperation operation;
+        Status status;
+    };
+    const Case cases[] = {
+        {"ENCRYPT_METHOD", "YESCRYPT", "yescrypt", ComparisonOperation::Equal, Status::Compliant},
+        {"ENCRYPT_METHOD", "YESCRYPT", "md5", ComparisonOperation::NotEqual, Status::Compliant},
+        {"OTHER", "YESCRYPT", "yescrypt", ComparisonOperation::Equal, Status::NonCompliant},
+        {"OTHER", "YESCRYPT", "yescrypt", ComparisonOperation::NotEqual, Status::Compliant},
+    };
+    for (const auto& test : cases)
+    {
+        SetLoginDefsContent(test.option + " " + test.actual + "\n");
+        LoginDefsOptionParams params;
+        params.option = test.option;
+        params.value = test.expected;
+        params.comparison = test.operation;
+        IndicatorsTree indicators;
+        indicators.Push("LoginDefsOption");
+        auto result = AuditLoginDefsOption(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), test.status);
+        ASSERT_EQ(indicators.Back().indicators.size(), 1U);
+        EXPECT_EQ(indicators.Back().indicators.front().status, test.status);
+        EXPECT_EQ(indicators.Back().indicators.front().message, test.option + " = " + test.actual + (test.status == Status::Compliant ? " (" : " (expected ") +
+                                                                    std::to_string(test.operation) + " " + test.expected + ")");
+    }
+
+    SetLoginDefsContent("OTHER yescrypt\n");
+    LoginDefsOptionParams params;
+    params.option = "OTHER";
+    params.value = "yescrypt";
+    params.comparison = ComparisonOperation::LessThan;
+    auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().message, "Unsupported comparison operation for string value (only eq and ne are supported)");
+}
+
+TEST_F(LoginDefsOptionTest, NumericEndpointsPreserveBothOperandDirections)
+{
+    struct Case
+    {
+        string actual;
+        string expected;
+        ComparisonOperation operation;
+        Status status;
+    };
+    const Case cases[] = {
+        {"-2147483648", "-2147483648", ComparisonOperation::Equal, Status::Compliant},
+        {"-2147483648", "-2147483648", ComparisonOperation::LessThan, Status::NonCompliant},
+        {"-2147483648", "-2147483648", ComparisonOperation::LessOrEqual, Status::Compliant},
+        {"-2147483648", "-2147483647", ComparisonOperation::LessThan, Status::Compliant},
+        {"0", "-2147483648", ComparisonOperation::GreaterThan, Status::Compliant},
+        {"2147483647", "2147483647", ComparisonOperation::Equal, Status::Compliant},
+        {"2147483647", "2147483647", ComparisonOperation::GreaterThan, Status::NonCompliant},
+        {"2147483647", "2147483647", ComparisonOperation::GreaterOrEqual, Status::Compliant},
+        {"2147483647", "2147483646", ComparisonOperation::GreaterThan, Status::Compliant},
+    };
+    for (const auto& test : cases)
+    {
+        SetLoginDefsContent("PASS_MAX_DAYS " + test.actual + "\n");
+        LoginDefsOptionParams params;
+        params.option = "PASS_MAX_DAYS";
+        params.value = test.expected;
+        params.comparison = test.operation;
+        IndicatorsTree indicators;
+        indicators.Push("LoginDefsOption");
+        auto result = AuditLoginDefsOption(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), test.status);
+        ASSERT_EQ(indicators.Back().indicators.size(), 1U);
+        EXPECT_EQ(indicators.Back().indicators.front().status, test.status);
+        EXPECT_EQ(indicators.Back().indicators.front().message, "PASS_MAX_DAYS = " + test.actual + (test.status == Status::Compliant ? " (" : " (expected ") +
+                                                                    std::to_string(test.operation) + " " + test.expected + ")");
+    }
+}
+
+TEST_F(LoginDefsOptionTest, NumericOverflowReturnsErrorWithoutIndicator)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 2147483648\n");
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "5";
+    params.comparison = ComparisonOperation::Equal;
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, ERANGE);
+    EXPECT_EQ(result.Error().message, "Invalid PASS_MAX_DAYS value: Integer value out of range: 2147483648");
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, NumericTargetOverflowReturnsErrorWithoutIndicator)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 5\n");
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "02147483648";
+    params.comparison = ComparisonOperation::Equal;
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, ERANGE);
+    EXPECT_EQ(result.Error().message, "Invalid PASS_MAX_DAYS comparison target: Integer value out of range: 02147483648");
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, MalformedNumericTargetReturnsError)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 5\n");
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "5junk";
+    params.comparison = ComparisonOperation::Equal;
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().message, "Invalid PASS_MAX_DAYS comparison target: Invalid integer value: 5junk");
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, MissingNumericOptionStillRejectsMalformedTarget)
+{
+    SetLoginDefsContent("ENCRYPT_METHOD SHA512\n");
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "5junk";
+    params.comparison = ComparisonOperation::Equal;
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().message, "Invalid PASS_MAX_DAYS comparison target: Invalid integer value: 5junk");
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, MalformedNumericValueReturnsError)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 5junk\n");
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "5";
+    params.comparison = ComparisonOperation::Equal;
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().message, "Invalid PASS_MAX_DAYS value: Invalid integer value: 5junk");
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, EqualMalformedNumericValuesCannotPass)
+{
+    for (const string option : {"PASS_MAX_DAYS", "PASS_MIN_DAYS", "PASS_WARN_AGE", "UID_MIN", "UID_MAX"})
+    {
+        SetLoginDefsContent(option + " 5junk\n");
+        LoginDefsOptionParams params;
+        params.option = option;
+        params.value = "5junk";
+        params.comparison = ComparisonOperation::Equal;
+        const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+        ASSERT_FALSE(result.HasValue()) << option;
+        EXPECT_EQ(result.Error().code, EINVAL) << option;
+        EXPECT_TRUE(mIndicators.Back().indicators.empty()) << option;
+    }
+}
+
+TEST_F(LoginDefsOptionTest, UidRangeOptionsRejectMalformedTargetsEvenWhenMissing)
+{
+    for (const string option : {"UID_MIN", "UID_MAX"})
+    {
+        SetLoginDefsContent("ENCRYPT_METHOD SHA512\n");
+        LoginDefsOptionParams params;
+        params.option = option;
+        params.value = "5junk";
+        params.comparison = ComparisonOperation::Equal;
+        const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+        ASSERT_FALSE(result.HasValue()) << option;
+        EXPECT_EQ(result.Error().code, EINVAL) << option;
+        EXPECT_EQ(result.Error().message, "Invalid " + option + " comparison target: Invalid integer value: 5junk");
+        EXPECT_TRUE(mIndicators.Back().indicators.empty()) << option;
+    }
+}
+
+TEST_F(LoginDefsOptionTest, UidRangeOptionsRejectOverflowingValues)
+{
+    for (const string option : {"UID_MIN", "UID_MAX"})
+    {
+        SetLoginDefsContent(option + " 2147483648\n");
+        LoginDefsOptionParams params;
+        params.option = option;
+        params.value = "5";
+        params.comparison = ComparisonOperation::Equal;
+        const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+        ASSERT_FALSE(result.HasValue()) << option;
+        EXPECT_EQ(result.Error().code, ERANGE) << option;
+        EXPECT_EQ(result.Error().message, "Invalid " + option + " value: Integer value out of range: 2147483648");
+        EXPECT_TRUE(mIndicators.Back().indicators.empty()) << option;
+    }
+}
+
+TEST_F(LoginDefsOptionTest, UidRangeOptionsKeepValidNumericComparisons)
+{
+    for (const string option : {"UID_MIN", "UID_MAX"})
+    {
+        SetLoginDefsContent(option + " 1000\n");
+        LoginDefsOptionParams params;
+        params.option = option;
+        params.value = "900";
+        params.comparison = ComparisonOperation::GreaterOrEqual;
+        const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue()) << option;
+        EXPECT_EQ(result.Value(), Status::Compliant) << option;
+    }
+}
+
+TEST_F(LoginDefsOptionTest, UnknownStringOptionPreservesStringComparison)
+{
+    SetLoginDefsContent("OTHER 5junk\n");
+    LoginDefsOptionParams params;
+    params.option = "OTHER";
+    params.value = "5junk";
+    params.comparison = ComparisonOperation::Equal;
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(LoginDefsOptionTest, UnsupportedNumericOperatorReturnsErrorWithoutIndicator)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 5\n");
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "5";
+    params.comparison = ComparisonOperation::PatternMatch;
+    auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().message, "Unsupported comparison operation for numeric value: Unsupported comparison operation 6");
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }

@@ -5,6 +5,7 @@
 
 #include <SystemdConfig.h>
 #include <gtest/gtest.h>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -623,6 +624,106 @@ TEST_F(SystemdConfigTest, OperatorEqualWithNumericStrings)
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(SystemdConfigTest, TypedOperatorBoundariesPreserveStringEqualityAndLongOrdering)
+{
+    struct Case
+    {
+        std::string actual;
+        std::string expected;
+        SystemdConfigValueOperator operation;
+        Status status;
+    };
+    const auto min = std::numeric_limits<long>::min();
+    const auto max = std::numeric_limits<long>::max();
+    const Case cases[] = {
+        {"042", "42", SystemdConfigValueOperator::Equal, Status::NonCompliant},
+        {"-1", "0", SystemdConfigValueOperator::LessThan, Status::Compliant},
+        {"0", "-1", SystemdConfigValueOperator::GreaterThan, Status::Compliant},
+        {std::to_string(min), std::to_string(min), SystemdConfigValueOperator::LessThan, Status::NonCompliant},
+        {std::to_string(min), std::to_string(min), SystemdConfigValueOperator::LessOrEqual, Status::Compliant},
+        {std::to_string(min), std::to_string(min + 1), SystemdConfigValueOperator::LessThan, Status::Compliant},
+        {std::to_string(max), std::to_string(max), SystemdConfigValueOperator::GreaterThan, Status::NonCompliant},
+        {std::to_string(max), std::to_string(max), SystemdConfigValueOperator::GreaterOrEqual, Status::Compliant},
+        {std::to_string(max), std::to_string(max - 1), SystemdConfigValueOperator::GreaterThan, Status::Compliant},
+    };
+    for (const auto& test : cases)
+    {
+        const std::string output = "# /etc/systemd/test.conf\nTestParam=" + test.actual + "\n";
+        EXPECT_CALL(mContext, ExecuteCommand("/usr/bin/systemd-analyze cat-config \"test.conf\"")).WillOnce(Return(Result<std::string>(output)));
+        SystemdConfigValueParams params;
+        params.parameter = "TestParam";
+        params.file = "test.conf";
+        params.value = test.expected;
+        params.op = test.operation;
+        IndicatorsTree indicators;
+        indicators.Push("SystemdParameter");
+        auto result = AuditSystemdConfigValue(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue()) << test.actual;
+        EXPECT_EQ(result.Value(), test.status) << test.actual;
+        ASSERT_EQ(indicators.Back().indicators.size(), 1U);
+        EXPECT_EQ(indicators.Back().indicators.front().status, test.status);
+        EXPECT_EQ(indicators.Back().indicators.front().message,
+            test.status == Status::Compliant ?
+                "Parameter 'TestParam' found in file '/etc/systemd/test.conf' with value '" + test.actual + "'" :
+                "Parameter 'TestParam' value '" + test.actual + "' in file '/etc/systemd/test.conf' does not satisfy the comparison");
+    }
+}
+
+TEST_F(SystemdConfigTest, NumericOperatorKeepsMissingAndConversionPolicies)
+{
+    SystemdConfigValueParams params;
+    params.parameter = "TestParam";
+    params.file = "test.conf";
+    params.op = SystemdConfigValueOperator::GreaterThan;
+    params.value = "0";
+    const std::string absent = "# /etc/systemd/test.conf\nOtherParam=1\n";
+
+    EXPECT_CALL(mContext, ExecuteCommand("/usr/bin/systemd-analyze cat-config \"test.conf\"")).WillOnce(Return(Result<std::string>(absent)));
+    IndicatorsTree missing;
+    missing.Push("SystemdParameter");
+    auto result = AuditSystemdConfigValue(params, missing, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    ASSERT_EQ(missing.Back().indicators.size(), 1U);
+    EXPECT_EQ(missing.Back().indicators.front().message, "Parameter 'TestParam' not found");
+
+    EXPECT_CALL(mContext, ExecuteCommand("/usr/bin/systemd-analyze cat-config \"test.conf\"")).WillOnce(Return(Result<std::string>(absent)));
+    params.passOnNotFound = true;
+    IndicatorsTree optional;
+    optional.Push("SystemdParameter");
+    result = AuditSystemdConfigValue(params, optional, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    ASSERT_EQ(optional.Back().indicators.size(), 1U);
+    EXPECT_EQ(optional.Back().indicators.front().message, "Parameter 'TestParam' not found but Compliant due to passOnNotFound==true");
+
+    EXPECT_CALL(mContext, ExecuteCommand("/usr/bin/systemd-analyze cat-config \"test.conf\""))
+        .WillOnce(Return(Result<std::string>("# /etc/systemd/test.conf\nTestParam=abc\n")));
+    IndicatorsTree invalid;
+    invalid.Push("SystemdParameter");
+    result = AuditSystemdConfigValue(params, invalid, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().message, "Failed to convert values to numbers for comparison: actual='abc', expected='0'");
+    EXPECT_TRUE(invalid.Back().indicators.empty());
+}
+
+TEST_F(SystemdConfigTest, InvalidDirectNumericOperationReturnsErrorWithoutIndicator)
+{
+    EXPECT_CALL(mContext, ExecuteCommand("/usr/bin/systemd-analyze cat-config \"test.conf\""))
+        .WillOnce(Return(Result<std::string>("# /etc/systemd/test.conf\nTestParam=1\n")));
+    SystemdConfigValueParams params;
+    params.parameter = "TestParam";
+    params.file = "test.conf";
+    params.op = static_cast<SystemdConfigValueOperator>(100);
+    params.value = "0";
+
+    auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().message, "Unsupported numeric comparison operation 100");
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }
 
 // --- Tests for block parameter ---
