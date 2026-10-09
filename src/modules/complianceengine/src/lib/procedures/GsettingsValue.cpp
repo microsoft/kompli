@@ -6,14 +6,33 @@
 #include <GsettingsValue.h>
 #include <ProcedureMap.h>
 #include <StringTools.h>
+#include <TypedComparison.h>
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
-#include <functional>
-#include <map>
 
 namespace ComplianceEngine
 {
+namespace
+{
+Result<TypedComparisonOperation> MapComparison(GsettingsOperationType operation)
+{
+    switch (operation)
+    {
+        case GsettingsOperationType::LessThan:
+            return TypedComparisonOperation::LessThan;
+        case GsettingsOperationType::GreaterThan:
+            return TypedComparisonOperation::GreaterThan;
+        case GsettingsOperationType::Equal:
+        case GsettingsOperationType::IsUnlocked:
+            return TypedComparisonOperation::Equal;
+        case GsettingsOperationType::NotEqual:
+            return TypedComparisonOperation::NotEqual;
+    }
+    return Error("Unsupported operation " + std::to_string(static_cast<int>(operation)), EINVAL);
+}
+} // namespace
+
 Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
     auto log = context.GetLogHandle();
@@ -21,20 +40,13 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
     const auto escapedSchema = EscapeForShell(params.schema);
     const auto escapedKey = EscapeForShell(params.key);
 
-    std::map<GsettingsOperationType, std::pair<std::function<bool(const int&, const int&)>, std::function<bool(const std::string&, const std::string&)>>> operations{
-        {GsettingsOperationType::LessThan,
-            std::make_pair([](const int& x, const int& y) { return x < y; }, [](const std::string&, const std::string&) { return false; })},
-        {GsettingsOperationType::GreaterThan,
-            std::make_pair([](const int& x, const int& y) { return x > y; }, [](const std::string&, const std::string&) { return false; })},
-        {GsettingsOperationType::Equal,
-            std::make_pair([](const int& x, const int& y) { return x == y; }, [](const std::string& x, const std::string& y) { return x == y; })},
-        {GsettingsOperationType::NotEqual,
-            std::make_pair([](const int& x, const int& y) { return x != y; }, [](const std::string& x, const std::string& y) { return x != y; })},
-        {GsettingsOperationType::IsUnlocked,
-            std::make_pair([](const int&, const int&) { return false; }, [](const std::string& x, const std::string& y) { return x == y; })}};
-    auto genericOp = operations.find(params.operation);
-    if (genericOp == operations.end() || (params.keyType != GsettingsKeyType::Number && (genericOp->first == GsettingsOperationType::LessThan ||
-                                                                                            genericOp->first == GsettingsOperationType::GreaterThan)))
+    auto comparison = MapComparison(params.operation);
+    if (!comparison.HasValue())
+    {
+        return comparison.Error();
+    }
+    if ((params.keyType != GsettingsKeyType::Number) &&
+        ((params.operation == GsettingsOperationType::LessThan) || (params.operation == GsettingsOperationType::GreaterThan)))
     {
         return Error("Unsupported operation " + std::to_string(params.operation), EINVAL);
     }
@@ -139,8 +151,13 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
     bool isCompliant = false;
     if (params.keyType == GsettingsKeyType::Number)
     {
-        auto op = genericOp->second.first;
-        isCompliant = op(gsettingsNumberValue, numberValue);
+        // Preserve the previous numeric comparator's int operand width.
+        auto result = CompareTyped(static_cast<int>(gsettingsNumberValue), static_cast<int>(numberValue), comparison.Value());
+        if (!result.HasValue())
+        {
+            return result.Error();
+        }
+        isCompliant = result.Value();
     }
     else
     {
@@ -155,8 +172,12 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
             }
             gsettingsValue = gsettingsValue.substr(1, gsettingsValue.length() - 2);
         }
-        auto op = genericOp->second.second;
-        isCompliant = op(gsettingsValue, params.value);
+        auto result = CompareTyped(gsettingsValue, params.value, comparison.Value());
+        if (!result.HasValue())
+        {
+            return result.Error();
+        }
+        isCompliant = result.Value();
     }
 
     if (isCompliant)

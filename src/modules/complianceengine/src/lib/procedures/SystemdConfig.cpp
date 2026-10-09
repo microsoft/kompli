@@ -3,6 +3,7 @@
 
 #include <StringTools.h>
 #include <SystemdConfig.h>
+#include <TypedComparison.h>
 #include <algorithm>
 #include <cstdlib>
 #include <fts.h>
@@ -20,6 +21,24 @@ namespace
 {
 // Maps (block, parameter) -> (value, sourceFile)
 typedef std::map<std::pair<std::string, std::string>, std::pair<std::string, std::string>> SystemdConfigMap_t;
+
+Result<TypedComparisonOperation> MapNumericComparison(SystemdConfigValueOperator operation)
+{
+    switch (operation)
+    {
+        case SystemdConfigValueOperator::LessThan:
+            return TypedComparisonOperation::LessThan;
+        case SystemdConfigValueOperator::LessOrEqual:
+            return TypedComparisonOperation::LessOrEqual;
+        case SystemdConfigValueOperator::GreaterThan:
+            return TypedComparisonOperation::GreaterThan;
+        case SystemdConfigValueOperator::GreaterOrEqual:
+            return TypedComparisonOperation::GreaterOrEqual;
+        case SystemdConfigValueOperator::Equal:
+            break;
+    }
+    return Error("Unsupported numeric comparison operation " + std::to_string(static_cast<int>(operation)), EINVAL);
+}
 
 Result<bool> GetSystemdConfig(SystemdConfigMap_t& config, const std::string& filename, ContextInterface& context)
 {
@@ -233,10 +252,21 @@ Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, I
 
         if (op == SystemdConfigValueOperator::Equal)
         {
-            comparisonResult = (actualValue == expectedValue);
+            auto result = CompareTyped(actualValue, expectedValue, TypedComparisonOperation::Equal);
+            if (!result.HasValue())
+            {
+                return result.Error();
+            }
+            comparisonResult = result.Value();
         }
         else
         {
+            auto mapped = MapNumericComparison(op);
+            if (!mapped.HasValue())
+            {
+                return mapped.Error();
+            }
+
             // Numerical comparison for lt, le, gt, ge
             char* endActual = nullptr;
             char* endExpected = nullptr;
@@ -250,23 +280,12 @@ Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, I
                 return Error("Failed to convert values to numbers for comparison: actual='" + actualValue + "', expected='" + expectedValue + "'");
             }
 
-            switch (op)
+            auto result = CompareTyped(actualNum, expectedNum, mapped.Value());
+            if (!result.HasValue())
             {
-                case SystemdConfigValueOperator::LessThan:
-                    comparisonResult = (actualNum < expectedNum);
-                    break;
-                case SystemdConfigValueOperator::LessOrEqual:
-                    comparisonResult = (actualNum <= expectedNum);
-                    break;
-                case SystemdConfigValueOperator::GreaterThan:
-                    comparisonResult = (actualNum > expectedNum);
-                    break;
-                case SystemdConfigValueOperator::GreaterOrEqual:
-                    comparisonResult = (actualNum >= expectedNum);
-                    break;
-                default:
-                    break;
+                return result.Error();
             }
+            comparisonResult = result.Value();
         }
 
         if (comparisonResult)
