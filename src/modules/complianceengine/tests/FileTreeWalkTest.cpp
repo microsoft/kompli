@@ -414,3 +414,86 @@ TEST(FileTreeWalkTest, ReturnsErrorWhenDescentExceedsMaximumDepth)
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ("Maximum recursion depth reached", result.Error().message);
 }
+
+TEST(FileTreeWalkTest, ChildStopSkipsDirectoryPostorderCallback)
+{
+    TestDirectory directory;
+    directory.MakeDirectory("sub");
+    directory.MakeFile("sub/failing");
+    TestContext context(directory);
+    std::vector<std::string> visited;
+
+    const Result<Status> result = FileTreeWalk(
+        directory.Path(),
+        [&visited](const std::string&, const std::string& name, const struct stat&) -> Result<Status> {
+            visited.push_back(name);
+            return "failing" == name ? Status::NonCompliant : Status::Compliant;
+        },
+        BreakOnNonCompliant::True, context);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    EXPECT_EQ((std::vector<std::string>{"failing"}), visited);
+}
+
+TEST(FileTreeWalkTest, ObtainsDirectoryMetadataAfterNestedFileCallback)
+{
+    TestDirectory directory;
+    const std::string child = directory.MakeDirectory("sub");
+    directory.MakeFile("sub/item");
+    TestContext context(directory);
+    mode_t deliveredMode = 0;
+
+    const Result<Status> result = FileTreeWalk(
+        directory.Path(),
+        [&child, &deliveredMode](const std::string&, const std::string& name, const struct stat& entryStat) -> Result<Status> {
+            if ("item" == name)
+            {
+                if (0 != chmod(child.c_str(), 0500))
+                {
+                    return Error("Failed to change child permissions", errno);
+                }
+            }
+            if ("sub" == name)
+            {
+                deliveredMode = entryStat.st_mode & 0777;
+                if (0 != chmod(child.c_str(), 0700))
+                {
+                    return Error("Failed to restore child permissions", errno);
+                }
+            }
+            return Status::Compliant;
+        },
+        BreakOnNonCompliant::False, context);
+
+    EXPECT_EQ(0, chmod(child.c_str(), 0700));
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+    EXPECT_EQ(0500, deliveredMode);
+}
+
+TEST(FileTreeWalkTest, LaterCallbackErrorOverridesEarlierNoncompliance)
+{
+    TestDirectory directory;
+    directory.MakeFile("first");
+    directory.MakeFile("second");
+    TestContext context(directory);
+    size_t callbackCount = 0;
+
+    const Result<Status> result = FileTreeWalk(
+        directory.Path(),
+        [&callbackCount](const std::string&, const std::string&, const struct stat&) -> Result<Status> {
+            ++callbackCount;
+            if (1 == callbackCount)
+            {
+                return Status::NonCompliant;
+            }
+            return Error("later callback failed", EIO);
+        },
+        BreakOnNonCompliant::False, context);
+
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(2u, callbackCount);
+    EXPECT_EQ(EIO, result.Error().code);
+    EXPECT_EQ("later callback failed", result.Error().message);
+}
