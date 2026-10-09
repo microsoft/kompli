@@ -4,9 +4,11 @@
 #include "MockContext.h"
 
 #include <AuditdRules.h>
+#include <cerrno>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <map>
+#include <parsers/LoginDefs.h>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -174,6 +176,50 @@ TEST_F(AuditdRulesCheckTest, SyscallFieldLayoutUsesRuntimeUidMin)
     }
 }
 
+TEST_F(AuditdRulesCheckTest, OversizedLoginDefsDoesNotUseDefaultUidMin)
+{
+    std::string loginDefs = "UID_MIN 500\n";
+    loginDefs.resize(ComplianceEngine::LoginDefs::MaxBytes + 1, '#');
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(Return(Result<std::string>(loginDefs)));
+
+    const std::string directory = MakeTempDir();
+    ASSERT_FALSE(directory.empty());
+    const std::string rule = "-a always,exit -F arch=b64 -S init_module -F auid>=1000 -k audit-key\n";
+    WriteFile(directory + "/audit.rules", rule);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", directory);
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).Times(testing::AnyNumber()).WillRepeatedly(Return(Result<std::string>(rule)));
+
+    AuditdRulesParams params;
+    params.searchItem = "-S init_module";
+    params.requiredOptions.items = {"-F auid>=1000"};
+    const auto result = AuditAuditdRules(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(E2BIG, result.Error().code);
+    EXPECT_EQ("login.defs byte limit exceeded", result.Error().message);
+    const auto* root = indicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    EXPECT_TRUE(root->indicators.empty());
+}
+
+TEST_F(AuditdRulesCheckTest, InvalidUidMinStillUsesExistingDefault)
+{
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(Return(Result<std::string>("UID_MIN junk\n")));
+
+    const std::string directory = MakeTempDir();
+    ASSERT_FALSE(directory.empty());
+    const std::string rule = "-a always,exit -F arch=b64 -S init_module -F auid>=1000 -k audit-key\n";
+    WriteFile(directory + "/audit.rules", rule);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", directory);
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(rule)));
+
+    AuditdRulesParams params;
+    params.searchItem = "-S init_module";
+    params.requiredOptions.items = {"-F auid>=1000"};
+    const auto result = AuditAuditdRules(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+}
+
 // Test: override path where running has rule but files do not -> NonCompliant
 TEST_F(AuditdRulesCheckTest, OverridePathMissingFileRuleIsNonCompliant)
 {
@@ -308,6 +354,30 @@ TEST_F(AuditdRulesCheckTest, PersistentRulesUseNaturalOrderAndPrependActions)
         ASSERT_TRUE(result.HasValue());
         EXPECT_EQ(result.Value(), prepend ? Status::NonCompliant : Status::Compliant);
     }
+}
+
+TEST_F(AuditdRulesCheckTest, PersistentRulesIgnoreNestedNonRulesAndDirectorySymlinks)
+{
+    const std::string auditing = "-a always,exit -F arch=b64 -S execve\n";
+    const std::string suppressing = "-a never,exit -F arch=b64 -S execve\n";
+    const std::string directory = MakeTempDir();
+    ASSERT_FALSE(directory.empty());
+    const std::string nested = directory + "/nested";
+    ASSERT_EQ(0, ::mkdir(nested.c_str(), 0700));
+    WriteFile(directory + "/audit.rules", auditing);
+    WriteFile(directory + "/ignored.conf", suppressing);
+    WriteFile(nested + "/nested.rules", suppressing);
+    ASSERT_EQ(0, ::symlink(nested.c_str(), (directory + "/nested-link").c_str()));
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", directory);
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(auditing)));
+    AuditdRulesParams params;
+    params.searchItem = "-S execve";
+    params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)"};
+
+    const auto result = AuditAuditdRules(params, indicators, mContext);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
 }
 
 TEST_F(AuditdRulesCheckTest, EarlierDisjointSuppressionDoesNotInvalidateRule)

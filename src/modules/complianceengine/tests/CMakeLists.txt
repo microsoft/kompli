@@ -7,6 +7,8 @@ project(compliancetests)
 
 include(GoogleTest)
 find_package(GTest CONFIG REQUIRED)
+set(VCPKG_PACKAGES_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+find_package(OpenSSL REQUIRED NO_DEFAULT_PATH PATHS ${VCPKG_PACKAGES_DIR})
 
 set(PROCEDURES
     procedures/AideAttributesTest.cpp
@@ -45,6 +47,7 @@ set(PROCEDURES
     procedures/XdmcpDisabledTest.cpp
     procedures/CommandOutputMatchTest.cpp
     procedures/FileRegexMatchTest.cpp
+    procedures/FileRegexMatchErrorsTest.cpp
     procedures/PackageInstalledTest.cpp
     procedures/SystemdConfigTest.cpp
     procedures/SystemdUnitStateTest.cpp
@@ -73,14 +76,23 @@ add_executable(complianceenginetests
     DistributionInfoTest.cpp
     EngineTest.cpp
     EvaluatorTest.cpp
+    FileTreeWalkTest.cpp
+    FilesystemCollectionTest.cpp
     FilesystemScannerTest.cpp
     LuaEvaluatorTest.cpp
     LuaProceduresTest.cpp
     NetworkToolsTest.cpp
+    NumericFileGroupTest.cpp
     OptionalTest.cpp
+    OvalVariableEvidenceTest.cpp
+    OvalVariableResolverTest.cpp
+    parsers/LoginDefsTest.cpp
     RegexFallbackTest.cpp
     RegexTest.cpp
     ResultTest.cpp
+    ResultEvidenceTest.cpp
+    StigTextPatternLoweringTest.cpp
+    StigTextQuantifierSemanticsTest.cpp
     StringToolsTest.cpp
     TemporaryDirectoryTest.cpp
     UsersIteratorTest.cpp
@@ -91,6 +103,7 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR}/../src/lib)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/../src/lib/procedures)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(complianceenginetests
+    OpenSSL::Crypto
     GTest::gtest
     GTest::gtest_main
     GTest::gmock

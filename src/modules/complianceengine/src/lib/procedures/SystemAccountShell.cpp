@@ -7,6 +7,7 @@
 #include <StringTools.h>
 #include <UsersIterator.h>
 #include <fstream>
+#include <parsers/LoginDefs.h>
 #include <set>
 #include <shadow.h>
 #include <sstream>
@@ -50,45 +51,62 @@ Result<uid_t> LoadMinUID(ContextInterface& context)
         return Error(string("Failed to read ") + filename, EINVAL);
     }
 
-    string line;
-    const string keyword = "UID_MIN";
-    while (std::getline(file, line))
+    string contents(LoginDefs::MaxBytes + 1, '\0');
+    file.read(&contents[0], static_cast<std::streamsize>(contents.size()));
+    if (file.bad() || (file.fail() && !file.eof()))
     {
-        auto index = line.find('#');
-        if (string::npos != index)
+        OsConfigLogError(context.GetLogHandle(), "Failed to read %s", filename.c_str());
+        return Error(string("Failed to read ") + filename, EIO);
+    }
+    contents.resize(static_cast<size_t>(file.gcount()));
+    const auto parsed = LoginDefs::Parse(contents, filename);
+    if (!parsed.HasValue())
+    {
+        OsConfigLogError(context.GetLogHandle(), "Failed to parse %s: %s", filename.c_str(), parsed.Error().message.c_str());
+        return parsed.Error();
+    }
+    const string uidMinKey = "UID_MIN";
+    const LoginDefs::Record* record = nullptr;
+    for (const auto& candidate : parsed.Value().records)
+    {
+        if (candidate.key == uidMinKey)
         {
-            line = line.substr(0, index);
+            record = &candidate;
+            break;
         }
-
-        index = line.find(keyword);
-        if (string::npos == index)
+        if (candidate.key.size() > uidMinKey.size() && candidate.key.compare(0, uidMinKey.size(), uidMinKey) == 0 && candidate.key[uidMinKey.size()] == '\0')
         {
-            continue;
+            OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN key: embedded NUL");
+            return Error("Failed to parse UID_MIN key: embedded NUL", EINVAL);
         }
-
-        string value;
-        line = line.substr(index + keyword.size());
-
-        std::stringstream stream(line);
-        stream >> value;
-
-        auto uid = TryStringToInt(value);
-        if (!uid.HasValue())
-        {
-            OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN value: %s", uid.Error().message.c_str());
-            return uid.Error();
-        }
-
-        if (uid.Value() < 0)
-        {
-            OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN value: must not be negative");
-            return Error("Failed to parse UID_MIN value: must not be negative", EINVAL);
-        }
-
-        return static_cast<uid_t>(uid.Value());
+    }
+    if (nullptr == record)
+    {
+        return defaultUID;
+    }
+    if (parsed.Value().HasEmbeddedNul(*record))
+    {
+        OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN value: embedded NUL");
+        return Error("Failed to parse UID_MIN value: embedded NUL", EINVAL);
     }
 
-    return defaultUID;
+    std::istringstream stream(parsed.Value().Text(record->valueSpan));
+    string value;
+    stream >> value;
+    auto uid = TryStringToInt(value);
+    if (!uid.HasValue())
+    {
+        OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN value: %s", uid.Error().message.c_str());
+        return uid.Error();
+    }
+
+    if (uid.Value() < 0)
+    {
+        OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN value: must not be negative");
+        return Error("Failed to parse UID_MIN value: must not be negative", EINVAL);
+    }
+
+    return static_cast<uid_t>(uid.Value());
 }
 } // anonymous namespace
 

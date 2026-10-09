@@ -172,6 +172,7 @@ add_library(complianceenginelib STATIC
     Engine.cpp
     Evaluator.cpp
     FileTreeWalk.cpp
+    FilesystemCollection.cpp
     GuestConfigurationContext.cpp
     FilesystemScanner.cpp
     GroupsIterator.cpp
@@ -183,10 +184,13 @@ add_library(complianceenginelib STATIC
     LuaProcedures.cpp
     NetworkTools.cpp
     PasswordEntriesIterator.cpp
+    PasswordCreditUnionEvidence.cpp
+    parsers/LoginDefs.cpp
     Pattern.cpp
     Procedure.cpp
     ProcedureMap.cpp
     Result.cpp
+    ResultEvidence.cpp
     StringTools.cpp
     SystemdCatConfig.cpp
     Telemetry.cpp

@@ -29,11 +29,11 @@ const char* Bindings<DconfValueParams>::names[] = {"key", "value", "operation"};
 // FileExists.h:15
 const char* Bindings<FileExistsParams>::names[] = {"filename"};
 
-// FilePermissions.h:36
-const char* Bindings<FilePermissionsParams>::names[] = {"path", "owner", "group", "permissions", "mask", "behavior"};
+// FilePermissions.h:39
+const char* Bindings<FilePermissionsParams>::names[] = {"path", "owner", "group", "groupId", "permissions", "mask", "behavior"};
 
-// FilePermissions.h:82
-const char* Bindings<FilePermissionsCollectionParams>::names[] = {"directory", "recurse", "directoriesOnly", "allFileTypes", "excludeSymlinks", "excludeDirectories", "maximumUid", "maximumGid", "filePattern", "filePatternIsRegex", "owner", "group", "permissions", "mask", "behavior"};
+// FilePermissions.h:88
+const char* Bindings<FilePermissionsCollectionParams>::names[] = {"directory", "recurse", "directoriesOnly", "allFileTypes", "excludeSymlinks", "excludeDirectories", "maximumUid", "maximumGid", "filePattern", "filePatternIsRegex", "owner", "group", "groupId", "permissions", "mask", "behavior"};
 
 // FileRegexMatch.h:82
 const char* Bindings<FileRegexMatchParams>::names[] = {"path", "filenamePattern", "filenameSearch", "matchOperation", "matchPattern", "stateOperation", "statePattern", "minimumValue", "maximumValue", "allMatches", "wholeFile", "noneMatches", "ignoreCase", "behavior"};
@@ -92,8 +92,8 @@ const char* Bindings<SysctlValueParams>::names[] = {"sysctlName", "value", "runt
 // SystemdConfig.h:55
 const char* Bindings<SystemdConfigValueParams>::names[] = {"parameter", "valueRegex", "op", "value", "file", "block", "dir", "passOnNotFound"};
 
-// SystemdUnitState.h:28
-const char* Bindings<SystemdUnitStateParams>::names[] = {"unitName", "activeState", "loadState", "unitFileState", "unit"};
+// SystemdUnitState.h:31
+const char* Bindings<SystemdUnitStateParams>::names[] = {"unitName", "activeState", "subState", "loadState", "unitFileState", "unit"};
 
 // TestingProcedures.h:15
 const char* Bindings<TestingProcedureParams>::names[] = {"message"};
