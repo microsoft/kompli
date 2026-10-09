@@ -152,6 +152,8 @@ Result<FilesystemCollectionResult> StreamFilesystemCollectionWithOperations(cons
     const FilesystemCollectionVisitor& visitor, const FilesystemCollectionOperations& operations, OsConfigLogHandle log = nullptr);
 Result<FilesystemCollectionResult> CollectFilesystemWithOperations(const FilesystemCollectionRequest& request,
     const FilesystemCollectionOperations& operations, OsConfigLogHandle log = nullptr);
+Result<FilesystemCollectionResult> StreamLegacyFileTreeWalk(const std::string& rootPath, const FilesystemCollectionVisitor& visitor,
+    const FilesystemCollectionOperations& operations, OsConfigLogHandle log = nullptr);
 } // namespace Detail
 } // namespace ComplianceEngine
 

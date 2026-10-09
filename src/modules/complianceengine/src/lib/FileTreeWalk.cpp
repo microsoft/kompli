@@ -2,114 +2,55 @@
 // Licensed under the MIT License.
 
 #include <FileTreeWalk.h>
-#include <ScopeGuard.h>
-#include <dirent.h>
+#include <FilesystemCollection.h>
+#include <cerrno>
 
 namespace ComplianceEngine
 {
-namespace
+namespace Detail
 {
-constexpr size_t maxDepth = 32;
-Result<Status> FileTreeWalk(const std::string& path, FtwCallback callback, BreakOnNonCompliant breakOnNonCompliant, ContextInterface& context, size_t depth)
+Result<Status> FileTreeWalkWithOperations(const std::string& path, FtwCallback callback, BreakOnNonCompliant breakOnNonCompliant,
+    ContextInterface& context, const FilesystemCollectionOperations& operations)
 {
-    if (depth > maxDepth)
+    if (!callback)
     {
-        return Error("Maximum recursion depth reached");
+        return Error("FileTreeWalk callback must not be empty", EINVAL);
     }
 
-    auto* dir = opendir(path.c_str());
-    if (nullptr == dir)
-    {
-        int status = errno;
-        if (ENOENT == status)
+    bool nonCompliant = false;
+    const FilesystemCollectionVisitor visitor = [&](const FilesystemCollectionEntry& entry) -> Result<FilesystemVisitAction> {
+        const std::size_t separator = entry.path.find_last_of('/');
+        const Result<Status> status = callback(entry.path.substr(0, separator), entry.path.substr(separator + 1), entry.linkMetadata);
+        if (!status.HasValue())
         {
-            return Status::Compliant;
+            return status.Error();
         }
-
-        OsConfigLogError(context.GetLogHandle(), "Failed to open directory '%s': %s", path.c_str(), strerror(status));
-        return Error("Failed to open directory '" + path + "': " + strerror(status), status);
-    }
-    ScopeGuard closeDirectory([dir]() { closedir(dir); });
-
-    Result<Status> result = Status::Compliant;
-    Result<Status> subResult = Status::Compliant;
-    struct dirent* entry = nullptr;
-    for (errno = 0, entry = readdir(dir); nullptr != entry; errno = 0, entry = readdir(dir))
-    {
-        if (entry->d_type == DT_DIR)
+        if (Status::Compliant != status.Value())
         {
-            if ((0 == strcmp(entry->d_name, ".")) || (0 == strcmp(entry->d_name, "..")))
+            nonCompliant = true;
+            if (BreakOnNonCompliant::True == breakOnNonCompliant)
             {
-                continue;
-            }
-
-            // Recursively call FTW for subdirectories
-            subResult = FileTreeWalk(path + "/" + entry->d_name, callback, breakOnNonCompliant, context, depth + 1);
-            if (!subResult.HasValue())
-            {
-                OsConfigLogDebug(context.GetLogHandle(), "Callback returned an error: %s", subResult.Error().message.c_str());
-                return subResult.Error();
-            }
-
-            if (subResult.Value() != Status::Compliant)
-            {
-                result = Status::NonCompliant;
-                if (breakOnNonCompliant == BreakOnNonCompliant::True)
-                {
-                    OsConfigLogDebug(context.GetLogHandle(), "Callback returned NonCompliant status, stopping iteration");
-                    break;
-                }
+                return FilesystemVisitAction::Stop;
             }
         }
-
-        struct stat sb;
-        std::string directory = path + "/" + entry->d_name;
-        OsConfigLogDebug(context.GetLogHandle(), "Checking file: '%s'", directory.c_str());
-        if (0 != lstat(directory.c_str(), &sb))
-        {
-            int status = errno;
-            OsConfigLogError(context.GetLogHandle(), "Failed to lstat '%s': %s", directory.c_str(), strerror(status));
-            result = Error("Failed to lstat '" + directory + "': " + strerror(status), status);
-            break;
-        }
-
-        subResult = callback(path, entry->d_name, sb);
-        if (!subResult.HasValue())
-        {
-            OsConfigLogDebug(context.GetLogHandle(), "Callback returned an error: %s", subResult.Error().message.c_str());
-            return subResult.Error();
-        }
-
-        if (subResult.Value() != Status::Compliant)
-        {
-            result = Status::NonCompliant;
-            if (breakOnNonCompliant == BreakOnNonCompliant::True)
-            {
-                OsConfigLogDebug(context.GetLogHandle(), "Callback returned NonCompliant status, stopping iteration");
-                break;
-            }
-        }
-    }
-
-    int status = errno;
-    if (!result.HasValue())
+        return FilesystemVisitAction::Continue;
+    };
+    const Result<FilesystemCollectionResult> collected = StreamLegacyFileTreeWalk(path, visitor, operations, context.GetLogHandle());
+    if (!collected.HasValue())
     {
-        OsConfigLogDebug(context.GetLogHandle(), "Iteration failed with an error: %s", result.Error().message.c_str());
-        return result.Error();
+        return collected.Error();
     }
-
-    if (0 != status)
+    if ((FilesystemCollectionOutcome::Stopped == collected.Value().outcome) && !nonCompliant)
     {
-        OsConfigLogError(context.GetLogHandle(), "Failed to iterate directory '%s': %s", path.c_str(), strerror(status));
-        return Error("Failed to iterate directory '" + path + "': " + strerror(status), status);
+        return Error("FileTreeWalk stopped without a decisive callback result", EIO);
     }
-
-    return result;
+    return nonCompliant ? Status::NonCompliant : Status::Compliant;
 }
-} // anonymous namespace
+} // namespace Detail
 
-Result<Status> FileTreeWalk(const std::string& path, FtwCallback callable, BreakOnNonCompliant breakOnNonCompliant, ContextInterface& context)
+Result<Status> FileTreeWalk(const std::string& path, FtwCallback callback, BreakOnNonCompliant breakOnNonCompliant, ContextInterface& context)
 {
-    return FileTreeWalk(path, callable, breakOnNonCompliant, context, 0);
+    const Detail::FilesystemCollectionOperations operations;
+    return Detail::FileTreeWalkWithOperations(path, callback, breakOnNonCompliant, context, operations);
 }
 } // namespace ComplianceEngine

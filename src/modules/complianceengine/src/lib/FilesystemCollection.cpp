@@ -230,14 +230,16 @@ Error OperationError(const char* operation, const std::string& path, int code)
 
 struct PrefixEntry
 {
-    PrefixEntry(std::string name, ino_t inode)
+    PrefixEntry(std::string name, ino_t inode, unsigned char type)
         : name(std::move(name)),
-          inode(inode)
+          inode(inode),
+          type(type)
     {
     }
 
     std::string name;
     ino_t inode;
+    unsigned char type;
 };
 
 struct DirectoryFrame
@@ -249,6 +251,7 @@ struct DirectoryFrame
     std::vector<PrefixEntry> prefix;
     std::size_t width = 0;
     std::size_t chargedBytes = 0;
+    bool postorder = false;
 };
 
 struct DirectoryCloser
@@ -267,11 +270,12 @@ struct DirectoryCloser
 class Traversal
 {
 public:
-    Traversal(ResolvedFilesystemCollectionRequest request, const FilesystemCollectionVisitor& visitor, bool retainEntries,
+    Traversal(ResolvedFilesystemCollectionRequest request, const FilesystemCollectionVisitor& visitor, bool retainEntries, bool legacy,
         const Detail::FilesystemCollectionOperations& operations, OsConfigLogHandle log)
         : mRequest(std::move(request)),
           mVisitor(visitor),
           mRetainEntries(retainEntries),
+          mLegacy(legacy),
           mOperations(operations),
           mLog(log)
     {
@@ -339,7 +343,7 @@ private:
         return true;
     }
 
-    Result<bool> OpenFrame(std::string path, const struct stat& expected)
+    Result<bool> OpenFrame(std::string path, const struct stat* expected, bool postorder = false, bool root = false)
     {
         if (mOpenDirectories == mRequest.limits.openDirectories)
         {
@@ -369,6 +373,11 @@ private:
         std::unique_ptr<DIR, DirectoryCloser> ownedStream(mOperations.openDirectory(path.c_str()), DirectoryCloser{&mOperations});
         if (!ownedStream)
         {
+            if (root && (ENOENT == errno))
+            {
+                mResult.outcome = FilesystemCollectionOutcome::Absent;
+                return true;
+            }
             return OperationError("open directory", path, errno);
         }
         struct stat opened = {};
@@ -381,7 +390,7 @@ private:
             }
             return OperationError("stat directory", path, code);
         }
-        if ((expected.st_dev != opened.st_dev) || (expected.st_ino != opened.st_ino))
+        if ((nullptr != expected) && ((expected->st_dev != opened.st_dev) || (expected->st_ino != opened.st_ino)))
         {
             if (0 != mOperations.closeDirectory(ownedStream.release()))
             {
@@ -404,6 +413,7 @@ private:
         frame.device = opened.st_dev;
         frame.inode = opened.st_ino;
         frame.chargedBytes = bytes;
+        frame.postorder = postorder;
         mFrames.push_back(std::move(frame));
         mFrames.back().stream = ownedStream.release();
         ++mOpenDirectories;
@@ -467,7 +477,7 @@ private:
             {
                 errno = 0;
                 entry = mOperations.readDirectory(stream);
-            } while ((nullptr != entry) && ((0 == std::strcmp(entry->d_name, ".")) || (0 == std::strcmp(entry->d_name, ".."))));
+            } while ((nullptr != entry) && Skip(entry));
             if (nullptr == entry)
             {
                 const int code = errno;
@@ -482,12 +492,18 @@ private:
             {
                 return work.Error();
             }
-            if ((expected.name != entry->d_name) || ((0 != expected.inode) && (0 != entry->d_ino) && (expected.inode != entry->d_ino)))
+            if ((expected.name != entry->d_name) || ((0 != expected.inode) && (0 != entry->d_ino) && (expected.inode != entry->d_ino)) ||
+                (mLegacy && (expected.type != entry->d_type)))
             {
                 return Error("Directory prefix changed during replay at '" + frame.path + "'", ESTALE);
             }
         }
         return true;
+    }
+
+    bool Skip(const struct dirent* entry) const
+    {
+        return ((!mLegacy || (DT_DIR == entry->d_type)) && ((0 == std::strcmp(entry->d_name, ".")) || (0 == std::strcmp(entry->d_name, ".."))));
     }
 
     Result<bool> Deliver(FilesystemCollectionEntry entry)
@@ -626,26 +642,58 @@ private:
                 }
             }
         }
-        return OpenFrame(path, metadata);
+        return OpenFrame(path, &metadata);
+    }
+
+    Result<bool> LegacyEntry(const std::string& path)
+    {
+        if (mRequest.limits.fullPathBytes <= path.size())
+        {
+            return Error("Filesystem path exceeds full path budget at '" + path + "'", ENAMETOOLONG);
+        }
+        struct stat metadata = {};
+        if (0 != mOperations.lstatPath(path.c_str(), &metadata))
+        {
+            return OperationError("lstat", path, errno);
+        }
+        FilesystemCollectionEntry entry;
+        entry.path = path;
+        entry.linkMetadata = metadata;
+        return Deliver(std::move(entry));
     }
 
     Result<FilesystemCollectionResult> Walk()
     {
-        struct stat root = {};
-        if (0 != mOperations.lstatPath(mRequest.rootPath.c_str(), &root))
+        if (mLegacy)
         {
-            const int code = errno;
-            if (ENOENT == code)
+            const Result<bool> opened = OpenFrame(mRequest.rootPath, nullptr, false, true);
+            if (!opened.HasValue())
             {
-                mResult.outcome = FilesystemCollectionOutcome::Absent;
+                return opened.Error();
+            }
+            if (FilesystemCollectionOutcome::Absent == mResult.outcome)
+            {
                 return std::move(mResult);
             }
-            return OperationError("lstat", mRequest.rootPath, code);
         }
-        const Result<bool> rootResult = Entry(mRequest.rootPath, true);
-        if (!rootResult.HasValue())
+        else
         {
-            return rootResult.Error();
+            struct stat root = {};
+            if (0 != mOperations.lstatPath(mRequest.rootPath.c_str(), &root))
+            {
+                const int code = errno;
+                if (ENOENT == code)
+                {
+                    mResult.outcome = FilesystemCollectionOutcome::Absent;
+                    return std::move(mResult);
+                }
+                return OperationError("lstat", mRequest.rootPath, code);
+            }
+            const Result<bool> rootResult = Entry(mRequest.rootPath, true);
+            if (!rootResult.HasValue())
+            {
+                return rootResult.Error();
+            }
         }
         while ((!mFrames.empty()) && (FilesystemCollectionOutcome::Stopped != mResult.outcome))
         {
@@ -674,11 +722,19 @@ private:
                 {
                     return OperationError("close directory", frame.path, errno);
                 }
+                if (frame.postorder)
+                {
+                    const Result<bool> delivered = LegacyEntry(frame.path);
+                    if (!delivered.HasValue())
+                    {
+                        return delivered.Error();
+                    }
+                }
                 mRetainedBytes -= frame.chargedBytes;
                 mFrames.pop_back();
                 continue;
             }
-            if ((0 == std::strcmp(dirEntry->d_name, ".")) || (0 == std::strcmp(dirEntry->d_name, "..")))
+            if (Skip(dirEntry))
             {
                 continue;
             }
@@ -694,6 +750,7 @@ private:
             ++frame.width;
             const std::string name = dirEntry->d_name;
             const ino_t inode = dirEntry->d_ino;
+            const unsigned char type = dirEntry->d_type;
             const std::size_t prefixBytes = sizeof(PrefixEntry) + name.size() + 1;
             const Result<bool> chargedPrefix = Charge(prefixBytes, frame.path);
             if (!chargedPrefix.HasValue())
@@ -701,15 +758,42 @@ private:
                 return chargedPrefix.Error();
             }
             frame.chargedBytes += prefixBytes;
-            frame.prefix.push_back({name, inode});
+            frame.prefix.push_back({name, inode, type});
             const std::string childPath = frame.path + "/" + name;
+            if (mLegacy && (mRequest.limits.fullPathBytes <= childPath.size()))
+            {
+                return Error("Filesystem path exceeds full path budget at '" + childPath + "'", ENAMETOOLONG);
+            }
             const std::size_t pathBytes = childPath.size() + 1;
             const Result<bool> chargedPath = Charge(pathBytes, childPath);
             if (!chargedPath.HasValue())
             {
                 return chargedPath.Error();
             }
-            const Result<bool> processed = Entry(childPath, false);
+            Result<bool> processed = true;
+            if (mLegacy)
+            {
+                if (DT_DIR == type)
+                {
+                    if (mFrames.size() > 32)
+                    {
+                        return Error("Maximum recursion depth reached");
+                    }
+                    if (mRequest.limits.operationalDescent < mFrames.size())
+                    {
+                        return Error("Operational descent budget exceeded at '" + childPath + "'", E2BIG);
+                    }
+                    processed = OpenFrame(childPath, nullptr, true);
+                }
+                else
+                {
+                    processed = LegacyEntry(childPath);
+                }
+            }
+            else
+            {
+                processed = Entry(childPath, false);
+            }
             mRetainedBytes -= pathBytes;
             if (!processed.HasValue())
             {
@@ -722,6 +806,7 @@ private:
     ResolvedFilesystemCollectionRequest mRequest;
     const FilesystemCollectionVisitor& mVisitor;
     bool mRetainEntries = false;
+    bool mLegacy = false;
     const Detail::FilesystemCollectionOperations& mOperations;
     OsConfigLogHandle mLog = nullptr;
     FilesystemCollectionResult mResult;
@@ -759,7 +844,7 @@ Result<FilesystemCollectionResult> StreamFilesystemCollectionWithOperations(cons
     {
         return Error("Filesystem collection visitor must not be empty", EINVAL);
     }
-    Traversal traversal(resolved.Value(), visitor, false, operations, log);
+    Traversal traversal(resolved.Value(), visitor, false, false, operations, log);
     return traversal.Run();
 }
 
@@ -774,7 +859,27 @@ Result<FilesystemCollectionResult> CollectFilesystemWithOperations(const Filesys
     const FilesystemCollectionVisitor visitor = [](const FilesystemCollectionEntry&) {
         return Result<FilesystemVisitAction>(FilesystemVisitAction::Continue);
     };
-    Traversal traversal(resolved.Value(), visitor, true, operations, log);
+    Traversal traversal(resolved.Value(), visitor, true, false, operations, log);
+    return traversal.Run();
+}
+
+Result<FilesystemCollectionResult> StreamLegacyFileTreeWalk(const std::string& rootPath, const FilesystemCollectionVisitor& visitor,
+    const FilesystemCollectionOperations& operations, OsConfigLogHandle log)
+{
+    FilesystemCollectionRequest request(rootPath, FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    request.maxDepth = -1;
+    request.scope = FilesystemScope::All;
+    const Result<ResolvedFilesystemCollectionRequest> resolved = ResolveFilesystemCollectionRequest(request);
+    if (!resolved.HasValue())
+    {
+        return resolved.Error();
+    }
+    if (!visitor)
+    {
+        return Error("Filesystem collection visitor must not be empty", EINVAL);
+    }
+    Traversal traversal(resolved.Value(), visitor, false, true, operations, log);
     return traversal.Run();
 }
 } // namespace Detail

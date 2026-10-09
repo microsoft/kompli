@@ -3,10 +3,13 @@
 
 #include "FileTreeWalk.h"
 
+#include "FilesystemCollection.h"
 #include "TemporaryDirectory.h"
 
 #include <algorithm>
 #include <cerrno>
+#include <cstring>
+#include <dirent.h>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <stdexcept>
@@ -73,6 +76,17 @@ public:
             throw std::runtime_error("Failed to create symlink '" + path + "': " + strerror(errno));
         }
         return path;
+    }
+
+    std::string MakeChain(int depth) const
+    {
+        std::string relativePath;
+        for (int level = 1; level <= depth; ++level)
+        {
+            relativePath += (relativePath.empty() ? "" : "/") + std::string("d") + std::to_string(level);
+            MakeDirectory(relativePath);
+        }
+        return relativePath;
     }
 
 private:
@@ -496,4 +510,382 @@ TEST(FileTreeWalkTest, LaterCallbackErrorOverridesEarlierNoncompliance)
     EXPECT_EQ(2u, callbackCount);
     EXPECT_EQ(EIO, result.Error().code);
     EXPECT_EQ("later callback failed", result.Error().message);
+}
+
+TEST(FileTreeWalkTest, UnknownDirectoryTypesAreDeliveredWithoutDescentAndUnknownDotsReachCallback)
+{
+    TestDirectory directory;
+    directory.MakeDirectory("sub");
+    directory.MakeFile("sub/nested");
+    TestContext context(directory);
+    ComplianceEngine::Detail::FilesystemCollectionOperations operations;
+    operations.readDirectory = [](DIR* stream) {
+        struct dirent* entry = readdir(stream);
+        if ((nullptr != entry) && ((0 == strcmp(entry->d_name, ".")) || (0 == strcmp(entry->d_name, "..")) || (0 == strcmp(entry->d_name, "sub"))))
+        {
+            entry->d_type = DT_UNKNOWN;
+        }
+        return entry;
+    };
+    std::vector<std::string> visited;
+
+    const Result<Status> result = ComplianceEngine::Detail::FileTreeWalkWithOperations(
+        directory.Path(),
+        [&visited](const std::string&, const std::string& name, const struct stat& metadata) -> Result<Status> {
+            EXPECT_TRUE(S_ISDIR(metadata.st_mode));
+            visited.push_back(name);
+            return Status::Compliant;
+        },
+        BreakOnNonCompliant::False, context, operations);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+    EXPECT_EQ(1, std::count(visited.begin(), visited.end(), "."));
+    EXPECT_EQ(1, std::count(visited.begin(), visited.end(), ".."));
+    EXPECT_EQ(1, std::count(visited.begin(), visited.end(), "sub"));
+    EXPECT_EQ(0, std::count(visited.begin(), visited.end(), "nested"));
+}
+
+TEST(FileTreeWalkTest, MissingRequiredInteriorDirectoryIsAnError)
+{
+    TestDirectory directory;
+    directory.MakeDirectory("sub");
+    TestContext context(directory);
+    ComplianceEngine::Detail::FilesystemCollectionOperations operations;
+    operations.openDirectory = [&directory](const char* path) -> DIR* {
+        if (directory.Path() + "/sub" == path)
+        {
+            errno = ENOENT;
+            return nullptr;
+        }
+        return opendir(path);
+    };
+    std::size_t callbackCount = 0;
+
+    const Result<Status> result = ComplianceEngine::Detail::FileTreeWalkWithOperations(
+        directory.Path(),
+        [&callbackCount](const std::string&, const std::string&, const struct stat&) -> Result<Status> {
+            ++callbackCount;
+            return Status::Compliant;
+        },
+        BreakOnNonCompliant::False, context, operations);
+
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(ENOENT, result.Error().code);
+    EXPECT_NE(std::string::npos, result.Error().message.find(directory.Path() + "/sub"));
+    EXPECT_EQ(0u, callbackCount);
+}
+
+TEST(FileTreeWalkTest, RejectsOverlongLegacyDirectoryBeforeOpeningIt)
+{
+    const std::string rootPath(4094, 'x');
+    ComplianceEngine::Detail::FilesystemCollectionOperations operations;
+    std::size_t opens = 0;
+    operations.openDirectory = [&opens](const char*) {
+        ++opens;
+        return opendir(".");
+    };
+    struct dirent child = {};
+    strcpy(child.d_name, "child");
+    child.d_type = DT_DIR;
+    bool emitted = false;
+    operations.readDirectory = [&child, &emitted](DIR*) -> struct dirent*
+    {
+        if (!emitted)
+        {
+            emitted = true;
+            return &child;
+        }
+        errno = 0;
+        return nullptr;
+    };
+    std::size_t callbacks = 0;
+
+    const auto result = ComplianceEngine::Detail::StreamLegacyFileTreeWalk(
+        rootPath,
+        [&callbacks](const ComplianceEngine::FilesystemCollectionEntry&) {
+            ++callbacks;
+            return Result<ComplianceEngine::FilesystemVisitAction>(ComplianceEngine::FilesystemVisitAction::Continue);
+        },
+        operations);
+
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(ENAMETOOLONG, result.Error().code);
+    EXPECT_EQ(1u, opens);
+    EXPECT_EQ(0u, callbacks);
+}
+
+TEST(FileTreeWalkTest, DescriptorContinuationDeliversEveryPostorderEntryOnce)
+{
+    TestDirectory directory;
+    const std::string relativePath = directory.MakeChain(18);
+    directory.MakeFile(relativePath + "/leaf");
+    directory.MakeFile("sibling");
+    TestContext context(directory);
+    ComplianceEngine::Detail::FilesystemCollectionOperations operations;
+    struct dirent rootEntries[2] = {};
+    strcpy(rootEntries[0].d_name, "d1");
+    rootEntries[0].d_type = DT_DIR;
+    strcpy(rootEntries[1].d_name, "sibling");
+    rootEntries[1].d_type = DT_REG;
+    DIR* rootStream = nullptr;
+    std::size_t rootIndex = 0;
+    operations.openDirectory = [&directory, &rootStream, &rootIndex](const char* path) {
+        DIR* stream = opendir(path);
+        if (directory.Path() == path)
+        {
+            rootStream = stream;
+            rootIndex = 0;
+        }
+        return stream;
+    };
+    operations.closeDirectory = [&rootStream](DIR* stream) {
+        if (rootStream == stream)
+        {
+            rootStream = nullptr;
+        }
+        return closedir(stream);
+    };
+    operations.readDirectory = [&rootStream, &rootIndex, &rootEntries](DIR * stream) -> struct dirent*
+    {
+        if (rootStream == stream)
+        {
+            if (2 == rootIndex)
+            {
+                errno = 0;
+                return nullptr;
+            }
+            return &rootEntries[rootIndex++];
+        }
+        return readdir(stream);
+    };
+    std::vector<std::string> visited;
+
+    const Result<Status> result = ComplianceEngine::Detail::FileTreeWalkWithOperations(
+        directory.Path(),
+        [&visited](const std::string&, const std::string& name, const struct stat&) -> Result<Status> {
+            visited.push_back(name);
+            return Status::Compliant;
+        },
+        BreakOnNonCompliant::False, context, operations);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+    ASSERT_EQ(20u, visited.size());
+    EXPECT_EQ("sibling", visited.back());
+    visited.pop_back();
+    ASSERT_EQ("leaf", visited.front());
+    for (int depth = 18; depth >= 1; --depth)
+    {
+        EXPECT_EQ("d" + std::to_string(depth), visited[19 - depth]);
+    }
+}
+
+TEST(FileTreeWalkTest, ChangedAncestorIdentityDuringReplayIsAnError)
+{
+    TestDirectory directory;
+    directory.MakeChain(17);
+    TestContext context(directory);
+    ComplianceEngine::Detail::FilesystemCollectionOperations operations;
+    bool reopeningRoot = false;
+    std::size_t rootOpens = 0;
+    operations.openDirectory = [&directory, &reopeningRoot, &rootOpens](const char* path) {
+        if (directory.Path() == path)
+        {
+            reopeningRoot = (0 != rootOpens++);
+        }
+        return opendir(path);
+    };
+    operations.statDescriptor = [&reopeningRoot](int descriptor, struct stat* metadata) {
+        const int status = fstat(descriptor, metadata);
+        if ((0 == status) && reopeningRoot)
+        {
+            ++metadata->st_ino;
+        }
+        return status;
+    };
+    std::vector<std::string> visited;
+
+    const Result<Status> result = ComplianceEngine::Detail::FileTreeWalkWithOperations(
+        directory.Path(),
+        [&visited](const std::string&, const std::string& name, const struct stat&) -> Result<Status> {
+            visited.push_back(name);
+            return Status::Compliant;
+        },
+        BreakOnNonCompliant::False, context, operations);
+
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(ESTALE, result.Error().code);
+    EXPECT_EQ(2u, rootOpens);
+    EXPECT_EQ(1, std::count(visited.begin(), visited.end(), "d1"));
+}
+
+TEST(FileTreeWalkTest, ChangedAncestorPrefixDuringReplayIsAnError)
+{
+    TestDirectory directory;
+    directory.MakeChain(17);
+    TestContext context(directory);
+    ComplianceEngine::Detail::FilesystemCollectionOperations operations;
+    bool replayingRoot = false;
+    std::size_t rootOpens = 0;
+    DIR* rootStream = nullptr;
+    operations.openDirectory = [&directory, &replayingRoot, &rootOpens, &rootStream](const char* path) {
+        DIR* stream = opendir(path);
+        if (directory.Path() == path)
+        {
+            replayingRoot = (0 != rootOpens++);
+            rootStream = stream;
+        }
+        return stream;
+    };
+    operations.readDirectory = [&replayingRoot, &rootStream](DIR* stream) {
+        struct dirent* entry = readdir(stream);
+        if ((nullptr != entry) && replayingRoot && (stream == rootStream) && (0 == strcmp(entry->d_name, "d1")))
+        {
+            ++entry->d_ino;
+        }
+        return entry;
+    };
+    std::vector<std::string> visited;
+
+    const Result<Status> result = ComplianceEngine::Detail::FileTreeWalkWithOperations(
+        directory.Path(),
+        [&visited](const std::string&, const std::string& name, const struct stat&) -> Result<Status> {
+            visited.push_back(name);
+            return Status::Compliant;
+        },
+        BreakOnNonCompliant::False, context, operations);
+
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(ESTALE, result.Error().code);
+    EXPECT_EQ(2u, rootOpens);
+    EXPECT_EQ(1, std::count(visited.begin(), visited.end(), "d1"));
+}
+
+TEST(FileTreeWalkTest, PostorderStatFailureIsPrimaryButDecisiveStopSkipsIt)
+{
+    TestDirectory directory;
+    const std::string child = directory.MakeDirectory("sub");
+    directory.MakeFile("sub/item");
+    TestContext context(directory);
+    ComplianceEngine::Detail::FilesystemCollectionOperations operations;
+    std::size_t childStats = 0;
+    operations.lstatPath = [&child, &childStats](const char* path, struct stat* metadata) {
+        if (child == path)
+        {
+            ++childStats;
+            errno = EACCES;
+            return -1;
+        }
+        return lstat(path, metadata);
+    };
+    std::vector<std::string> visited;
+    const auto callback = [&visited](const std::string&, const std::string& name, const struct stat&) -> Result<Status> {
+        visited.push_back(name);
+        return "item" == name ? Status::NonCompliant : Status::Compliant;
+    };
+
+    const Result<Status> continued =
+        ComplianceEngine::Detail::FileTreeWalkWithOperations(directory.Path(), callback, BreakOnNonCompliant::False, context, operations);
+    ASSERT_FALSE(continued.HasValue());
+    EXPECT_EQ(EACCES, continued.Error().code);
+    EXPECT_EQ(1u, childStats);
+
+    childStats = 0;
+    visited.clear();
+    const Result<Status> stopped = ComplianceEngine::Detail::FileTreeWalkWithOperations(directory.Path(), callback, BreakOnNonCompliant::True, context, operations);
+    ASSERT_TRUE(stopped.HasValue());
+    EXPECT_EQ(Status::NonCompliant, stopped.Value());
+    EXPECT_EQ(0u, childStats);
+    EXPECT_NE(visited.end(), std::find(visited.begin(), visited.end(), "item"));
+}
+
+TEST(FileTreeWalkTest, PostorderStopDoesNotReopenSuspendedAncestors)
+{
+    TestDirectory directory;
+    directory.MakeChain(18);
+    TestContext context(directory);
+    ComplianceEngine::Detail::FilesystemCollectionOperations operations;
+    std::size_t rootOpens = 0;
+    operations.openDirectory = [&directory, &rootOpens](const char* path) {
+        if (directory.Path() == path)
+        {
+            ++rootOpens;
+        }
+        return opendir(path);
+    };
+    std::vector<std::string> visited;
+
+    const Result<Status> result = ComplianceEngine::Detail::FileTreeWalkWithOperations(
+        directory.Path(),
+        [&visited](const std::string&, const std::string& name, const struct stat&) -> Result<Status> {
+            visited.push_back(name);
+            return "d18" == name ? Status::NonCompliant : Status::Compliant;
+        },
+        BreakOnNonCompliant::True, context, operations);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    EXPECT_EQ((std::vector<std::string>{"d18"}), visited);
+    EXPECT_EQ(1u, rootOpens);
+}
+
+TEST(FileTreeWalkTest, DecisiveStopDoesNotReopenSuspendedAncestors)
+{
+    TestDirectory directory;
+    const std::string relativePath = directory.MakeChain(18);
+    directory.MakeFile(relativePath + "/leaf");
+    TestContext context(directory);
+    ComplianceEngine::Detail::FilesystemCollectionOperations operations;
+    std::size_t rootOpens = 0;
+    operations.openDirectory = [&directory, &rootOpens](const char* path) {
+        if (directory.Path() == path)
+        {
+            ++rootOpens;
+        }
+        return opendir(path);
+    };
+    std::vector<std::string> visited;
+
+    const Result<Status> result = ComplianceEngine::Detail::FileTreeWalkWithOperations(
+        directory.Path(),
+        [&visited](const std::string&, const std::string& name, const struct stat&) -> Result<Status> {
+            visited.push_back(name);
+            return "leaf" == name ? Status::NonCompliant : Status::Compliant;
+        },
+        BreakOnNonCompliant::True, context, operations);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    EXPECT_EQ((std::vector<std::string>{"leaf"}), visited);
+    EXPECT_EQ(1u, rootOpens);
+}
+
+TEST(FileTreeWalkTest, CloseFailureIsAnErrorUnlessCallbackAlreadyFailed)
+{
+    TestDirectory directory;
+    directory.MakeFile("item");
+    TestContext context(directory);
+    ComplianceEngine::Detail::FilesystemCollectionOperations operations;
+    operations.closeDirectory = [](DIR* stream) {
+        const int status = closedir(stream);
+        if (0 == status)
+        {
+            errno = EIO;
+            return -1;
+        }
+        return status;
+    };
+    const auto callback = [](const std::string&, const std::string&, const struct stat&) -> Result<Status> { return Status::Compliant; };
+    const Result<Status> closeFailure =
+        ComplianceEngine::Detail::FileTreeWalkWithOperations(directory.Path(), callback, BreakOnNonCompliant::False, context, operations);
+    ASSERT_FALSE(closeFailure.HasValue());
+    EXPECT_EQ(EIO, closeFailure.Error().code);
+
+    const Result<Status> callbackFailure = ComplianceEngine::Detail::FileTreeWalkWithOperations(
+        directory.Path(), [](const std::string&, const std::string&, const struct stat&) -> Result<Status> { return Error("callback failed", EACCES); },
+        BreakOnNonCompliant::False, context, operations);
+    ASSERT_FALSE(callbackFailure.HasValue());
+    EXPECT_EQ(EACCES, callbackFailure.Error().code);
+    EXPECT_EQ("callback failed", callbackFailure.Error().message);
 }
