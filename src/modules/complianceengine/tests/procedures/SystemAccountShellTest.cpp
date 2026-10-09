@@ -7,6 +7,8 @@
 #include <Optional.h>
 #include <SystemAccountShell.h>
 #include <fstream>
+#include <parsers/LoginDefs.h>
+#include <sys/stat.h>
 
 using ComplianceEngine::AuditSystemAccountShell;
 using ComplianceEngine::CompactListFormatter;
@@ -17,6 +19,21 @@ using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 using std::map;
 using std::string;
+
+namespace
+{
+string LoginDefsAtByteLimit()
+{
+    string contents = "UID_MIN 2000\n";
+    const string commentLine = string(4095, '#') + '\n';
+    while (contents.size() + commentLine.size() <= ComplianceEngine::LoginDefs::MaxBytes)
+    {
+        contents += commentLine;
+    }
+    contents.append(ComplianceEngine::LoginDefs::MaxBytes - contents.size(), '#');
+    return contents;
+}
+} // namespace
 
 class EnsureSystemAccountsDoNotHaveValidShellTest : public ::testing::Test
 {
@@ -185,6 +202,47 @@ TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, CorruptedLaterKeyDoesNotOver
     ASSERT_NE(nullptr, root);
     ASSERT_EQ(1U, root->indicators.size());
     EXPECT_EQ(Status::NonCompliant, root->indicators.front().status);
+}
+
+TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, LoginDefsFileAtByteLimitUsesSelectedUidMin)
+{
+    const string contents = LoginDefsAtByteLimit();
+    ASSERT_EQ(ComplianceEngine::LoginDefs::MaxBytes, contents.size());
+    const string filename = mContext.MakeTempfile(contents);
+    struct stat fileStat;
+    ASSERT_EQ(0, ::stat(filename.c_str(), &fileStat));
+    ASSERT_EQ(static_cast<off_t>(ComplianceEngine::LoginDefs::MaxBytes), fileStat.st_size);
+    mContext.SetSpecialFilePath("/etc/login.defs", filename);
+    mContext.SetSpecialFilePath("/etc/passwd", CreateTestPasswdFile(1500, "/bin/bash"));
+
+    const auto result = AuditSystemAccountShell(mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    const auto* root = mIndicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    ASSERT_EQ(1U, root->indicators.size());
+    EXPECT_EQ(Status::NonCompliant, root->indicators.front().status);
+}
+
+TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, LoginDefsFileOverByteLimitReturnsErrorWithoutIndicators)
+{
+    string contents = LoginDefsAtByteLimit();
+    contents += '#';
+    ASSERT_EQ(ComplianceEngine::LoginDefs::MaxBytes + 1, contents.size());
+    const string filename = mContext.MakeTempfile(contents);
+    struct stat fileStat;
+    ASSERT_EQ(0, ::stat(filename.c_str(), &fileStat));
+    ASSERT_EQ(static_cast<off_t>(ComplianceEngine::LoginDefs::MaxBytes + 1), fileStat.st_size);
+    mContext.SetSpecialFilePath("/etc/login.defs", filename);
+    mContext.SetSpecialFilePath("/etc/passwd", CreateTestPasswdFile(1500, "/bin/bash"));
+
+    const auto result = AuditSystemAccountShell(mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(E2BIG, result.Error().code);
+    EXPECT_EQ("login.defs byte limit exceeded", result.Error().message);
+    const auto* root = mIndicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    EXPECT_TRUE(root->indicators.empty());
 }
 
 TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, UidMinRejectsInlineHashWithoutIndicators)
