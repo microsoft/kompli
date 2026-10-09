@@ -847,6 +847,72 @@ TEST(UserDotFilePermissionsErrorsTest, RegularDotFileRetainsPermissionVerdict)
     EXPECT_EQ(Status::NonCompliant, result.Value());
 }
 
+TEST(UserDotFilePermissionsErrorsTest, RemediationNonDirectoryHomePropagatesWalkError)
+{
+    MockContext context;
+    ComplianceEngine::IndicatorsTree indicators;
+    indicators.Push("UserDotFilePermissions");
+    const std::string home = context.MakeTempfile("not a directory");
+    context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    const auto* group = getgrnam("root");
+    ASSERT_NE(nullptr, group);
+    const std::string passwd =
+        context.MakeTempfile("fixture:x:" + std::to_string(getuid()) + ":" + std::to_string(group->gr_gid) + "::" + home + ":/bin/sh\n");
+
+    const auto result = ComplianceEngine::RemediateUserDotFilePermissionsWithPasswdFile(indicators, context, passwd);
+
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(ENOTDIR, result.Error().code);
+    EXPECT_TRUE(indicators.Back().indicators.empty());
+}
+
+TEST(UserDotFilePermissionsErrorsTest, RemediationForbiddenFileRetainsOrdinaryVerdict)
+{
+    MockContext context;
+    ComplianceEngine::IndicatorsTree indicators;
+    indicators.Push("UserDotFilePermissions");
+    const std::string home = context.GetTempdirPath() + "/home";
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    std::ofstream(home + "/.rhosts") << "host\n";
+    context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    const auto* group = getgrnam("root");
+    ASSERT_NE(nullptr, group);
+    const std::string passwd =
+        context.MakeTempfile("fixture:x:" + std::to_string(getuid()) + ":" + std::to_string(group->gr_gid) + "::" + home + ":/bin/sh\n");
+
+    const auto result = ComplianceEngine::RemediateUserDotFilePermissionsWithPasswdFile(indicators, context, passwd);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    ASSERT_EQ(1u, indicators.Back().indicators.size());
+    EXPECT_EQ(Status::NonCompliant, indicators.Back().indicators[0].status);
+}
+
+TEST(UserDotFilePermissionsErrorsTest, RemediationLaterWalkErrorOverridesNoncompliance)
+{
+    MockContext context;
+    ComplianceEngine::IndicatorsTree indicators;
+    indicators.Push("UserDotFilePermissions");
+    const std::string firstHome = context.GetTempdirPath() + "/home";
+    ASSERT_EQ(0, mkdir(firstHome.c_str(), 0700));
+    std::ofstream(firstHome + "/.rhosts") << "host\n";
+    const std::string secondHome = context.MakeTempfile("not a directory");
+    context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    const auto* group = getgrnam("root");
+    ASSERT_NE(nullptr, group);
+    const std::string gid = std::to_string(group->gr_gid);
+    const std::string uid = std::to_string(getuid());
+    const std::string passwd = context.MakeTempfile("first:x:" + uid + ":" + gid + "::" + firstHome + ":/bin/sh\n" + "second:x:" + uid + ":" + gid +
+                                                    "::" + secondHome + ":/bin/sh\n");
+
+    const auto result = ComplianceEngine::RemediateUserDotFilePermissionsWithPasswdFile(indicators, context, passwd);
+
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(ENOTDIR, result.Error().code);
+    ASSERT_EQ(1u, indicators.Back().indicators.size());
+    EXPECT_EQ(Status::NonCompliant, indicators.Back().indicators[0].status);
+}
+
 TEST(UserHomeDirectoryPermissionsErrorsTest, FailedChildRemediationPropagatesWithoutMutatingHome)
 {
     MockContext context;

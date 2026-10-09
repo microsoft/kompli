@@ -16,8 +16,6 @@ namespace
 // When isRemediation == true it will remediate permissions/ownership, otherwise only audit.
 Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTree& indicators, ContextInterface& context)
 {
-    (void)context; // log handle not needed currently
-
     const std::string baseDir = context.GetSpecialFilePath("/etc/ssh");
 
     // Prepare static args map passed to existing file permission helpers.
@@ -40,7 +38,7 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
         auto content = context.GetFileContents(fullPath);
         if (!content.HasValue())
         {
-            return Status::Compliant; // ignore unreadable
+            return content.Error();
         }
         std::istringstream iss(content.Value());
         std::string firstLine;

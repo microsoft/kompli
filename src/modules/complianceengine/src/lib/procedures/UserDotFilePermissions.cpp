@@ -154,6 +154,11 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
 
 Result<Status> RemediateUserDotFilePermissions(IndicatorsTree& indicators, ContextInterface& context)
 {
+    return RemediateUserDotFilePermissionsWithPasswdFile(indicators, context, "/etc/passwd");
+}
+
+Result<Status> RemediateUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicators, ContextInterface& context, const string& passwdPath)
+{
     const auto validShells = ListValidShells(context);
     if (!validShells.HasValue())
     {
@@ -162,7 +167,7 @@ Result<Status> RemediateUserDotFilePermissions(IndicatorsTree& indicators, Conte
     }
 
     auto status = Status::Compliant;
-    auto users = UsersRange::Make(context.GetLogHandle());
+    auto users = UsersRange::Make(passwdPath, context.GetLogHandle());
     if (!users.HasValue())
     {
         return users.Error();
@@ -272,7 +277,12 @@ Result<Status> RemediateUserDotFilePermissions(IndicatorsTree& indicators, Conte
         };
 
         auto result = FileTreeWalk(user.pw_dir, ftwCallback, BreakOnNonCompliant::False, context);
-        if (!result.HasValue() || result.Value() == Status::NonCompliant)
+        if (!result.HasValue())
+        {
+            OsConfigLogError(context.GetLogHandle(), "Directory validation for user '%s' failed: %s", user.pw_name, result.Error().message.c_str());
+            return result.Error();
+        }
+        if (Status::NonCompliant == result.Value())
         {
             OsConfigLogError(context.GetLogHandle(), "Directory validation for user %s id %d returned NonCompliant, but continuing", user.pw_name, user.pw_uid);
             status = Status::NonCompliant;
