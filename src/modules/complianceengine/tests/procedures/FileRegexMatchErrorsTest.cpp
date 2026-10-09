@@ -127,3 +127,42 @@ TEST(FileRegexMatchErrorsTest, EmptyAndUnterminatedInputRemainReadable)
         EXPECT_EQ(Status::Compliant, result.Value());
     }
 }
+
+TEST(FileRegexMatchErrorsTest, MissingRootAndInvalidInputRetainDistinctOutcomes)
+{
+    MockContext context;
+    const auto missing = context.GetTempdirPath() + "/missing";
+    FileRegexMatchParams params;
+    params.path = missing;
+    params.filenamePattern = regex(".*");
+    params.matchPattern = "key";
+
+    for (const auto behavior : {Behavior::AllExist, Behavior::AnyExist, Behavior::AtLeastOneExists, Behavior::NoneExist, Behavior::OnlyOneExists})
+    {
+        params.behavior = behavior;
+        IndicatorsTree indicators;
+        indicators.Push("FileRegexMatch");
+        const auto result = AuditFileRegexMatch(params, indicators, context);
+        ASSERT_TRUE(result.HasValue());
+        const auto expected = behavior == Behavior::NoneExist ? Status::Compliant : Status::NonCompliant;
+        EXPECT_EQ(expected, result.Value());
+        EXPECT_EQ(behavior == Behavior::NoneExist ? 0U : 1U, indicators.Back().indicators.size());
+    }
+
+    params.behavior = Behavior::AnyExist;
+    params.allMatches = true;
+    IndicatorsTree indicators;
+    indicators.Push("FileRegexMatch");
+    const auto optional = AuditFileRegexMatch(params, indicators, context);
+    ASSERT_TRUE(optional.HasValue());
+    EXPECT_EQ(Status::Compliant, optional.Value());
+    ASSERT_EQ(1U, indicators.Back().indicators.size());
+    EXPECT_EQ(Status::Compliant, indicators.Back().indicators[0].status);
+
+    params.allMatches = false;
+    params.matchPattern = "(";
+    const auto invalid = AuditFileRegexMatch(params, indicators, context);
+    ASSERT_FALSE(invalid.HasValue());
+    EXPECT_EQ(EINVAL, invalid.Error().code);
+    EXPECT_EQ(1U, indicators.Back().indicators.size());
+}

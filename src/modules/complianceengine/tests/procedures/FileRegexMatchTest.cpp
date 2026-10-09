@@ -875,6 +875,102 @@ TEST_F(FileRegexMatchTest, ExistenceBehaviorsCountFileStateVerdicts)
     EXPECT_EQ(Status::NonCompliant, oneResult.Value());
 }
 
+TEST_F(FileRegexMatchTest, NativeExistenceCountsPassingFilesNotSelectedValues)
+{
+    MakeTempfile("key=ok\nkey=bad\n");
+    MakeTempfile("key=bad\n");
+    std::ofstream(mTempdir + "/excluded") << "key=ok\n";
+
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex("[12]");
+    params.matchPattern = R"(^key=([^\n]*))";
+    params.statePattern = "^ok$";
+
+    struct Case
+    {
+        const char* first;
+        const char* second;
+        const char* selectedNames;
+        Status all;
+        Status any;
+        Status atLeastOne;
+        Status none;
+        Status onlyOne;
+    };
+    const std::vector<Case> cases = {
+        {"key=ok\n", "key=bad\n", "missing", Status::NonCompliant, Status::Compliant, Status::NonCompliant, Status::Compliant, Status::NonCompliant},
+        {"key=ok\n", "key=bad\n", "1", Status::Compliant, Status::Compliant, Status::Compliant, Status::NonCompliant, Status::Compliant},
+        {"key=bad\n", "key=ok\n", "1", Status::NonCompliant, Status::Compliant, Status::NonCompliant, Status::Compliant, Status::NonCompliant},
+        {"key=ok\nkey=bad\n", "key=bad\n", "[12]", Status::NonCompliant, Status::Compliant, Status::Compliant, Status::NonCompliant, Status::Compliant},
+        {"key=bad\n", "key=bad\nkey=ok\n", "[12]", Status::NonCompliant, Status::Compliant, Status::Compliant, Status::NonCompliant, Status::Compliant},
+        {"key=ok\n", "key=ok\n", "[12]", Status::Compliant, Status::Compliant, Status::Compliant, Status::NonCompliant, Status::NonCompliant},
+    };
+    for (const auto& testCase : cases)
+    {
+        std::ofstream(mTempfiles[0]) << testCase.first;
+        std::ofstream(mTempfiles[1]) << testCase.second;
+        params.filenamePattern = regex(testCase.selectedNames);
+        for (const auto& expectation : {std::pair<Behavior, Status>{Behavior::AllExist, testCase.all}, {Behavior::AnyExist, testCase.any},
+                 {Behavior::AtLeastOneExists, testCase.atLeastOne}, {Behavior::NoneExist, testCase.none}, {Behavior::OnlyOneExists, testCase.onlyOne}})
+        {
+            params.behavior = expectation.first;
+            IndicatorsTree indicators;
+            indicators.Push("FileRegexMatch");
+            const auto result = AuditFileRegexMatch(params, indicators, mContext);
+            ASSERT_TRUE(result.HasValue()) << testCase.selectedNames << " " << static_cast<int>(expectation.first);
+            EXPECT_EQ(expectation.second, result.Value()) << testCase.selectedNames << " " << static_cast<int>(expectation.first);
+            ASSERT_EQ(1U, indicators.Back().indicators.size());
+            EXPECT_EQ(expectation.second, indicators.Back().indicators[0].status);
+        }
+    }
+}
+
+TEST_F(FileRegexMatchTest, SelectedValueFlagsPrecedeOuterFileExistenceInBothModes)
+{
+    MakeTempfile("key=bad\nkey=ok\n");
+    MakeTempfile("unrelated=ok\n");
+    std::ofstream(mTempdir + "/excluded") << "key=ok\n";
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex("[12]");
+    params.matchPattern = R"(^key=([^\n]*))";
+    params.statePattern = "^ok$";
+    params.behavior = Behavior::AnyExist;
+
+    for (const bool wholeFile : {false, true})
+    {
+        params.wholeFile = wholeFile;
+        for (const auto& expectation : {std::pair<std::pair<bool, bool>, Status>{{false, false}, Status::Compliant},
+                 {{true, false}, Status::NonCompliant}, {{false, true}, Status::NonCompliant}})
+        {
+            params.allMatches = expectation.first.first;
+            params.noneMatches = expectation.first.second;
+            IndicatorsTree indicators;
+            indicators.Push("FileRegexMatch");
+            const auto result = AuditFileRegexMatch(params, indicators, mContext);
+            ASSERT_TRUE(result.HasValue());
+            EXPECT_EQ(expectation.second, result.Value()) << "wholeFile=" << wholeFile;
+            ASSERT_EQ(1U, indicators.Back().indicators.size());
+            EXPECT_EQ(expectation.second, indicators.Back().indicators[0].status);
+        }
+        params.allMatches = true;
+        params.noneMatches = false;
+        params.filenamePattern = regex("2");
+        IndicatorsTree indicators;
+        indicators.Push("FileRegexMatch");
+        const auto optional = AuditFileRegexMatch(params, indicators, mContext);
+        ASSERT_TRUE(optional.HasValue());
+        EXPECT_EQ(Status::Compliant, optional.Value());
+        params.behavior = Behavior::AtLeastOneExists;
+        const auto required = AuditFileRegexMatch(params, indicators, mContext);
+        ASSERT_TRUE(required.HasValue());
+        EXPECT_EQ(Status::NonCompliant, required.Value());
+        params.behavior = Behavior::AnyExist;
+        params.filenamePattern = regex("[12]");
+    }
+}
+
 TEST_F(FileRegexMatchTest, AllMatchesIgnoresUnselectedFilesInEitherOrder)
 {
     MakeTempfile("unrelated=1\n");
