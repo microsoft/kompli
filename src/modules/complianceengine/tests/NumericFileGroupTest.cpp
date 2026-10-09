@@ -178,133 +178,134 @@ TEST_F(NumericFileGroupTest, SerializedNumericSelectorRejectsMalformedId)
     ASSERT_FALSE(result.HasValue());
 }
 
-TEST_F(NumericFileGroupTest, SerializedAuditCombinesConfigAndSelectedFileGroups)
+std::string AuditLogScript(const std::string& config, int groupId)
 {
-    const auto config = context.GetTempdirPath() + "/auditd.conf";
-    const auto selected = context.MakeTempfile("audit\n");
-    const auto other = context.MakeTempfile("unselected\n");
-    struct stat selectedStat;
-    ASSERT_EQ(0, stat(selected.c_str(), &selectedStat));
+    return "local paths = {}\nfor line in io.lines('" + config + R"(') do
+    local path = string.match(line, '^%s*log_file%s*=%s*(%S+)%s*$')
+    if path == nil then
+        path = string.match(line, '^%s*log_file%s*=%s*(%S+)%s+#.*$')
+    end
+    if path ~= nil then
+        table.insert(paths, path)
+    end
+end
+if #paths == 0 then
+    return false, 'No log_file configured in )" +
+           config + R"('
+end
+local compliant = true
+local reason = nil
+for _, path in ipairs(paths) do
+    local status, message = ce.AuditFilePermissions({path = path, groupId = )" +
+           std::to_string(groupId) + R"(})
+    if not status then
+        compliant = false
+        reason = message
+    end
+end
+return compliant, reason)";
+}
 
-    // Mirror the M-14 YAML's two-child audit, redirecting only its config path
-    // and using the fixture's actual GID when the test is not run as root.
-    const std::string serialized =
-        R"({"allOf":[{"FileRegexMatch":{"path":")" + context.GetTempdirPath() +
-        R"(","filenamePattern":"auditd\\.conf","matchPattern":"^\\s*log_group\\s*=\\s*(\\S+)\\s*(?:#.*)?$","statePattern":"^root$","allMatches":"True"}},{"Lua":{"script":""}}]})";
-    auto audit = JsonWrapper::FromString(serialized);
-    ASSERT_TRUE(audit.HasValue());
-    auto* children = json_object_get_array(json_value_get_object(audit->get()), "allOf");
-    ASSERT_NE(nullptr, children);
-    auto* lua = json_object_get_object(json_array_get_object(children, 1), "Lua");
-    ASSERT_NE(nullptr, lua);
-    const auto groupId = std::to_string(selectedStat.st_gid);
-    const std::string script = "local paths = {}\nfor line in io.lines('" + config +
-                               "') do\n"
-                               "    local path = string.match(line, '^%s*log_file%s*=%s*(%S+)%s*$')\n"
-                               "    if path == nil then\n"
-                               "        path = string.match(line, '^%s*log_file%s*=%s*(%S+)%s+#.*$')\n"
-                               "    end\n"
-                               "    if path ~= nil then\n"
-                               "        table.insert(paths, path)\n"
-                               "    end\n"
-                               "end\n"
-                               "if #paths == 0 then\n"
-                               "    return false, 'No log_file configured in " +
-                               config +
-                               "'\n"
-                               "end\n"
-                               "local compliant = true\nlocal reason = nil\n"
-                               "for _, path in ipairs(paths) do\n"
-                               "    local status, message = ce.AuditFilePermissions({path = path, groupId = " +
-                               groupId +
-                               "})\n"
-                               "    if not status then\n"
-                               "        compliant = false\n"
-                               "        reason = message\n"
-                               "    end\n"
-                               "end\nreturn compliant, reason";
-    ASSERT_EQ(JSONSuccess, json_object_set_string(lua, "script", script.c_str()));
-    DebugFormatter formatter;
-    const ParameterMap parameters;
-    const auto evaluate = [&]() {
+class ComposedNumericFileGroupTest : public NumericFileGroupTest
+{
+protected:
+    std::string config = context.GetTempdirPath() + "/auditd.conf";
+    std::string selected;
+    int selectedGid = 0;
+
+    void SetUp() override
+    {
+        NumericFileGroupTest::SetUp();
+        selected = context.MakeTempfile("audit\n");
+        struct stat file;
+        ASSERT_EQ(0, stat(selected.c_str(), &file));
+        selectedGid = static_cast<int>(file.st_gid);
+    }
+
+    Result<AuditResult> Evaluate(int groupId)
+    {
+        // Mirror the M-14 YAML's two-child audit with a private config path.
+        const auto serialized =
+            R"({"allOf":[{"FileRegexMatch":{"path":")" + context.GetTempdirPath() +
+            R"(","filenamePattern":"auditd\\.conf","matchPattern":"^\\s*log_group\\s*=\\s*(\\S+)\\s*(?:#.*)?$","statePattern":"^root$","allMatches":"True"}},{"Lua":{"script":""}}]})";
+        auto audit = JsonWrapper::FromString(serialized);
+        if (!audit.HasValue())
+        {
+            return audit.Error();
+        }
+        auto* children = json_object_get_array(json_value_get_object(audit->get()), "allOf");
+        if (nullptr == children)
+        {
+            return Error("Missing audit children", EINVAL);
+        }
+        auto* child = json_array_get_object(children, 1);
+        if (nullptr == child)
+        {
+            return Error("Missing Lua audit child", EINVAL);
+        }
+        auto* lua = json_object_get_object(child, "Lua");
+        if (nullptr == lua)
+        {
+            return Error("Missing Lua audit child", EINVAL);
+        }
+        const auto script = AuditLogScript(config, groupId);
+        if (JSONSuccess != json_object_set_string(lua, "script", script.c_str()))
+        {
+            return Error("Cannot set audit log script", EINVAL);
+        }
+        DebugFormatter formatter;
+        const ParameterMap parameters;
         Evaluator evaluator("SV-270829", json_value_get_object(audit->get()), parameters, context);
         return evaluator.ExecuteAudit(formatter);
-    };
+    }
 
+    void ExpectStatus(const std::string& contents, int groupId, Status expected)
+    {
+        std::ofstream(config) << contents;
+        const auto result = Evaluate(groupId);
+        ASSERT_TRUE(result.HasValue()) << result.Error().message;
+        EXPECT_EQ(expected, result.Value().status);
+    }
+};
+
+TEST_F(ComposedNumericFileGroupTest, ConfigurationAndLiteralZeroGroup)
+{
     // The first child prevents a missing or invalid setting from reaching Lua.
-    auto result = evaluate();
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(Status::NonCompliant, result.Value().status);
-    std::ofstream(config) << "log_group = adm\nlog_file = " << selected << "\n";
-    result = evaluate();
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(Status::NonCompliant, result.Value().status);
+    const auto missing = Evaluate(selectedGid);
+    ASSERT_TRUE(missing.HasValue()) << missing.Error().message;
+    EXPECT_EQ(Status::NonCompliant, missing.Value().status);
 
-    std::ofstream(config) << "log_group = root\n";
-    result = evaluate();
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(Status::NonCompliant, result.Value().status);
+    ExpectStatus("log_group = adm\nlog_file = " + selected + "\n", selectedGid, Status::NonCompliant);
+    ExpectStatus("log_group = root\n", selectedGid, Status::NonCompliant);
+    ExpectStatus("log_group = root\nlog_file = " + selected + "\n", selectedGid, Status::Compliant);
+    ExpectStatus("log_group = root\nlog_file = " + selected + "\n", 0, 0 == selectedGid ? Status::Compliant : Status::NonCompliant);
+    ExpectStatus("log_group = root\nlog_group = adm\nlog_file = " + selected + "\n", selectedGid, Status::NonCompliant);
+    ExpectStatus("log_group = adm\nlog_group = root\nlog_file = " + selected + "\n", selectedGid, Status::NonCompliant);
+}
 
-    std::ofstream(config) << "log_group = root\nlog_file = " << selected << "\n";
-    result = evaluate();
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(Status::Compliant, result.Value().status);
-
-    auto zeroGidScript = script;
-    const auto groupArgument = "groupId = " + groupId;
-    const auto groupArgumentPosition = zeroGidScript.find(groupArgument);
-    ASSERT_NE(std::string::npos, groupArgumentPosition);
-    zeroGidScript.replace(groupArgumentPosition, groupArgument.size(), "groupId = 0");
-    ASSERT_EQ(JSONSuccess, json_object_set_string(lua, "script", zeroGidScript.c_str()));
-    result = evaluate();
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(selectedStat.st_gid == 0 ? Status::Compliant : Status::NonCompliant, result.Value().status);
-    ASSERT_EQ(JSONSuccess, json_object_set_string(lua, "script", script.c_str()));
-
-    std::ofstream(config) << "log_group = root\nlog_file = " << selected << "\nlog_file = " << selected << "\n";
-    result = evaluate();
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(Status::Compliant, result.Value().status);
-
-    // Unselected siblings must not affect the verdict; every selected path must.
+TEST_F(ComposedNumericFileGroupTest, AuditsEverySelectedPathWithoutScanningSiblings)
+{
+    const auto other = context.MakeTempfile("unselected\n");
     struct stat otherStat;
     ASSERT_EQ(0, stat(other.c_str(), &otherStat));
-    std::ofstream(config) << "log_group = root\nlog_file = " << selected << "\nlog_file = " << other << "\n";
-    result = evaluate();
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(Status::Compliant, result.Value().status);
-    std::ofstream(config) << "log_group = root\nlog_file = " << selected << "\nlog_file = " << context.GetTempdirPath() << "/absent\n";
-    result = evaluate();
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(Status::NonCompliant, result.Value().status);
+    ExpectStatus("log_group = root\nlog_file = " + selected + "\nlog_file = " + selected + "\n", selectedGid, Status::Compliant);
+    ExpectStatus("log_group = root\nlog_file = " + selected + "\nlog_file = " + other + "\n", selectedGid, Status::Compliant);
+    const auto absent = context.GetTempdirPath() + "/absent";
+    ExpectStatus("log_group = root\nlog_file = " + selected + "\nlog_file = " + absent + "\n", selectedGid, Status::NonCompliant);
+    ExpectStatus("log_group = root\nlog_file = " + absent + "\nlog_file = " + selected + "\n", selectedGid, Status::NonCompliant);
+}
 
-    std::ofstream(config) << "log_group = root\nlog_file = " << context.GetTempdirPath() << "/absent\nlog_file = " << selected << "\n";
-    result = evaluate();
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(Status::NonCompliant, result.Value().status);
-
+TEST_F(ComposedNumericFileGroupTest, FollowsSelectedLinkAndPropagatesStatError)
+{
     const auto link = context.GetTempdirPath() + "/selected-link";
     ASSERT_EQ(0, symlink(selected.c_str(), link.c_str()));
-    std::ofstream(config) << "log_group = root\nlog_file = " << link << "\n";
-    result = evaluate();
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(Status::Compliant, result.Value().status);
+    ExpectStatus("log_group = root\nlog_file = " + link + "\n", selectedGid, Status::Compliant);
 
     const auto loop = context.GetTempdirPath() + "/selected-loop";
     ASSERT_EQ(0, symlink(loop.c_str(), loop.c_str()));
     std::ofstream(config) << "log_group = root\nlog_file = " << loop << "\n";
-    result = evaluate();
+    const auto result = Evaluate(selectedGid);
     ASSERT_FALSE(result.HasValue());
     EXPECT_NE(std::string::npos, result.Error().message.find("Stat error"));
-
-    std::ofstream(config) << "log_group = root\nlog_group = adm\nlog_file = " << selected << "\n";
-    result = evaluate();
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(Status::NonCompliant, result.Value().status);
-
-    std::ofstream(config) << "log_group = adm\nlog_group = root\nlog_file = " << selected << "\n";
-    result = evaluate();
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(Status::NonCompliant, result.Value().status);
 }
 } // namespace
