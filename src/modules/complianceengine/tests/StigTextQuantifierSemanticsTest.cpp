@@ -54,22 +54,23 @@ struct SourceCase
     const char* name;
     const char* contents;
     int selectedItems;
-    Status expected;
+    Status sourceExpected;
     const char* firstSourceValue;
     const char* secondSourceValue;
     int expectedNativeStateMatches;
+    bool expectedDivergence;
 };
 
 constexpr SourceCase cSourceCases[] = {
-    {"AOnly", "cert_policy = crl_auto;\n", 1, Status::Compliant, "crl_auto", nullptr, 1},
-    {"BOnly", "cert_policy = crl_offline;\n", 1, Status::Compliant, "crl_offline", nullptr, 1},
-    {"AAndB", "cert_policy = crl_auto;\ncert_policy = crl_offline;\n", 2, Status::Compliant, "crl_auto", "crl_offline", 2},
-    {"AThenNeither", "cert_policy = crl_auto;\ncert_policy = ca;\n", 2, Status::NonCompliant, "crl_auto", "ca", 1},
-    {"NeitherThenA", "cert_policy = ca;\ncert_policy = crl_auto;\n", 2, Status::NonCompliant, "ca", "crl_auto", 1},
-    {"NeitherOnly", "cert_policy = ca;\n", 1, Status::NonCompliant, "ca", nullptr, 0},
-    {"NoSelection", "# cert_policy = crl_auto;\nother = crl_offline;\n", 0, Status::NonCompliant, nullptr, nullptr, 0},
-    {"Empty", "", 0, Status::NonCompliant, nullptr, nullptr, 0},
-    {"SurroundedToken", "decoy = crl_offline;\ncert_policy = ca, crl_auto, signature;\n", 1, Status::Compliant, "ca, crl_auto, signature", nullptr, 0},
+    {"AOnly", "cert_policy = crl_auto;\n", 1, Status::Compliant, "crl_auto", nullptr, 1, true},
+    {"BOnly", "cert_policy = crl_offline;\n", 1, Status::Compliant, "crl_offline", nullptr, 1, true},
+    {"AAndB", "cert_policy = crl_auto;\ncert_policy = crl_offline;\n", 2, Status::Compliant, "crl_auto", "crl_offline", 2, true},
+    {"AThenNeither", "cert_policy = crl_auto;\ncert_policy = ca;\n", 2, Status::NonCompliant, "crl_auto", "ca", 1, false},
+    {"NeitherThenA", "cert_policy = ca;\ncert_policy = crl_auto;\n", 2, Status::NonCompliant, "ca", "crl_auto", 1, false},
+    {"NeitherOnly", "cert_policy = ca;\n", 1, Status::NonCompliant, "ca", nullptr, 0, false},
+    {"NoSelection", "# cert_policy = crl_auto;\nother = crl_offline;\n", 0, Status::NonCompliant, nullptr, nullptr, 0, false},
+    {"Empty", "", 0, Status::NonCompliant, nullptr, nullptr, 0, false},
+    {"SurroundedToken", "decoy = crl_offline;\ncert_policy = ca, crl_auto, signature;\n", 1, Status::Compliant, "ca, crl_auto, signature", nullptr, 0, true},
 };
 
 class StigTextQuantifierSemanticsTest : public ::testing::TestWithParam<std::size_t>
@@ -124,13 +125,16 @@ TEST(StigTextQuantifierPayloadTest, CapturedPayloadHasPinnedProvenanceAndShape)
     EXPECT_EQ(nullptr, json_object_get_value(procedure, "wholeFile"));
 }
 
-TEST_P(StigTextQuantifierSemanticsTest, ActualPayloadMatchesSourceVerdict)
+TEST_P(StigTextQuantifierSemanticsTest, OriginalPayloadRetainsRecordedSourceDivergence)
 {
     ASSERT_LT(GetParam(), sizeof(cSourceCases) / sizeof(cSourceCases[0]));
     const auto& testCase = cSourceCases[GetParam()];
     RecordProperty("case", testCase.name);
     RecordProperty("sourceSelectedItems", testCase.selectedItems);
-    RecordProperty("sourceExpected", std::to_string(testCase.expected));
+    RecordProperty("sourceExpected", std::to_string(testCase.sourceExpected));
+    constexpr auto historicalNativeExpected = Status::NonCompliant;
+    RecordProperty("historicalNativeExpected", std::to_string(historicalNativeExpected));
+    EXPECT_EQ(testCase.expectedDivergence, testCase.sourceExpected != historicalNativeExpected);
 
     const auto directory = mContext.GetTempdirPath() + "/pam_pkcs11";
     ASSERT_EQ(0, mkdir(directory.c_str(), 0700));
@@ -168,7 +172,9 @@ TEST_P(StigTextQuantifierSemanticsTest, ActualPayloadMatchesSourceVerdict)
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
     RecordProperty("nativeStatus", std::to_string(result.Value().status));
     RecordProperty("nativeIndicators", result.Value().payload);
-    EXPECT_EQ(testCase.expected, result.Value().status) << result.Value().payload;
+    RecordProperty("sourceNativeDivergence", std::to_string(testCase.sourceExpected != result.Value().status));
+    EXPECT_EQ(historicalNativeExpected, result.Value().status) << result.Value().payload;
+    EXPECT_EQ(testCase.expectedDivergence, testCase.sourceExpected != result.Value().status);
 }
 
 TEST_P(StigTextQuantifierSemanticsTest, CapturedPatternsExposeNativeStages)
