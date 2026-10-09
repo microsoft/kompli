@@ -35,7 +35,7 @@ Result<TypedComparisonOperation> MapComparison(ComparisonOperation operation)
         default:
             break;
     }
-    return Error("Unsupported comparison operation", EINVAL);
+    return Error("Unsupported comparison operation " + std::to_string(static_cast<int>(operation)), EINVAL);
 }
 
 Result<bool> NumericComparison(int lhs, int rhs, ComparisonOperation operation)
@@ -43,7 +43,7 @@ Result<bool> NumericComparison(int lhs, int rhs, ComparisonOperation operation)
     auto mapped = MapComparison(operation);
     if (!mapped.HasValue())
     {
-        return Error("Unsupported comparison operation for numeric value", EINVAL);
+        return Error("Unsupported comparison operation for numeric value: " + mapped.Error().message, mapped.Error().code);
     }
     return CompareTyped(lhs, rhs, mapped.Value());
 }

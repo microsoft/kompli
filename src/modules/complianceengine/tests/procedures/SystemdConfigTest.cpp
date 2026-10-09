@@ -722,7 +722,7 @@ TEST_F(SystemdConfigTest, InvalidDirectNumericOperationReturnsErrorWithoutIndica
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, EINVAL);
-    EXPECT_EQ(result.Error().message, "Unsupported numeric comparison operation");
+    EXPECT_EQ(result.Error().message, "Unsupported numeric comparison operation 100");
     EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }
 

@@ -95,7 +95,7 @@ TEST_F(EnsureShadowContainsTest, InvalidArguments_1)
     auto result = AuditShadowField(params, mIndicators, mContext);
     RemoveTestShadowFile(path);
     ASSERT_FALSE(result.HasValue());
-    ASSERT_EQ(result.Error().message, "Unsupported comparison operation for an integer type");
+    ASSERT_EQ(result.Error().message, "Unsupported comparison operation for an integer type: Unsupported comparison operation 6");
     ASSERT_EQ(result.Error().code, EINVAL);
 }
 
@@ -904,6 +904,25 @@ TEST_F(EnsureShadowContainsTest, IntegerParsingAndUnsupportedOperationKeepErrors
     result = AuditShadowField(params, unsupported, mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, EINVAL);
-    EXPECT_EQ(result.Error().message, "Unsupported comparison operation for an integer type");
+    EXPECT_EQ(result.Error().message, "Unsupported comparison operation for an integer type: Unsupported comparison operation 6");
     EXPECT_TRUE(unsupported.Back().indicators.empty());
+}
+
+TEST_F(EnsureShadowContainsTest, UnknownStringOperationReportsNumericMapperError)
+{
+    const auto path = CreateTestShadowFile("testuser", string("abc"));
+    ASSERT_FALSE(path.empty());
+    ScopeGuard cleanup([&] { RemoveTestShadowFile(path); });
+    mContext.SetSpecialFilePath("/etc/shadow", path);
+
+    ShadowFieldParams params;
+    params.username = "testuser";
+    params.field = Field::Password;
+    params.value = "abc";
+    params.operation = static_cast<ComparisonOperation>(42);
+    const auto result = AuditShadowField(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().message, "Unsupported comparison operation for a string type: Unsupported comparison operation 42");
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }

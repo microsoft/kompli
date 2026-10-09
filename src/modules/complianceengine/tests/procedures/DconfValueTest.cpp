@@ -67,6 +67,7 @@ TEST(TypedComparisonTest, PreservesIntegerLimitsAndRejectsUnknownOperation)
     EXPECT_TRUE(greater.Value());
     ASSERT_FALSE(invalid.HasValue());
     EXPECT_EQ(invalid.Error().code, EINVAL);
+    EXPECT_EQ(invalid.Error().message, "Unsupported typed comparison operation 100");
 }
 
 using ComplianceEngine::AuditDconfValue;
@@ -195,6 +196,6 @@ TEST_F(EnsureDconf, InvalidDirectOperationReturnsErrorWithoutCommandOrIndicator)
     const auto result = AuditDconfValue(mParams, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, EINVAL);
-    EXPECT_EQ(result.Error().message, "Not supported operation");
+    EXPECT_EQ(result.Error().message, "Not supported operation 100");
     EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }
