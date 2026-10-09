@@ -43,6 +43,46 @@ TEST_F(UsersIteratorTest, UidMinSelectsFirstExactOccurrence)
     EXPECT_EQ(1000U, result.Value());
 }
 
+TEST_F(UsersIteratorTest, CorruptedFirstUidMinKeyCannotSelectLaterValue)
+{
+    const char contents[] = "UID_MIN\0 500\nUID_MIN 1000\n";
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>(std::string(contents, sizeof(contents) - 1))));
+    const auto result = GetUidMin(mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+}
+
+TEST_F(UsersIteratorTest, ValidFirstUidMinIgnoresLaterCorruptedKey)
+{
+    const char contents[] = "UID_MIN 500\nUID_MIN\0 1000\n";
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>(std::string(contents, sizeof(contents) - 1))));
+    const auto result = GetUidMin(mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(500U, result.Value());
+}
+
+TEST_F(UsersIteratorTest, UnrelatedCorruptedKeyDoesNotBlockUidMin)
+{
+    const char contents[] = "NOT_UID_MIN\0 2000\nUID_MIN 500\n";
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>(std::string(contents, sizeof(contents) - 1))));
+    const auto result = GetUidMin(mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(500U, result.Value());
+}
+
+TEST_F(UsersIteratorTest, UidMinPropagatesRequiredReadError)
+{
+    for (int code : {EIO, EACCES, -1})
+    {
+        SCOPED_TRACE(code);
+        EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>(Error("Read failed", code))));
+        const auto result = GetUidMin(mContext);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(code, result.Error().code);
+        EXPECT_EQ("Read failed", result.Error().message);
+    }
+}
+
 TEST_F(UsersIteratorTest, UidMinRejectsInlineHashRatherThanStrippingIt)
 {
     EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>("UID_MIN 1000#note\n")));

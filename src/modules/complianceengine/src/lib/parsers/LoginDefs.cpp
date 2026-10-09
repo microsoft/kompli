@@ -22,6 +22,11 @@ Result<Document> LimitError(const char* limit)
 }
 } // anonymous namespace
 
+bool IsNulCorruptedKey(const Record& record, const std::string& expectedKey)
+{
+    return record.key.size() > expectedKey.size() && record.key.compare(0, expectedKey.size(), expectedKey) == 0 && record.key[expectedKey.size()] == '\0';
+}
+
 std::string Document::Text(Span span) const
 {
     return bytes.substr(span.offset, span.length);
@@ -97,14 +102,14 @@ Result<Document> Parse(const std::string& bytes, const std::string& source)
             return LimitError("line");
         }
 
-        if (nextNul < end)
+        while (nextNul < end)
         {
             if (MaxDiagnostics <= document.diagnostics.size())
             {
                 return LimitError("diagnostic");
             }
             document.diagnostics.push_back({Diagnostic::Kind::EmbeddedNul, {nextNul, 1}, lineNumber, nextNul - start + 1});
-            nextNul = bytes.find('\0', end);
+            nextNul = bytes.find('\0', nextNul + 1);
         }
 
         std::size_t keyStart = start;

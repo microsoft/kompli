@@ -38,6 +38,8 @@ struct Record
     std::string key;
 };
 
+bool IsNulCorruptedKey(const Record& record, const std::string& expectedKey);
+
 struct Diagnostic
 {
     enum class Kind

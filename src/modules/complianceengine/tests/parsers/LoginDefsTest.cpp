@@ -108,6 +108,34 @@ TEST(LoginDefsTest, EmbeddedNulDoesNotTruncateLaterBytesOrLines)
     EXPECT_FALSE(doc.HasEmbeddedNul(doc.records[1]));
 }
 
+TEST(LoginDefsTest, LocatesEachEmbeddedNulOnTheSameLine)
+{
+    const std::string input("UID_MIN 1\0a\0b\n", 14);
+    const auto parsed = ld::Parse(input, "source");
+    ASSERT_TRUE(parsed.HasValue());
+    const auto& diagnostics = parsed.Value().diagnostics;
+    ASSERT_EQ(2U, diagnostics.size());
+    EXPECT_EQ(ld::Diagnostic::Kind::EmbeddedNul, diagnostics[0].kind);
+    EXPECT_EQ(9U, diagnostics[0].span.offset);
+    EXPECT_EQ(10U, diagnostics[0].column);
+    EXPECT_EQ(ld::Diagnostic::Kind::EmbeddedNul, diagnostics[1].kind);
+    EXPECT_EQ(11U, diagnostics[1].span.offset);
+    EXPECT_EQ(12U, diagnostics[1].column);
+    EXPECT_EQ(1U, diagnostics[1].line);
+}
+
+TEST(LoginDefsTest, MultipleNulsRespectDiagnosticBudget)
+{
+    std::string input = "#" + std::string(ld::MaxDiagnostics, '\0');
+    const auto withinLimit = ld::Parse(input, "source");
+    ASSERT_TRUE(withinLimit.HasValue());
+    EXPECT_EQ(ld::MaxDiagnostics, withinLimit.Value().diagnostics.size());
+    input += '\0';
+    const auto overLimit = ld::Parse(input, "source");
+    ASSERT_FALSE(overLimit.HasValue());
+    EXPECT_EQ(E2BIG, overLimit.Error().code);
+}
+
 TEST(LoginDefsTest, ByteBudgetRejectsOversizeInsteadOfReturningPartialDocument)
 {
     std::string input;

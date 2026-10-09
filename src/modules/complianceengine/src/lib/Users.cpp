@@ -4,14 +4,24 @@
 #include <CommonContext.h>
 #include <StringTools.h>
 #include <Users.h>
+#include <cerrno>
 #include <parsers/LoginDefs.h>
 
 namespace ComplianceEngine
 {
 Result<unsigned int> GetUidMin(ContextInterface& context)
 {
-    auto loginDefsResult = context.GetFileContents("/etc/login.defs");
-    if (!loginDefsResult.HasValue() || loginDefsResult.Value().empty())
+    return GetUidMin(context, context.GetFileContents("/etc/login.defs"));
+}
+
+Result<unsigned int> GetUidMin(ContextInterface& context, const Result<std::string>& loginDefsResult)
+{
+    if (!loginDefsResult.HasValue())
+    {
+        OsConfigLogWarning(context.GetLogHandle(), "Failed to read /etc/login.defs: %s", loginDefsResult.Error().message.c_str());
+        return loginDefsResult.Error();
+    }
+    if (loginDefsResult.Value().empty())
     {
         OsConfigLogWarning(context.GetLogHandle(), "Failed to read /etc/login.defs");
         return Error("Failed to read /etc/login.defs");
@@ -22,7 +32,21 @@ Result<unsigned int> GetUidMin(ContextInterface& context)
         OsConfigLogWarning(context.GetLogHandle(), "Invalid /etc/login.defs: %s", parsed.Error().message.c_str());
         return parsed.Error();
     }
-    const auto* record = parsed.Value().FindFirst("UID_MIN");
+    const std::string uidMinKey = "UID_MIN";
+    const LoginDefs::Record* record = nullptr;
+    for (const auto& candidate : parsed.Value().records)
+    {
+        if (candidate.key == uidMinKey)
+        {
+            record = &candidate;
+            break;
+        }
+        if (LoginDefs::IsNulCorruptedKey(candidate, uidMinKey))
+        {
+            OsConfigLogWarning(context.GetLogHandle(), "Invalid UID_MIN key in /etc/login.defs: embedded NUL");
+            return Error("Invalid UID_MIN key: embedded NUL", EBADMSG);
+        }
+    }
     if (nullptr == record)
     {
         return Error("Could not get UID_MIN find value");

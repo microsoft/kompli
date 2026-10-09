@@ -74,7 +74,7 @@ Result<uid_t> LoadMinUID(ContextInterface& context)
             record = &candidate;
             break;
         }
-        if (candidate.key.size() > uidMinKey.size() && candidate.key.compare(0, uidMinKey.size(), uidMinKey) == 0 && candidate.key[uidMinKey.size()] == '\0')
+        if (LoginDefs::IsNulCorruptedKey(candidate, uidMinKey))
         {
             OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN key: embedded NUL");
             return Error("Failed to parse UID_MIN key: embedded NUL", EINVAL);

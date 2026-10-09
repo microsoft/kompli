@@ -105,7 +105,19 @@ Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, Indicat
     {
         return parsed.Error();
     }
-    const auto* selected = parsed.Value().FindLast(params.option);
+    const LoginDefs::Record* selected = nullptr;
+    for (auto it = parsed.Value().records.rbegin(); it != parsed.Value().records.rend(); ++it)
+    {
+        if (it->key == params.option)
+        {
+            selected = &*it;
+            break;
+        }
+        if (LoginDefs::IsNulCorruptedKey(*it, params.option))
+        {
+            return Error("Invalid " + params.option + " key: embedded NUL", EINVAL);
+        }
+    }
     if ((nullptr != selected) && parsed.Value().HasEmbeddedNul(*selected))
     {
         return Error("Invalid " + params.option + " value: embedded NUL", EINVAL);

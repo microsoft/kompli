@@ -5,11 +5,34 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 
+namespace
+{
+std::size_t maxObservedInputBytes = 0;
+
+void ReportMaxObservedInput()
+{
+    if (std::fprintf(stderr, "MAX_OBSERVED_INPUT_BYTES=%zu\n", maxObservedInputBytes) < 0)
+    {
+        std::abort();
+    }
+}
+} // namespace
+
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)
 {
+    static const int reportRegistration = std::atexit(ReportMaxObservedInput);
+    if (reportRegistration != 0)
+    {
+        std::abort();
+    }
+    if (size > maxObservedInputBytes)
+    {
+        maxObservedInputBytes = size;
+    }
     const std::string bytes = 0 == size ? std::string() : std::string(reinterpret_cast<const char*>(data), size);
     const auto first = ComplianceEngine::LoginDefs::Parse(bytes, "fuzz");
     const auto second = ComplianceEngine::LoginDefs::Parse(bytes, "fuzz");
@@ -53,16 +76,35 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         }
         previous = record.lineSpan.offset + record.lineSpan.length;
     }
+    std::size_t nextNul = bytes.find('\0');
+    std::size_t previousDiagnosticOffset = 0;
     for (std::size_t i = 0; i < document.diagnostics.size(); ++i)
     {
         const auto& diagnostic = document.diagnostics[i];
         if ((diagnostic.span.offset > bytes.size()) ||
             (diagnostic.span.length > bytes.size() - diagnostic.span.offset) ||
+            (diagnostic.span.offset < previousDiagnosticOffset) ||
             (diagnostic.kind != repeated.diagnostics[i].kind) ||
-            (diagnostic.span.offset != repeated.diagnostics[i].span.offset))
+            (diagnostic.span.offset != repeated.diagnostics[i].span.offset) ||
+            (diagnostic.span.length != repeated.diagnostics[i].span.length) ||
+            (diagnostic.line != repeated.diagnostics[i].line) ||
+            (diagnostic.column != repeated.diagnostics[i].column))
         {
             std::abort();
         }
+        if (diagnostic.kind == ComplianceEngine::LoginDefs::Diagnostic::Kind::EmbeddedNul)
+        {
+            if ((diagnostic.span.length != 1) || (diagnostic.span.offset != nextNul))
+            {
+                std::abort();
+            }
+            nextNul = bytes.find('\0', nextNul + 1);
+        }
+        previousDiagnosticOffset = diagnostic.span.offset;
+    }
+    if (nextNul != std::string::npos)
+    {
+        std::abort();
     }
     return 0;
 }
