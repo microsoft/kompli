@@ -636,6 +636,44 @@ TEST_F(EnsureSshdOptionTest, DelimitedNumericLimitsRejectExtraFieldsAndTrailingD
     }
 }
 
+TEST_F(EnsureSshdOptionTest, DelimitedNumericLimitsRejectEmptyFields)
+{
+    struct Case
+    {
+        std::string option;
+        std::string actual;
+        std::string limit;
+        std::string error;
+    };
+    const Case cases[] = {
+        {"maxstartups", ":30:60", "15:40:70", "Failed to parse maxstartups value ':30:60': stoll"},
+        {"maxstartups", "10::60", "15:40:70", "Failed to parse maxstartups value '10::60': stoll"},
+        {"maxstartups", "", "15:40:70", "Failed to parse maxstartups value '': No numeric fields"},
+        {"maxstartups", "10:30:60", ":40:70", "Failed to parse maxstartups limit ':40:70': stoll"},
+        {"maxstartups", "10:0:60", "15::70", "Failed to parse maxstartups limit '15::70': stoll"},
+        {"rekeylimit", "", "15:150", "Failed to parse rekeylimit value '': No numeric fields"},
+        {"rekeylimit", "10 123", ":150", "Failed to parse rekeylimit limit ':150': stoll"},
+    };
+    for (const auto& test : cases)
+    {
+        const auto output = "port 22\n" + test.option + " " + test.actual + "\n";
+        EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(output)));
+        EXPECT_CALL(mContext, ExecuteCommand(sshdSimpleCommand)).WillOnce(Return(Result<std::string>(output)));
+        SshdOptionParams params;
+        params.option = {{test.option}};
+        params.value = test.limit;
+        params.op = SshdOptionOperation::Match;
+        IndicatorsTree indicators;
+        indicators.Push("EnsureSshdOption");
+
+        const auto result = AuditSshdOption(params, indicators, mContext);
+        ASSERT_FALSE(result.HasValue()) << test.option << " " << test.actual << " " << test.limit;
+        EXPECT_EQ(result.Error().code, EINVAL);
+        EXPECT_EQ(result.Error().message, test.error);
+        EXPECT_TRUE(indicators.Back().indicators.empty());
+    }
+}
+
 TEST_F(EnsureSshdOptionTest, DelimitedNumericLimitsKeepShorterValues)
 {
     struct Case

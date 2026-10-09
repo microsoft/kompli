@@ -225,16 +225,17 @@ static Result<Status> EvaluateDelimitedNumericLimits(const std::string& option, 
     size_t idx = 0;
     while ((idx < numFields) && std::getline(realStream, token, delimiter))
     {
-        if (!token.empty())
+        auto parsed = parseToken(token);
+        if (!parsed.HasValue())
         {
-            auto parsed = parseToken(token);
-            if (!parsed.HasValue())
-            {
-                return Error("Failed to parse " + option + " value '" + realValue + "': " + parsed.Error().message, parsed.Error().code);
-            }
-            realParts[idx] = parsed.Value();
+            return Error("Failed to parse " + option + " value '" + realValue + "': " + parsed.Error().message, parsed.Error().code);
         }
+        realParts[idx] = parsed.Value();
         ++idx;
+    }
+    if (idx == 0)
+    {
+        return Error("Failed to parse " + option + " value '" + realValue + "': No numeric fields", EINVAL);
     }
     if ((idx == numFields && !realStream.eof()) || (!realValue.empty() && realValue.back() == delimiter))
     {
@@ -245,15 +246,12 @@ static Result<Status> EvaluateDelimitedNumericLimits(const std::string& option, 
     idx = 0;
     while ((idx < numFields) && std::getline(limitStream, token, ':'))
     {
-        if (!token.empty())
+        auto parsed = parseToken(token);
+        if (!parsed.HasValue())
         {
-            auto parsed = parseToken(token);
-            if (!parsed.HasValue())
-            {
-                return Error("Failed to parse " + option + " limit '" + value + "': " + parsed.Error().message, parsed.Error().code);
-            }
-            limitParts[idx] = parsed.Value();
+            return Error("Failed to parse " + option + " limit '" + value + "': " + parsed.Error().message, parsed.Error().code);
         }
+        limitParts[idx] = parsed.Value();
         ++idx;
     }
     if ((idx == numFields && !limitStream.eof()) || (!value.empty() && value.back() == ':'))
