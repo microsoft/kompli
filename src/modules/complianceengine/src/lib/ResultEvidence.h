@@ -6,6 +6,7 @@
 
 #include <MmiResults.h>
 #include <Result.h>
+#include <vector>
 
 namespace ComplianceEngine
 {
@@ -19,6 +20,14 @@ private:
     bool mHasSelected = false;
     bool mAllSatisfied = true;
 };
+
+struct SelectedValueItem
+{
+    std::vector<Result<bool>> values;
+};
+
+// Input is complete and already selected; excluded items are not supplied.
+Result<Status> EvaluateRepeatedValueItems(const Result<std::vector<SelectedValueItem>>& selectedItems);
 } // namespace ComplianceEngine
 
 #endif // COMPLIANCEENGINE_RESULT_EVIDENCE_H

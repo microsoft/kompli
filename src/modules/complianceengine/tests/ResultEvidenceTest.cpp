@@ -16,6 +16,7 @@ using ComplianceEngine::PasswordCreditAssessment;
 using ComplianceEngine::PasswordCreditItem;
 using ComplianceEngine::PasswordCreditRoot;
 using ComplianceEngine::Result;
+using ComplianceEngine::SelectedValueItem;
 using ComplianceEngine::Status;
 
 namespace
@@ -58,6 +59,69 @@ TEST(ResultEvidenceTest, CompleteItemExistenceAndUniversalState)
     EXPECT_EQ(Status::NonCompliant, all.EvaluateAtLeastOneAll().Value());
     all.AddSelected(true);
     EXPECT_EQ(Status::NonCompliant, all.EvaluateAtLeastOneAll().Value());
+}
+
+TEST(ResultEvidenceTest, RepeatedValuesWithinOneItemUseAtLeastOneInEitherOrder)
+{
+    const std::vector<SelectedValueItem> matchFirst = {{{true, false, false}}};
+    const std::vector<SelectedValueItem> matchLast = {{{false, false, true}}};
+    EXPECT_EQ(Status::Compliant, ComplianceEngine::EvaluateRepeatedValueItems(matchFirst).Value());
+    EXPECT_EQ(Status::Compliant, ComplianceEngine::EvaluateRepeatedValueItems(matchLast).Value());
+    EXPECT_EQ(Status::NonCompliant, ComplianceEngine::EvaluateRepeatedValueItems(std::vector<SelectedValueItem>{{{false, false}}}).Value());
+}
+
+TEST(ResultEvidenceTest, DistinctItemsUseAllInEitherOrder)
+{
+    const std::vector<SelectedValueItem> matchFirst = {{{false, true}}, {{false}}};
+    const std::vector<SelectedValueItem> matchLast = {{{false}}, {{true, false}}};
+    EXPECT_EQ(Status::NonCompliant, ComplianceEngine::EvaluateRepeatedValueItems(matchFirst).Value());
+    EXPECT_EQ(Status::NonCompliant, ComplianceEngine::EvaluateRepeatedValueItems(matchLast).Value());
+    EXPECT_EQ(Status::Compliant, ComplianceEngine::EvaluateRepeatedValueItems(std::vector<SelectedValueItem>{{{true}}, {{false, true}}}).Value());
+}
+
+TEST(ResultEvidenceTest, ScalarAndExcludedValueItemsRetainExistencePolicy)
+{
+    const std::vector<SelectedValueItem> selected = {{{true}}};
+    const SelectedValueItem excludedDecoy = {{false}};
+    EXPECT_EQ(Status::Compliant, ComplianceEngine::EvaluateRepeatedValueItems(selected).Value());
+    auto withDecoySelected = selected;
+    withDecoySelected.push_back(excludedDecoy);
+    EXPECT_EQ(Status::NonCompliant, ComplianceEngine::EvaluateRepeatedValueItems(withDecoySelected).Value());
+    EXPECT_EQ(Status::NonCompliant, ComplianceEngine::EvaluateRepeatedValueItems(std::vector<SelectedValueItem>{}).Value());
+}
+
+TEST(ResultEvidenceTest, ReachedValueErrorSurvivesMatchingValuesAndItemOrder)
+{
+    const SelectedValueItem matching = {{true, false}};
+    const SelectedValueItem errorAfterMatch = {{true, Error("conversion failed", EIO)}};
+    const SelectedValueItem errorBeforeMatch = {{Error("conversion failed", EIO), true}};
+    for (const auto& items : {std::vector<SelectedValueItem>{matching, errorAfterMatch}, std::vector<SelectedValueItem>{errorBeforeMatch, matching},
+             std::vector<SelectedValueItem>{matching, errorBeforeMatch}, std::vector<SelectedValueItem>{errorAfterMatch, matching}})
+    {
+        const auto result = ComplianceEngine::EvaluateRepeatedValueItems(items);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EIO, result.Error().code);
+        EXPECT_EQ("conversion failed", result.Error().message);
+    }
+}
+
+TEST(ResultEvidenceTest, CollectionErrorAndEmptySelectedItemAreNotVerdicts)
+{
+    const auto collectionError = ComplianceEngine::EvaluateRepeatedValueItems(Error("collection failed", EACCES));
+    ASSERT_FALSE(collectionError.HasValue());
+    EXPECT_EQ(EACCES, collectionError.Error().code);
+    EXPECT_EQ("collection failed", collectionError.Error().message);
+
+    const auto emptyItem = ComplianceEngine::EvaluateRepeatedValueItems(std::vector<SelectedValueItem>{{}});
+    ASSERT_FALSE(emptyItem.HasValue());
+    EXPECT_EQ(EINVAL, emptyItem.Error().code);
+    EXPECT_NE(std::string::npos, emptyItem.Error().message.find("no comparison results"));
+
+    const std::vector<SelectedValueItem> emptyThenError = {{}, {{true, Error("read failed", EIO)}}};
+    const auto reachedError = ComplianceEngine::EvaluateRepeatedValueItems(emptyThenError);
+    ASSERT_FALSE(reachedError.HasValue());
+    EXPECT_EQ(EIO, reachedError.Error().code);
+    EXPECT_EQ("read failed", reachedError.Error().message);
 }
 
 TEST(ResultEvidenceTest, CompleteEmptyAndAbsentRootsNeedUnionWideExistence)
