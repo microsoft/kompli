@@ -721,6 +721,6 @@ TEST_F(LoginDefsOptionTest, UnsupportedNumericOperatorReturnsErrorWithoutIndicat
     auto result = AuditLoginDefsOption(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, EINVAL);
-    EXPECT_EQ(result.Error().message, "Unsupported comparison operation for numeric value");
+    EXPECT_EQ(result.Error().message, "Unsupported comparison operation for numeric value: Unsupported comparison operation 6");
     EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }

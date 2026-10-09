@@ -29,7 +29,7 @@ Result<TypedComparisonOperation> MapComparison(GsettingsOperationType operation)
         case GsettingsOperationType::NotEqual:
             return TypedComparisonOperation::NotEqual;
     }
-    return Error("Unsupported operation", EINVAL);
+    return Error("Unsupported operation " + std::to_string(static_cast<int>(operation)), EINVAL);
 }
 } // namespace
 

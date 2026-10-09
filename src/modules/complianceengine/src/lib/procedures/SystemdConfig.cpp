@@ -37,7 +37,7 @@ Result<TypedComparisonOperation> MapNumericComparison(SystemdConfigValueOperator
         case SystemdConfigValueOperator::Equal:
             break;
     }
-    return Error("Unsupported numeric comparison operation", EINVAL);
+    return Error("Unsupported numeric comparison operation " + std::to_string(static_cast<int>(operation)), EINVAL);
 }
 
 Result<bool> GetSystemdConfig(SystemdConfigMap_t& config, const std::string& filename, ContextInterface& context)

@@ -103,7 +103,7 @@ Result<TypedComparisonOperation> MapComparison(ComparisonOperation operation)
         default:
             break;
     }
-    return Error("Unsupported comparison operation", EINVAL);
+    return Error("Unsupported comparison operation " + std::to_string(static_cast<int>(operation)), EINVAL);
 }
 
 Result<bool> StringComparison(const string& lhs, const string& rhs, ComparisonOperation operation)
@@ -124,7 +124,7 @@ Result<bool> StringComparison(const string& lhs, const string& rhs, ComparisonOp
     auto mapped = MapComparison(operation);
     if (!mapped.HasValue())
     {
-        return Error("Unsupported comparison operation for a string type", EINVAL);
+        return Error("Unsupported comparison operation for a string type: " + mapped.Error().message, mapped.Error().code);
     }
     return CompareTyped(lhs, rhs, mapped.Value());
 }
@@ -134,7 +134,7 @@ Result<bool> IntegerComparison(const int lhs, const int rhs, ComparisonOperation
     auto mapped = MapComparison(operation);
     if (!mapped.HasValue())
     {
-        return Error("Unsupported comparison operation for an integer type", EINVAL);
+        return Error("Unsupported comparison operation for an integer type: " + mapped.Error().message, mapped.Error().code);
     }
     return CompareTyped(lhs, rhs, mapped.Value());
 }

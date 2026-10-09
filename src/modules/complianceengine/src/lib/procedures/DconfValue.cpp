@@ -19,7 +19,7 @@ Result<TypedComparisonOperation> MapComparison(DconfOperation operation)
         case DconfOperation::Ne:
             return TypedComparisonOperation::NotEqual;
     }
-    return Error("Not supported operation", EINVAL);
+    return Error("Not supported operation " + std::to_string(static_cast<int>(operation)), EINVAL);
 }
 } // namespace
 

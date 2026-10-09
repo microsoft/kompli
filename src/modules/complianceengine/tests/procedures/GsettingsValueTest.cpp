@@ -451,7 +451,7 @@ TEST_F(EnsureGsettings, InvalidDirectOperationReturnsErrorWithoutCommandOrIndica
     const auto result = AuditGsettingsValue(mParams, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, EINVAL);
-    EXPECT_EQ(result.Error().message, "Unsupported operation");
+    EXPECT_EQ(result.Error().message, "Unsupported operation 100");
     EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }
 

@@ -6,6 +6,7 @@
 
 #include <Result.h>
 #include <cerrno>
+#include <string>
 
 namespace ComplianceEngine
 {
@@ -37,7 +38,7 @@ Result<bool> CompareTyped(const T& lhs, const T& rhs, TypedComparisonOperation o
         case TypedComparisonOperation::GreaterOrEqual:
             return lhs >= rhs;
     }
-    return Error("Unsupported typed comparison operation", EINVAL);
+    return Error("Unsupported typed comparison operation " + std::to_string(static_cast<int>(operation)), EINVAL);
 }
 } // namespace ComplianceEngine
 
