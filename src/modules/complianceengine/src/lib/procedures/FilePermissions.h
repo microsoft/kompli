@@ -23,7 +23,7 @@ struct FilePermissionsParams
     /// Required group of the file, single or | separated, first one is used for remediation
     Optional<Separated<Pattern, '|'>> group;
 
-    /// Required numeric group ID (audit only), distinct from the named group selector
+    /// Expected numeric group ID
     Optional<int> groupId;
 
     /// Required octal permissions of the file
@@ -72,7 +72,7 @@ struct FilePermissionsCollectionParams
     /// Required group of the file, single or | separated, first one is used for remediation
     Optional<Separated<Pattern, '|'>> group;
 
-    /// Required numeric group ID (audit only), distinct from the named group selector
+    /// Expected numeric group ID
     Optional<int> groupId;
 
     /// Required octal permissions of the file
