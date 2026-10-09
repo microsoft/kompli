@@ -134,6 +134,59 @@ TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, UidMinMatchesExactKeyNotSubs
     EXPECT_TRUE(root->indicators.empty());
 }
 
+TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, CorruptedUidMinKeyDoesNotBecomeMissingKeyDefault)
+{
+    const string contents("UID_MIN\0 2000\n", 14);
+    mContext.SetSpecialFilePath("/etc/login.defs", mContext.MakeTempfile(contents));
+    mContext.SetSpecialFilePath("/etc/passwd", CreateTestPasswdFile(1500, "/bin/bash"));
+    const auto result = AuditSystemAccountShell(mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+    const auto* root = mIndicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    EXPECT_TRUE(root->indicators.empty());
+}
+
+TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, CorruptedFirstUidMinKeyDoesNotSelectLaterValue)
+{
+    const string contents("UID_MIN\0 2000\nUID_MIN 1000\n", 27);
+    mContext.SetSpecialFilePath("/etc/login.defs", mContext.MakeTempfile(contents));
+    mContext.SetSpecialFilePath("/etc/passwd", CreateTestPasswdFile(1500, "/bin/bash"));
+    const auto result = AuditSystemAccountShell(mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+    const auto* root = mIndicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    EXPECT_TRUE(root->indicators.empty());
+}
+
+TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, UnrelatedCorruptedKeyRetainsMissingKeyDefault)
+{
+    const string contents("NOT_UID_MIN\0 2000\n", 18);
+    mContext.SetSpecialFilePath("/etc/login.defs", mContext.MakeTempfile(contents));
+    mContext.SetSpecialFilePath("/etc/passwd", CreateTestPasswdFile(1500, "/bin/bash"));
+    const auto result = AuditSystemAccountShell(mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+    const auto* root = mIndicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    EXPECT_TRUE(root->indicators.empty());
+}
+
+TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, CorruptedLaterKeyDoesNotOverrideFirstUidMin)
+{
+    const string contents("UID_MIN 2000\nUID_MIN\0 1000\n", 27);
+    mContext.SetSpecialFilePath("/etc/login.defs", mContext.MakeTempfile(contents));
+    mContext.SetSpecialFilePath("/etc/passwd", CreateTestPasswdFile(1500, "/bin/bash"));
+    const auto result = AuditSystemAccountShell(mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    const auto* root = mIndicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    ASSERT_EQ(1U, root->indicators.size());
+    EXPECT_EQ(Status::NonCompliant, root->indicators.front().status);
+}
+
 TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, UidMinRejectsInlineHashWithoutIndicators)
 {
     mContext.SetSpecialFilePath("/etc/login.defs", mContext.MakeTempfile("UID_MIN 100#note\n"));

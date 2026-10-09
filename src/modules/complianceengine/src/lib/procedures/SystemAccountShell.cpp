@@ -65,7 +65,21 @@ Result<uid_t> LoadMinUID(ContextInterface& context)
         OsConfigLogError(context.GetLogHandle(), "Failed to parse %s: %s", filename.c_str(), parsed.Error().message.c_str());
         return parsed.Error();
     }
-    const auto* record = parsed.Value().FindFirst("UID_MIN");
+    const string uidMinKey = "UID_MIN";
+    const LoginDefs::Record* record = nullptr;
+    for (const auto& candidate : parsed.Value().records)
+    {
+        if (candidate.key == uidMinKey)
+        {
+            record = &candidate;
+            break;
+        }
+        if (candidate.key.size() > uidMinKey.size() && candidate.key.compare(0, uidMinKey.size(), uidMinKey) == 0 && candidate.key[uidMinKey.size()] == '\0')
+        {
+            OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN key: embedded NUL");
+            return Error("Failed to parse UID_MIN key: embedded NUL", EINVAL);
+        }
+    }
     if (nullptr == record)
     {
         return defaultUID;
