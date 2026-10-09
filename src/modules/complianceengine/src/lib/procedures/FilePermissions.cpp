@@ -379,6 +379,10 @@ Result<Status> AuditFilePermissions(const FilePermissionsParams& params, Indicat
 
 Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
+    if (params.groupId.HasValue() && (params.group.HasValue() || params.groupId.Value() < 0))
+    {
+        return Error("Invalid numeric group ID parameters", EINVAL);
+    }
     if (params.groupId.HasValue())
     {
         return Error("Numeric group ID remediation is not supported", ENOTSUP);

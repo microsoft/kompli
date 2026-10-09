@@ -118,6 +118,24 @@ TEST_F(NumericFileGroupTest, NumericRemediationRejectsWithoutChangingFile)
     EXPECT_EQ(before.st_mode, after.st_mode);
 }
 
+TEST_F(NumericFileGroupTest, NumericRemediationRejectsInvalidSelectorsBeforeOpeningFile)
+{
+    FilePermissionsParams params;
+    params.path = context.GetTempdirPath() + "/absent";
+    params.groupId = -1;
+    auto result = RemediateFilePermissions(params, indicators, context);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+
+    params.groupId = 0;
+    auto named = Pattern::Make("root");
+    ASSERT_TRUE(named.HasValue());
+    params.group = {{std::move(named.Value())}};
+    result = RemediateFilePermissions(params, indicators, context);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+}
+
 TEST_F(NumericFileGroupTest, CollectionForwardsExactGroupEquality)
 {
     const auto path = context.MakeTempfile("audit\n");
