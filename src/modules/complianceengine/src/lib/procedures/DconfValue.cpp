@@ -3,22 +3,33 @@
 
 #include <ProcedureMap.h>
 #include <StringTools.h>
+#include <TypedComparison.h>
 #include <algorithm>
-#include <functional>
-#include <map>
 
 namespace ComplianceEngine
 {
+namespace
+{
+Result<TypedComparisonOperation> MapComparison(DconfOperation operation)
+{
+    switch (operation)
+    {
+        case DconfOperation::Eq:
+            return TypedComparisonOperation::Equal;
+        case DconfOperation::Ne:
+            return TypedComparisonOperation::NotEqual;
+    }
+    return Error("Not supported operation " + std::to_string(static_cast<int>(operation)), EINVAL);
+}
+} // namespace
+
 Result<Status> AuditDconfValue(const DconfValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
     const auto key = EscapeForShell(params.key);
-    static const std::map<DconfOperation, std::function<bool(const std::string&, const std::string&)>> ops{
-        {DconfOperation::Eq, [](const std::string& x, const std::string& y) { return x == y; }},
-        {DconfOperation::Ne, [](const std::string& x, const std::string& y) { return x != y; }}};
-    const auto op = ops.find(params.operation);
-    if (op == ops.end())
+    auto mapped = MapComparison(params.operation);
+    if (!mapped.HasValue())
     {
-        return Error("Not supported operation '" + std::to_string(params.operation) + "'", EINVAL);
+        return mapped.Error();
     }
 
     Result<std::string> dconfRead = context.ExecuteCommand("dconf read \"" + key + "\"");
@@ -34,8 +45,12 @@ Result<Status> AuditDconfValue(const DconfValueParams& params, IndicatorsTree& i
         dconfVal.erase(dconfVal.size() - 1);
     }
 
-    auto isCompliant = op->second(dconfVal, params.value);
-    if (isCompliant)
+    auto comparison = CompareTyped(dconfVal, params.value, mapped.Value());
+    if (!comparison.HasValue())
+    {
+        return comparison.Error();
+    }
+    if (comparison.Value())
     {
         return indicators.Compliant("Dconf read " + key + " " + std::to_string(params.operation) + " value " + params.value);
     }

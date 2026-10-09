@@ -6,6 +6,7 @@
 #include <ProcedureMap.h> // Adds std::to_string() for enum classes
 #include <Regex.h>
 #include <SshdOption.h>
+#include <TypedComparison.h>
 #include <fnmatch.h>
 #include <fts.h>
 #include <sstream>
@@ -324,30 +325,34 @@ static Result<Status> EvaluateSshdOption(const std::map<std::string, std::string
         long long realInt = realIntRes.Value();
         long long wantedInt = wantedIntRes.Value();
 
-        bool pass = false;
+        TypedComparisonOperation typedOp = TypedComparisonOperation::LessThan;
         std::string expectation;
         if (op == "lt")
         {
-            pass = realInt < wantedInt;
             expectation = "less than";
         }
         else if (op == "le")
         {
-            pass = realInt <= wantedInt;
+            typedOp = TypedComparisonOperation::LessOrEqual;
             expectation = "less than or equal to";
         }
         else if (op == "gt")
         {
-            pass = realInt > wantedInt;
+            typedOp = TypedComparisonOperation::GreaterThan;
             expectation = "greater than";
         }
         else if (op == "ge")
         {
-            pass = realInt >= wantedInt;
+            typedOp = TypedComparisonOperation::GreaterOrEqual;
             expectation = "greater than or equal to";
         }
 
-        if (pass)
+        auto result = CompareTyped(realInt, wantedInt, typedOp);
+        if (!result.HasValue())
+        {
+            return result.Error();
+        }
+        if (result.Value())
         {
             return indicators.Compliant("Option '" + option + "' has a compliant numeric value '" + realValue + "' (" + expectation + " '" + value +
                                         "')" + ctx);
