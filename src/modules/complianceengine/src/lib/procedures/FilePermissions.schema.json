@@ -31,7 +31,7 @@
                 },
                 "groupId": {
                   "type": "string",
-                  "description": "Required numeric group ID (audit only), distinct from the named group selector"
+                  "description": "Expected numeric group ID"
                 },
                 "permissions": {
                   "type": "string",
@@ -109,7 +109,7 @@
                 },
                 "groupId": {
                   "type": "string",
-                  "description": "Required numeric group ID (audit only), distinct from the named group selector"
+                  "description": "Expected numeric group ID"
                 },
                 "permissions": {
                   "type": "string",
@@ -161,7 +161,7 @@
                 },
                 "groupId": {
                   "type": "string",
-                  "description": "Required numeric group ID (audit only), distinct from the named group selector"
+                  "description": "Expected numeric group ID"
                 },
                 "permissions": {
                   "type": "string",
@@ -239,7 +239,7 @@
                 },
                 "groupId": {
                   "type": "string",
-                  "description": "Required numeric group ID (audit only), distinct from the named group selector"
+                  "description": "Expected numeric group ID"
                 },
                 "permissions": {
                   "type": "string",
