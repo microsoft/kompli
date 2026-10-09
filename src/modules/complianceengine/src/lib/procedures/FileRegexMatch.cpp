@@ -10,7 +10,6 @@
 #include <cstdlib>
 #include <dirent.h>
 #include <fstream>
-#include <iterator>
 
 namespace ComplianceEngine
 {
@@ -88,7 +87,18 @@ Result<MultilineMatchResult> MultilineMatch(const std::string& filename, const s
 
     if (wholeFile)
     {
-        const string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        string contents;
+        char buffer[8192];
+        do
+        {
+            input.read(buffer, sizeof(buffer));
+            contents.append(buffer, static_cast<size_t>(input.gcount()));
+        } while (input);
+        if (input.bad() || !input.eof())
+        {
+            OsConfigLogError(context.GetLogHandle(), "Failed to read file '%s'", filename.c_str());
+            return Error("Failed to read file: " + filename, EIO);
+        }
         const auto evaluateWholeFileMatch = [&](const smatch& match) -> Optional<MultilineMatchResult> {
             const bool valueMatches = evaluateMatch(match).Value();
             if (noneMatches && valueMatches)
@@ -175,8 +185,13 @@ Result<MultilineMatchResult> MultilineMatch(const std::string& filename, const s
     string line;
 
     // Special case for empty files, read empty line then
-    while (getline(input, line) || lineNumber == 0)
+    while (getline(input, line) || (lineNumber == 0 && input.eof()))
     {
+        if (input.bad())
+        {
+            OsConfigLogError(context.GetLogHandle(), "Failed to read file '%s'", filename.c_str());
+            return Error("Failed to read file: " + filename, EIO);
+        }
         lineNumber++;
         OsConfigLogDebug(context.GetLogHandle(), "Matching line %d: '%s', pattern: '%s'", lineNumber, line.c_str(), matchPattern.c_str());
         smatch match;
@@ -202,6 +217,11 @@ Result<MultilineMatchResult> MultilineMatch(const std::string& filename, const s
                 return MultilineMatchResult{true, selected};
             }
         }
+    }
+    if (input.bad() || !input.eof())
+    {
+        OsConfigLogError(context.GetLogHandle(), "Failed to read file '%s'", filename.c_str());
+        return Error("Failed to read file: " + filename, EIO);
     }
     return MultilineMatchResult{noneMatches ? selected : matchingValueFound, selected};
 }

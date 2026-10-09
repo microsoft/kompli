@@ -97,3 +97,33 @@ TEST(FileRegexMatchErrorsTest, InvalidPatternsFailWithoutSelectedFiles)
     ASSERT_FALSE(stateResult.HasValue());
     EXPECT_EQ(EINVAL, stateResult.Error().code);
 }
+
+TEST(FileRegexMatchErrorsTest, EmptyAndUnterminatedInputRemainReadable)
+{
+    MockContext context;
+    IndicatorsTree indicators;
+    indicators.Push("FileRegexMatch");
+    const std::string path = context.GetTempdirPath() + "/regex-input";
+    ASSERT_EQ(0, mkdir(path.c_str(), 0700));
+    const std::string filename = path + "/selected";
+    std::ofstream(filename).close();
+
+    FileRegexMatchParams params;
+    params.path = path;
+    params.filenamePattern = regex("selected");
+    params.matchPattern = "^$";
+
+    const auto emptyResult = AuditFileRegexMatch(params, indicators, context);
+    ASSERT_TRUE(emptyResult.HasValue());
+    EXPECT_EQ(Status::Compliant, emptyResult.Value());
+
+    std::ofstream(filename) << "key=value";
+    params.matchPattern = "^key=value$";
+    for (const bool wholeFile : {false, true})
+    {
+        params.wholeFile = wholeFile;
+        const auto result = AuditFileRegexMatch(params, indicators, context);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(Status::Compliant, result.Value());
+    }
+}
