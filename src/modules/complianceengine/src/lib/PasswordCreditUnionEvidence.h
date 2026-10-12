@@ -9,6 +9,7 @@
 #include <Result.h>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ComplianceEngine
@@ -23,10 +24,23 @@ struct PasswordCreditRoot
 {
     enum class Outcome
     {
+        Unspecified,
         Complete,
         Absent,
         Stopped,
     };
+
+    PasswordCreditRoot()
+        : outcome(Outcome::Unspecified)
+    {
+    }
+    PasswordCreditRoot(Outcome outcome, std::vector<PasswordCreditItem> selected, std::vector<std::string> exclusions, std::string stopReason)
+        : outcome(outcome),
+          selected(std::move(selected)),
+          exclusions(std::move(exclusions)),
+          stopReason(std::move(stopReason))
+    {
+    }
 
     Outcome outcome;
     std::vector<PasswordCreditItem> selected;

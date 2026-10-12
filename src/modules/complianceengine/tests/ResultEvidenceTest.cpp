@@ -243,6 +243,30 @@ TEST(ResultEvidenceTest, InvalidAbsenceAndMissingReporterAreErrors)
     EXPECT_EQ(EINVAL, ComplianceEngine::EvaluatePasswordCreditUnion(empty, empty, {}).Error().code);
 }
 
+TEST(ResultEvidenceTest, UnmarkedRootCannotProduceACompliantVerdict)
+{
+    PasswordCreditRoot defaultInitialized;
+    defaultInitialized.selected.push_back(Credit("credit", -1));
+    PasswordCreditRoot valueInitialized{};
+    valueInitialized.selected.push_back(Credit("credit", -1));
+    const auto absent = Root(PasswordCreditRoot::Outcome::Absent);
+
+    for (const auto& root : {defaultInitialized, valueInitialized})
+    {
+        std::vector<std::string> diagnostics;
+        const PasswordCreditAssessment unmarked = {root, {}};
+        const auto asMain = Evaluate(unmarked, absent, diagnostics);
+        ASSERT_FALSE(asMain.HasValue());
+        EXPECT_EQ(EINVAL, asMain.Error().code);
+        EXPECT_EQ("Invalid password credit root outcome: main", asMain.Error().message);
+        const auto asDropIn = Evaluate(absent, unmarked, diagnostics);
+        ASSERT_FALSE(asDropIn.HasValue());
+        EXPECT_EQ(EINVAL, asDropIn.Error().code);
+        EXPECT_EQ("Invalid password credit root outcome: drop-in", asDropIn.Error().message);
+        EXPECT_EQ((std::vector<std::string>{"main:selected:credit", "drop-in:selected:credit"}), diagnostics);
+    }
+}
+
 TEST(ResultEvidenceTest, ReportsSelectedExcludedAndObservedWithoutMaskingOriginalError)
 {
     std::vector<std::string> diagnostics;
