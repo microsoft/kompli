@@ -16,7 +16,7 @@ using ComplianceEngine::Optional;
 namespace ComplianceEngine
 {
 
-// Documentation for dbus {ActiveState, LoadState, UnitFileState} possible values and meaning
+// Documentation for dbus {ActiveState, SubState, LoadState, UnitFileState} possible values and meaning
 // https://www.freedesktop.org/wiki/Software/systemd/dbus/
 // man systemd.timer /Unit=
 // https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html
@@ -27,13 +27,14 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
     {
         std::string argName;
         Optional<Pattern> pattern;
+        bool observed = false;
         systemdQueryParams(const char* name)
             : argName(name),
               pattern(Optional<Pattern>())
         {
         }
     };
-    systemdQueryParams queryParams[] = {"ActiveState", "LoadState", "UnitFileState", "Unit"};
+    systemdQueryParams queryParams[] = {"ActiveState", "SubState", "LoadState", "UnitFileState", "Unit"};
     bool argFound = false;
     auto log = context.GetLogHandle();
     std::string systemCtlCmd = "systemctl show ";
@@ -49,24 +50,28 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
     {
         setParamValue(queryParams[0], params.activeState.Value());
     }
+    if (params.subState.HasValue())
+    {
+        setParamValue(queryParams[1], params.subState.Value());
+    }
     if (params.loadState.HasValue())
     {
-        setParamValue(queryParams[1], params.loadState.Value());
+        setParamValue(queryParams[2], params.loadState.Value());
     }
     if (params.unitFileState.HasValue())
     {
-        setParamValue(queryParams[2], params.unitFileState.Value());
+        setParamValue(queryParams[3], params.unitFileState.Value());
     }
     if (params.unit.HasValue())
     {
-        setParamValue(queryParams[3], params.unit.Value());
+        setParamValue(queryParams[4], params.unit.Value());
     }
     systemCtlCmd += "\"" + EscapeForShell(params.unitName) + "\"";
 
     if (!argFound)
     {
-        OsConfigLogError(log, "Error: EnsureSystemdUnit: none of 'activeState loadState UnitFileState' parameters are present");
-        return Error("None of 'activeState loadState UnitFileState' parameters are present");
+        OsConfigLogError(log, "Error: EnsureSystemdUnit: none of 'activeState subState loadState unitFileState unit' parameters are present");
+        return Error("None of 'activeState subState loadState unitFileState unit' parameters are present");
     }
 
     Result<std::string> systemCtlOutput = context.ExecuteCommand(systemCtlCmd);
@@ -74,18 +79,19 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
     {
         OsConfigLogError(log, "Failed to execute systemctl command '%s': %s (code: %d)", systemCtlCmd.c_str(), systemCtlOutput.Error().message.c_str(),
             systemCtlOutput.Error().code);
-        return indicators.NonCompliant("Failed to execute systemctl command " + systemCtlOutput.Error().message);
+        return Error("Failed to execute systemctl command '" + systemCtlCmd + "': " + systemCtlOutput.Error().message, systemCtlOutput.Error().code);
     }
     std::string line;
     std::istringstream sysctlValues(systemCtlOutput.Value());
+    std::string mismatchMessage;
 
     while (std::getline(sysctlValues, line))
     {
         size_t eqSign = line.find('=');
         if (eqSign == std::string::npos)
         {
-            OsConfigLogError(log, "Error: EnsureSystemdUnit: invalid sysctl output, missing '=' sing in %s", line.c_str());
-            return indicators.NonCompliant("invalid sysctl output, missing '='  in  output '" + line + "'");
+            OsConfigLogError(log, "Invalid systemctl output, missing '=' in '%s'", line.c_str());
+            return Error("Invalid systemctl output, missing '=' in '" + line + "'");
         }
         auto name = line.substr(0, eqSign);
         auto value = line.substr(eqSign + 1);
@@ -96,14 +102,23 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
             {
                 continue;
             }
+            if (value.empty())
+            {
+                OsConfigLogError(log, "Empty systemctl property '%s' for unit '%s'", name.c_str(), params.unitName.c_str());
+                return Error("Empty systemctl property '" + name + "' for unit '" + params.unitName + "'");
+            }
+            param.observed = true;
             if (!regex_match(value, param.pattern->GetRegex()))
             {
                 // OsConfigLogDebug(log, "Failed to match systemctl unit name '%s' for name '%s' for pattern '%s'  for value '%s' ",
                 // params.unitName.c_str(), name.c_str(), param.value.c_str(), value.c_str());
                 OsConfigLogDebug(log, "Failed to match systemctl unit name '%s' for name '%s' for pattern '%s'", params.unitName.c_str(), name.c_str(),
                     value.c_str());
-                return indicators.NonCompliant("Failed to match systemctl unit name '" + params.unitName + "' field '" + name + "' value '" + value +
-                                               "' with pattern '" + param.pattern->GetPattern() + "'");
+                if (mismatchMessage.empty())
+                {
+                    mismatchMessage = "Failed to match systemctl unit name '" + params.unitName + "' field '" + name + "' value '" + value +
+                                      "' with pattern '" + param.pattern->GetPattern() + "'";
+                }
             }
             else
             {
@@ -114,9 +129,23 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
         }
         if (matched == false)
         {
-            OsConfigLogError(log, "Error match systemctl unit name '%s' state '%s' not matched any arguments", params.unitName.c_str(), name.c_str());
-            return Status::NonCompliant;
+            OsConfigLogError(log, "Unexpected systemctl property '%s' for unit '%s'", name.c_str(), params.unitName.c_str());
+            return Error("Unexpected systemctl property '" + name + "' for unit '" + params.unitName + "'");
         }
+    }
+
+    for (const auto& param : queryParams)
+    {
+        if (param.pattern.HasValue() && !param.observed)
+        {
+            OsConfigLogError(log, "Missing requested systemctl property '%s' for unit '%s'", param.argName.c_str(), params.unitName.c_str());
+            return Error("Missing requested systemctl property '" + param.argName + "' for unit '" + params.unitName + "'");
+        }
+    }
+
+    if (!mismatchMessage.empty())
+    {
+        return indicators.NonCompliant(mismatchMessage);
     }
 
     OsConfigLogDebug(log, "Success to match systemctl unit name '%s' for name all params ", params.unitName.c_str());

@@ -92,8 +92,8 @@ const char* Bindings<SysctlValueParams>::names[] = {"sysctlName", "value", "runt
 // SystemdConfig.h:55
 const char* Bindings<SystemdConfigValueParams>::names[] = {"parameter", "valueRegex", "op", "value", "file", "block", "dir", "passOnNotFound"};
 
-// SystemdUnitState.h:28
-const char* Bindings<SystemdUnitStateParams>::names[] = {"unitName", "activeState", "loadState", "unitFileState", "unit"};
+// SystemdUnitState.h:31
+const char* Bindings<SystemdUnitStateParams>::names[] = {"unitName", "activeState", "subState", "loadState", "unitFileState", "unit"};
 
 // TestingProcedures.h:15
 const char* Bindings<TestingProcedureParams>::names[] = {"message"};
