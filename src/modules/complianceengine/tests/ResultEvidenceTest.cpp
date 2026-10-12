@@ -5,6 +5,7 @@
 #include <ResultEvidence.h>
 #include <cerrno>
 #include <gtest/gtest.h>
+#include <initializer_list>
 #include <limits>
 #include <utility>
 
@@ -16,7 +17,9 @@ using ComplianceEngine::PasswordCreditAssessment;
 using ComplianceEngine::PasswordCreditItem;
 using ComplianceEngine::PasswordCreditRoot;
 using ComplianceEngine::Result;
-using ComplianceEngine::SelectedValueItem;
+using ComplianceEngine::SelectedItemComparisonEvidence;
+using ComplianceEngine::SelectedItemsEvidence;
+using ComplianceEngine::StateSatisfaction;
 using ComplianceEngine::Status;
 
 namespace
@@ -45,74 +48,103 @@ PasswordCreditItem Credit(const char* identity, long long value)
 {
     return {identity, value};
 }
+
+SelectedItemComparisonEvidence Item(std::initializer_list<Result<StateSatisfaction>> comparisons)
+{
+    SelectedItemComparisonEvidence item;
+    for (const auto& comparison : comparisons)
+    {
+        item.AddComparison(comparison);
+    }
+    return item;
+}
+
+Result<Status> Evaluate(const SelectedItemsEvidence& items)
+{
+    const auto state = items.AllSelectedItemsSatisfied();
+    if (!state.HasValue())
+    {
+        return state.Error();
+    }
+    return (items.HasSelectedItems() && state.Value() == StateSatisfaction::Satisfied) ? Status::Compliant : Status::NonCompliant;
+}
+
+SelectedItemsEvidence Items(std::initializer_list<SelectedItemComparisonEvidence> selected)
+{
+    SelectedItemsEvidence items;
+    for (const auto& item : selected)
+    {
+        items.AddItem(item);
+    }
+    return items;
+}
 } // anonymous namespace
 
 TEST(ResultEvidenceTest, SelectedItemExistenceDoesNotDependOnStateSatisfaction)
 {
     CompletedItemEvidence evidence;
     EXPECT_FALSE(evidence.HasSelectedItems());
-    evidence.AddSelected(false);
+    evidence.AddSelected(StateSatisfaction::NotSatisfied);
     EXPECT_TRUE(evidence.HasSelectedItems());
-    evidence.AddSelected(true);
+    evidence.AddSelected(StateSatisfaction::Satisfied);
     EXPECT_TRUE(evidence.HasSelectedItems());
 }
 
 TEST(ResultEvidenceTest, UniversalStateSatisfactionDoesNotRequireExistence)
 {
     CompletedItemEvidence evidence;
-    EXPECT_TRUE(evidence.AllSelectedStatesSatisfied());
-    evidence.AddSelected(true);
-    evidence.AddSelected(true);
-    EXPECT_TRUE(evidence.AllSelectedStatesSatisfied());
-    evidence.AddSelected(false);
-    EXPECT_FALSE(evidence.AllSelectedStatesSatisfied());
-    evidence.AddSelected(true);
-    EXPECT_FALSE(evidence.AllSelectedStatesSatisfied());
+    EXPECT_EQ(StateSatisfaction::Satisfied, evidence.AllSelectedStatesSatisfied());
+    evidence.AddSelected(StateSatisfaction::Satisfied);
+    evidence.AddSelected(StateSatisfaction::Satisfied);
+    EXPECT_EQ(StateSatisfaction::Satisfied, evidence.AllSelectedStatesSatisfied());
+    evidence.AddSelected(StateSatisfaction::NotSatisfied);
+    EXPECT_EQ(StateSatisfaction::NotSatisfied, evidence.AllSelectedStatesSatisfied());
+    evidence.AddSelected(StateSatisfaction::Satisfied);
+    EXPECT_EQ(StateSatisfaction::NotSatisfied, evidence.AllSelectedStatesSatisfied());
 
     CompletedItemEvidence mismatchFirst;
-    mismatchFirst.AddSelected(false);
-    mismatchFirst.AddSelected(true);
-    EXPECT_FALSE(mismatchFirst.AllSelectedStatesSatisfied());
+    mismatchFirst.AddSelected(StateSatisfaction::NotSatisfied);
+    mismatchFirst.AddSelected(StateSatisfaction::Satisfied);
+    EXPECT_EQ(StateSatisfaction::NotSatisfied, mismatchFirst.AllSelectedStatesSatisfied());
 }
 
 TEST(ResultEvidenceTest, RepeatedValuesWithinOneItemUseAtLeastOneInEitherOrder)
 {
-    const std::vector<SelectedValueItem> matchFirst = {{{true, false, false}}};
-    const std::vector<SelectedValueItem> matchLast = {{{false, false, true}}};
-    EXPECT_EQ(Status::Compliant, ComplianceEngine::EvaluateRepeatedValueItems(matchFirst).Value());
-    EXPECT_EQ(Status::Compliant, ComplianceEngine::EvaluateRepeatedValueItems(matchLast).Value());
-    EXPECT_EQ(Status::NonCompliant, ComplianceEngine::EvaluateRepeatedValueItems(std::vector<SelectedValueItem>{{{false, false}}}).Value());
+    const auto matchFirst = Item({StateSatisfaction::Satisfied, StateSatisfaction::NotSatisfied, StateSatisfaction::NotSatisfied});
+    const auto matchLast = Item({StateSatisfaction::NotSatisfied, StateSatisfaction::NotSatisfied, StateSatisfaction::Satisfied});
+    EXPECT_EQ(Status::Compliant, Evaluate(Items({matchFirst})).Value());
+    EXPECT_EQ(Status::Compliant, Evaluate(Items({matchLast})).Value());
+    EXPECT_EQ(Status::NonCompliant, Evaluate(Items({Item({StateSatisfaction::NotSatisfied, StateSatisfaction::NotSatisfied})})).Value());
 }
 
 TEST(ResultEvidenceTest, DistinctItemsUseAllInEitherOrder)
 {
-    const std::vector<SelectedValueItem> matchFirst = {{{false, true}}, {{false}}};
-    const std::vector<SelectedValueItem> matchLast = {{{false}}, {{true, false}}};
-    EXPECT_EQ(Status::NonCompliant, ComplianceEngine::EvaluateRepeatedValueItems(matchFirst).Value());
-    EXPECT_EQ(Status::NonCompliant, ComplianceEngine::EvaluateRepeatedValueItems(matchLast).Value());
-    EXPECT_EQ(Status::Compliant, ComplianceEngine::EvaluateRepeatedValueItems(std::vector<SelectedValueItem>{{{true}}, {{false, true}}}).Value());
+    const auto matching = Item({StateSatisfaction::NotSatisfied, StateSatisfaction::Satisfied});
+    const auto mismatching = Item({StateSatisfaction::NotSatisfied});
+    EXPECT_EQ(Status::NonCompliant, Evaluate(Items({matching, mismatching})).Value());
+    EXPECT_EQ(Status::NonCompliant, Evaluate(Items({mismatching, matching})).Value());
+    EXPECT_EQ(Status::Compliant, Evaluate(Items({Item({StateSatisfaction::Satisfied}), matching})).Value());
 }
 
 TEST(ResultEvidenceTest, ScalarAndExcludedValueItemsRetainExistencePolicy)
 {
-    const std::vector<SelectedValueItem> selected = {{{true}}};
-    const SelectedValueItem excludedDecoy = {{false}};
-    EXPECT_EQ(Status::Compliant, ComplianceEngine::EvaluateRepeatedValueItems(selected).Value());
-    auto withDecoySelected = selected;
-    withDecoySelected.push_back(excludedDecoy);
-    EXPECT_EQ(Status::NonCompliant, ComplianceEngine::EvaluateRepeatedValueItems(withDecoySelected).Value());
-    EXPECT_EQ(Status::NonCompliant, ComplianceEngine::EvaluateRepeatedValueItems(std::vector<SelectedValueItem>{}).Value());
+    auto selected = Items({Item({StateSatisfaction::Satisfied})});
+    const auto excludedDecoy = Item({StateSatisfaction::NotSatisfied});
+    EXPECT_EQ(Status::Compliant, Evaluate(selected).Value());
+    selected.AddItem(excludedDecoy);
+    EXPECT_EQ(Status::NonCompliant, Evaluate(selected).Value());
+    EXPECT_EQ(Status::NonCompliant, Evaluate(SelectedItemsEvidence{}).Value());
 }
 
 TEST(ResultEvidenceTest, ReachedValueErrorSurvivesMatchingValuesAndItemOrder)
 {
-    const SelectedValueItem matching = {{true, false}};
-    const SelectedValueItem errorAfterMatch = {{true, Error("conversion failed", EIO)}};
-    const SelectedValueItem errorBeforeMatch = {{Error("conversion failed", EIO), true}};
-    for (const auto& items : {std::vector<SelectedValueItem>{matching, errorAfterMatch}, std::vector<SelectedValueItem>{errorBeforeMatch, matching},
-             std::vector<SelectedValueItem>{matching, errorBeforeMatch}, std::vector<SelectedValueItem>{errorAfterMatch, matching}})
+    const auto matching = Item({StateSatisfaction::Satisfied, StateSatisfaction::NotSatisfied});
+    const auto errorAfterMatch = Item({StateSatisfaction::Satisfied, Error("conversion failed", EIO)});
+    const auto errorBeforeMatch = Item({Error("conversion failed", EIO), StateSatisfaction::Satisfied});
+    for (const auto& items :
+        {Items({matching, errorAfterMatch}), Items({errorBeforeMatch, matching}), Items({matching, errorBeforeMatch}), Items({errorAfterMatch, matching})})
     {
-        const auto result = ComplianceEngine::EvaluateRepeatedValueItems(items);
+        const auto result = Evaluate(items);
         ASSERT_FALSE(result.HasValue());
         EXPECT_EQ(EIO, result.Error().code);
         EXPECT_EQ("conversion failed", result.Error().message);
@@ -121,21 +153,99 @@ TEST(ResultEvidenceTest, ReachedValueErrorSurvivesMatchingValuesAndItemOrder)
 
 TEST(ResultEvidenceTest, CollectionErrorAndEmptySelectedItemAreNotVerdicts)
 {
-    const auto collectionError = ComplianceEngine::EvaluateRepeatedValueItems(Error("collection failed", EACCES));
+    SelectedItemsEvidence failedCollection;
+    failedCollection.RecordCollectionError(Error("collection failed", EACCES));
+    const auto collectionError = Evaluate(failedCollection);
     ASSERT_FALSE(collectionError.HasValue());
     EXPECT_EQ(EACCES, collectionError.Error().code);
     EXPECT_EQ("collection failed", collectionError.Error().message);
 
-    const auto emptyItem = ComplianceEngine::EvaluateRepeatedValueItems(std::vector<SelectedValueItem>{{}});
+    const auto emptyItem = Evaluate(Items({SelectedItemComparisonEvidence{}}));
     ASSERT_FALSE(emptyItem.HasValue());
     EXPECT_EQ(EINVAL, emptyItem.Error().code);
     EXPECT_NE(std::string::npos, emptyItem.Error().message.find("no comparison results"));
 
-    const std::vector<SelectedValueItem> emptyThenError = {{}, {{true, Error("read failed", EIO)}}};
-    const auto reachedError = ComplianceEngine::EvaluateRepeatedValueItems(emptyThenError);
+    const auto emptyThenError = Items({SelectedItemComparisonEvidence{}, Item({StateSatisfaction::Satisfied, Error("read failed", EIO)})});
+    const auto reachedError = Evaluate(emptyThenError);
     ASSERT_FALSE(reachedError.HasValue());
     EXPECT_EQ(EIO, reachedError.Error().code);
     EXPECT_EQ("read failed", reachedError.Error().message);
+}
+
+TEST(ResultEvidenceTest, ItemComparisonStateHasExplicitSatisfactionAndEmptyError)
+{
+    SelectedItemComparisonEvidence item;
+    EXPECT_FALSE(item.HasComparisons());
+    const auto empty = item.AnyComparisonSatisfied();
+    ASSERT_FALSE(empty.HasValue());
+    EXPECT_EQ(EINVAL, empty.Error().code);
+    item.AddComparison(StateSatisfaction::NotSatisfied);
+    EXPECT_TRUE(item.HasComparisons());
+    EXPECT_EQ(StateSatisfaction::NotSatisfied, item.AnyComparisonSatisfied().Value());
+    item.AddComparison(StateSatisfaction::Satisfied);
+    EXPECT_EQ(StateSatisfaction::Satisfied, item.AnyComparisonSatisfied().Value());
+    item.AddComparison(StateSatisfaction::NotSatisfied);
+    EXPECT_EQ(StateSatisfaction::Satisfied, item.AnyComparisonSatisfied().Value());
+}
+
+TEST(ResultEvidenceTest, ComparisonErrorsDoNotInterruptAddingAndFirstErrorIsRetained)
+{
+    SelectedItemComparisonEvidence item;
+    size_t added = 0;
+    for (const auto& comparison : {Result<StateSatisfaction>(Error("first failure", EIO)), Result<StateSatisfaction>(StateSatisfaction::Satisfied),
+             Result<StateSatisfaction>(Error("later failure", EACCES)), Result<StateSatisfaction>(StateSatisfaction::NotSatisfied)})
+    {
+        item.AddComparison(comparison);
+        ++added;
+    }
+    EXPECT_EQ(4U, added);
+    const auto state = item.AnyComparisonSatisfied();
+    ASSERT_FALSE(state.HasValue());
+    EXPECT_EQ(EIO, state.Error().code);
+    EXPECT_EQ("first failure", state.Error().message);
+
+    SelectedItemsEvidence items;
+    items.AddItem(item);
+    items.AddItem(Item({StateSatisfaction::Satisfied}));
+    items.RecordCollectionError(Error("later collection failure", E2BIG));
+    items.AddItem(Item({Error("later item failure", ENOENT)}));
+    EXPECT_TRUE(items.HasSelectedItems());
+    const auto result = items.AllSelectedItemsSatisfied();
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EIO, result.Error().code);
+    EXPECT_EQ("first failure", result.Error().message);
+}
+
+TEST(ResultEvidenceTest, CollectionErrorDoesNotImplyExistenceAndSurvivesLaterItems)
+{
+    SelectedItemsEvidence items;
+    EXPECT_FALSE(items.HasSelectedItems());
+    EXPECT_EQ(StateSatisfaction::Satisfied, items.AllSelectedItemsSatisfied().Value());
+    items.RecordCollectionError(Error("collection failed", EACCES));
+    EXPECT_FALSE(items.HasSelectedItems());
+    items.AddItem(Item({StateSatisfaction::Satisfied}));
+    items.AddItem(Item({Error("comparison failed", EIO)}));
+    EXPECT_TRUE(items.HasSelectedItems());
+    const auto result = items.AllSelectedItemsSatisfied();
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EACCES, result.Error().code);
+    EXPECT_EQ("collection failed", result.Error().message);
+}
+
+TEST(ResultEvidenceTest, EmptyItemValidationDoesNotMaskLaterCollectionErrors)
+{
+    SelectedItemsEvidence items;
+    items.AddItem(SelectedItemComparisonEvidence{});
+    EXPECT_TRUE(items.HasSelectedItems());
+    const auto invalid = items.AllSelectedItemsSatisfied();
+    ASSERT_FALSE(invalid.HasValue());
+    EXPECT_EQ(EINVAL, invalid.Error().code);
+    items.RecordCollectionError(Error("collection failed", EIO));
+    items.AddItem(Item({StateSatisfaction::Satisfied}));
+    const auto result = items.AllSelectedItemsSatisfied();
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EIO, result.Error().code);
+    EXPECT_EQ("collection failed", result.Error().message);
 }
 
 TEST(ResultEvidenceTest, CompleteEmptyAndAbsentRootsNeedUnionWideExistence)

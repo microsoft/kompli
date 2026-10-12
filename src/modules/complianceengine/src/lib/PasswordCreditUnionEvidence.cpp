@@ -92,7 +92,7 @@ Result<Status> EvaluatePasswordCreditUnion(const PasswordCreditAssessment& mainR
         {
             if (!item.value.HasValue())
             {
-                combined.AddSelected(false);
+                combined.AddSelected(StateSatisfaction::NotSatisfied);
                 continue;
             }
             const auto matches = CompareTyped(item.value.Value(), 0LL, TypedComparisonOperation::LessThan);
@@ -102,10 +102,11 @@ Result<Status> EvaluatePasswordCreditUnion(const PasswordCreditAssessment& mainR
                 ReportEvidence(dropInRoot, CreditRootLocation::DropIn, reportDiagnostic);
                 return matches.Error();
             }
-            combined.AddSelected(matches.Value());
+            combined.AddSelected(matches.Value() ? StateSatisfaction::Satisfied : StateSatisfaction::NotSatisfied);
         }
     }
-    const auto result = (combined.HasSelectedItems() && combined.AllSelectedStatesSatisfied()) ? Status::Compliant : Status::NonCompliant;
+    const auto result = (combined.HasSelectedItems() && combined.AllSelectedStatesSatisfied() == StateSatisfaction::Satisfied) ? Status::Compliant :
+                                                                                                                                 Status::NonCompliant;
     ReportEvidence(mainRoot, CreditRootLocation::Main, reportDiagnostic);
     ReportEvidence(dropInRoot, CreditRootLocation::DropIn, reportDiagnostic);
     return result;
