@@ -183,10 +183,12 @@ add_library(complianceenginelib STATIC
     LuaProcedures.cpp
     NetworkTools.cpp
     PasswordEntriesIterator.cpp
+    PasswordCreditUnionEvidence.cpp
     Pattern.cpp
     Procedure.cpp
     ProcedureMap.cpp
     Result.cpp
+    ResultEvidence.cpp
     StringTools.cpp
     SystemdCatConfig.cpp
     Telemetry.cpp
