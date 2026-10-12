@@ -6,10 +6,13 @@
 
 namespace ComplianceEngine
 {
-void CompletedItemEvidence::AddSelected(bool stateSatisfied)
+void CompletedItemEvidence::AddSelected(StateSatisfaction state)
 {
     mHasSelected = true;
-    mAllSatisfied = mAllSatisfied && stateSatisfied;
+    if (state == StateSatisfaction::NotSatisfied)
+    {
+        mAllSatisfied = StateSatisfaction::NotSatisfied;
+    }
 }
 
 bool CompletedItemEvidence::HasSelectedItems() const
@@ -17,43 +20,88 @@ bool CompletedItemEvidence::HasSelectedItems() const
     return mHasSelected;
 }
 
-bool CompletedItemEvidence::AllSelectedStatesSatisfied() const
+StateSatisfaction CompletedItemEvidence::AllSelectedStatesSatisfied() const
 {
     return mAllSatisfied;
 }
 
-Result<Status> EvaluateRepeatedValueItems(const Result<std::vector<SelectedValueItem>>& selectedItems)
+void SelectedItemComparisonEvidence::AddComparison(const Result<StateSatisfaction>& comparison)
 {
-    if (!selectedItems.HasValue())
+    mHasComparisons = true;
+    if (!mAnySatisfied.HasValue())
     {
-        return selectedItems.Error();
+        return;
     }
+    if (!comparison.HasValue())
+    {
+        mAnySatisfied = comparison.Error();
+    }
+    else if (comparison.Value() == StateSatisfaction::Satisfied)
+    {
+        mAnySatisfied = StateSatisfaction::Satisfied;
+    }
+}
 
-    for (const auto& item : selectedItems.Value())
-    {
-        for (const auto& value : item.values)
-        {
-            if (!value.HasValue())
-            {
-                return value.Error();
-            }
-        }
-    }
+bool SelectedItemComparisonEvidence::HasComparisons() const
+{
+    return mHasComparisons;
+}
 
-    CompletedItemEvidence evidence;
-    for (const auto& item : selectedItems.Value())
+Result<StateSatisfaction> SelectedItemComparisonEvidence::AnyComparisonSatisfied() const
+{
+    if (!mHasComparisons)
     {
-        if (item.values.empty())
-        {
-            return Error("Selected value item has no comparison results", EINVAL);
-        }
-        bool anyValueSatisfied = false;
-        for (const auto& value : item.values)
-        {
-            anyValueSatisfied = anyValueSatisfied || value.Value();
-        }
-        evidence.AddSelected(anyValueSatisfied);
+        return Error("Selected value item has no comparison results", EINVAL);
     }
-    return (evidence.HasSelectedItems() && evidence.AllSelectedStatesSatisfied()) ? Status::Compliant : Status::NonCompliant;
+    return mAnySatisfied;
+}
+
+void SelectedItemsEvidence::AddItem(const SelectedItemComparisonEvidence& item)
+{
+    if (!item.HasComparisons())
+    {
+        mHasEmptyItem = true;
+        mItems.AddSelected(StateSatisfaction::NotSatisfied);
+        return;
+    }
+    const auto state = item.AnyComparisonSatisfied();
+    if (!state.HasValue())
+    {
+        RecordError(state.Error());
+        mItems.AddSelected(StateSatisfaction::NotSatisfied);
+        return;
+    }
+    mItems.AddSelected(state.Value());
+}
+
+void SelectedItemsEvidence::RecordCollectionError(const Error& error)
+{
+    RecordError(error);
+}
+
+void SelectedItemsEvidence::RecordError(const Error& error)
+{
+    if (!mError.HasValue())
+    {
+        mError = error;
+    }
+}
+
+bool SelectedItemsEvidence::HasSelectedItems() const
+{
+    return mItems.HasSelectedItems();
+}
+
+Result<StateSatisfaction> SelectedItemsEvidence::AllSelectedItemsSatisfied() const
+{
+    if (mError.HasValue())
+    {
+        return mError.Value();
+    }
+    if (mHasEmptyItem)
+    {
+        return Error("Selected value item has no comparison results", EINVAL);
+    }
+    return mItems.AllSelectedStatesSatisfied();
 }
 } // namespace ComplianceEngine
