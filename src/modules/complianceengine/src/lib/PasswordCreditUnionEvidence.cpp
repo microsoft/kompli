@@ -105,7 +105,7 @@ Result<Status> EvaluatePasswordCreditUnion(const PasswordCreditAssessment& mainR
             combined.AddSelected(matches.Value());
         }
     }
-    const auto result = combined.EvaluateAtLeastOneAll();
+    const auto result = (combined.HasSelectedItems() && combined.AllSelectedStatesSatisfied()) ? Status::Compliant : Status::NonCompliant;
     ReportEvidence(mainRoot, CreditRootLocation::Main, reportDiagnostic);
     ReportEvidence(dropInRoot, CreditRootLocation::DropIn, reportDiagnostic);
     return result;

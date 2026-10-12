@@ -12,9 +12,14 @@ void CompletedItemEvidence::AddSelected(bool stateSatisfied)
     mAllSatisfied = mAllSatisfied && stateSatisfied;
 }
 
-Result<Status> CompletedItemEvidence::EvaluateAtLeastOneAll() const
+bool CompletedItemEvidence::HasSelectedItems() const
 {
-    return (mHasSelected && mAllSatisfied) ? Status::Compliant : Status::NonCompliant;
+    return mHasSelected;
+}
+
+bool CompletedItemEvidence::AllSelectedStatesSatisfied() const
+{
+    return mAllSatisfied;
 }
 
 Result<Status> EvaluateRepeatedValueItems(const Result<std::vector<SelectedValueItem>>& selectedItems)
@@ -49,6 +54,6 @@ Result<Status> EvaluateRepeatedValueItems(const Result<std::vector<SelectedValue
         }
         evidence.AddSelected(anyValueSatisfied);
     }
-    return evidence.EvaluateAtLeastOneAll();
+    return (evidence.HasSelectedItems() && evidence.AllSelectedStatesSatisfied()) ? Status::Compliant : Status::NonCompliant;
 }
 } // namespace ComplianceEngine
