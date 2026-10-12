@@ -14,7 +14,9 @@ class CompletedItemEvidence
 {
 public:
     void AddSelected(bool stateSatisfied);
-    Result<Status> EvaluateAtLeastOneAll() const;
+    bool HasSelectedItems() const;
+    // True for empty evidence; callers apply existence policy separately.
+    bool AllSelectedStatesSatisfied() const;
 
 private:
     bool mHasSelected = false;

@@ -47,18 +47,32 @@ PasswordCreditItem Credit(const char* identity, long long value)
 }
 } // anonymous namespace
 
-TEST(ResultEvidenceTest, CompleteItemExistenceAndUniversalState)
+TEST(ResultEvidenceTest, SelectedItemExistenceDoesNotDependOnStateSatisfaction)
 {
-    CompletedItemEvidence empty;
-    EXPECT_EQ(Status::NonCompliant, empty.EvaluateAtLeastOneAll().Value());
-    CompletedItemEvidence all;
-    all.AddSelected(true);
-    all.AddSelected(true);
-    EXPECT_EQ(Status::Compliant, all.EvaluateAtLeastOneAll().Value());
-    all.AddSelected(false);
-    EXPECT_EQ(Status::NonCompliant, all.EvaluateAtLeastOneAll().Value());
-    all.AddSelected(true);
-    EXPECT_EQ(Status::NonCompliant, all.EvaluateAtLeastOneAll().Value());
+    CompletedItemEvidence evidence;
+    EXPECT_FALSE(evidence.HasSelectedItems());
+    evidence.AddSelected(false);
+    EXPECT_TRUE(evidence.HasSelectedItems());
+    evidence.AddSelected(true);
+    EXPECT_TRUE(evidence.HasSelectedItems());
+}
+
+TEST(ResultEvidenceTest, UniversalStateSatisfactionDoesNotRequireExistence)
+{
+    CompletedItemEvidence evidence;
+    EXPECT_TRUE(evidence.AllSelectedStatesSatisfied());
+    evidence.AddSelected(true);
+    evidence.AddSelected(true);
+    EXPECT_TRUE(evidence.AllSelectedStatesSatisfied());
+    evidence.AddSelected(false);
+    EXPECT_FALSE(evidence.AllSelectedStatesSatisfied());
+    evidence.AddSelected(true);
+    EXPECT_FALSE(evidence.AllSelectedStatesSatisfied());
+
+    CompletedItemEvidence mismatchFirst;
+    mismatchFirst.AddSelected(false);
+    mismatchFirst.AddSelected(true);
+    EXPECT_FALSE(mismatchFirst.AllSelectedStatesSatisfied());
 }
 
 TEST(ResultEvidenceTest, RepeatedValuesWithinOneItemUseAtLeastOneInEitherOrder)
