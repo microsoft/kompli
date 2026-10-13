@@ -70,7 +70,8 @@ enum class CreditEvidenceKind
 
 using CreditDiagnosticReporter = std::function<void(CreditRootLocation, CreditEvidenceKind, const std::string&)>;
 
-// The reporter must emit incrementally or charge any retained copies to the producer's budget.
+// The reporter must emit incrementally or charge retained copies to the producer's budget.
+// Reporter exceptions become evaluation errors; an already-reached assessment error takes precedence.
 Result<Status> EvaluatePasswordCreditUnion(const PasswordCreditAssessment& mainRoot, const PasswordCreditAssessment& dropInRoot,
     const CreditDiagnosticReporter& reportDiagnostic);
 } // namespace ComplianceEngine

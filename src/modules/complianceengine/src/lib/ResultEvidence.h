@@ -5,7 +5,6 @@
 #define COMPLIANCEENGINE_RESULT_EVIDENCE_H
 
 #include <MmiResults.h>
-#include <Optional.h>
 #include <Result.h>
 
 namespace ComplianceEngine
@@ -19,14 +18,15 @@ enum class StateSatisfaction
 class CompletedItemEvidence
 {
 public:
-    void AddSelected(StateSatisfaction state);
+    void AddSelected(const Result<StateSatisfaction>& state);
+    void RecordError(const Error& error);
     bool HasSelectedItems() const;
     // Empty evidence is Satisfied; callers apply existence policy separately.
-    StateSatisfaction AllSelectedStatesSatisfied() const;
+    Result<StateSatisfaction> AllSelectedStatesSatisfied() const;
 
 private:
     bool mHasSelected = false;
-    StateSatisfaction mAllSatisfied = StateSatisfaction::Satisfied;
+    Result<StateSatisfaction> mAllSatisfied = StateSatisfaction::Satisfied;
 };
 
 class SelectedItemComparisonEvidence
@@ -54,9 +54,7 @@ public:
     Result<StateSatisfaction> AllSelectedItemsSatisfied() const;
 
 private:
-    void RecordError(const Error& error);
     CompletedItemEvidence mItems;
-    Optional<Error> mError;
     bool mHasEmptyItem = false;
 };
 } // namespace ComplianceEngine

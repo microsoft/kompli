@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 #include <initializer_list>
 #include <limits>
+#include <stdexcept>
 #include <utility>
 
 using ComplianceEngine::CompletedItemEvidence;
@@ -93,19 +94,79 @@ TEST(ResultEvidenceTest, SelectedItemExistenceDoesNotDependOnStateSatisfaction)
 TEST(ResultEvidenceTest, UniversalStateSatisfactionDoesNotRequireExistence)
 {
     CompletedItemEvidence evidence;
-    EXPECT_EQ(StateSatisfaction::Satisfied, evidence.AllSelectedStatesSatisfied());
+    auto state = evidence.AllSelectedStatesSatisfied();
+    ASSERT_TRUE(state.HasValue());
+    EXPECT_EQ(StateSatisfaction::Satisfied, state.Value());
     evidence.AddSelected(StateSatisfaction::Satisfied);
     evidence.AddSelected(StateSatisfaction::Satisfied);
-    EXPECT_EQ(StateSatisfaction::Satisfied, evidence.AllSelectedStatesSatisfied());
+    state = evidence.AllSelectedStatesSatisfied();
+    ASSERT_TRUE(state.HasValue());
+    EXPECT_EQ(StateSatisfaction::Satisfied, state.Value());
     evidence.AddSelected(StateSatisfaction::NotSatisfied);
-    EXPECT_EQ(StateSatisfaction::NotSatisfied, evidence.AllSelectedStatesSatisfied());
+    state = evidence.AllSelectedStatesSatisfied();
+    ASSERT_TRUE(state.HasValue());
+    EXPECT_EQ(StateSatisfaction::NotSatisfied, state.Value());
     evidence.AddSelected(StateSatisfaction::Satisfied);
-    EXPECT_EQ(StateSatisfaction::NotSatisfied, evidence.AllSelectedStatesSatisfied());
+    state = evidence.AllSelectedStatesSatisfied();
+    ASSERT_TRUE(state.HasValue());
+    EXPECT_EQ(StateSatisfaction::NotSatisfied, state.Value());
 
     CompletedItemEvidence mismatchFirst;
     mismatchFirst.AddSelected(StateSatisfaction::NotSatisfied);
     mismatchFirst.AddSelected(StateSatisfaction::Satisfied);
-    EXPECT_EQ(StateSatisfaction::NotSatisfied, mismatchFirst.AllSelectedStatesSatisfied());
+    state = mismatchFirst.AllSelectedStatesSatisfied();
+    ASSERT_TRUE(state.HasValue());
+    EXPECT_EQ(StateSatisfaction::NotSatisfied, state.Value());
+}
+
+TEST(ResultEvidenceTest, InvalidStateSatisfactionIsAnErrorAtEveryAccumulatorBoundary)
+{
+    const auto invalid = static_cast<StateSatisfaction>(2);
+
+    CompletedItemEvidence scalar;
+    scalar.AddSelected(invalid);
+    auto state = scalar.AllSelectedStatesSatisfied();
+    ASSERT_FALSE(state.HasValue());
+    EXPECT_EQ(EINVAL, state.Error().code);
+
+    CompletedItemEvidence afterMatch;
+    afterMatch.AddSelected(StateSatisfaction::Satisfied);
+    afterMatch.AddSelected(invalid);
+    state = afterMatch.AllSelectedStatesSatisfied();
+    ASSERT_FALSE(state.HasValue());
+    EXPECT_EQ(EINVAL, state.Error().code);
+
+    CompletedItemEvidence afterMismatch;
+    afterMismatch.AddSelected(StateSatisfaction::NotSatisfied);
+    afterMismatch.AddSelected(invalid);
+    state = afterMismatch.AllSelectedStatesSatisfied();
+    ASSERT_FALSE(state.HasValue());
+    EXPECT_EQ(EINVAL, state.Error().code);
+
+    CompletedItemEvidence errorFirst;
+    errorFirst.AddSelected(Error("first failure", EIO));
+    errorFirst.AddSelected(invalid);
+    state = errorFirst.AllSelectedStatesSatisfied();
+    ASSERT_FALSE(state.HasValue());
+    EXPECT_EQ(EIO, state.Error().code);
+    EXPECT_EQ("first failure", state.Error().message);
+
+    for (const auto& item : {Item({StateSatisfaction::Satisfied, invalid}), Item({StateSatisfaction::NotSatisfied, invalid})})
+    {
+        const auto itemState = item.AnyComparisonSatisfied();
+        ASSERT_FALSE(itemState.HasValue());
+        EXPECT_EQ(EINVAL, itemState.Error().code);
+
+        const auto result = Evaluate(Items({item}));
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EINVAL, result.Error().code);
+    }
+
+    const auto comparisonErrorFirst = Item({Error("first comparison failure", EACCES), invalid});
+    const auto comparisonState = comparisonErrorFirst.AnyComparisonSatisfied();
+    ASSERT_FALSE(comparisonState.HasValue());
+    EXPECT_EQ(EACCES, comparisonState.Error().code);
+    EXPECT_EQ("first comparison failure", comparisonState.Error().message);
 }
 
 TEST(ResultEvidenceTest, RepeatedValuesWithinOneItemUseAtLeastOneInEitherOrder)
@@ -423,6 +484,23 @@ TEST(ResultEvidenceTest, InvalidAbsenceAndMissingReporterAreErrors)
     const auto missingReporter = ComplianceEngine::EvaluatePasswordCreditUnion(empty, empty, {});
     ASSERT_FALSE(missingReporter.HasValue());
     EXPECT_EQ(EINVAL, missingReporter.Error().code);
+}
+
+TEST(ResultEvidenceTest, ReporterExceptionsAreErrorsWithoutMaskingAssessmentErrors)
+{
+    const auto throwingReporter = [](CreditRootLocation, CreditEvidenceKind, const std::string&) { throw std::runtime_error("report failed"); };
+    const auto passing = Root(PasswordCreditRoot::Outcome::Complete, {Credit("credit", -1)});
+    const auto empty = Root(PasswordCreditRoot::Outcome::Complete);
+    const auto reportFailure = ComplianceEngine::EvaluatePasswordCreditUnion(passing, empty, throwingReporter);
+    ASSERT_FALSE(reportFailure.HasValue());
+    EXPECT_EQ(EIO, reportFailure.Error().code);
+    EXPECT_NE(std::string::npos, reportFailure.Error().message.find("reporter"));
+
+    const auto failed = FailedRoot("read failed", EACCES, {"observed-before-error"});
+    const auto assessmentFailure = ComplianceEngine::EvaluatePasswordCreditUnion(failed, passing, throwingReporter);
+    ASSERT_FALSE(assessmentFailure.HasValue());
+    EXPECT_EQ(EACCES, assessmentFailure.Error().code);
+    EXPECT_EQ("read failed", assessmentFailure.Error().message);
 }
 
 TEST(ResultEvidenceTest, NonStoppedRootsWithStopReasonsHaveOutcomeNeutralDiagnostics)
