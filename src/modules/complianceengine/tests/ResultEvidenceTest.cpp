@@ -367,6 +367,24 @@ TEST(ResultEvidenceTest, InvalidAbsenceAndMissingReporterAreErrors)
     EXPECT_EQ(EINVAL, ComplianceEngine::EvaluatePasswordCreditUnion(empty, empty, {}).Error().code);
 }
 
+TEST(ResultEvidenceTest, NonStoppedRootsWithStopReasonsHaveOutcomeNeutralDiagnostics)
+{
+    const auto empty = Root(PasswordCreditRoot::Outcome::Complete);
+    for (const auto outcome : {PasswordCreditRoot::Outcome::Complete, PasswordCreditRoot::Outcome::Absent})
+    {
+        std::vector<std::string> diagnostics;
+        const auto invalid = Root(outcome, {}, {}, "unexpected stop reason");
+        const auto main = Evaluate(invalid, empty, diagnostics);
+        ASSERT_FALSE(main.HasValue());
+        EXPECT_EQ(EINVAL, main.Error().code);
+        EXPECT_EQ("Non-stopped password credit root contains a stop reason: main", main.Error().message);
+        const auto dropIn = Evaluate(empty, invalid, diagnostics);
+        ASSERT_FALSE(dropIn.HasValue());
+        EXPECT_EQ(EINVAL, dropIn.Error().code);
+        EXPECT_EQ("Non-stopped password credit root contains a stop reason: drop-in", dropIn.Error().message);
+    }
+}
+
 TEST(ResultEvidenceTest, UnmarkedRootCannotProduceACompliantVerdict)
 {
     PasswordCreditRoot defaultInitialized;

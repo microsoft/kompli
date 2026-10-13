@@ -51,7 +51,7 @@ Result<Status> ValidateRoot(const PasswordCreditAssessment& root, const char* na
     }
     if ((!evidence.stopReason.empty()) && (evidence.outcome != PasswordCreditRoot::Outcome::Stopped))
     {
-        return Error(std::string("Completed password credit root contains a stop reason: ") + name, EINVAL);
+        return Error(std::string("Non-stopped password credit root contains a stop reason: ") + name, EINVAL);
     }
     return Status::Compliant;
 }
