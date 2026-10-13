@@ -296,3 +296,10 @@ TEST_F(DistributionInfoTest, InalidOverrideFile_8)
     EXPECT_EQ(result.Error().code, EINVAL);
     EXPECT_EQ(result.Error().message, "Unexpected space in a key");
 }
+
+TEST_F(DistributionInfoTest, IdentifiesMetaDistributions)
+{
+    EXPECT_TRUE(DistributionInfo::isMetaDistribution(ComplianceEngine::LinuxDistribution::AKS));
+    EXPECT_TRUE(DistributionInfo::isMetaDistribution(ComplianceEngine::LinuxDistribution::Kubernetes));
+    EXPECT_FALSE(DistributionInfo::isMetaDistribution(ComplianceEngine::LinuxDistribution::Ubuntu));
+}

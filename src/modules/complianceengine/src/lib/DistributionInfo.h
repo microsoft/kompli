@@ -29,6 +29,7 @@ enum class LinuxDistribution
     AmazonLinux,
     AlmaLinux,
     RockyLinux,
+    Kubernetes, // Generic Kubernetes meta distribution
     AKS, // Azure Kubernetes Service
 };
 
@@ -58,6 +59,7 @@ struct DistributionInfo
     static Result<DistributionInfo> ParseEtcOsRelease(const std::string& etcOsReleasePath);
     static Result<DistributionInfo> ParseOverrideFile(const std::string& overrideFilePath);
     static Result<LinuxDistribution> ParseLinuxDistribution(const std::string& distributionStr);
+    static bool isMetaDistribution(const LinuxDistribution distribution);
 };
 
 } // namespace ComplianceEngine

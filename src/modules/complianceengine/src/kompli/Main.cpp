@@ -307,8 +307,14 @@ int main(int argc, char* argv[])
         return 1;
     }
     const auto& document = documentResult.Value();
-
-    if (!document.benchmarkInfo.Match(distributionInfo))
+    const auto& benchmark = document.benchmarkInfo;
+    const bool isMetaDistribution = DistributionInfo::isMetaDistribution(benchmark.distribution);
+    if (isMetaDistribution)
+    {
+        OsConfigLogInfo(
+            logHandle.get(), "This benchmark distribution check is disabled for this distribution %s", std::to_string(benchmark.distribution).c_str());
+    }
+    if (!isMetaDistribution && !document.benchmarkInfo.Match(distributionInfo))
     {
         OsConfigLogError(logHandle.get(), "Benchmark is not applicable for the current distribution");
         OsConfigLogError(logHandle.get(), "Current system identification: %s", std::to_string(distributionInfo).c_str());

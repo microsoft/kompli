@@ -198,6 +198,20 @@ TEST_F(ComplianceEngineTest, ValidatePayload_3)
     ASSERT_EQ(0, ComplianceEngineCheckApplicability(mHandle, payloadKey.c_str(), nullptr));
 }
 
+TEST_F(ComplianceEngineTest, ValidatePayload_DisregardsDistributionInfoForMetaDistribution)
+{
+    auto& engine = *reinterpret_cast<ComplianceEngine::Engine*>(mHandle);
+    const auto& osRelease = engine.GetDistributionInfo();
+    ASSERT_TRUE(osRelease.HasValue());
+
+    const auto metaDistribution = ComplianceEngine::LinuxDistribution::AKS == osRelease->distribution
+        ? ComplianceEngine::LinuxDistribution::Kubernetes
+        : ComplianceEngine::LinuxDistribution::AKS;
+    const std::string payloadKey = "/cis/" + to_string(metaDistribution) + "/non-matching-version/v1.1.1/x/y/z";
+
+    EXPECT_EQ(0, ComplianceEngineCheckApplicability(mHandle, payloadKey.c_str(), nullptr));
+}
+
 TEST_F(ComplianceEngineTest, ValidatePayload_OverrideFile)
 {
     if (0 != getuid())

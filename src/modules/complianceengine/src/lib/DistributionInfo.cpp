@@ -43,6 +43,7 @@ const map<string, LinuxDistribution>& GetDistributionMap()
         {"sles", LinuxDistribution::SUSE}, {"ol", LinuxDistribution::OracleLinux}, {"mariner", LinuxDistribution::Mariner},
         {"debian", LinuxDistribution::Debian}, {"azurelinux", LinuxDistribution::AzureLinux}, {"amzn", LinuxDistribution::AmazonLinux},
         {"almalinux", LinuxDistribution::AlmaLinux}, {"rocky", LinuxDistribution::RockyLinux}, {"aks", LinuxDistribution::AKS},
+        {"kubernetes", LinuxDistribution::Kubernetes}
         // Add more distributions as needed
     };
     return sDistributionMap;
@@ -358,6 +359,11 @@ Result<DistributionInfo> DistributionInfo::ParseOverrideFile(const string& overr
     result.version = std::move(it->second);
 
     return result;
+}
+
+bool DistributionInfo::isMetaDistribution(const LinuxDistribution distribution)
+{
+    return (LinuxDistribution::Kubernetes == distribution) || (LinuxDistribution::AKS == distribution);
 }
 
 } // namespace ComplianceEngine

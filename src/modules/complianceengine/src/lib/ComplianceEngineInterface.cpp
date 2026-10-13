@@ -475,7 +475,14 @@ int ComplianceEngineCheckApplicability(MMI_HANDLE clientSession, const char* pay
         return EINVAL;
     }
 
-    if (!benchmark->Match(distributionInfo.Value()))
+    const bool isMetaDistribution = DistributionInfo::isMetaDistribution(benchmark.Value().distribution);
+    if (isMetaDistribution)
+    {
+        OsConfigLogInfo(
+            log, "This benchmark distribution check is disabled for this distribution %s", std::to_string(benchmark.Value().distribution).c_str());
+    }
+
+    if (!isMetaDistribution && !benchmark->Match(distributionInfo.Value()))
     {
         OsConfigLogInfo(log, "This benchmark is not applicable for the current distribution");
         OsConfigLogInfo(log, "Current system identification: %s", std::to_string(distributionInfo.Value()).c_str());
