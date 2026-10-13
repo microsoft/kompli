@@ -112,28 +112,46 @@ TEST(ResultEvidenceTest, RepeatedValuesWithinOneItemUseAtLeastOneInEitherOrder)
 {
     const auto matchFirst = Item({StateSatisfaction::Satisfied, StateSatisfaction::NotSatisfied, StateSatisfaction::NotSatisfied});
     const auto matchLast = Item({StateSatisfaction::NotSatisfied, StateSatisfaction::NotSatisfied, StateSatisfaction::Satisfied});
-    EXPECT_EQ(Status::Compliant, Evaluate(Items({matchFirst})).Value());
-    EXPECT_EQ(Status::Compliant, Evaluate(Items({matchLast})).Value());
-    EXPECT_EQ(Status::NonCompliant, Evaluate(Items({Item({StateSatisfaction::NotSatisfied, StateSatisfaction::NotSatisfied})})).Value());
+    const auto first = Evaluate(Items({matchFirst}));
+    ASSERT_TRUE(first.HasValue());
+    EXPECT_EQ(Status::Compliant, first.Value());
+    const auto last = Evaluate(Items({matchLast}));
+    ASSERT_TRUE(last.HasValue());
+    EXPECT_EQ(Status::Compliant, last.Value());
+    const auto mismatching = Evaluate(Items({Item({StateSatisfaction::NotSatisfied, StateSatisfaction::NotSatisfied})}));
+    ASSERT_TRUE(mismatching.HasValue());
+    EXPECT_EQ(Status::NonCompliant, mismatching.Value());
 }
 
 TEST(ResultEvidenceTest, DistinctItemsUseAllInEitherOrder)
 {
     const auto matching = Item({StateSatisfaction::NotSatisfied, StateSatisfaction::Satisfied});
     const auto mismatching = Item({StateSatisfaction::NotSatisfied});
-    EXPECT_EQ(Status::NonCompliant, Evaluate(Items({matching, mismatching})).Value());
-    EXPECT_EQ(Status::NonCompliant, Evaluate(Items({mismatching, matching})).Value());
-    EXPECT_EQ(Status::Compliant, Evaluate(Items({Item({StateSatisfaction::Satisfied}), matching})).Value());
+    const auto matchFirst = Evaluate(Items({matching, mismatching}));
+    ASSERT_TRUE(matchFirst.HasValue());
+    EXPECT_EQ(Status::NonCompliant, matchFirst.Value());
+    const auto matchLast = Evaluate(Items({mismatching, matching}));
+    ASSERT_TRUE(matchLast.HasValue());
+    EXPECT_EQ(Status::NonCompliant, matchLast.Value());
+    const auto allMatching = Evaluate(Items({Item({StateSatisfaction::Satisfied}), matching}));
+    ASSERT_TRUE(allMatching.HasValue());
+    EXPECT_EQ(Status::Compliant, allMatching.Value());
 }
 
 TEST(ResultEvidenceTest, ScalarAndExcludedValueItemsRetainExistencePolicy)
 {
     auto selected = Items({Item({StateSatisfaction::Satisfied})});
     const auto excludedDecoy = Item({StateSatisfaction::NotSatisfied});
-    EXPECT_EQ(Status::Compliant, Evaluate(selected).Value());
+    const auto withoutDecoy = Evaluate(selected);
+    ASSERT_TRUE(withoutDecoy.HasValue());
+    EXPECT_EQ(Status::Compliant, withoutDecoy.Value());
     selected.AddItem(excludedDecoy);
-    EXPECT_EQ(Status::NonCompliant, Evaluate(selected).Value());
-    EXPECT_EQ(Status::NonCompliant, Evaluate(SelectedItemsEvidence{}).Value());
+    const auto withDecoy = Evaluate(selected);
+    ASSERT_TRUE(withDecoy.HasValue());
+    EXPECT_EQ(Status::NonCompliant, withDecoy.Value());
+    const auto empty = Evaluate(SelectedItemsEvidence{});
+    ASSERT_TRUE(empty.HasValue());
+    EXPECT_EQ(Status::NonCompliant, empty.Value());
 }
 
 TEST(ResultEvidenceTest, ReachedValueErrorSurvivesMatchingValuesAndItemOrder)
@@ -181,11 +199,17 @@ TEST(ResultEvidenceTest, ItemComparisonStateHasExplicitSatisfactionAndEmptyError
     EXPECT_EQ(EINVAL, empty.Error().code);
     item.AddComparison(StateSatisfaction::NotSatisfied);
     EXPECT_TRUE(item.HasComparisons());
-    EXPECT_EQ(StateSatisfaction::NotSatisfied, item.AnyComparisonSatisfied().Value());
+    const auto mismatching = item.AnyComparisonSatisfied();
+    ASSERT_TRUE(mismatching.HasValue());
+    EXPECT_EQ(StateSatisfaction::NotSatisfied, mismatching.Value());
     item.AddComparison(StateSatisfaction::Satisfied);
-    EXPECT_EQ(StateSatisfaction::Satisfied, item.AnyComparisonSatisfied().Value());
+    const auto matching = item.AnyComparisonSatisfied();
+    ASSERT_TRUE(matching.HasValue());
+    EXPECT_EQ(StateSatisfaction::Satisfied, matching.Value());
     item.AddComparison(StateSatisfaction::NotSatisfied);
-    EXPECT_EQ(StateSatisfaction::Satisfied, item.AnyComparisonSatisfied().Value());
+    const auto stillMatching = item.AnyComparisonSatisfied();
+    ASSERT_TRUE(stillMatching.HasValue());
+    EXPECT_EQ(StateSatisfaction::Satisfied, stillMatching.Value());
 }
 
 TEST(ResultEvidenceTest, ComparisonErrorsDoNotInterruptAddingAndFirstErrorIsRetained)
@@ -220,7 +244,9 @@ TEST(ResultEvidenceTest, CollectionErrorDoesNotImplyExistenceAndSurvivesLaterIte
 {
     SelectedItemsEvidence items;
     EXPECT_FALSE(items.HasSelectedItems());
-    EXPECT_EQ(StateSatisfaction::Satisfied, items.AllSelectedItemsSatisfied().Value());
+    const auto empty = items.AllSelectedItemsSatisfied();
+    ASSERT_TRUE(empty.HasValue());
+    EXPECT_EQ(StateSatisfaction::Satisfied, empty.Value());
     items.RecordCollectionError(Error("collection failed", EACCES));
     EXPECT_FALSE(items.HasSelectedItems());
     items.AddItem(Item({StateSatisfaction::Satisfied}));
@@ -253,10 +279,18 @@ TEST(ResultEvidenceTest, CompleteEmptyAndAbsentRootsNeedUnionWideExistence)
     std::vector<std::string> diagnostics;
     const auto empty = Root(PasswordCreditRoot::Outcome::Complete, {}, {"excluded-decoy"});
     const auto absent = Root(PasswordCreditRoot::Outcome::Absent);
-    EXPECT_EQ(Status::NonCompliant, Evaluate(empty, empty, diagnostics).Value());
-    EXPECT_EQ(Status::NonCompliant, Evaluate(absent, empty, diagnostics).Value());
-    EXPECT_EQ(Status::NonCompliant, Evaluate(empty, absent, diagnostics).Value());
-    EXPECT_EQ(Status::NonCompliant, Evaluate(absent, absent, diagnostics).Value());
+    const auto bothEmpty = Evaluate(empty, empty, diagnostics);
+    ASSERT_TRUE(bothEmpty.HasValue());
+    EXPECT_EQ(Status::NonCompliant, bothEmpty.Value());
+    const auto mainAbsent = Evaluate(absent, empty, diagnostics);
+    ASSERT_TRUE(mainAbsent.HasValue());
+    EXPECT_EQ(Status::NonCompliant, mainAbsent.Value());
+    const auto dropInAbsent = Evaluate(empty, absent, diagnostics);
+    ASSERT_TRUE(dropInAbsent.HasValue());
+    EXPECT_EQ(Status::NonCompliant, dropInAbsent.Value());
+    const auto bothAbsent = Evaluate(absent, absent, diagnostics);
+    ASSERT_TRUE(bothAbsent.HasValue());
+    EXPECT_EQ(Status::NonCompliant, bothAbsent.Value());
     EXPECT_EQ((std::vector<std::string>{
                   "main:excluded:excluded-decoy", "drop-in:excluded:excluded-decoy", "drop-in:excluded:excluded-decoy", "main:excluded:excluded-decoy"}),
         diagnostics);
@@ -269,8 +303,12 @@ TEST(ResultEvidenceTest, EitherLocationSuppliesTheOnlyPassingItem)
     for (const auto other : {PasswordCreditRoot::Outcome::Absent, PasswordCreditRoot::Outcome::Complete})
     {
         const auto optional = Root(other);
-        EXPECT_EQ(Status::Compliant, Evaluate(passing, optional, diagnostics).Value());
-        EXPECT_EQ(Status::Compliant, Evaluate(optional, passing, diagnostics).Value());
+        const auto mainPassing = Evaluate(passing, optional, diagnostics);
+        ASSERT_TRUE(mainPassing.HasValue());
+        EXPECT_EQ(Status::Compliant, mainPassing.Value());
+        const auto dropInPassing = Evaluate(optional, passing, diagnostics);
+        ASSERT_TRUE(dropInPassing.HasValue());
+        EXPECT_EQ(Status::Compliant, dropInPassing.Value());
     }
     EXPECT_EQ((std::vector<std::string>{"main:selected:credit", "drop-in:selected:credit", "main:selected:credit", "drop-in:selected:credit"}), diagnostics);
 }
@@ -280,8 +318,12 @@ TEST(ResultEvidenceTest, ExcludedDecoyDoesNotInvalidatePassingSelection)
     std::vector<std::string> diagnostics;
     const auto passing = Root(PasswordCreditRoot::Outcome::Complete, {Credit("credit", -1)});
     const auto decoy = Root(PasswordCreditRoot::Outcome::Complete, {}, {"excluded-failing-decoy"});
-    EXPECT_EQ(Status::Compliant, Evaluate(passing, decoy, diagnostics).Value());
-    EXPECT_EQ(Status::Compliant, Evaluate(decoy, passing, diagnostics).Value());
+    const auto mainPassing = Evaluate(passing, decoy, diagnostics);
+    ASSERT_TRUE(mainPassing.HasValue());
+    EXPECT_EQ(Status::Compliant, mainPassing.Value());
+    const auto dropInPassing = Evaluate(decoy, passing, diagnostics);
+    ASSERT_TRUE(dropInPassing.HasValue());
+    EXPECT_EQ(Status::Compliant, dropInPassing.Value());
     EXPECT_EQ((std::vector<std::string>{
                   "main:selected:credit", "drop-in:excluded:excluded-failing-decoy", "main:excluded:excluded-failing-decoy", "drop-in:selected:credit"}),
         diagnostics);
@@ -294,15 +336,27 @@ TEST(ResultEvidenceTest, AllSelectedItemsMustPassInEitherLocationAndOrder)
     for (const long long failing : {0LL, 1LL, std::numeric_limits<long long>::max()})
     {
         const auto bad = Root(PasswordCreditRoot::Outcome::Complete, {Credit("nonnegative", failing)});
-        EXPECT_EQ(Status::NonCompliant, Evaluate(passing, bad, diagnostics).Value());
-        EXPECT_EQ(Status::NonCompliant, Evaluate(bad, passing, diagnostics).Value());
+        const auto mainPassing = Evaluate(passing, bad, diagnostics);
+        ASSERT_TRUE(mainPassing.HasValue());
+        EXPECT_EQ(Status::NonCompliant, mainPassing.Value());
+        const auto dropInPassing = Evaluate(bad, passing, diagnostics);
+        ASSERT_TRUE(dropInPassing.HasValue());
+        EXPECT_EQ(Status::NonCompliant, dropInPassing.Value());
     }
     const auto malformed = Root(PasswordCreditRoot::Outcome::Complete, {{"selected-malformed", {}}});
-    EXPECT_EQ(Status::NonCompliant, Evaluate(passing, malformed, diagnostics).Value());
-    EXPECT_EQ(Status::NonCompliant, Evaluate(malformed, passing, diagnostics).Value());
+    const auto malformedDropIn = Evaluate(passing, malformed, diagnostics);
+    ASSERT_TRUE(malformedDropIn.HasValue());
+    EXPECT_EQ(Status::NonCompliant, malformedDropIn.Value());
+    const auto malformedMain = Evaluate(malformed, passing, diagnostics);
+    ASSERT_TRUE(malformedMain.HasValue());
+    EXPECT_EQ(Status::NonCompliant, malformedMain.Value());
     const auto overflow = Root(PasswordCreditRoot::Outcome::Complete, {{"selected-overflow", {}}});
-    EXPECT_EQ(Status::NonCompliant, Evaluate(passing, overflow, diagnostics).Value());
-    EXPECT_EQ(Status::NonCompliant, Evaluate(overflow, passing, diagnostics).Value());
+    const auto overflowDropIn = Evaluate(passing, overflow, diagnostics);
+    ASSERT_TRUE(overflowDropIn.HasValue());
+    EXPECT_EQ(Status::NonCompliant, overflowDropIn.Value());
+    const auto overflowMain = Evaluate(overflow, passing, diagnostics);
+    ASSERT_TRUE(overflowMain.HasValue());
+    EXPECT_EQ(Status::NonCompliant, overflowMain.Value());
     EXPECT_FALSE(diagnostics.empty());
 }
 
@@ -359,12 +413,16 @@ TEST(ResultEvidenceTest, InvalidAbsenceAndMissingReporterAreErrors)
     std::vector<std::string> diagnostics;
     const auto absentWithItem = Root(PasswordCreditRoot::Outcome::Absent, {Credit("impossible", -1)});
     const auto empty = Root(PasswordCreditRoot::Outcome::Complete);
-    EXPECT_EQ(EINVAL, Evaluate(absentWithItem, empty, diagnostics).Error().code);
+    const auto invalidAbsence = Evaluate(absentWithItem, empty, diagnostics);
+    ASSERT_FALSE(invalidAbsence.HasValue());
+    EXPECT_EQ(EINVAL, invalidAbsence.Error().code);
     const auto stoppedWithoutReason = Root(PasswordCreditRoot::Outcome::Stopped);
     const auto stopped = Evaluate(empty, stoppedWithoutReason, diagnostics);
     ASSERT_FALSE(stopped.HasValue());
     EXPECT_NE(std::string::npos, stopped.Error().message.find("lacks a reason"));
-    EXPECT_EQ(EINVAL, ComplianceEngine::EvaluatePasswordCreditUnion(empty, empty, {}).Error().code);
+    const auto missingReporter = ComplianceEngine::EvaluatePasswordCreditUnion(empty, empty, {});
+    ASSERT_FALSE(missingReporter.HasValue());
+    EXPECT_EQ(EINVAL, missingReporter.Error().code);
 }
 
 TEST(ResultEvidenceTest, NonStoppedRootsWithStopReasonsHaveOutcomeNeutralDiagnostics)
