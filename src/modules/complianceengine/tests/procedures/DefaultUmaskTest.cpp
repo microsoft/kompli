@@ -7,12 +7,15 @@
 
 #include <DefaultUmask.h>
 #include <Optional.h>
+#include <cerrno>
 #include <fstream>
+#include <iterator>
 
 using ComplianceEngine::AuditDefaultUmask;
 using ComplianceEngine::Error;
 using ComplianceEngine::IndicatorsTree;
 using ComplianceEngine::Optional;
+using ComplianceEngine::RemediateDefaultUmask;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 using std::map;
@@ -182,6 +185,60 @@ TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, IncorrectValue_1)
     ASSERT_NE(nullptr, root);
     ASSERT_FALSE(root->indicators.empty());
     EXPECT_EQ(root->indicators.back().message, string("umask is incorrectly set in ") + filename);
+}
+
+TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, RemediateShellUmask)
+{
+    auto filename = mContext.MakeTempfile("umask u=rwx,g=rwx,o= # permissive\n");
+    mContext.SetSpecialFilePath("/etc/bashrc", filename);
+
+    auto result = RemediateDefaultUmask(mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    std::ifstream input(filename);
+    EXPECT_EQ(string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()), "umask 027 # permissive\n");
+}
+
+TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, RemediatePamUmask)
+{
+    auto filename = mContext.MakeTempfile("session required pam_umask.so umask=022\n");
+    mContext.SetSpecialFilePath("/etc/pam.d/postlogin", filename);
+
+    auto result = RemediateDefaultUmask(mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    std::ifstream input(filename);
+    EXPECT_EQ(string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()), "session required pam_umask.so umask=027\n");
+}
+
+TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, RemediateMissingUmaskInProfile)
+{
+    auto filename = mContext.MakeTempfile("# profile");
+    mContext.SetSpecialFilePath("/etc/profile", filename);
+
+    auto result = RemediateDefaultUmask(mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    std::ifstream input(filename);
+    EXPECT_EQ(string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()), "# profile\numask 027\n");
+}
+
+TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, RemediateRejectsSymlink)
+{
+    const auto target = mContext.MakeTempfile("umask 022\n");
+    const auto link = mContext.GetTempdirPath() + "/bashrc";
+    ASSERT_EQ(symlink(target.c_str(), link.c_str()), 0);
+    mContext.SetSpecialFilePath("/etc/bashrc", link);
+
+    auto result = RemediateDefaultUmask(mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+
+    std::ifstream input(target);
+    EXPECT_EQ(string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()), "umask 022\n");
 }
 
 TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, IncorrectValue_2)
