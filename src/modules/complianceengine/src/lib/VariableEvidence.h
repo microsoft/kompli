@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_OVAL_VARIABLE_EVIDENCE_H
-#define COMPLIANCEENGINE_OVAL_VARIABLE_EVIDENCE_H
+#ifndef COMPLIANCEENGINE_VARIABLE_EVIDENCE_H
+#define COMPLIANCEENGINE_VARIABLE_EVIDENCE_H
 
-#include <OvalVariableResolver.h>
+#include <VariableResolver.h>
 #include <cerrno>
 #include <string>
 #include <utility>
@@ -12,7 +12,7 @@
 
 namespace ComplianceEngine
 {
-namespace OvalVariable
+namespace VariableResolution
 {
 inline bool IsSupportedComparisonOperation(TypedComparisonOperation operation)
 {
@@ -77,7 +77,7 @@ inline Result<ValueEvidence<std::string>> ResolveStringEvidence(const std::strin
 {
     if (objectRef.empty() || itemField.empty() || !collect)
     {
-        return Error("Invalid object_component reference, field or collector", EINVAL);
+        return Error("Object reference, field name and collector are required", EINVAL);
     }
 
     auto collected = collect(objectRef);
@@ -128,7 +128,7 @@ inline Result<ValueEvidence<std::string>> ResolveEvidence(const std::string& obj
 {
     if (datatype != VariableDatatype::String)
     {
-        return Error("Requested non-string OVAL variable from string resolver", EINVAL);
+        return Error("Requested non-string variable from string resolver", EINVAL);
     }
     return ResolveStringEvidence(objectRef, itemField, collect);
 }
@@ -138,7 +138,7 @@ inline Result<ValueEvidence<long long>> ResolveIntegerEvidence(const std::string
 {
     if (datatype != VariableDatatype::Integer)
     {
-        return Error("Requested non-integer OVAL variable from integer resolver", EINVAL);
+        return Error("Requested non-integer variable from integer resolver", EINVAL);
     }
     return ResolveIntegerEvidence(objectRef, itemField, collect);
 }
@@ -160,7 +160,7 @@ inline Result<ValueEvidence<std::string>> SplitEvidence(const ValueEvidence<std:
 {
     if (delimiter.empty())
     {
-        return Error("Empty OVAL split delimiter", EINVAL);
+        return Error("Empty variable split delimiter", EINVAL);
     }
     if (evidence.state == EvidenceState::Incomplete)
     {
@@ -264,7 +264,7 @@ Result<ValueEvidence<bool>> CompareScalarEvidence(const ValueEvidence<T>& lhs, c
     }
     return ValueEvidence<bool>{EvidenceState::Complete, {result.Value()}, lhs.source + " compared with " + rhs.source, {}};
 }
-} // namespace OvalVariable
+} // namespace VariableResolution
 } // namespace ComplianceEngine
 
-#endif // COMPLIANCEENGINE_OVAL_VARIABLE_EVIDENCE_H
+#endif // COMPLIANCEENGINE_VARIABLE_EVIDENCE_H

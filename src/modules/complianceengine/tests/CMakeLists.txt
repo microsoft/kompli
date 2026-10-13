@@ -79,8 +79,8 @@ add_executable(complianceenginetests
     NetworkToolsTest.cpp
     NumericFileGroupTest.cpp
     OptionalTest.cpp
-    OvalVariableEvidenceTest.cpp
-    OvalVariableResolverTest.cpp
+    VariableEvidenceTest.cpp
+    VariableResolverTest.cpp
     RegexFallbackTest.cpp
     RegexTest.cpp
     ResultTest.cpp
