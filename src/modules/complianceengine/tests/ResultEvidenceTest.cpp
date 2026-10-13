@@ -199,6 +199,81 @@ TEST(ResultEvidenceTest, DistinctItemsUseAllInEitherOrder)
     EXPECT_EQ(Status::Compliant, allMatching.Value());
 }
 
+TEST(ResultEvidenceTest, DirectAssessmentsAndRepeatedComparisonsShareOuterAggregation)
+{
+    SelectedItemsEvidence direct;
+    EXPECT_FALSE(direct.HasSelectedItems());
+    direct.AddItem(Result<StateSatisfaction>(StateSatisfaction::Satisfied));
+    EXPECT_TRUE(direct.HasSelectedItems());
+    auto state = direct.AllSelectedItemsSatisfied();
+    ASSERT_TRUE(state.HasValue());
+    EXPECT_EQ(StateSatisfaction::Satisfied, state.Value());
+
+    direct.AddItem(Result<StateSatisfaction>(StateSatisfaction::NotSatisfied));
+    state = direct.AllSelectedItemsSatisfied();
+    ASSERT_TRUE(state.HasValue());
+    EXPECT_EQ(StateSatisfaction::NotSatisfied, state.Value());
+
+    for (const auto& mixed : {[] {
+                                  SelectedItemsEvidence items;
+                                  items.AddItem(Result<StateSatisfaction>(StateSatisfaction::Satisfied));
+                                  items.AddItem(Item({StateSatisfaction::NotSatisfied, StateSatisfaction::Satisfied}));
+                                  return items;
+                              }(),
+             [] {
+                 SelectedItemsEvidence items;
+                 items.AddItem(Item({StateSatisfaction::Satisfied, StateSatisfaction::NotSatisfied}));
+                 items.AddItem(Result<StateSatisfaction>(StateSatisfaction::Satisfied));
+                 return items;
+             }()})
+    {
+        const auto mixedState = mixed.AllSelectedItemsSatisfied();
+        ASSERT_TRUE(mixedState.HasValue());
+        EXPECT_EQ(StateSatisfaction::Satisfied, mixedState.Value());
+    }
+
+    SelectedItemsEvidence mismatchThenRepeated;
+    mismatchThenRepeated.AddItem(Result<StateSatisfaction>(StateSatisfaction::NotSatisfied));
+    mismatchThenRepeated.AddItem(Item({StateSatisfaction::Satisfied}));
+    state = mismatchThenRepeated.AllSelectedItemsSatisfied();
+    ASSERT_TRUE(state.HasValue());
+    EXPECT_EQ(StateSatisfaction::NotSatisfied, state.Value());
+
+    SelectedItemsEvidence repeatedThenMismatch;
+    repeatedThenMismatch.AddItem(Item({StateSatisfaction::Satisfied}));
+    repeatedThenMismatch.AddItem(Result<StateSatisfaction>(StateSatisfaction::NotSatisfied));
+    state = repeatedThenMismatch.AllSelectedItemsSatisfied();
+    ASSERT_TRUE(state.HasValue());
+    EXPECT_EQ(StateSatisfaction::NotSatisfied, state.Value());
+}
+
+TEST(ResultEvidenceTest, DirectAssessmentErrorsAreSelectedAndRetainFirstError)
+{
+    SelectedItemsEvidence items;
+    items.AddItem(Result<StateSatisfaction>(Error("assessment failed", EIO)));
+    EXPECT_TRUE(items.HasSelectedItems());
+    items.AddItem(Result<StateSatisfaction>(StateSatisfaction::Satisfied));
+    items.AddItem(Item({Error("later failure", EACCES)}));
+    auto state = items.AllSelectedItemsSatisfied();
+    ASSERT_FALSE(state.HasValue());
+    EXPECT_EQ(EIO, state.Error().code);
+    EXPECT_EQ("assessment failed", state.Error().message);
+
+    SelectedItemsEvidence invalid;
+    invalid.AddItem(Result<StateSatisfaction>(static_cast<StateSatisfaction>(2)));
+    state = invalid.AllSelectedItemsSatisfied();
+    ASSERT_FALSE(state.HasValue());
+    EXPECT_EQ(EINVAL, state.Error().code);
+
+    SelectedItemsEvidence emptyThenError;
+    emptyThenError.AddItem(SelectedItemComparisonEvidence{});
+    emptyThenError.AddItem(Result<StateSatisfaction>(Error("reached failure", ENOENT)));
+    state = emptyThenError.AllSelectedItemsSatisfied();
+    ASSERT_FALSE(state.HasValue());
+    EXPECT_EQ(ENOENT, state.Error().code);
+    EXPECT_EQ("reached failure", state.Error().message);
+}
+
 TEST(ResultEvidenceTest, ScalarAndExcludedValueItemsRetainExistencePolicy)
 {
     auto selected = Items({Item({StateSatisfaction::Satisfied})});
@@ -419,6 +494,49 @@ TEST(ResultEvidenceTest, AllSelectedItemsMustPassInEitherLocationAndOrder)
     ASSERT_TRUE(overflowMain.HasValue());
     EXPECT_EQ(Status::NonCompliant, overflowMain.Value());
     EXPECT_FALSE(diagnostics.empty());
+}
+
+TEST(ResultEvidenceTest, MultipleCreditsWithinOneRootAllAffectTheVerdict)
+{
+    const auto absent = Root(PasswordCreditRoot::Outcome::Absent);
+    const auto expectedDiagnostics = [](const char* root, const char* first, const char* second) {
+        return std::vector<std::string>{
+            std::string(root) + ":selected:" + first,
+            std::string(root) + ":selected:" + second,
+        };
+    };
+
+    for (const auto root : {CreditRootLocation::Main, CreditRootLocation::DropIn})
+    {
+        const auto evaluate = [&](const PasswordCreditAssessment& assessment, std::vector<std::string>& diagnostics) {
+            return root == CreditRootLocation::Main ? Evaluate(assessment, absent, diagnostics) : Evaluate(absent, assessment, diagnostics);
+        };
+        const auto location = root == CreditRootLocation::Main ? "main" : "drop-in";
+
+        struct FailingCase
+        {
+            PasswordCreditAssessment assessment;
+            const char* first;
+            const char* second;
+        };
+        for (const auto& testCase :
+            {FailingCase{Root(PasswordCreditRoot::Outcome::Complete, {Credit("negative", -1), Credit("zero", 0)}), "negative", "zero"},
+                FailingCase{Root(PasswordCreditRoot::Outcome::Complete, {Credit("zero", 0), Credit("negative", -1)}), "zero", "negative"}})
+        {
+            std::vector<std::string> diagnostics;
+            const auto result = evaluate(testCase.assessment, diagnostics);
+            ASSERT_TRUE(result.HasValue());
+            EXPECT_EQ(Status::NonCompliant, result.Value());
+            EXPECT_EQ(expectedDiagnostics(location, testCase.first, testCase.second), diagnostics);
+        }
+
+        std::vector<std::string> diagnostics;
+        const auto bothNegative = Root(PasswordCreditRoot::Outcome::Complete, {Credit("first-negative", -1), Credit("second-negative", -2)});
+        const auto result = evaluate(bothNegative, diagnostics);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(Status::Compliant, result.Value());
+        EXPECT_EQ(expectedDiagnostics(location, "first-negative", "second-negative"), diagnostics);
+    }
 }
 
 TEST(ResultEvidenceTest, RequiredErrorAfterPassingItemKeepsOriginalErrorAndProvenance)

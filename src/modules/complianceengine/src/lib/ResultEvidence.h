@@ -47,6 +47,10 @@ private:
 class SelectedItemsEvidence
 {
 public:
+    // Adds one selected, already-assessed item. This is not absence, exclusion,
+    // collection completion, sufficient stopping, or a final procedure status.
+    void AddItem(const Result<StateSatisfaction>& assessment);
+    // Adds one selected item whose repeated comparisons use any-satisfied.
     void AddItem(const SelectedItemComparisonEvidence& item);
     void RecordCollectionError(const Error& error);
     bool HasSelectedItems() const;
