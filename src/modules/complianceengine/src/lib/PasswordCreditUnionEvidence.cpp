@@ -5,29 +5,70 @@
 #include <ResultEvidence.h>
 #include <TypedComparison.h>
 #include <cerrno>
+#include <exception>
 #include <initializer_list>
 
 namespace ComplianceEngine
 {
 namespace
 {
-void ReportEvidence(const PasswordCreditAssessment& root, CreditRootLocation location, const CreditDiagnosticReporter& reportDiagnostic)
+Result<bool> ReportOne(CreditRootLocation location, CreditEvidenceKind kind, const std::string& identity, const CreditDiagnosticReporter& reportDiagnostic)
+{
+    try
+    {
+        reportDiagnostic(location, kind, identity);
+        return true;
+    }
+    catch (const std::exception&)
+    {
+        return Error("Password credit diagnostic reporter threw an exception", EIO);
+    }
+    catch (...)
+    {
+        return Error("Password credit diagnostic reporter threw an unknown exception", EIO);
+    }
+}
+
+Result<bool> ReportEvidence(const PasswordCreditAssessment& root, CreditRootLocation location, const CreditDiagnosticReporter& reportDiagnostic)
 {
     if (root.result.HasValue())
     {
         for (const auto& item : root.result.Value().selected)
         {
-            reportDiagnostic(location, CreditEvidenceKind::Selected, item.identity);
+            const auto reported = ReportOne(location, CreditEvidenceKind::Selected, item.identity, reportDiagnostic);
+            if (!reported.HasValue())
+            {
+                return reported.Error();
+            }
         }
         for (const auto& exclusion : root.result.Value().exclusions)
         {
-            reportDiagnostic(location, CreditEvidenceKind::Excluded, exclusion);
+            const auto reported = ReportOne(location, CreditEvidenceKind::Excluded, exclusion, reportDiagnostic);
+            if (!reported.HasValue())
+            {
+                return reported.Error();
+            }
         }
     }
     for (const auto& identity : root.observed)
     {
-        reportDiagnostic(location, CreditEvidenceKind::Observed, identity);
+        const auto reported = ReportOne(location, CreditEvidenceKind::Observed, identity, reportDiagnostic);
+        if (!reported.HasValue())
+        {
+            return reported.Error();
+        }
     }
+    return true;
+}
+
+Result<bool> ReportAllEvidence(const PasswordCreditAssessment& mainRoot, const PasswordCreditAssessment& dropInRoot, const CreditDiagnosticReporter& reportDiagnostic)
+{
+    const auto main = ReportEvidence(mainRoot, CreditRootLocation::Main, reportDiagnostic);
+    if (!main.HasValue())
+    {
+        return main.Error();
+    }
+    return ReportEvidence(dropInRoot, CreditRootLocation::DropIn, reportDiagnostic);
 }
 
 Result<Status> ValidateRoot(const PasswordCreditAssessment& root, const char* name)
@@ -64,51 +105,55 @@ Result<Status> EvaluatePasswordCreditUnion(const PasswordCreditAssessment& mainR
     {
         return Error("Missing password credit diagnostic reporter", EINVAL);
     }
-    if ((!mainRoot.result.HasValue()) || (!dropInRoot.result.HasValue()))
-    {
-        ReportEvidence(mainRoot, CreditRootLocation::Main, reportDiagnostic);
-        ReportEvidence(dropInRoot, CreditRootLocation::DropIn, reportDiagnostic);
-        return !mainRoot.result.HasValue() ? mainRoot.result.Error() : dropInRoot.result.Error();
-    }
-    const auto main = ValidateRoot(mainRoot, "main");
-    if (!main.HasValue())
-    {
-        ReportEvidence(mainRoot, CreditRootLocation::Main, reportDiagnostic);
-        ReportEvidence(dropInRoot, CreditRootLocation::DropIn, reportDiagnostic);
-        return main.Error();
-    }
-    const auto dropIn = ValidateRoot(dropInRoot, "drop-in");
-    if (!dropIn.HasValue())
-    {
-        ReportEvidence(mainRoot, CreditRootLocation::Main, reportDiagnostic);
-        ReportEvidence(dropInRoot, CreditRootLocation::DropIn, reportDiagnostic);
-        return dropIn.Error();
-    }
-
-    CompletedItemEvidence combined;
-    for (const auto* root : {&mainRoot.result.Value(), &dropInRoot.result.Value()})
-    {
-        for (const auto& item : root->selected)
+    const auto evaluation = [&]() -> Result<Status> {
+        if ((!mainRoot.result.HasValue()) || (!dropInRoot.result.HasValue()))
         {
-            if (!item.value.HasValue())
-            {
-                combined.AddSelected(StateSatisfaction::NotSatisfied);
-                continue;
-            }
-            const auto matches = CompareTyped(item.value.Value(), 0LL, TypedComparisonOperation::LessThan);
-            if (!matches.HasValue())
-            {
-                ReportEvidence(mainRoot, CreditRootLocation::Main, reportDiagnostic);
-                ReportEvidence(dropInRoot, CreditRootLocation::DropIn, reportDiagnostic);
-                return matches.Error();
-            }
-            combined.AddSelected(matches.Value() ? StateSatisfaction::Satisfied : StateSatisfaction::NotSatisfied);
+            return !mainRoot.result.HasValue() ? mainRoot.result.Error() : dropInRoot.result.Error();
         }
+        const auto main = ValidateRoot(mainRoot, "main");
+        if (!main.HasValue())
+        {
+            return main.Error();
+        }
+        const auto dropIn = ValidateRoot(dropInRoot, "drop-in");
+        if (!dropIn.HasValue())
+        {
+            return dropIn.Error();
+        }
+
+        CompletedItemEvidence combined;
+        for (const auto* root : {&mainRoot.result.Value(), &dropInRoot.result.Value()})
+        {
+            for (const auto& item : root->selected)
+            {
+                if (!item.value.HasValue())
+                {
+                    combined.AddSelected(StateSatisfaction::NotSatisfied);
+                    continue;
+                }
+                const auto matches = CompareTyped(item.value.Value(), 0LL, TypedComparisonOperation::LessThan);
+                combined.AddSelected(!matches.HasValue() ?
+                                         Result<StateSatisfaction>(matches.Error()) :
+                                         Result<StateSatisfaction>(matches.Value() ? StateSatisfaction::Satisfied : StateSatisfaction::NotSatisfied));
+            }
+        }
+        const auto state = combined.AllSelectedStatesSatisfied();
+        if (!state.HasValue())
+        {
+            return state.Error();
+        }
+        return (combined.HasSelectedItems() && state.Value() == StateSatisfaction::Satisfied) ? Status::Compliant : Status::NonCompliant;
+    }();
+
+    const auto reported = ReportAllEvidence(mainRoot, dropInRoot, reportDiagnostic);
+    if (!evaluation.HasValue())
+    {
+        return evaluation.Error();
     }
-    const auto result = (combined.HasSelectedItems() && combined.AllSelectedStatesSatisfied() == StateSatisfaction::Satisfied) ? Status::Compliant :
-                                                                                                                                 Status::NonCompliant;
-    ReportEvidence(mainRoot, CreditRootLocation::Main, reportDiagnostic);
-    ReportEvidence(dropInRoot, CreditRootLocation::DropIn, reportDiagnostic);
-    return result;
+    if (!reported.HasValue())
+    {
+        return reported.Error();
+    }
+    return evaluation.Value();
 }
 } // namespace ComplianceEngine

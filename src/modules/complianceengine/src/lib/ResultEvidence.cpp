@@ -6,12 +6,47 @@
 
 namespace ComplianceEngine
 {
-void CompletedItemEvidence::AddSelected(StateSatisfaction state)
+namespace
+{
+Result<StateSatisfaction> ValidateStateSatisfaction(const Result<StateSatisfaction>& state)
+{
+    if (!state.HasValue())
+    {
+        return state.Error();
+    }
+    switch (state.Value())
+    {
+        case StateSatisfaction::Satisfied:
+        case StateSatisfaction::NotSatisfied:
+            return state.Value();
+    }
+    return Error("Invalid state satisfaction value", EINVAL);
+}
+} // anonymous namespace
+
+void CompletedItemEvidence::AddSelected(const Result<StateSatisfaction>& state)
 {
     mHasSelected = true;
-    if (state == StateSatisfaction::NotSatisfied)
+    if (!mAllSatisfied.HasValue())
+    {
+        return;
+    }
+    const auto validated = ValidateStateSatisfaction(state);
+    if (!validated.HasValue())
+    {
+        mAllSatisfied = validated.Error();
+    }
+    else if (validated.Value() == StateSatisfaction::NotSatisfied)
     {
         mAllSatisfied = StateSatisfaction::NotSatisfied;
+    }
+}
+
+void CompletedItemEvidence::RecordError(const Error& error)
+{
+    if (mAllSatisfied.HasValue())
+    {
+        mAllSatisfied = error;
     }
 }
 
@@ -20,7 +55,7 @@ bool CompletedItemEvidence::HasSelectedItems() const
     return mHasSelected;
 }
 
-StateSatisfaction CompletedItemEvidence::AllSelectedStatesSatisfied() const
+Result<StateSatisfaction> CompletedItemEvidence::AllSelectedStatesSatisfied() const
 {
     return mAllSatisfied;
 }
@@ -32,11 +67,12 @@ void SelectedItemComparisonEvidence::AddComparison(const Result<StateSatisfactio
     {
         return;
     }
-    if (!comparison.HasValue())
+    const auto validated = ValidateStateSatisfaction(comparison);
+    if (!validated.HasValue())
     {
-        mAnySatisfied = comparison.Error();
+        mAnySatisfied = validated.Error();
     }
-    else if (comparison.Value() == StateSatisfaction::Satisfied)
+    else if (validated.Value() == StateSatisfaction::Satisfied)
     {
         mAnySatisfied = StateSatisfaction::Satisfied;
     }
@@ -65,26 +101,12 @@ void SelectedItemsEvidence::AddItem(const SelectedItemComparisonEvidence& item)
         return;
     }
     const auto state = item.AnyComparisonSatisfied();
-    if (!state.HasValue())
-    {
-        RecordError(state.Error());
-        mItems.AddSelected(StateSatisfaction::NotSatisfied);
-        return;
-    }
-    mItems.AddSelected(state.Value());
+    mItems.AddSelected(state);
 }
 
 void SelectedItemsEvidence::RecordCollectionError(const Error& error)
 {
-    RecordError(error);
-}
-
-void SelectedItemsEvidence::RecordError(const Error& error)
-{
-    if (!mError.HasValue())
-    {
-        mError = error;
-    }
+    mItems.RecordError(error);
 }
 
 bool SelectedItemsEvidence::HasSelectedItems() const
@@ -94,14 +116,15 @@ bool SelectedItemsEvidence::HasSelectedItems() const
 
 Result<StateSatisfaction> SelectedItemsEvidence::AllSelectedItemsSatisfied() const
 {
-    if (mError.HasValue())
+    const auto state = mItems.AllSelectedStatesSatisfied();
+    if (!state.HasValue())
     {
-        return mError.Value();
+        return state.Error();
     }
     if (mHasEmptyItem)
     {
         return Error("Selected value item has no comparison results", EINVAL);
     }
-    return mItems.AllSelectedStatesSatisfied();
+    return state.Value();
 }
 } // namespace ComplianceEngine
