@@ -39,6 +39,22 @@ std::string StringOrEmpty(const char* s)
     return (nullptr == s) ? std::string() : std::string(s);
 }
 
+bool IsAsciiWhitespace(unsigned char value)
+{
+    switch (value)
+    {
+        case ' ':
+        case '\t':
+        case '\n':
+        case '\r':
+        case '\v':
+        case '\f':
+            return true;
+        default:
+            return false;
+    }
+}
+
 std::string TrimWhiteSpaces(const std::string& str)
 {
     const auto isWhitespace = [](unsigned char character) { return std::isspace(character); };

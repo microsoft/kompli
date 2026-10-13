@@ -36,6 +36,7 @@ set(PROCEDURES
     procedures/MountPointExists.cpp
     procedures/NetworkInterfaceFlag.cpp
     procedures/MtaLocalOnly.cpp
+    procedures/NameserverCount.cpp
     procedures/NoDuplicateEntries.cpp
     procedures/NoShadowPrimaryGroup.cpp
     procedures/NoUnownedFiles.cpp
@@ -85,6 +86,7 @@ set(SCHEMAS
     procedures/MountPointExists.schema.json
     procedures/NetworkInterfaceFlag.schema.json
     procedures/MtaLocalOnly.schema.json
+    procedures/NameserverCount.schema.json
     procedures/NoDuplicateEntries.schema.json
     procedures/NoShadowPrimaryGroup.schema.json
     procedures/NoUnownedFiles.schema.json
@@ -171,6 +173,7 @@ add_library(complianceenginelib STATIC
     DlTools.cpp
     Engine.cpp
     Evaluator.cpp
+    ExactFileObjectCollector.cpp
     FileTreeWalk.cpp
     FilesystemCollection.cpp
     GuestConfigurationContext.cpp

@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "audit": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "NameserverCount"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "NameserverCount": {
+              "type": "object",
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "Logical source path. Only /etc/resolv.conf is supported.",
+                  "pattern": "(^\\$[a-zA-Z0-9_]+:(/etc/resolv[.]conf)$|(^/etc/resolv[.]conf$))"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "remediation": {
+      "anyOf": []
+    }
+  }
+}

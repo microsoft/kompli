@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 using ComplianceEngine::EscapeForShell;
+using ComplianceEngine::IsAsciiWhitespace;
 using ComplianceEngine::TrimWhiteSpaces;
 
 class StringToolsTest : public ::testing::Test
@@ -97,6 +98,15 @@ TEST_F(StringToolsTest, EscapeForShell_MixedContent)
 }
 
 // Tests for TrimWhiteSpaces
+
+TEST_F(StringToolsTest, AsciiWhitespaceClassificationIsExhaustive)
+{
+    for (unsigned int value = 0; value <= 0xff; ++value)
+    {
+        const bool expected = value == ' ' || value == '\t' || value == '\n' || value == '\r' || value == '\v' || value == '\f';
+        EXPECT_EQ(expected, IsAsciiWhitespace(static_cast<unsigned char>(value))) << value;
+    }
+}
 
 TEST_F(StringToolsTest, TrimWhiteSpaces_EmptyString)
 {
