@@ -92,6 +92,11 @@ Result<StateSatisfaction> SelectedItemComparisonEvidence::AnyComparisonSatisfied
     return mAnySatisfied;
 }
 
+void SelectedItemsEvidence::AddItem(const Result<StateSatisfaction>& assessment)
+{
+    mItems.AddSelected(assessment);
+}
+
 void SelectedItemsEvidence::AddItem(const SelectedItemComparisonEvidence& item)
 {
     if (!item.HasComparisons())
