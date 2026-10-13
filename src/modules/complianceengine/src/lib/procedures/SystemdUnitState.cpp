@@ -28,6 +28,7 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
         std::string argName;
         Optional<Pattern> pattern;
         bool observed = false;
+        std::string observedValue;
         systemdQueryParams(const char* name)
             : argName(name),
               pattern(Optional<Pattern>())
@@ -107,7 +108,18 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
                 OsConfigLogError(log, "Empty systemctl property '%s' for unit '%s'", name.c_str(), params.unitName.c_str());
                 return Error("Empty systemctl property '" + name + "' for unit '" + params.unitName + "'");
             }
+            if (param.observed)
+            {
+                if (value != param.observedValue)
+                {
+                    OsConfigLogError(log, "Conflicting systemctl property '%s' for unit '%s'", name.c_str(), params.unitName.c_str());
+                    return Error("Conflicting systemctl property '" + name + "' for unit '" + params.unitName + "'");
+                }
+                matched = true;
+                break;
+            }
             param.observed = true;
+            param.observedValue = value;
             if (!regex_match(value, param.pattern->GetRegex()))
             {
                 // OsConfigLogDebug(log, "Failed to match systemctl unit name '%s' for name '%s' for pattern '%s'  for value '%s' ",
