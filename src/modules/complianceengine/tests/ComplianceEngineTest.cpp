@@ -178,6 +178,22 @@ TEST_F(ComplianceEngineTest, ComplianceEngineMmiGet_2)
     ComplianceEngineMmiFree(payload);
 }
 
+TEST_F(ComplianceEngineTest, ReachedNativeErrorDoesNotBecomePassAtMmiBoundary)
+{
+    const std::string procedurePayload =
+        R"({"audit":{"not":{"FileRegexMatch":{"path":"/missing","filenamePattern":".*","matchPattern":"key","allMatches":"true","noneMatches":"true"}}}})";
+    ASSERT_EQ(MMI_OK, ComplianceEngineMmiSet(mHandle, "ComplianceEngine", "procedureresultEvaluation", procedurePayload.c_str(),
+                          static_cast<int>(procedurePayload.size())));
+    char* payload = nullptr;
+    int payloadSizeBytes = 0;
+    ASSERT_EQ(MMI_OK, ComplianceEngineMmiGet(mHandle, "ComplianceEngine", "auditresultEvaluation", &payload, &payloadSizeBytes));
+    ASSERT_NE(nullptr, payload);
+    const std::string result(payload, payloadSizeBytes);
+    EXPECT_EQ(result.find("PASS"), std::string::npos);
+    EXPECT_NE(result.find("Audit failed with a non-critical error"), std::string::npos);
+    ComplianceEngineMmiFree(payload);
+}
+
 TEST_F(ComplianceEngineTest, ValidatePayload_1)
 {
     ASSERT_EQ(EINVAL, ComplianceEngineCheckApplicability(nullptr, "/cis/ubuntu/22.04/v1.1.1/x/y/z", nullptr));

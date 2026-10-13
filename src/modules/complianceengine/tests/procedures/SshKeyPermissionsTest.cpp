@@ -6,6 +6,7 @@
 #include "MockContext.h"
 
 #include <SshKeyPermissions.h>
+#include <cerrno>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <map>
@@ -77,6 +78,61 @@ TEST_F(EnsureSshKeyPermsTest, PublicKeyCompliant)
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(EnsureSshKeyPermsTest, RegularFileRootPropagatesTraversalError)
+{
+    const auto root = mContext.GetTempdirPath() + "/ssh-root-file";
+    std::ofstream(root) << "not a directory\n";
+    mContext.SetSpecialFilePath("/etc/ssh", root);
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Public;
+
+    const auto result = AuditSshKeyPermissions(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(ENOTDIR, result.Error().code);
+}
+
+TEST_F(EnsureSshKeyPermsTest, AuditFailedKeyReadPropagatesErrorWithoutIndicator)
+{
+    const std::string keyPath = mSshDir + "/id_ed25519.pub";
+    std::ofstream key(keyPath);
+    ASSERT_TRUE(key.is_open());
+    key << kPublicKeySample;
+    key.close();
+    ASSERT_TRUE(key.good());
+    EXPECT_CALL(mContext, GetFileContents(keyPath))
+        .WillOnce(::testing::Return(ComplianceEngine::Result<std::string>(ComplianceEngine::Error("Key read failed", EACCES))));
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Public;
+
+    const auto result = AuditSshKeyPermissions(params, mIndicators, mContext);
+
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EACCES, result.Error().code);
+    EXPECT_EQ("Key read failed", result.Error().message);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(EnsureSshKeyPermsTest, RemediationFailedKeyReadPropagatesErrorWithoutIndicator)
+{
+    const std::string keyPath = mSshDir + "/id_ed25519";
+    std::ofstream key(keyPath);
+    ASSERT_TRUE(key.is_open());
+    key << kPrivateKeyHeader;
+    key.close();
+    ASSERT_TRUE(key.good());
+    EXPECT_CALL(mContext, GetFileContents(keyPath))
+        .WillOnce(::testing::Return(ComplianceEngine::Result<std::string>(ComplianceEngine::Error("Key read failed", EIO))));
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Private;
+
+    const auto result = RemediateSshKeyPermissions(params, mIndicators, mContext);
+
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EIO, result.Error().code);
+    EXPECT_EQ("Key read failed", result.Error().message);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
 TEST_F(EnsureSshKeyPermsTest, PublicKeyNonCompliantBitMask)
 {
     std::string keyPath = mSshDir + "/id_test.pub";
@@ -138,4 +194,36 @@ TEST_F(EnsureSshKeyPermsTest, RemediationNoKeys)
     auto result = RemediateSshKeyPermissions(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureSshKeyPermsTest, NestedRecognizedKeyIsChecked)
+{
+    const std::string nested = mSshDir + "/nested";
+    ASSERT_EQ(0, ::mkdir(nested.c_str(), 0755));
+    const std::string keyPath = nested + "/host-key";
+    std::ofstream(keyPath) << kPrivateKeyHeader << "payload\n";
+    ASSERT_EQ(0, ::chmod(keyPath.c_str(), 0777));
+    EXPECT_CALL(mContext, GetFileContents(keyPath)).WillOnce(::testing::Return(ComplianceEngine::Result<std::string>(std::string(kPrivateKeyHeader) + "payload\n")));
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Private;
+
+    const auto result = AuditSshKeyPermissions(params, mIndicators, mContext);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+}
+
+TEST_F(EnsureSshKeyPermsTest, SimilarlyNamedNonKeyIsIgnored)
+{
+    const std::string decoyPath = mSshDir + "/host-key.pub";
+    std::ofstream(decoyPath) << "not a key\n";
+    ASSERT_EQ(0, ::chmod(decoyPath.c_str(), 0777));
+    EXPECT_CALL(mContext, GetFileContents(decoyPath)).WillOnce(::testing::Return(ComplianceEngine::Result<std::string>("not a key\n")));
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Public;
+
+    const auto result = AuditSshKeyPermissions(params, mIndicators, mContext);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
 }

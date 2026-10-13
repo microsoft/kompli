@@ -1,0 +1,17 @@
+{
+  "source": {
+    "benchmark": "U_CAN_Ubuntu_22-04_LTS_V2R5_STIG_SCAP_1-3_Benchmark.xml",
+    "benchmarkSha256": "6e135dc2128d7cfa08bdacf7820313c4ef75de87934bc789a02938878b9d8694",
+    "rule": "xccdf_mil.disa.stig_rule_SV-260578r1015021_rule",
+    "test": "oval:mil.disa.stig.ind:tst:23823300"
+  },
+  "capture": {
+    "augmentation": "none",
+    "augmentationEngineRevision": "837e8ec216d1ffded4e55909524d3a0ea7a01b99",
+    "parsePySha256": "0efa44accd07a95713855874d8b6438d5f1d5d6e809a0bc1f5f02379e3e24143",
+    "rulePySha256": "5a25eb73b5abba9535f7fbad8b1aaef998fc6ffb2b638a44c84b7047d6ba35fd",
+    "utilsPySha256": "da0d7beaadac9d0c7221f9266c8b9579639b2148e6478a663524b9786152db43",
+    "payloadSha256": "289becee11335b7c880a073a3d00a751e6583fd89c0f381a01d7de7922b68942"
+  },
+  "canonicalPayload": "{\"FileRegexMatch\":{\"filenamePattern\":\"pam_pkcs11.conf\",\"matchOperation\":\"pattern match\",\"matchPattern\":\"^[ \\\\t]*cert_policy[ \\\\t]+=[ \\\\t]+([[a-zA-Z0-9_]\\\\,\\\"' ]+);[ \\\\t]*$\",\"path\":\"/etc/pam_pkcs11\",\"stateOperation\":\"pattern match\",\"statePattern\":\"^([\\\"']*crl_auto[\\\"']*$|^[\\\"']*crl_auto[\\\"',[ \\\\t]]|[\\\"',[ \\\\t]]crl_auto[\\\"',[ \\\\t]]|[\\\"',[ \\\\t]]crl_auto[\\\"']*|[\\\"']*crl_offline[\\\"']*$|^[\\\"']*crl_offline[\\\"',[ \\\\t]]|[\\\"',[ \\\\t]]crl_offline[\\\"',[ \\\\t]]|[\\\"',[ \\\\t]]crl_offline[\\\"']*)$\"}}"
+}

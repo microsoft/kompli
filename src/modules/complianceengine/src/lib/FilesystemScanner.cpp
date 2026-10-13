@@ -108,7 +108,7 @@ private:
 
 } // anonymous namespace
 
-static void ScanDirRecursive(const std::string& dir, dev_t rootDev, std::map<std::string, FilesystemScanner::FSEntry>& entries);
+static bool ScanDirRecursive(const std::string& dir, dev_t rootDev, std::map<std::string, FilesystemScanner::FSEntry>& entries);
 pid_t BackgroundScan(const std::string& root, const std::string& cachePath, const std::string& lockPath);
 
 static void CloseInheritedFileDescriptors()
@@ -213,17 +213,27 @@ Result<std::shared_ptr<const FilesystemScanner::FSCache>> FilesystemScanner::Get
 // Filesystem recursion with boundary detection: if st_dev differs from rootDev and
 // the target filesystem type is in a disallowed set (proc, devfs/devpts/devtmpfs variants,
 // nfs*, fuse*), the directory entry is recorded but not traversed.
-static void ScanDirRecursive(const std::string& dir, dev_t rootDev, std::map<std::string, FilesystemScanner::FSEntry>& entries)
+static bool ScanDirRecursive(const std::string& dir, dev_t rootDev, std::map<std::string, FilesystemScanner::FSEntry>& entries)
 {
     DIR* d = ::opendir(dir.c_str());
     if (!d)
     {
-        return; // ignore unreadable dirs
+        return false;
     }
     auto dirDeleter = std::unique_ptr<DIR, int (*)(DIR*)>(d, ::closedir);
     struct dirent* de = nullptr;
-    while ((de = ::readdir(d)) != nullptr)
+    while (true)
     {
+        errno = 0;
+        de = ::readdir(d);
+        if (de == nullptr)
+        {
+            if (errno != 0)
+            {
+                return false;
+            }
+            break;
+        }
         if (de->d_name[0] == '.' && (de->d_name[1] == '\0' || (de->d_name[1] == '.' && de->d_name[2] == '\0')))
         {
             continue;
@@ -238,7 +248,7 @@ static void ScanDirRecursive(const std::string& dir, dev_t rootDev, std::map<std
         struct stat st;
         if (::lstat(fullPath.c_str(), &st) != 0)
         {
-            continue;
+            return false;
         }
         entries.insert(std::make_pair(fullPath, FilesystemScanner::FSEntry{st}));
         if (S_ISDIR(st.st_mode))
@@ -247,31 +257,36 @@ static void ScanDirRecursive(const std::string& dir, dev_t rootDev, std::map<std
             if (st.st_dev != rootDev)
             {
                 struct statfs sfs;
-                if (::statfs(fullPath.c_str(), &sfs) == 0)
+                if (::statfs(fullPath.c_str(), &sfs) != 0)
                 {
-                    // Magic numbers for filesystems to skip recursion into when crossing boundary
-                    switch (static_cast<unsigned long>(sfs.f_type))
-                    {
-                        case 0x9fa0:     /* PROC_SUPER_MAGIC (procfs) */
-                        case 0x1373:     /* DEVFS_SUPER_MAGIC (legacy devfs) */
-                        case 0x1cd1:     /* DEVPTS_SUPER_MAGIC (devpts) */
-                        case 0x62656572: /* SYSFS_MAGIC (sysfs) */
-                        case 0x01021994: /* TMPFS_MAGIC (devtmpfs often appears as tmpfs) */
-                        case 0x6969:     /* NFS_SUPER_MAGIC (all nfs variants share) */
-                        case 0x65735546: /* FUSE_SUPER_MAGIC (fuse) */
-                            traverse = false;
-                            break;
-                        default:
-                            break;
-                    }
+                    return false;
+                }
+                // Magic numbers for filesystems to skip recursion into when crossing boundary
+                switch (static_cast<unsigned long>(sfs.f_type))
+                {
+                    case 0x9fa0:     /* PROC_SUPER_MAGIC (procfs) */
+                    case 0x1373:     /* DEVFS_SUPER_MAGIC (legacy devfs) */
+                    case 0x1cd1:     /* DEVPTS_SUPER_MAGIC (devpts) */
+                    case 0x62656572: /* SYSFS_MAGIC (sysfs) */
+                    case 0x01021994: /* TMPFS_MAGIC (devtmpfs often appears as tmpfs) */
+                    case 0x6969:     /* NFS_SUPER_MAGIC (all nfs variants share) */
+                    case 0x65735546: /* FUSE_SUPER_MAGIC (fuse) */
+                        traverse = false;
+                        break;
+                    default:
+                        break;
                 }
             }
             if (traverse)
             {
-                ScanDirRecursive(fullPath, st.st_dev, entries);
+                if (!ScanDirRecursive(fullPath, st.st_dev, entries))
+                {
+                    return false;
+                }
             }
         }
     }
+    return ::closedir(dirDeleter.release()) == 0;
 }
 
 pid_t BackgroundScan(const std::string& root, const std::string& cachePath, const std::string& lockPath)
@@ -327,7 +342,10 @@ pid_t BackgroundScan(const std::string& root, const std::string& cachePath, cons
         {
             _exit(1);
         }
-        ScanDirRecursive(root, rootSt.st_dev, cache->entries);
+        if (!ScanDirRecursive(root, rootSt.st_dev, cache->entries))
+        {
+            _exit(1);
+        }
         time_t end = ::time(nullptr);
         cache->scan_end_time = end;
         // Build and atomically replace cache file.
@@ -349,9 +367,11 @@ pid_t BackgroundScan(const std::string& root, const std::string& cachePath, cons
         }
         ofs.flush();
         ofs.close();
-
-        ::unlink(cachePath.c_str());
-        ::rename(tmpPath.c_str(), cachePath.c_str());
+        if (!ofs || ::rename(tmpPath.c_str(), cachePath.c_str()) != 0)
+        {
+            ::unlink(tmpPath.c_str());
+            _exit(1);
+        }
         _exit(0);
     }
 

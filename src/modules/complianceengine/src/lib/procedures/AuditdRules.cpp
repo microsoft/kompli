@@ -8,6 +8,7 @@
 #include <StringTools.h>
 #include <Users.h>
 #include <cctype>
+#include <cerrno>
 #include <cstring>
 #include <fstream>
 #include <fts.h>
@@ -281,9 +282,19 @@ Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree&
             return Error("Invalid excludeOptions regex: " + std::string(e.what()), EINVAL);
         }
     }
-    auto uidMin = GetUidMin(context);
+    const auto loginDefsResult = context.GetFileContents("/etc/login.defs");
+    if (!loginDefsResult.HasValue() && loginDefsResult.Error().code != ENOENT)
+    {
+        OsConfigLogError(context.GetLogHandle(), "Failed to read /etc/login.defs: %s", loginDefsResult.Error().message.c_str());
+        return loginDefsResult.Error();
+    }
+    auto uidMin = GetUidMin(context, loginDefsResult);
     if (!uidMin.HasValue())
     {
+        if (E2BIG == uidMin.Error().code || EBADMSG == uidMin.Error().code)
+        {
+            return uidMin.Error();
+        }
         const int defaultUidMin = 1000;
         uidMin = defaultUidMin;
         OsConfigLogWarning(context.GetLogHandle(), "UID_MIN not found in /etc/login.defs, using default ");

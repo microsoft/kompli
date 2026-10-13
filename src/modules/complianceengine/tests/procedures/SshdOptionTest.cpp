@@ -374,42 +374,6 @@ TEST_F(EnsureSshdOptionTest, OperationNumericGe_NonCompliant)
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
 
-TEST_F(EnsureSshdOptionTest, NumericOperationRejectsSuffixButTrimsOutputWhitespace)
-{
-    struct Case
-    {
-        std::string actual;
-        std::string expected;
-        Status status;
-        std::string message;
-    };
-    const Case cases[] = {
-        {"4junk", "5", Status::NonCompliant,
-            "Option 'maxauthtries' has non-numeric value '4junk' or comparison target '5' (cannot apply numeric operation 'lt')"},
-        {"4", "5junk", Status::NonCompliant,
-            "Option 'maxauthtries' has non-numeric value '4' or comparison target '5junk' (cannot apply numeric operation 'lt')"},
-        {"4  \t", "5", Status::Compliant, "Option 'maxauthtries' has a compliant numeric value '4' (less than '5')"},
-    };
-    for (const auto& test : cases)
-    {
-        const auto output = "port 22\nmaxauthtries " + test.actual + "\n";
-        EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(output)));
-        EXPECT_CALL(mContext, ExecuteCommand(sshdSimpleCommand)).WillOnce(Return(Result<std::string>(output)));
-        SshdOptionParams params;
-        params.option = {{"maxauthtries"}};
-        params.value = test.expected;
-        params.op = SshdOptionOperation::LessThan;
-        IndicatorsTree indicators;
-        indicators.Push("EnsureSshdOption");
-        const auto result = AuditSshdOption(params, indicators, mContext);
-        ASSERT_TRUE(result.HasValue()) << test.actual;
-        EXPECT_EQ(result.Value(), test.status) << test.actual;
-        ASSERT_FALSE(indicators.Back().indicators.empty());
-        EXPECT_EQ(indicators.Back().indicators.front().status, test.status);
-        EXPECT_EQ(indicators.Back().indicators.front().message, test.message);
-    }
-}
-
 TEST_F(EnsureSshdOptionTest, NumericOperatorBoundariesAndIndicators)
 {
     struct Case
@@ -487,6 +451,42 @@ TEST_F(EnsureSshdOptionTest, NumericOperationKeepsMissingAndInvalidValuePolicies
     ASSERT_EQ(invalid.Back().indicators.size(), 1U);
     EXPECT_EQ(invalid.Back().indicators.front().message,
         "Option 'maxauthtries' has non-numeric value '4' or comparison target 'not-a-number' (cannot apply numeric operation 'gt')");
+}
+
+TEST_F(EnsureSshdOptionTest, NumericOperationRejectsSuffixButTrimsOutputWhitespace)
+{
+    struct Case
+    {
+        std::string actual;
+        std::string expected;
+        Status status;
+        std::string message;
+    };
+    const Case cases[] = {
+        {"4junk", "5", Status::NonCompliant,
+            "Option 'maxauthtries' has non-numeric value '4junk' or comparison target '5' (cannot apply numeric operation 'lt')"},
+        {"4", "5junk", Status::NonCompliant,
+            "Option 'maxauthtries' has non-numeric value '4' or comparison target '5junk' (cannot apply numeric operation 'lt')"},
+        {"4  \t", "5", Status::Compliant, "Option 'maxauthtries' has a compliant numeric value '4' (less than '5')"},
+    };
+    for (const auto& test : cases)
+    {
+        const auto output = "port 22\nmaxauthtries " + test.actual + "\n";
+        EXPECT_CALL(mContext, ExecuteCommand(sshdInitialCommand)).WillOnce(Return(Result<std::string>(output)));
+        EXPECT_CALL(mContext, ExecuteCommand(sshdSimpleCommand)).WillOnce(Return(Result<std::string>(output)));
+        SshdOptionParams params;
+        params.option = {{"maxauthtries"}};
+        params.value = test.expected;
+        params.op = SshdOptionOperation::LessThan;
+        IndicatorsTree indicators;
+        indicators.Push("EnsureSshdOption");
+        const auto result = AuditSshdOption(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue()) << test.actual;
+        EXPECT_EQ(result.Value(), test.status) << test.actual;
+        ASSERT_FALSE(indicators.Back().indicators.empty());
+        EXPECT_EQ(indicators.Back().indicators.front().status, test.status);
+        EXPECT_EQ(indicators.Back().indicators.front().message, test.message);
+    }
 }
 
 TEST_F(EnsureSshdOptionTest, MaxStartups_Compliant)
@@ -1007,9 +1007,43 @@ TEST_F(EnsureSshdOptionTest, Match_NumericLt_NonCompliant)
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
 
-TEST_F(EnsureSshdOptionTest, Match_FileReadFailure_NoMatchesReturnsCompliant)
+TEST_F(EnsureSshdOptionTest, Match_RequiredConfigReadFailureReturnsError)
 {
-    EXPECT_CALL(mContext, GetFileContents("/etc/ssh/sshd_config")).WillOnce(Return(Result<std::string>(Error("read error", -1))));
+    EXPECT_CALL(mContext, GetFileContents("/etc/ssh/sshd_config")).WillOnce(Return(Result<std::string>(Error("read error", EACCES))));
+
+    SshdOptionParams params;
+    params.option = {{"permitrootlogin"}};
+    params.value = "no";
+    params.mode = SshdOptionMode::AllMatches;
+
+    auto result = AuditSshdOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EACCES);
+    EXPECT_NE(result.Error().message.find("/etc/ssh/sshd_config"), std::string::npos);
+    EXPECT_NE(result.Error().message.find("read error"), std::string::npos);
+}
+
+TEST_F(EnsureSshdOptionTest, Match_IncludedConfigReadFailureReturnsError)
+{
+    EXPECT_CALL(mContext, GetFileContents("/etc/ssh/sshd_config"))
+        .WillOnce(Return(Result<std::string>("Include /etc/ssh/sshd_config.d/child.conf\nMatch User alice\n")));
+    EXPECT_CALL(mContext, GetFileContents("/etc/ssh/sshd_config.d/child.conf")).WillOnce(Return(Result<std::string>(Error("read error", EACCES))));
+
+    SshdOptionParams params;
+    params.option = {{"permitrootlogin"}};
+    params.value = "no";
+    params.mode = SshdOptionMode::AllMatches;
+
+    auto result = AuditSshdOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EACCES);
+    EXPECT_NE(result.Error().message.find("/etc/ssh/sshd_config.d/child.conf"), std::string::npos);
+    EXPECT_NE(result.Error().message.find("read error"), std::string::npos);
+}
+
+TEST_F(EnsureSshdOptionTest, Match_ReadableConfigWithoutMatchBlocksIsCompliant)
+{
+    EXPECT_CALL(mContext, GetFileContents("/etc/ssh/sshd_config")).WillOnce(Return(Result<std::string>("Port 22\n")));
 
     SshdOptionParams params;
     params.option = {{"permitrootlogin"}};
@@ -1018,8 +1052,7 @@ TEST_F(EnsureSshdOptionTest, Match_FileReadFailure_NoMatchesReturnsCompliant)
 
     auto result = AuditSshdOption(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
-    // No matches => loop skipped => Compliant per current implementation
-    ASSERT_EQ(result.Value(), Status::Compliant);
+    EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
 // Reproduces the aadsshlogin failure: the installer appends

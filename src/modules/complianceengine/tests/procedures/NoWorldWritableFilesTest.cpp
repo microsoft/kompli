@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <vector>
 
 using ComplianceEngine::AuditNoWorldWritableFiles;
 using ComplianceEngine::IndicatorsTree;
@@ -85,4 +86,30 @@ TEST_F(EnsureNoWritablesTest, CompliantWhenNoViolations)
     auto result = AuditNoWorldWritableFiles(indicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureNoWritablesTest, ReportsNestedViolationPathAndCapsDetails)
+{
+    const std::string nested = rootDir + "/nested";
+    ASSERT_EQ(0, ::mkdir(nested.c_str(), 0700));
+    std::vector<std::string> badFiles;
+    for (size_t index = 0; 4 > index; ++index)
+    {
+        const std::string path = nested + "/bad" + std::to_string(index);
+        std::ofstream(path) << "data";
+        ASSERT_EQ(0, ::chmod(path.c_str(), 0666));
+        badFiles.push_back(path);
+    }
+    ASSERT_TRUE(mContext.GetFilesystemScanner().GetFullFilesystem().HasValue());
+
+    const auto result = AuditNoWorldWritableFiles(indicators, mContext);
+
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    const auto& messages = indicators.GetRootNode()->indicators;
+    ASSERT_EQ(4u, messages.size());
+    EXPECT_EQ("World writable file: '" + badFiles[0] + "'", messages[0].message);
+    EXPECT_EQ("World writable file: '" + badFiles[1] + "'", messages[1].message);
+    EXPECT_EQ("World writable file: '" + badFiles[2] + "'", messages[2].message);
+    EXPECT_EQ(std::string::npos, messages[3].message.find(badFiles[3]));
 }

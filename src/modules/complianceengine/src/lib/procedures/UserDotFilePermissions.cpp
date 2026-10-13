@@ -6,6 +6,7 @@
 #include <ListValidShells.h>
 #include <Result.h>
 #include <UserDotFilePermissions.h>
+#include <UserPermissionsTestSeams.h>
 #include <UsersIterator.h>
 #include <fcntl.h>
 #include <fstream>
@@ -20,12 +21,12 @@ namespace ComplianceEngine
 using std::map;
 using std::string;
 
-// NOTE: This procedure enumerates real accounts via UsersRange::Make() (hardcoded /etc/passwd)
-// and resolves groups and home directories through libc (getgrgid) and the live filesystem, with
-// no injection seam. The ".rhosts"/".forward" NonCompliant detection path therefore cannot be
-// exercised by a deterministic unit test without first refactoring the account/group/home-directory
-// lookups to accept caller-supplied sources.
 Result<Status> AuditUserDotFilePermissions(IndicatorsTree& indicators, ContextInterface& context)
+{
+    return AuditUserDotFilePermissionsWithPasswdFile(indicators, context, "/etc/passwd");
+}
+
+Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicators, ContextInterface& context, const string& passwdPath)
 {
     const auto validShells = ListValidShells(context);
     if (!validShells.HasValue())
@@ -35,7 +36,7 @@ Result<Status> AuditUserDotFilePermissions(IndicatorsTree& indicators, ContextIn
     }
 
     auto status = Status::Compliant;
-    auto users = UsersRange::Make(context.GetLogHandle());
+    auto users = UsersRange::Make(passwdPath, context.GetLogHandle());
     if (!users.HasValue())
     {
         return users.Error();
@@ -136,7 +137,12 @@ Result<Status> AuditUserDotFilePermissions(IndicatorsTree& indicators, ContextIn
         };
 
         auto result = FileTreeWalk(pwd.pw_dir, ftwCallback, BreakOnNonCompliant::True, context);
-        if (!result.HasValue() || result.Value() == Status::NonCompliant)
+        if (!result.HasValue())
+        {
+            OsConfigLogError(context.GetLogHandle(), "Directory validation for user '%s' failed: %s", pwd.pw_name, result.Error().message.c_str());
+            return result.Error();
+        }
+        if (result.Value() == Status::NonCompliant)
         {
             OsConfigLogDebug(context.GetLogHandle(), "Directory validation for user %s id %d returned NonCompliant, but continuing", pwd.pw_name, pwd.pw_uid);
             status = Status::NonCompliant;
@@ -148,6 +154,11 @@ Result<Status> AuditUserDotFilePermissions(IndicatorsTree& indicators, ContextIn
 
 Result<Status> RemediateUserDotFilePermissions(IndicatorsTree& indicators, ContextInterface& context)
 {
+    return RemediateUserDotFilePermissionsWithPasswdFile(indicators, context, "/etc/passwd");
+}
+
+Result<Status> RemediateUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicators, ContextInterface& context, const string& passwdPath)
+{
     const auto validShells = ListValidShells(context);
     if (!validShells.HasValue())
     {
@@ -156,7 +167,7 @@ Result<Status> RemediateUserDotFilePermissions(IndicatorsTree& indicators, Conte
     }
 
     auto status = Status::Compliant;
-    auto users = UsersRange::Make(context.GetLogHandle());
+    auto users = UsersRange::Make(passwdPath, context.GetLogHandle());
     if (!users.HasValue())
     {
         return users.Error();
@@ -266,7 +277,12 @@ Result<Status> RemediateUserDotFilePermissions(IndicatorsTree& indicators, Conte
         };
 
         auto result = FileTreeWalk(user.pw_dir, ftwCallback, BreakOnNonCompliant::False, context);
-        if (!result.HasValue() || result.Value() == Status::NonCompliant)
+        if (!result.HasValue())
+        {
+            OsConfigLogError(context.GetLogHandle(), "Directory validation for user '%s' failed: %s", user.pw_name, result.Error().message.c_str());
+            return result.Error();
+        }
+        if (Status::NonCompliant == result.Value())
         {
             OsConfigLogError(context.GetLogHandle(), "Directory validation for user %s id %d returned NonCompliant, but continuing", user.pw_name, user.pw_uid);
             status = Status::NonCompliant;

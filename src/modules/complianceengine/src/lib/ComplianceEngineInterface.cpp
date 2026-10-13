@@ -306,6 +306,7 @@ int ComplianceEngineMmiGet(MMI_HANDLE clientSession, const char* componentName, 
     try
     {
         auto result = engine.MmiGet(objectName);
+        std::string payloadString;
         if (!result.HasValue())
         {
             if (g_criticalErrors.find(result.Error().code) != g_criticalErrors.end())
@@ -318,14 +319,16 @@ int ComplianceEngineMmiGet(MMI_HANDLE clientSession, const char* componentName, 
             {
                 OsConfigLogError(engine.Log(), "ComplianceEngineMmiGet failed with a non-critical error: %s (errno: %d)",
                     result.Error().message.c_str(), result.Error().code);
-                result = ComplianceEngine::AuditResult(Status::NonCompliant, "Audit failed with a non-critical error: " + result.Error().message);
+                payloadString = "Audit failed with a non-critical error: " + result.Error().message;
             }
         }
-
-        auto payloadString = result.Value().payload;
-        if ((result.Value().status == Status::Compliant) || (result.Value().status == Status::NotApplicable))
+        else
         {
-            payloadString = "PASS" + payloadString;
+            payloadString = result.Value().payload;
+            if ((result.Value().status == Status::Compliant) || (result.Value().status == Status::NotApplicable))
+            {
+                payloadString = "PASS" + payloadString;
+            }
         }
 
         auto json = JsonWrapper::FromJsonString(payloadString);

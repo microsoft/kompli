@@ -268,6 +268,67 @@ TEST_F(LoginDefsOptionTest, LastOccurrenceWins)
     EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(LoginDefsOptionTest, MalformedLastOccurrenceCannotFallBackToEarlierValue)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 180\nPASS_MAX_DAYS\n");
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, CorruptedLastKeyCannotExposeEarlierPassingValue)
+{
+    const char contents[] = "PASS_MAX_DAYS 180\nPASS_MAX_DAYS\0 99999\n";
+    SetLoginDefsContent(string(contents, sizeof(contents) - 1));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, EarlierCorruptedKeyDoesNotOverrideLastExactValue)
+{
+    const char contents[] = "PASS_MAX_DAYS\0 99999\nPASS_MAX_DAYS 180\n";
+    SetLoginDefsContent(string(contents, sizeof(contents) - 1));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+}
+
+TEST_F(LoginDefsOptionTest, SelectedEmbeddedNulCannotProduceIndicator)
+{
+    SetLoginDefsContent(string("PASS_MAX_DAYS 180 \0ignored\n", 27));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
 TEST_F(LoginDefsOptionTest, TabSeparated)
 {
     SetLoginDefsContent("PASS_MAX_DAYS\t\t365\n");
@@ -571,7 +632,7 @@ TEST_F(LoginDefsOptionTest, NumericOverflowReturnsErrorWithoutIndicator)
     params.option = "PASS_MAX_DAYS";
     params.value = "5";
     params.comparison = ComparisonOperation::Equal;
-    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    auto result = AuditLoginDefsOption(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, ERANGE);
     EXPECT_EQ(result.Error().message, "Invalid PASS_MAX_DAYS value: Integer value out of range: 2147483648");
@@ -599,7 +660,7 @@ TEST_F(LoginDefsOptionTest, MalformedNumericTargetReturnsError)
     params.option = "PASS_MAX_DAYS";
     params.value = "5junk";
     params.comparison = ComparisonOperation::Equal;
-    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    auto result = AuditLoginDefsOption(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, EINVAL);
     EXPECT_EQ(result.Error().message, "Invalid PASS_MAX_DAYS comparison target: Invalid integer value: 5junk");
