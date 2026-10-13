@@ -406,6 +406,11 @@ TEST_F(SystemdUnitStateTest, ActiveAndRunningBothRequired)
     const Case cases[] = {
         {"ActiveState=active\nSubState=running\n", true, Status::Compliant},
         {"SubState=running\nActiveState=active", true, Status::Compliant},
+        {"ActiveState=active\nSubState=running\nActiveState=active\n", true, Status::Compliant},
+        {"ActiveState=active\nSubState=running\nSubState=running\n", true, Status::Compliant},
+        {"ActiveState=inactive\nSubState=running\nActiveState=active\n", false, Status::NonCompliant},
+        {"ActiveState=active\nSubState=running\nSubState=dead\n", false, Status::NonCompliant},
+        {"ActiveState=active\nSubState=dead\nSubState=dead\n", true, Status::NonCompliant},
         {"ActiveState=active\nSubState=dead\n", true, Status::NonCompliant},
         {"ActiveState=inactive\nSubState=running\n", true, Status::NonCompliant},
         {"ActiveState=inactive\nSubState=dead\n", true, Status::NonCompliant},
@@ -482,6 +487,9 @@ TEST_F(SystemdUnitStateTest, NegatedCisPredicateDoesNotAcceptInvalidOutput)
     const Case cases[] = {
         {"UnitFileState=disabled\n", true, Status::Compliant},
         {"UnitFileState=enabled\n", true, Status::NonCompliant},
+        {"UnitFileState=disabled\nUnitFileState=enabled\n", false, Status::NonCompliant},
+        {"UnitFileState=disabled\nUnitFileState=disabled\n", true, Status::Compliant},
+        {"UnitFileState=enabled\nUnitFileState=enabled\n", true, Status::NonCompliant},
         {"", false, Status::NonCompliant},
         {"ActiveState=active\n", false, Status::NonCompliant},
         {"UnitFileState=\n", false, Status::NonCompliant},
@@ -518,7 +526,11 @@ TEST_F(SystemdUnitStateTest, NegatedMultiPropertyMismatchRequiresCompleteOutput)
     };
     const Case cases[] = {
         {"ActiveState=active\nSubState=running\n", true, Status::NonCompliant},
+        {"ActiveState=active\nSubState=running\nSubState=running\n", true, Status::NonCompliant},
         {"ActiveState=inactive\nSubState=running\n", true, Status::Compliant},
+        {"ActiveState=inactive\nSubState=running\nActiveState=inactive\n", true, Status::Compliant},
+        {"ActiveState=inactive\nSubState=running\nActiveState=active\n", false, Status::NonCompliant},
+        {"ActiveState=active\nSubState=running\nSubState=dead\n", false, Status::NonCompliant},
         {"ActiveState=inactive\n", false, Status::NonCompliant},
         {"ActiveState=inactive\nSubState", false, Status::NonCompliant},
         {"ActiveState=inactive\nSubState=\n", false, Status::NonCompliant},
