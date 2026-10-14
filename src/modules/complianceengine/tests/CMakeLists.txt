@@ -87,6 +87,7 @@ add_executable(complianceenginetests
     NetworkToolsTest.cpp
     NumericFileGroupTest.cpp
     OptionalTest.cpp
+    RangesTest.cpp
     VariableResolverTest.cpp
     parsers/LoginDefsTest.cpp
     RegexFallbackTest.cpp

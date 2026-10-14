@@ -12,6 +12,7 @@ using ComplianceEngine::Error;
 using ComplianceEngine::Result;
 using ComplianceEngine::TypedComparisonOperation;
 namespace VariableResolution = ComplianceEngine::VariableResolution;
+namespace Ranges = ComplianceEngine::Ranges;
 
 namespace
 {
@@ -85,12 +86,20 @@ TEST(VariableResolver, SplitPreservesEveryValueIncludingEmptySegments)
 TEST(VariableResolver, UniqueCountUsesAcceptedTypedComparison)
 {
     const std::vector<std::string> nameservers{"1.1.1.1", "1.1.1.1", "8.8.8.8"};
-    auto unique = VariableResolution::Unique(nameservers);
+    auto distinct = Ranges::Unique(Ranges::Range(nameservers));
+    std::vector<std::string> unique;
+    for (const auto& item : distinct)
+    {
+        ASSERT_TRUE(item.HasValue());
+        unique.push_back(item.Value());
+    }
     EXPECT_EQ((std::vector<std::string>{"1.1.1.1", "8.8.8.8"}), unique);
-    auto result = VariableResolution::CompareCount(unique, 2, TypedComparisonOperation::GreaterOrEqual);
+    const auto count = Ranges::Count(Ranges::Range(unique));
+    ASSERT_TRUE(count.HasValue());
+    auto result = ComplianceEngine::CompareTyped(count.Value(), std::size_t{2}, TypedComparisonOperation::GreaterOrEqual);
     ASSERT_TRUE(result.HasValue());
     EXPECT_TRUE(result.Value());
-    EXPECT_EQ(3, VariableResolution::Count(nameservers).Value());
+    EXPECT_EQ(3U, Ranges::Count(Ranges::Range(nameservers)).Value());
 }
 
 TEST(VariableResolver, IntegerConversionPreservesErrorsAndBoundaries)
@@ -108,7 +117,13 @@ TEST(VariableResolver, IntegerConversionPreservesErrorsAndBoundaries)
     ASSERT_FALSE(overflow.HasValue());
     EXPECT_EQ(ERANGE, overflow.Error().code);
 
-    const auto sourceDistinct = VariableResolution::Unique({"001", "1", "001", "2"});
+    auto distinct = Ranges::Unique(Ranges::Range(std::vector<std::string>{"001", "1", "001", "2"}));
+    std::vector<std::string> sourceDistinct;
+    for (const auto& item : distinct)
+    {
+        ASSERT_TRUE(item.HasValue());
+        sourceDistinct.push_back(item.Value());
+    }
     EXPECT_EQ((std::vector<std::string>{"001", "1", "2"}), sourceDistinct);
     auto parsed = VariableResolution::IntegerValues(sourceDistinct);
     ASSERT_TRUE(parsed.HasValue());

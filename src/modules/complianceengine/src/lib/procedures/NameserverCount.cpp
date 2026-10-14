@@ -21,18 +21,12 @@ Result<Status> AuditNameserverCount(const NameserverCountParams& params, Indicat
     {
         return collection.Error();
     }
-    const auto values = VariableResolution::ExtractObjectFields(collection.Value(), "nameserver", "subexpression");
-    if (!values.HasValue())
-    {
-        return values.Error();
-    }
-    const auto unique = VariableResolution::Unique(values.Value());
-    const auto count = VariableResolution::Count(unique);
+    const auto count = Ranges::Count(Ranges::Unique(VariableResolution::ObjectFieldRange(collection.Value(), "nameserver", "subexpression")));
     if (!count.HasValue())
     {
         return count.Error();
     }
-    const auto compared = CompareTyped(count.Value(), 2LL, TypedComparisonOperation::GreaterOrEqual);
+    const auto compared = CompareTyped(count.Value(), std::size_t{2}, TypedComparisonOperation::GreaterOrEqual);
     Result<StateSatisfaction> assessment = !compared.HasValue() ?
                                                Result<StateSatisfaction>(compared.Error()) :
                                                Result<StateSatisfaction>(compared.Value() ? StateSatisfaction::Satisfied : StateSatisfaction::NotSatisfied);

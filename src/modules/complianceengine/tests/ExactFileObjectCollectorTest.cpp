@@ -429,11 +429,14 @@ TEST(ExactFileObjectCollectorTest, ResolverPipelineCountsDistinctNameservers)
     auto collection = ComplianceEngine::CollectNameserverObject(path);
     ASSERT_TRUE(collection.HasValue());
 
-    auto values = VariableResolution::ExtractObjectFields(collection.Value(), "object:1", "subexpression");
-    ASSERT_TRUE(values.HasValue());
-    EXPECT_EQ(3, VariableResolution::Count(values.Value()).Value());
-    EXPECT_EQ(2, VariableResolution::Count(VariableResolution::Unique(values.Value())).Value());
-    const auto passing = VariableResolution::CompareCount(VariableResolution::Unique(values.Value()), 2, ComplianceEngine::TypedComparisonOperation::GreaterOrEqual);
+    namespace Ranges = ComplianceEngine::Ranges;
+    const auto count = Ranges::Count(VariableResolution::ObjectFieldRange(collection.Value(), "object:1", "subexpression"));
+    ASSERT_TRUE(count.HasValue());
+    EXPECT_EQ(3U, count.Value());
+    const auto distinct = Ranges::Count(Ranges::Unique(VariableResolution::ObjectFieldRange(collection.Value(), "object:1", "subexpression")));
+    ASSERT_TRUE(distinct.HasValue());
+    EXPECT_EQ(2U, distinct.Value());
+    const auto passing = ComplianceEngine::CompareTyped(distinct.Value(), std::size_t{2}, ComplianceEngine::TypedComparisonOperation::GreaterOrEqual);
     ASSERT_TRUE(passing.HasValue());
     EXPECT_TRUE(passing.Value());
 }
