@@ -3,10 +3,9 @@
 //
 // Tests for InputSecurity helpers.
 //
-// Files and directories are created inside a per-test mkdtemp() tree managed
-// by MockContext. The fixture removes the entire tree on teardown, so a crash
-// or early exit never leaves stale paths that clash with a subsequent run —
-// unlike hardcoded /tmp filenames that survive process death.
+// Files and directories are created inside a unique per-test tree managed
+// by MockContext. Normal teardown removes the tree; a crash can leave it
+// behind, but the next run uses a different name rather than colliding.
 //
 // Tests that require root (e.g. chown to root) are skipped when running as
 // non-root.
@@ -53,8 +52,8 @@ bool HasSecureConventionalRoot()
 
 } // namespace
 
-// Base fixture: owns a MockContext whose mkdtemp() tree is removed on
-// TearDown. Helper methods delegate to it so test bodies stay concise.
+// Base fixture: owns a MockContext whose tree is removed on normal
+// destruction. Helper methods delegate to it so test bodies stay concise.
 // Per-suite subclasses preserve GTest suite names (e.g. OpenVerifiedInputTest.*).
 class InputSecurityFixture : public ::testing::Test
 {

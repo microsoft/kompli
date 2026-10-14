@@ -160,6 +160,7 @@ add_custom_target(complianceengineschema
 set_property(TARGET complianceengineschema PROPERTY OUTPUT ComplianceEngineSchema.zip)
 
 add_library(complianceenginelib STATIC
+    AtomicFile.cpp
     Base64.cpp
     BenchmarkInfo.cpp
     BindingParsers.cpp
@@ -183,13 +184,16 @@ add_library(complianceenginelib STATIC
     LuaProcedures.cpp
     NetworkTools.cpp
     PasswordEntriesIterator.cpp
+    PasswordCreditUnionEvidence.cpp
     Pattern.cpp
     Procedure.cpp
     ProcedureMap.cpp
     Result.cpp
+    ResultEvidence.cpp
     StringTools.cpp
     SystemdCatConfig.cpp
     Telemetry.cpp
+    TemporaryDirectory.cpp
     Users.cpp
     UsersIterator.cpp
     ${PROCEDURES}

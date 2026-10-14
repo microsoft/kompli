@@ -4,7 +4,6 @@
 #include "MockContext.h"
 
 #include <AuditdRules.h>
-#include <cstdio>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <map>
@@ -33,11 +32,10 @@ protected:
         EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillRepeatedly(Return(Result<std::string>(std::string("UID_MIN 1000\n"))));
     }
 
-    static std::string MakeTempDir()
+    std::string MakeTempDir()
     {
-        char tmpl[] = "/tmp/auditrulesXXXXXX";
-        char* d = mkdtemp(tmpl);
-        return d ? std::string(d) : std::string();
+        const std::string directory = mContext.GetTempdirPath() + "/audit-rules-" + std::to_string(++mTempdirCount);
+        return (mkdir(directory.c_str(), 0700) == 0) ? directory : std::string();
     }
 
     static void WriteFile(const std::string& path, const std::string& content)
@@ -47,15 +45,7 @@ protected:
         ofs.close();
     }
 
-    static void RemoveFile(const std::string& path)
-    {
-        std::remove(path.c_str());
-    }
-
-    static void RemoveDir(const std::string& path)
-    {
-        rmdir(path.c_str());
-    }
+    std::size_t mTempdirCount{0};
 };
 
 // Test invalid requiredOptions regex
@@ -113,10 +103,6 @@ TEST_F(AuditdRulesCheckTest, OverridePathWithMatchingFileRuleIsCompliant)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    // cleanup
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
@@ -154,8 +140,6 @@ TEST_F(AuditdRulesCheckTest, TimeChangeSyscallsAcceptAnyNonemptyKey)
             EXPECT_EQ(entry.second, result.Value());
         }
     }
-    RemoveFile(filename);
-    RemoveDir(directory);
 }
 
 TEST_F(AuditdRulesCheckTest, SyscallFieldLayoutUsesRuntimeUidMin)
@@ -188,8 +172,6 @@ TEST_F(AuditdRulesCheckTest, SyscallFieldLayoutUsesRuntimeUidMin)
         ASSERT_TRUE(result.HasValue());
         EXPECT_EQ(entry.second, result.Value());
     }
-    RemoveFile(filename);
-    RemoveDir(directory);
 }
 
 // Test: override path where running has rule but files do not -> NonCompliant
@@ -208,10 +190,6 @@ TEST_F(AuditdRulesCheckTest, OverridePathMissingFileRuleIsNonCompliant)
     params.requiredOptions.items = {"-p wa"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    // cleanup
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
@@ -250,9 +228,6 @@ TEST_F(AuditdRulesCheckTest, SyscallSearchCompliantWithOverridePath)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
@@ -282,8 +257,6 @@ TEST_F(AuditdRulesCheckTest, SyscallSuppressionRespectsFirstMatchingRule)
             EXPECT_EQ(result.Value(), runningSuppressed || filesSuppressed ? Status::NonCompliant : Status::Compliant);
         }
     }
-    RemoveFile(file);
-    RemoveDir(dir);
 }
 
 TEST_F(AuditdRulesCheckTest, AdditionalAuditingRuleDoesNotInvalidateCompliantRule)
@@ -304,9 +277,6 @@ TEST_F(AuditdRulesCheckTest, AdditionalAuditingRuleDoesNotInvalidateCompliantRul
     params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-F auid>=123", "-F auid!=(unset|-1|4294967295)"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
@@ -338,9 +308,6 @@ TEST_F(AuditdRulesCheckTest, PersistentRulesUseNaturalOrderAndPrependActions)
         ASSERT_TRUE(result.HasValue());
         EXPECT_EQ(result.Value(), prepend ? Status::NonCompliant : Status::Compliant);
     }
-    RemoveFile(earlyFile);
-    RemoveFile(lateFile);
-    RemoveDir(dir);
 }
 
 TEST_F(AuditdRulesCheckTest, EarlierDisjointSuppressionDoesNotInvalidateRule)
@@ -359,8 +326,6 @@ TEST_F(AuditdRulesCheckTest, EarlierDisjointSuppressionDoesNotInvalidateRule)
     params.searchItem = "-S open";
     params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-F exit=-EACCES"};
     auto result = AuditAuditdRules(params, indicators, mContext);
-    RemoveFile(file);
-    RemoveDir(dir);
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(result.Value(), Status::Compliant);
 }
@@ -384,9 +349,6 @@ TEST_F(AuditdRulesCheckTest, SyscallPrefixDoesNotMatchLongerSyscall)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
@@ -407,9 +369,6 @@ TEST_F(AuditdRulesCheckTest, HighBitSyscallSuffixDoesNotSatisfyExactToken)
     params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(result.Value(), Status::NonCompliant);
@@ -433,9 +392,6 @@ TEST_F(AuditdRulesCheckTest, SyscallMatchesTabAndEndOfLineBoundaries)
         params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)"};
 
         auto result = AuditAuditdRules(params, indicators, mContext);
-
-        RemoveFile(file);
-        RemoveDir(dir);
 
         ASSERT_TRUE(result.HasValue());
         EXPECT_EQ(result.Value(), Status::Compliant) << rules;
@@ -461,9 +417,6 @@ TEST_F(AuditdRulesCheckTest, ParallelArchAndExitVariantsDoNotInvalidateRule)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
@@ -484,9 +437,6 @@ TEST_F(AuditdRulesCheckTest, SyscallListWithLongerSuffixStillMatchesExactToken)
     params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-F auid>=123", "-F auid!=(unset|-1|4294967295)"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
@@ -509,9 +459,6 @@ TEST_F(AuditdRulesCheckTest, LongerSyscallAloneDoesNotSatisfyExactToken)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
@@ -533,9 +480,6 @@ TEST_F(AuditdRulesCheckTest, SyscallSearchFilesMissingIsNonCompliant)
     params.requiredOptions.items = {"-F arch=b64:-a (always,exit|exit,always):-F auid>=123:-F auid!=(unset|-1|4294967295)"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
@@ -561,9 +505,6 @@ TEST_F(AuditdRulesCheckTest, MultiSyscallOneMissingInFilesIsNonCompliant)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
@@ -585,9 +526,6 @@ TEST_F(AuditdRulesCheckTest, ExcludeOptionsSkipsMatchingRules)
     params.excludeOption = "-k badkey";
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
@@ -613,9 +551,6 @@ TEST_F(AuditdRulesCheckTest, SudoLogfileCompliantWithOverridePath)
     params.requiredOptions.items = {"-p wa"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
@@ -643,9 +578,6 @@ TEST_F(AuditdRulesCheckTest, SudoLogfileFilesMissingIsNonCompliant)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
@@ -666,9 +598,6 @@ TEST_F(AuditdRulesCheckTest, ImmutableRuleCompliant)
     params.requiredOptions.items = {".*"}; // allow any content for this simple line
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
@@ -691,9 +620,6 @@ TEST_F(AuditdRulesCheckTest, ImmutableRuleMissingIsNonCompliant)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
@@ -715,9 +641,6 @@ TEST_F(AuditdRulesCheckTest, RunningRuleMissingRequiredOptionsIsNonCompliant)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
@@ -738,9 +661,6 @@ TEST_F(AuditdRulesCheckTest, RunningRulesEmptyButFileMatchesIsNonCompliant)
     params.requiredOptions.items = {"-p wa"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
@@ -764,8 +684,6 @@ TEST_F(AuditdRulesCheckTest, SudoLogfileNotFoundReturnsFailure)
     params.requiredOptions.items = {"-p wa"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);

@@ -31,18 +31,9 @@ protected:
 
     void SetUp() override
     {
-        char tmppath[MAXPATHLEN] = "/tmp/EnsureNoDuplicateEntriesExistTestXXXXXX";
-        ASSERT_TRUE(nullptr != mkdtemp(tmppath));
-        mTempdir = tmppath;
+        mTempdir = mContext.GetTempdirPath() + "/no-duplicate-entries";
+        ASSERT_EQ(0, mkdir(mTempdir.c_str(), 0700));
         mIndicators.Push("EnsureNoDuplicateEntriesExist");
-    }
-
-    void TearDown() override
-    {
-        if (0 != rmdir(mTempdir.c_str()))
-        {
-            OsConfigLogError(mContext.GetLogHandle(), "Failed to remove temporary directory %s: %s", mTempdir.c_str(), strerror(errno));
-        }
     }
 
     std::string CreateTestFile(const std::string& content)

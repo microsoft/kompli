@@ -15,6 +15,29 @@
 using namespace ComplianceEngine;
 using ::testing::Return;
 
+namespace
+{
+Result<std::string> ReadFile(const std::string& path)
+{
+    std::ifstream input(path);
+    if (!input.is_open())
+    {
+        return Error("Failed to read test file", errno);
+    }
+    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+
+std::string QueryCommand(const AideAttributesParams& params)
+{
+    std::unique_ptr<char, decltype(&free)> canonical(realpath(params.filename.c_str(), nullptr), &free);
+    if (!canonical)
+    {
+        return "";
+    }
+    return "aide --config \"" + EscapeForShell(params.configPath) + "\" -p \"f:" + EscapeForShell(canonical.get()) + "\"";
+}
+} // anonymous namespace
+
 class AideAttributesTest : public ::testing::Test
 {
 protected:
@@ -86,12 +109,11 @@ TEST_F(AideAttributesTest, EveryAttributeIsRequired)
 
 TEST_F(AideAttributesTest, ExecutableFailureCannotBeHiddenByMatchingOutput)
 {
-    char directoryTemplate[] = "/tmp/aide-attributes-XXXXXX";
-    char* directory = mkdtemp(directoryTemplate);
-    ASSERT_NE(directory, nullptr);
-    const std::string executable = std::string(directory) + "/aide";
-    const std::string selected = std::string(directory) + "/tool \"$(id)`id`";
-    const std::string link = std::string(directory) + "/tool-link";
+    const std::string directory = context.GetTempdirPath() + "/aide \"$(printf dollar)`printf backtick`";
+    ASSERT_EQ(0, mkdir(directory.c_str(), 0700));
+    const std::string executable = directory + "/aide";
+    const std::string selected = directory + "/tool \"$(id)`id`";
+    const std::string link = directory + "/tool-link";
     std::ofstream(selected).close();
     ASSERT_EQ(symlink(selected.c_str(), link.c_str()), 0);
     params.filename = link;
@@ -105,16 +127,12 @@ TEST_F(AideAttributesTest, ExecutableFailureCannotBeHiddenByMatchingOutput)
         }
         ASSERT_EQ(chmod(executable.c_str(), 0700), 0);
         EXPECT_CALL(context, ExecuteCommand(command)).WillOnce(::testing::Invoke([&](const std::string& query) {
-            return realContext.ExecuteCommand("PATH=\"" + std::string(directory) + "\" " + query);
+            return realContext.ExecuteCommand("PATH=\"" + EscapeForShell(directory) + "\" " + query);
         }));
         auto result = AuditAideAttributes(params, indicators, context);
         ASSERT_TRUE(result.HasValue());
         EXPECT_EQ(result.Value(), exitCode == 0 ? Status::Compliant : Status::NonCompliant);
     }
-    EXPECT_EQ(unlink(link.c_str()), 0);
-    EXPECT_EQ(unlink(selected.c_str()), 0);
-    EXPECT_EQ(unlink(executable.c_str()), 0);
-    EXPECT_EQ(rmdir(directory), 0);
 }
 
 TEST_F(AideAttributesTest, MissingFile)
@@ -149,4 +167,83 @@ TEST_F(AideAttributesTest, EscapeConfigPath)
     auto result = AuditAideAttributes(params, indicators, context);
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(AideAttributesTest, RemediateAddsValidatedExactFileRule)
+{
+    params.configPath = context.MakeTempfile("# existing configuration\n", ".conf");
+    params.filename = context.MakeTempfile("protected", ".tool");
+    command = QueryCommand(params);
+    EXPECT_CALL(context, ExecuteCommand(command))
+        .WillOnce(Return(Result<std::string>("p+i+n+u+g+s+b+acl+xattrs\n")))
+        .WillOnce(Return(Result<std::string>(params.attributes + "\n")));
+    EXPECT_CALL(context, GetFileContents(params.configPath)).WillOnce(::testing::Invoke([this](const std::string&) {
+        return ReadFile(params.configPath);
+    }));
+
+    auto result = RemediateAideAttributes(params, indicators, context);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    auto config = ReadFile(params.configPath);
+    ASSERT_TRUE(config.HasValue());
+    EXPECT_EQ(config->find("# kompli:AideAttributes:"), 0);
+    EXPECT_NE(config->find("%2Etool$ " + params.attributes + "\n# existing configuration\n"), std::string::npos);
+}
+
+TEST_F(AideAttributesTest, RemediateCompliantConfigurationIsNoOp)
+{
+    params.configPath = context.MakeTempfile("# existing configuration\n", ".conf");
+    params.filename = context.MakeTempfile("protected", ".tool");
+    command = QueryCommand(params);
+    EXPECT_CALL(context, ExecuteCommand(command)).WillOnce(Return(Result<std::string>(params.attributes + "\n")));
+    struct stat before;
+    ASSERT_EQ(stat(params.configPath.c_str(), &before), 0);
+
+    auto result = RemediateAideAttributes(params, indicators, context);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    struct stat after;
+    ASSERT_EQ(stat(params.configPath.c_str(), &after), 0);
+    EXPECT_EQ(before.st_ino, after.st_ino);
+}
+
+TEST_F(AideAttributesTest, RemediateRollsBackFailedValidation)
+{
+    const std::string original = "# existing configuration\n";
+    params.configPath = context.MakeTempfile(original, ".conf");
+    params.filename = context.MakeTempfile("protected", ".tool");
+    command = QueryCommand(params);
+    EXPECT_CALL(context, ExecuteCommand(command)).WillOnce(Return(Result<std::string>(""))).WillOnce(Return(Result<std::string>("p+i+n\n")));
+    EXPECT_CALL(context, GetFileContents(params.configPath)).WillOnce(::testing::Invoke([this](const std::string&) {
+        return ReadFile(params.configPath);
+    }));
+
+    auto result = RemediateAideAttributes(params, indicators, context);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+
+    auto config = ReadFile(params.configPath);
+    ASSERT_TRUE(config.HasValue());
+    EXPECT_EQ(config.Value(), original);
+}
+
+TEST_F(AideAttributesTest, RemediateRejectsSymlinkConfiguration)
+{
+    const auto target = context.MakeTempfile("# existing configuration\n", ".conf");
+    params.configPath = context.GetTempdirPath() + "/aide-link.conf";
+    ASSERT_EQ(symlink(target.c_str(), params.configPath.c_str()), 0);
+    params.filename = context.MakeTempfile("protected", ".tool");
+    command = QueryCommand(params);
+    EXPECT_CALL(context, ExecuteCommand(command)).WillOnce(Return(Result<std::string>("")));
+    EXPECT_CALL(context, GetFileContents(params.configPath)).WillOnce(::testing::Invoke([target](const std::string&) { return ReadFile(target); }));
+
+    auto result = RemediateAideAttributes(params, indicators, context);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+
+    auto config = ReadFile(target);
+    ASSERT_TRUE(config.HasValue());
+    EXPECT_EQ(config.Value(), "# existing configuration\n");
 }

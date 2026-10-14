@@ -9,5 +9,6 @@
 namespace ComplianceEngine
 {
 Result<Status> AuditXdmcpDisabled(IndicatorsTree& indicators, ContextInterface& context);
+Result<Status> RemediateXdmcpDisabled(IndicatorsTree& indicators, ContextInterface& context);
 } // namespace ComplianceEngine
 #endif // COMPLIANCEENGINE_PROCEDURES_XDMCP_DISABLED_H

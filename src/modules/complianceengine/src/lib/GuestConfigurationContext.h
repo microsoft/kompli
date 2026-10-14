@@ -13,8 +13,8 @@ namespace ComplianceEngine
 class GuestConfigurationContext : public CommonContext
 {
 public:
-    GuestConfigurationContext(OsConfigLogHandle log, const int fd = -1)
-        : CommonContext(log, sStatePath, fd)
+    GuestConfigurationContext(OsConfigLogHandle log, const int telemetryFileDescriptor = -1)
+        : CommonContext(log, sStatePath, telemetryFileDescriptor)
     {
     }
 

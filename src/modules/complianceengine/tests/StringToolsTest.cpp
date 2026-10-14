@@ -144,3 +144,68 @@ TEST_F(StringToolsTest, TrimWhiteSpaces_InternalWhitespace)
     EXPECT_EQ("hello  world", TrimWhiteSpaces("  hello  world  "));
     EXPECT_EQ("hello\tworld", TrimWhiteSpaces("hello\tworld"));
 }
+
+TEST_F(StringToolsTest, TrimWhiteSpaces_PreservesHighBitBytes)
+{
+    EXPECT_EQ(std::string("\x80", 1), TrimWhiteSpaces(std::string(" \x80 ", 3)));
+}
+
+TEST_F(StringToolsTest, StripCommentLeavesWhitespaceForCaller)
+{
+    EXPECT_EQ("UID_MIN  1000 ", ComplianceEngine::StripComment("UID_MIN  1000 # users"));
+    EXPECT_EQ("", ComplianceEngine::StripComment("# UID_MIN 0"));
+    EXPECT_EQ("UID_MIN 1000", ComplianceEngine::StripComment("UID_MIN 1000"));
+}
+
+TEST_F(StringToolsTest, IntegerConversionRejectsUnconsumedSuffixes)
+{
+    for (const auto& value : {"5junk", "5 # comment", "5 ", "5\n", "5 6"})
+    {
+        const auto signedResult = ComplianceEngine::TryStringToInt(value);
+        ASSERT_FALSE(signedResult.HasValue()) << value;
+        EXPECT_EQ(signedResult.Error().code, EINVAL) << value;
+        EXPECT_EQ(signedResult.Error().message, std::string("Invalid integer value: ") + value);
+
+        const auto unsignedResult = ComplianceEngine::TryStringToUint(value);
+        ASSERT_FALSE(unsignedResult.HasValue()) << value;
+        EXPECT_EQ(unsignedResult.Error().code, EINVAL) << value;
+    }
+}
+
+TEST_F(StringToolsTest, IntegerConversionKeepsLeadingWhitespaceSignsAndBases)
+{
+    auto signedResult = ComplianceEngine::TryStringToInt(" \t-12");
+    ASSERT_TRUE(signedResult.HasValue());
+    EXPECT_EQ(signedResult.Value(), -12);
+
+    signedResult = ComplianceEngine::TryStringToInt("+12");
+    ASSERT_TRUE(signedResult.HasValue());
+    EXPECT_EQ(signedResult.Value(), 12);
+
+    signedResult = ComplianceEngine::TryStringToInt("077", 8);
+    ASSERT_TRUE(signedResult.HasValue());
+    EXPECT_EQ(signedResult.Value(), 63);
+
+    signedResult = ComplianceEngine::TryStringToInt("0x10", 0);
+    ASSERT_TRUE(signedResult.HasValue());
+    EXPECT_EQ(signedResult.Value(), 16);
+
+    signedResult = ComplianceEngine::TryStringToInt("078", 8);
+    ASSERT_FALSE(signedResult.HasValue());
+    EXPECT_EQ(signedResult.Error().code, EINVAL);
+
+    const auto unsignedResult = ComplianceEngine::TryStringToUint("-1");
+    ASSERT_FALSE(unsignedResult.HasValue());
+}
+
+TEST_F(StringToolsTest, IntegerConversionRetainsOverflowAndInvalidErrors)
+{
+    const auto overflow = ComplianceEngine::TryStringToInt("2147483648");
+    ASSERT_FALSE(overflow.HasValue());
+    EXPECT_EQ(overflow.Error().code, ERANGE);
+    EXPECT_EQ(overflow.Error().message, "Integer value out of range: 2147483648");
+
+    const auto invalid = ComplianceEngine::TryStringToInt("junk");
+    ASSERT_FALSE(invalid.HasValue());
+    EXPECT_EQ(invalid.Error().code, EINVAL);
+}

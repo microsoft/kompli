@@ -29,6 +29,10 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
     const auto behavior = params.behavior.Value();
     auto log = context.GetLogHandle();
     const bool numericOwnership = params.maximumUid.HasValue() || params.maximumGid.HasValue();
+    if ((params.groupId.HasValue() && (params.group.HasValue() || numericOwnership || params.groupId.Value() < 0)))
+    {
+        return Error("Invalid numeric group ID collection parameters", EINVAL);
+    }
     if ((params.maximumUid.HasValue() && params.maximumUid.Value() < 0) || (params.maximumGid.HasValue() && params.maximumGid.Value() < 0) ||
         (params.allFileTypes.Value() && (params.directoriesOnly.Value() || !numericOwnership)) ||
         (params.excludeSymlinks.Value() && !params.allFileTypes.Value()) || (params.excludeDirectories.Value() && !params.allFileTypes.Value()) ||
@@ -36,6 +40,10 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
                                  params.group.HasValue() || params.mask.HasValue() || params.permissions.HasValue())))
     {
         return Error("Invalid numeric ownership collection parameters", EINVAL);
+    }
+    if (isRemediation && params.groupId.HasValue())
+    {
+        return Error("Numeric group ID remediation is not supported", ENOTSUP);
     }
     if (isRemediation && (numericOwnership || params.allFileTypes.Value()))
     {
@@ -129,6 +137,7 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
                     subParams.path = fileName;
                     subParams.owner = params.owner;
                     subParams.group = params.group;
+                    subParams.groupId = params.groupId;
                     subParams.permissions = params.permissions;
                     subParams.mask = params.mask;
                     subParams.behavior = params.behavior;
@@ -224,6 +233,10 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
 Result<Status> AuditFilePermissions(const FilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
     assert(params.behavior.HasValue());
+    if (params.groupId.HasValue() && (params.group.HasValue() || params.groupId.Value() < 0))
+    {
+        return Error("Invalid numeric group ID parameters", EINVAL);
+    }
     auto log = context.GetLogHandle();
     struct stat statbuf;
     if (0 != stat(params.path.c_str(), &statbuf))
@@ -283,6 +296,15 @@ Result<Status> AuditFilePermissions(const FilePermissionsParams& params, Indicat
         indicators.Compliant(params.path + " owner matches expected value '" + params.owner->ToString() + "'");
     }
 
+    if (params.groupId.HasValue())
+    {
+        if (statbuf.st_gid != static_cast<gid_t>(params.groupId.Value()))
+        {
+            return indicators.NonCompliant("Invalid group ID on '" + params.path + "' - is " + std::to_string(statbuf.st_gid) + " should be " +
+                                           std::to_string(params.groupId.Value()));
+        }
+        indicators.Compliant(params.path + " group ID matches expected value " + std::to_string(params.groupId.Value()));
+    }
     if (params.group.HasValue())
     {
         group* grp = getgrgid(statbuf.st_gid);
@@ -357,6 +379,14 @@ Result<Status> AuditFilePermissions(const FilePermissionsParams& params, Indicat
 
 Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
+    if (params.groupId.HasValue() && (params.group.HasValue() || params.groupId.Value() < 0))
+    {
+        return Error("Invalid numeric group ID parameters", EINVAL);
+    }
+    if (params.groupId.HasValue())
+    {
+        return Error("Numeric group ID remediation is not supported", ENOTSUP);
+    }
     auto log = context.GetLogHandle();
 
     // Open the target without following a final-component symlink and keep the descriptor open for
