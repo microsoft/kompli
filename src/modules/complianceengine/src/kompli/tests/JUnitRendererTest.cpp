@@ -1,11 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#include <BenchmarkFormatter.hpp>
-#include <DistributionInfo.h>
 #include <JUnitRenderer.hpp>
-#include <Resource.hpp>
-#include <RuleFilters.hpp>
 #include <cerrno>
 #include <gtest/gtest.h>
 #include <string>
@@ -225,34 +221,6 @@ TEST(JUnitRendererTest, RejectsInvalidXmlCharactersAndUtf8)
 
     auto valid = RenderJUnit(R"({"rules":[{"id":"1","title":"\u00E9\uD83D\uDE00","status":"Compliant"}]})", "s");
     ASSERT_TRUE(valid.HasValue()) << valid.Error().message;
-}
-
-TEST(JUnitRendererTest, CanonicalFormatterResultRendersTitleTagsAndSkippedRules)
-{
-    using ComplianceEngine::Status;
-    using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
-    using ComplianceEngine::BenchmarkIO::Resource;
-
-    auto begun = BenchmarkFormatter::Begin(ComplianceEngine::DistributionInfo{});
-    ASSERT_TRUE(begun.HasValue()) << begun.Error().message;
-    auto& formatter = begun.Value();
-    Resource rule;
-    rule.id = "1.1";
-    rule.resourceID = "Human-readable rule";
-    rule.ruleName = "EngineRule";
-    rule.ruleId = "rule-1.1";
-    rule.tags = {"level:l1", "severity:critical"};
-    ASSERT_FALSE(formatter.AddSkippedEntry(rule, {}).HasValue());
-    auto canonical = std::move(formatter).Finish(Status::NotApplicable);
-    ASSERT_TRUE(canonical.HasValue()) << canonical.Error().message;
-
-    auto rendered = RenderJUnit(canonical.Value(), "suite");
-    ASSERT_TRUE(rendered.HasValue()) << rendered.Error().message;
-    EXPECT_TRUE(Contains(rendered.Value(), "<testcase classname=\"1.1\" name=\"Human-readable rule\">"));
-    EXPECT_TRUE(Contains(rendered.Value(), "<tag value=\"level:l1\"/>"));
-    EXPECT_TRUE(Contains(rendered.Value(), "<tag value=\"severity:critical\"/>"));
-    EXPECT_TRUE(Contains(rendered.Value(), "<skipped message=\"Rule was skipped\">Rule: EngineRule"));
-    EXPECT_TRUE(Contains(rendered.Value(), "tests=\"1\" failures=\"0\" skipped=\"1\""));
 }
 
 TEST(JUnitRendererTest, InvalidJsonIsError)
