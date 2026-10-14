@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 #include <JUnitRenderer.hpp>
+#include <RuleFilters.hpp>
 #include <cerrno>
 #include <gtest/gtest.h>
 #include <string>
