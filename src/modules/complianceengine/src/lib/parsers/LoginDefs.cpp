@@ -4,6 +4,7 @@
 #include "LoginDefs.h"
 
 #include <cerrno>
+#include <utility>
 
 namespace ComplianceEngine
 {
@@ -82,21 +83,22 @@ bool Document::HasEmbeddedNul(const Record& record) const
     return false;
 }
 
-Result<Document> Parse(const std::string& bytes, const std::string& source)
+Result<Document> Parse(std::string bytes, std::string source)
 {
     if (MaxBytes < bytes.size())
     {
         return LimitError("byte");
     }
 
-    Document document{source, bytes, {}, {}};
+    Document document{std::move(source), std::move(bytes), {}, {}};
+    const auto& input = document.bytes;
     std::size_t start = 0;
     std::size_t lineNumber = 1;
-    std::size_t nextNul = bytes.find('\0');
-    while (start < bytes.size())
+    std::size_t nextNul = input.find('\0');
+    while (start < input.size())
     {
-        const auto newline = bytes.find('\n', start);
-        const auto end = std::string::npos == newline ? bytes.size() : newline;
+        const auto newline = input.find('\n', start);
+        const auto end = std::string::npos == newline ? input.size() : newline;
         if (MaxLineBytes < end - start)
         {
             return LimitError("line");
@@ -109,33 +111,33 @@ Result<Document> Parse(const std::string& bytes, const std::string& source)
                 return LimitError("diagnostic");
             }
             document.diagnostics.push_back({Diagnostic::Kind::EmbeddedNul, {nextNul, 1}, lineNumber, nextNul - start + 1});
-            nextNul = bytes.find('\0', nextNul + 1);
+            nextNul = input.find('\0', nextNul + 1);
         }
 
         std::size_t keyStart = start;
-        while ((keyStart < end) && IsSeparator(bytes[keyStart]))
+        while ((keyStart < end) && IsSeparator(input[keyStart]))
         {
             ++keyStart;
         }
-        if ((keyStart < end) && ('#' != bytes[keyStart]))
+        if ((keyStart < end) && ('#' != input[keyStart]))
         {
             if (MaxRecords <= document.records.size())
             {
                 return LimitError("record");
             }
             std::size_t keyEnd = keyStart;
-            while ((keyEnd < end) && !IsSeparator(bytes[keyEnd]))
+            while ((keyEnd < end) && !IsSeparator(input[keyEnd]))
             {
                 ++keyEnd;
             }
             std::size_t valueStart = keyEnd;
-            while ((valueStart < end) && IsSeparator(bytes[valueStart]))
+            while ((valueStart < end) && IsSeparator(input[valueStart]))
             {
                 ++valueStart;
             }
             const bool hasValue = valueStart < end;
             document.records.push_back({{start, end - start}, {keyStart, keyEnd - keyStart}, {valueStart, end - valueStart}, lineNumber, hasValue,
-                bytes.substr(keyStart, keyEnd - keyStart)});
+                input.substr(keyStart, keyEnd - keyStart)});
             if (!hasValue)
             {
                 if (MaxDiagnostics <= document.diagnostics.size())

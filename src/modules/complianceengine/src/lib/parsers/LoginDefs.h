@@ -70,7 +70,7 @@ struct Document
 
 // Offsets and columns count bytes, not characters. Lines and columns are 1-based.
 // LF ends a physical line; a preceding CR remains in the raw line/value.
-Result<Document> Parse(const std::string& bytes, const std::string& source);
+Result<Document> Parse(std::string bytes, std::string source);
 } // namespace LoginDefs
 } // namespace ComplianceEngine
 

@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <parsers/LoginDefs.h>
 #include <string>
+#include <utility>
 
 namespace
 {
@@ -22,6 +23,25 @@ TEST(LoginDefsTest, EmptyAndCommentOnlyAreSuccessfulDocuments)
     ASSERT_TRUE(comments.HasValue());
     EXPECT_TRUE(comments.Value().records.empty());
     EXPECT_TRUE(comments.Value().diagnostics.empty());
+}
+
+TEST(LoginDefsTest, OwnsMovedInputAndPreservesLvalueArguments)
+{
+    std::string bytes = "UID_MIN 1000\n";
+    std::string source = "/etc/login.defs";
+    const auto copied = ld::Parse(bytes, source);
+    ASSERT_TRUE(copied.HasValue());
+    EXPECT_EQ("UID_MIN 1000\n", bytes);
+    EXPECT_EQ("/etc/login.defs", source);
+    EXPECT_EQ(bytes, copied.Value().bytes);
+    EXPECT_EQ(source, copied.Value().source);
+
+    const auto moved = ld::Parse(std::move(bytes), std::move(source));
+    ASSERT_TRUE(moved.HasValue());
+    EXPECT_EQ("UID_MIN 1000\n", moved.Value().bytes);
+    EXPECT_EQ("/etc/login.defs", moved.Value().source);
+    ASSERT_EQ(1U, moved.Value().records.size());
+    EXPECT_EQ("1000", moved.Value().Text(moved.Value().records[0].valueSpan));
 }
 
 TEST(LoginDefsTest, KeepsOrderedDuplicatesUnknownKeysAndPhysicalSpans)
