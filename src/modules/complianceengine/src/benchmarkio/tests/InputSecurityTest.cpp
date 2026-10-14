@@ -42,6 +42,14 @@ bool CreateFile(const std::string& path, mode_t mode)
     return true;
 }
 
+bool HasSecureConventionalRoot()
+{
+    struct stat info
+    {
+    };
+    return ::stat("/", &info) == 0 && info.st_uid == 0 && (info.st_mode & (S_IWGRP | S_IWOTH)) == 0;
+}
+
 } // namespace
 
 // Base fixture: owns a MockContext whose mkdtemp() tree is removed on
@@ -211,7 +219,10 @@ TEST_F(RefuseWritableParentDirTest, NonExistentParentIsRefused)
 
 TEST_F(RefuseWritableParentDirTest, RootDirectoryIsAccepted)
 {
-    // "/" is root-owned and not world-writable on any sane system.
+    if (!HasSecureConventionalRoot())
+    {
+        GTEST_SKIP() << "requires / to be owned by uid 0 and not writable by group or others";
+    }
     // No file is created; the function only stats the parent directory.
     EXPECT_FALSE(RefuseWritableParentDir("/foo.json", nullptr));
 }

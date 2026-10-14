@@ -5,6 +5,7 @@
 
 #include <RootPathSecurity.h>
 #include <gtest/gtest.h>
+#include <pwd.h>
 #include <string>
 #include <sys/param.h>
 #include <sys/stat.h>
@@ -16,6 +17,25 @@ using ComplianceEngine::IndicatorsTree;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 using ::testing::Return;
+
+namespace
+{
+
+bool IsSecureRootOwnedDirectory(const char* path)
+{
+    struct stat info
+    {
+    };
+    if (stat(path, &info) != 0 || !S_ISDIR(info.st_mode) || (info.st_mode & (S_IWGRP | S_IWOTH)) != 0)
+    {
+        return false;
+    }
+
+    const auto* owner = getpwuid(info.st_uid);
+    return owner != nullptr && std::string(owner->pw_name) == "root";
+}
+
+} // namespace
 
 class EnsureRootPathTest : public ::testing::Test
 {
@@ -40,6 +60,14 @@ protected:
 
 TEST_F(EnsureRootPathTest, AuditRootPathCompliant)
 {
+    for (const auto* directory : {"/bin", "/usr/bin", "/sbin", "/usr/sbin"})
+    {
+        if (!IsSecureRootOwnedDirectory(directory))
+        {
+            GTEST_SKIP() << "requires secure root-owned PATH directory: " << directory;
+        }
+    }
+
     EXPECT_CALL(mContext, ExecuteCommand("sudo -n -Hiu root env")).WillOnce(Return(Result<std::string>("PATH=/bin:/usr/bin:/sbin:/usr/sbin")));
 
     auto result = AuditRootPathSecurity(indicators, mContext);
