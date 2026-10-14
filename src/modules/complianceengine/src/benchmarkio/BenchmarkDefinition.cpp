@@ -106,6 +106,17 @@ Result<string> RequiredString(const JSON_Object* object, const char* key, const 
     return value;
 }
 
+Result<string> RequiredStringAllowEmpty(const JSON_Object* object, const char* key, const string& context)
+{
+    const JSON_Value* jsonValue = json_object_get_value(object, key);
+    if (nullptr == jsonValue || JSONString != json_value_get_type(jsonValue))
+    {
+        return Error("Benchmark definition " + context + " is missing required string field '" + string(key) + "'", EINVAL);
+    }
+
+    return ReadStringValue(jsonValue, key, context);
+}
+
 Result<Optional<string>> OptionalString(const JSON_Object* object, const char* key, const string& context)
 {
     const JSON_Value* jsonValue = json_object_get_value(object, key);
@@ -183,7 +194,7 @@ Result<std::map<string, BenchmarkIO::ParameterMetadata>> ParseParameterMetadata(
             return Error("Benchmark definition " + entryContext + " is not a JSON object", EINVAL);
         }
 
-        auto defaultValue = RequiredString(entryObject, "default", entryContext);
+        auto defaultValue = RequiredStringAllowEmpty(entryObject, "default", entryContext);
         if (!defaultValue.HasValue())
         {
             return defaultValue.Error();

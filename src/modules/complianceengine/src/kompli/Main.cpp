@@ -56,6 +56,7 @@ using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 using ComplianceEngine::TelemetryEvent;
 using ComplianceEngine::TelemetryEventType;
+using ComplianceEngine::BenchmarkDefinition::BenchmarkDocument;
 using ComplianceEngine::BenchmarkDefinition::ParseFile;
 using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
 using ComplianceEngine::BenchmarkIO::RefuseUnsafeLogFile;
@@ -74,6 +75,7 @@ using ComplianceEngine::Kompli::RenderJUnit;
 using ComplianceEngine::Kompli::RenderText;
 using ComplianceEngine::Kompli::TextStyle;
 using ComplianceEngine::Kompli::ToggleMode;
+using ComplianceEngine::Kompli::ValidatePlanForRun;
 using std::string;
 
 #ifdef BUILD_TELEMETRY
@@ -290,6 +292,8 @@ int main(int argc, char* argv[])
     // This re-reads each benchmark file up front (a nullptr log handle is
     // fine here, same as ParsePlanFile above); the per-block loop below
     // parses it again once log handle / applicability checks are ready.
+    std::vector<BenchmarkDocument> documents;
+    documents.reserve(plan.benchmarks.size());
     std::vector<std::pair<string, BenchmarkInfo>> identities;
     identities.reserve(plan.benchmarks.size());
     for (const auto& benchmark : plan.benchmarks)
@@ -301,6 +305,7 @@ int main(int argc, char* argv[])
             return 1;
         }
         identities.emplace_back(benchmark.file, identityDocResult.Value().benchmarkInfo);
+        documents.push_back(std::move(identityDocResult.Value()));
     }
     auto duplicateIdentityError = CheckUniqueBenchmarkIdentities(identities);
     if (duplicateIdentityError.HasValue())
@@ -398,6 +403,13 @@ int main(int argc, char* argv[])
     // formatter (at its construction, above) to render each rule's
     // indicators. Presentation is the `render` subcommand's job.
     const auto& distributionInfo = engine.GetDistributionInfo().Value();
+    auto validationError = ValidatePlanForRun(plan, documents, distributionInfo);
+    if (validationError.HasValue())
+    {
+        OsConfigLogError(logHandle.get(), "Refusing to run plan: %s", validationError.Value().message.c_str());
+        return 1;
+    }
+
     auto formatterResult = BenchmarkFormatter::Begin(distributionInfo);
     if (!formatterResult.HasValue())
     {
@@ -420,41 +432,7 @@ int main(int argc, char* argv[])
     // kompli's scope (ADR-0008) - not a byte-hash pin here.
     for (size_t b = 0; b < plan.benchmarks.size(); ++b)
     {
-        const string& benchmarkFile = plan.benchmarks[b].file;
-
-        // Parse the input as a benchmark-definition document. Definition input is a
-        // required positional file argument (enforced in ParseCommandLine); the
-        // parser encapsulates the full input-hardening posture (path-traversal
-        // rejection, root-owned non-writable parent directory, O_NOFOLLOW open, and
-        // regular-file/ownership/mode checks) and owns the file. stdin is
-        // deliberately unsupported for definitions so those integrity checks can
-        // never be bypassed by piping data in.
-        auto docResult = ParseFile(benchmarkFile, logHandle.get());
-        if (!docResult.HasValue())
-        {
-            OsConfigLogError(logHandle.get(), "Failed to parse benchmark definition input: %s", docResult.Error().message.c_str());
-            return 1;
-        }
-        const auto& doc = docResult.Value();
-
-        // Validate applicability once per file -
-        // every rule in one file shares the same distro/version prefix, so this
-        // is the only check possible now that rules no longer carry their own
-        // (see BenchmarkIO::Resource). A mismatch hard-fails the whole run:
-        // mixing a mismatched benchmark entry into an otherwise-valid plan is
-        // treated as an authoring mistake, not something to silently skip and
-        // report a partial result for.
-        if (!doc.benchmarkInfo.Match(distributionInfo))
-        {
-            OsConfigLogError(logHandle.get(), "Aborting on benchmark '%s': not applicable for the current distribution", benchmarkFile.c_str());
-            OsConfigLogError(logHandle.get(), "Current system identification: %s", std::to_string(distributionInfo).c_str());
-            auto overridden = distributionInfo;
-            overridden.distribution = doc.benchmarkInfo.distribution;
-            overridden.version = doc.benchmarkInfo.SanitizedVersion();
-            OsConfigLogError(logHandle.get(), "To override this detection, place the following line inside the '%s' file: %s",
-                DistributionInfo::cDefaultOverrideFilePath, std::to_string(overridden).c_str());
-            return 1;
-        }
+        const auto& doc = documents[b];
 
         for (const auto& entry : doc.resources)
         {

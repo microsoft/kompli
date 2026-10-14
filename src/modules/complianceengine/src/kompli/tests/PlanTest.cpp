@@ -28,6 +28,7 @@ using ComplianceEngine::Kompli::ParamOverride;
 using ComplianceEngine::Kompli::ParsePlanFile;
 using ComplianceEngine::Kompli::Toggle;
 using ComplianceEngine::Kompli::ToggleMode;
+using ComplianceEngine::Kompli::ValidatePlanForRun;
 
 namespace
 {
@@ -215,6 +216,23 @@ TEST_F(GeneratePlanTest, UnknownSectionInToggleIsRejected)
     const std::vector<Toggle> toggles = {Toggle{"9.9.9.9", ToggleMode::Remediate}};
     auto result = GeneratePlan({path}, toggles, {}, nullptr);
     EXPECT_FALSE(result.HasValue());
+}
+
+TEST_F(GeneratePlanTest, RejectsAmbiguousQualifiedReferenceWithDuplicateBasenames)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const std::string firstPath = MakeVerifiedFile("duplicate_basename_first", "bench.json", kBenchmarkJson);
+    std::string secondJson = kBenchmarkJson;
+    secondJson.replace(secondJson.find("\"v1.0.0\""), std::string("\"v1.0.0\"").size(), "\"v2.0.0\"");
+    const std::string secondPath = MakeVerifiedFile("duplicate_basename_second", "bench.json", secondJson);
+
+    const std::vector<Toggle> toggles = {Toggle{"bench.json:1.1.1.1", ToggleMode::Remediate}};
+    auto result = GeneratePlan({firstPath, secondPath}, toggles, {}, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("Ambiguous file"), std::string::npos);
 }
 
 TEST_F(ParsePlanFileTest, ParsesValidPlan)
@@ -425,6 +443,53 @@ TEST_F(ParsePlanFileTest, RejectsInvalidMode)
     EXPECT_FALSE(result.HasValue());
 }
 
+TEST_F(ParsePlanFileTest, RejectsRawNulByte)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    std::string planJson = R"({"benchmarks":[{"file":"x.json","rules":{}}]})";
+    planJson.insert(planJson.find("x.json") + 1, 1, '\0');
+    const std::string path = MakeVerifiedFile("parse_plan_raw_nul", "plan.json", planJson);
+
+    auto result = ParsePlanFile(path, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("raw NUL"), std::string::npos);
+}
+
+TEST_F(ParsePlanFileTest, RejectsEscapedNulInDecodedString)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const char* const planJson = R"({
+      "benchmarks": [{"file": "x\u0000.json", "rules": {}}]
+    })";
+    const std::string path = MakeVerifiedFile("parse_plan_escaped_nul", "plan.json", planJson);
+
+    auto result = ParsePlanFile(path, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("embedded NUL"), std::string::npos);
+}
+
+TEST_F(ParsePlanFileTest, RejectsPresentNonObjectParameters)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const char* const planJson = R"({
+      "benchmarks": [{"file": "x.json", "rules": {"1.1": {"mode": "audit", "parameters": []}}}]
+    })";
+    const std::string path = MakeVerifiedFile("parse_plan_parameters_type", "plan.json", planJson);
+
+    auto result = ParsePlanFile(path, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("not a JSON object"), std::string::npos);
+}
+
 TEST_F(ParsePlanFileTest, RefusesNonRootOwnedFile)
 {
     if (::geteuid() == 0)
@@ -449,7 +514,76 @@ ComplianceEngine::BenchmarkInfo MakeInfo(const std::string& framework, const std
     EXPECT_TRUE(result.HasValue()) << result.Error().message;
     return result.Value();
 }
+
+ComplianceEngine::DistributionInfo MakeDistribution(const std::string& version = "22.04")
+{
+    ComplianceEngine::DistributionInfo result;
+    result.distribution = ComplianceEngine::LinuxDistribution::Ubuntu;
+    result.version = version;
+    return result;
+}
+
+ComplianceEngine::BenchmarkDefinition::BenchmarkDocument ParseDocument(const std::string& json)
+{
+    auto result = ComplianceEngine::BenchmarkDefinition::ParseString(json, nullptr);
+    EXPECT_TRUE(result.HasValue()) << result.Error().message;
+    return std::move(result.Value());
+}
 } // namespace
+
+TEST(ValidatePlanForRunTest, AcceptsKnownRuleAndValidParameters)
+{
+    auto document = ParseDocument(kParameterizedBenchmarkJson);
+    ComplianceEngine::Kompli::Plan plan;
+    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    benchmark.file = "bench.json";
+    ComplianceEngine::Kompli::PlanRuleMode rule(ToggleMode::Audit);
+    rule.parameters["mountPoint"] = "/var/tmp";
+    benchmark.rules["1.1.1.1"] = rule;
+    plan.benchmarks.push_back(benchmark);
+
+    EXPECT_FALSE(ValidatePlanForRun(plan, {document}, MakeDistribution()).HasValue());
+}
+
+TEST(ValidatePlanForRunTest, RejectsInapplicableBlock)
+{
+    auto document = ParseDocument(kBenchmarkJson);
+    ComplianceEngine::Kompli::Plan plan;
+    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    benchmark.file = "bench.json";
+    plan.benchmarks.push_back(benchmark);
+
+    EXPECT_TRUE(ValidatePlanForRun(plan, {document}, MakeDistribution("24.04")).HasValue());
+}
+
+TEST(ValidatePlanForRunTest, RejectsUnknownRule)
+{
+    auto document = ParseDocument(kBenchmarkJson);
+    ComplianceEngine::Kompli::Plan plan;
+    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    benchmark.file = "bench.json";
+    benchmark.rules["unknown"] = ComplianceEngine::Kompli::PlanRuleMode(ToggleMode::Audit);
+    plan.benchmarks.push_back(benchmark);
+
+    EXPECT_TRUE(ValidatePlanForRun(plan, {document}, MakeDistribution()).HasValue());
+}
+
+TEST(ValidatePlanForRunTest, RejectsUnknownOrInvalidParameter)
+{
+    auto document = ParseDocument(kParameterizedBenchmarkJson);
+    ComplianceEngine::Kompli::Plan plan;
+    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    benchmark.file = "bench.json";
+    ComplianceEngine::Kompli::PlanRuleMode rule(ToggleMode::Audit);
+    rule.parameters["unknown"] = "value";
+    benchmark.rules["1.1.1.1"] = rule;
+    plan.benchmarks.push_back(benchmark);
+    EXPECT_TRUE(ValidatePlanForRun(plan, {document}, MakeDistribution()).HasValue());
+
+    plan.benchmarks[0].rules["1.1.1.1"].parameters.clear();
+    plan.benchmarks[0].rules["1.1.1.1"].parameters["mountPoint"] = "relative";
+    EXPECT_TRUE(ValidatePlanForRun(plan, {document}, MakeDistribution()).HasValue());
+}
 
 TEST(CheckUniqueBenchmarkIdentitiesTest, AcceptsDistinctIdentities)
 {

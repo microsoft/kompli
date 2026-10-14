@@ -285,57 +285,57 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
         {
             return Error("--suite-name is only valid for the 'render' subcommand.");
         }
+    }
 
-        if (Command::Plan == result.command)
+    if (Command::Plan == result.command)
+    {
+        if (result.continueOnError)
         {
-            if (result.continueOnError)
-            {
-                return Error("--continue-on-error is not valid for 'plan'; it doesn't execute anything.");
-            }
+            return Error("--continue-on-error is not valid for 'plan'; it doesn't execute anything.");
         }
-        else
+    }
+    else
+    {
+        if (!result.toggles.empty())
         {
-            if (!result.toggles.empty())
-            {
-                return Error("--audit=/--remediate=/--enforce= are only valid for 'plan'.");
-            }
-            if (!result.paramOverrides.empty())
-            {
-                return Error("--param= is only valid for 'plan'.");
-            }
-            if (result.output.HasValue())
-            {
-                return Error("--output is only valid for 'plan'.");
-            }
-            if (Command::List == result.command && result.continueOnError)
-            {
-                return Error("--continue-on-error is not valid for 'list'; it doesn't execute anything.");
-            }
+            return Error("--audit=/--remediate=/--enforce= are only valid for 'plan'.");
         }
+        if (!result.paramOverrides.empty())
+        {
+            return Error("--param= is only valid for 'plan'.");
+        }
+        if (result.output.HasValue())
+        {
+            return Error("--output is only valid for 'plan'.");
+        }
+        if (Command::List == result.command && result.continueOnError)
+        {
+            return Error("--continue-on-error is not valid for 'list'; it doesn't execute anything.");
+        }
+    }
 
-        // run/list require a single on-disk file as the positional argument
-        // (the benchmark definition for list, the plan file for run); `plan`
-        // requires at least one (docs/CLI.md section 8.1). stdin ('-') is
-        // deliberately rejected so the input-hardening checks cannot be
-        // bypassed by piping data in.
-        if (Command::Plan == result.command)
+    // run/list require a single on-disk file as the positional argument
+    // (the benchmark definition for list, the plan file for run); `plan`
+    // requires at least one (docs/CLI.md section 8.1). stdin ('-') is
+    // deliberately rejected so the input-hardening checks cannot be
+    // bypassed by piping data in.
+    if (Command::Plan == result.command)
+    {
+        if (result.inputs.empty())
         {
-            if (result.inputs.empty())
+            return Error("At least one benchmark-definition file is required for 'plan'.");
+        }
+        for (const auto& file : result.inputs)
+        {
+            if (file.empty() || file == "-")
             {
-                return Error("At least one benchmark-definition file is required for 'plan'.");
-            }
-            for (const auto& file : result.inputs)
-            {
-                if (file.empty() || file == "-")
-                {
-                    return Error("A file argument is required for 'plan'; stdin ('-') is not supported.");
-                }
+                return Error("A file argument is required for 'plan'; stdin ('-') is not supported.");
             }
         }
-        else if (result.input.empty() || result.input == "-")
-        {
-            return Error("A file argument is required for 'run' and 'list'; stdin ('-') is not supported.");
-        }
+    }
+    else if ((Command::Run == result.command || Command::List == result.command) && (result.input.empty() || result.input == "-"))
+    {
+        return Error("A file argument is required for 'run' and 'list'; stdin ('-') is not supported.");
     }
 
     return result;

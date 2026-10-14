@@ -262,6 +262,25 @@ TEST(BenchmarkDefinitionParserTest, ParsesMultipleParameterMetadataEntries)
     EXPECT_EQ(result.Value().resources[0].parameterMetadata.size(), 2u);
 }
 
+TEST(BenchmarkDefinitionParserTest, AcceptsEmptyParameterMetadataDefault)
+{
+    const char* const ruleWithParams = R"({
+        "ruleName": "EnsureOptionalValue",
+        "title": "Optional value",
+        "id": "1.1.2.1.3",
+        "ruleId": "rule-id",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {"X": {}}, "parameters": {"optionalValue": ""}},
+        "parameterMetadata": {
+            "optionalValue": {"type": "string", "default": ""}
+        }
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().resources[0].parameterMetadata.at("optionalValue").defaultValue, "");
+}
+
 TEST(BenchmarkDefinitionParserTest, RejectsInvalidParameterMetadata)
 {
     const char* const notObject = R"({

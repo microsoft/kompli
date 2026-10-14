@@ -3,6 +3,7 @@
 #ifndef COMPLIANCE_ENGINE_CLI_PLAN_HPP
 #define COMPLIANCE_ENGINE_CLI_PLAN_HPP
 
+#include <BenchmarkDefinition.hpp>
 #include <BenchmarkInfo.h>
 #include <CliOptions.hpp>
 #include <Logging.h>
@@ -91,6 +92,12 @@ Result<Plan> ParsePlanFile(const std::string& path, OsConfigLogHandle logHandle)
 // `remediate` don't call this; they always run a rule's own baked-in
 // defaults unchanged.
 Result<std::string> ApplyParameterOverrides(const std::string& procedureJson, const std::map<std::string, std::string>& parameters);
+
+// Validates every plan block against its already-parsed definition before
+// execution starts. This prevents partial host mutation when a later block is
+// inapplicable or malformed. Each plan rule must exist in its definition, and
+// every supplied parameter must be declared and satisfy its validationRegex.
+Optional<Error> ValidatePlanForRun(const Plan& plan, const std::vector<BenchmarkDefinition::BenchmarkDocument>& documents, const DistributionInfo& distributionInfo);
 
 // Checks that no two entries share the same (framework, distribution,
 // distributionVersion, benchmarkVersion) identity - the file-level prefix

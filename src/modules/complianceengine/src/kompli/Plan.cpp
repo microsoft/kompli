@@ -59,6 +59,58 @@ Result<ToggleMode> FromModeString(const string& mode)
     return Error("Invalid plan rule mode: '" + mode + "'. Must be 'audit', 'remediate' or 'enforce'.", EINVAL);
 }
 
+Result<string> ReadPlanString(const JSON_Value* value, const string& context, bool allowEmpty = false)
+{
+    if (nullptr == value || JSONString != json_value_get_type(value))
+    {
+        return Error("Plan file's '" + context + "' is missing or is not a string", EINVAL);
+    }
+
+    string result(json_value_get_string(value), json_value_get_string_len(value));
+    if (string::npos != result.find('\0'))
+    {
+        return Error("Plan file's '" + context + "' contains an embedded NUL", EINVAL);
+    }
+    if (!allowEmpty && result.empty())
+    {
+        return Error("Plan file's '" + context + "' is empty", EINVAL);
+    }
+    return result;
+}
+
+Optional<Error> ValidateParameters(const string& benchmarkFile, const string& ruleId, const std::map<string, BenchmarkIO::ParameterMetadata>& metadata,
+    const std::map<string, string>& parameters)
+{
+    for (const auto& parameter : parameters)
+    {
+        const auto metadataIt = metadata.find(parameter.first);
+        if (metadataIt == metadata.end())
+        {
+            return Error("Unknown parameter '" + parameter.first + "' for rule '" + ruleId + "' in benchmark definition '" + benchmarkFile + "'", EINVAL);
+        }
+        if (!metadataIt->second.validationRegex.HasValue())
+        {
+            continue;
+        }
+        try
+        {
+            const regex pattern(metadataIt->second.validationRegex.Value(), std::regex_constants::ECMAScript);
+            if (!regex_match(parameter.second, pattern))
+            {
+                return Error(metadataIt->second.validationFailedMessage.HasValue() ?
+                                 metadataIt->second.validationFailedMessage.Value() :
+                                 ("Value '" + parameter.second + "' for parameter '" + parameter.first + "' does not match its required pattern"),
+                    EINVAL);
+            }
+        }
+        catch (const regex_error&)
+        {
+            return Error("Parameter '" + parameter.first + "' has an invalid validationRegex", EINVAL);
+        }
+    }
+    return {};
+}
+
 // Applies the same input-hardening posture as benchmark-definition reads
 // (path-traversal rejection, root-owned non-writable parent directory,
 // O_NOFOLLOW open, regular-file/ownership/mode checks) and returns the
@@ -215,12 +267,21 @@ Result<ResolvedRuleRef> ResolveRuleRef(std::vector<ParsedBenchmarkFile>& parsedF
     }
     const string basename = ref.substr(0, colon);
     const string id = ref.substr(colon + 1);
+    ParsedBenchmarkFile* match = nullptr;
     for (auto& parsed : parsedFiles)
     {
         if (BaseName(parsed.file) == basename)
         {
-            return ResolvedRuleRef{&parsed, id};
+            if (nullptr != match)
+            {
+                return Error("Ambiguous file '" + basename + "' in qualified rule reference '" + ref + "'", EINVAL);
+            }
+            match = &parsed;
         }
+    }
+    if (nullptr != match)
+    {
+        return ResolvedRuleRef{match, id};
     }
     return Error("Unknown file '" + basename + "' in qualified rule reference '" + ref + "'", EINVAL);
 }
@@ -347,23 +408,11 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
         {
             return Error("Unknown parameter '" + paramOverride.name + "' for rule '" + ref.id + "' in benchmark definition '" + ref.file->file + "'", EINVAL);
         }
-        if (paramIt->second.validationRegex.HasValue())
+        const std::map<string, string> candidate = {{paramOverride.name, paramOverride.value}};
+        auto validationError = ValidateParameters(ref.file->file, ref.id, metadata, candidate);
+        if (validationError.HasValue())
         {
-            try
-            {
-                const regex pattern(paramIt->second.validationRegex.Value(), std::regex_constants::ECMAScript);
-                if (!regex_match(paramOverride.value, pattern))
-                {
-                    return Error(paramIt->second.validationFailedMessage.HasValue() ?
-                                     paramIt->second.validationFailedMessage.Value() :
-                                     ("Value '" + paramOverride.value + "' for parameter '" + paramOverride.name + "' does not match its required pattern"),
-                        EINVAL);
-                }
-            }
-            catch (const regex_error&)
-            {
-                return Error("Parameter '" + paramOverride.name + "' has an invalid validationRegex", EINVAL);
-            }
+            return validationError.Value();
         }
         ruleIt->second.parameters[paramOverride.name] = paramOverride.value;
     }
@@ -447,6 +496,11 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
         }
     }
 
+    if (string::npos != content.find('\0'))
+    {
+        return Error("Plan file contains a raw NUL byte", EINVAL);
+    }
+
     auto document = JsonWrapper::FromString(content);
     if (!document.HasValue())
     {
@@ -481,15 +535,23 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
         }
 
         PlanBenchmark benchmark;
-        const char* file = json_object_get_string(benchmarkObject, "file");
-        if (nullptr == file || file[0] == '\0')
+        auto file = ReadPlanString(json_object_get_value(benchmarkObject, "file"), context + ".file");
+        if (!file.HasValue())
         {
-            return Error("Plan file's '" + context + ".file' is missing or empty", EINVAL);
+            return file.Error();
         }
-        benchmark.file = file;
+        benchmark.file = std::move(file.Value());
 
-        const char* name = json_object_get_string(benchmarkObject, "name");
-        benchmark.name = (nullptr != name) ? string(name) : string();
+        const JSON_Value* nameValue = json_object_get_value(benchmarkObject, "name");
+        if (nullptr != nameValue)
+        {
+            auto name = ReadPlanString(nameValue, context + ".name", true);
+            if (!name.HasValue())
+            {
+                return name.Error();
+            }
+            benchmark.name = std::move(name.Value());
+        }
 
         auto* rulesObject = json_object_get_object(benchmarkObject, "rules");
         if (nullptr == rulesObject)
@@ -511,18 +573,23 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
             {
                 return Error("Plan file's '" + context + "' rule '" + string(id) + "' is not a JSON object", EINVAL);
             }
-            const char* mode = json_object_get_string(ruleObject, "mode");
-            if (nullptr == mode || mode[0] == '\0')
+            auto mode = ReadPlanString(json_object_get_value(ruleObject, "mode"), context + ".rules." + string(id) + ".mode");
+            if (!mode.HasValue())
             {
-                return Error("Plan file's '" + context + "' rule '" + string(id) + "' is missing a 'mode' field", EINVAL);
+                return mode.Error();
             }
-            auto modeResult = FromModeString(mode);
+            auto modeResult = FromModeString(mode.Value());
             if (!modeResult.HasValue())
             {
                 return modeResult.Error();
             }
             PlanRuleMode ruleMode{modeResult.Value()};
-            auto* parametersObject = json_object_get_object(ruleObject, "parameters");
+            const JSON_Value* parametersValue = json_object_get_value(ruleObject, "parameters");
+            if (nullptr != parametersValue && JSONObject != json_value_get_type(parametersValue))
+            {
+                return Error("Plan file's '" + context + "' rule '" + string(id) + "' has a 'parameters' field that is not a JSON object", EINVAL);
+            }
+            auto* parametersObject = json_value_get_object(parametersValue);
             if (nullptr != parametersObject)
             {
                 const std::size_t parameterCount = json_object_get_count(parametersObject);
@@ -533,12 +600,13 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
                     {
                         return Error("Plan file's '" + context + "' rule '" + string(id) + "' has a parameter with an empty name", EINVAL);
                     }
-                    const char* paramValue = json_object_get_string(parametersObject, paramName);
-                    if (nullptr == paramValue)
+                    auto paramValue = ReadPlanString(json_object_get_value(parametersObject, paramName),
+                        context + ".rules." + string(id) + ".parameters." + string(paramName), true);
+                    if (!paramValue.HasValue())
                     {
-                        return Error("Plan file's '" + context + "' rule '" + string(id) + "' parameter '" + string(paramName) + "' is not a string", EINVAL);
+                        return paramValue.Error();
                     }
-                    ruleMode.parameters[paramName] = paramValue;
+                    ruleMode.parameters[paramName] = std::move(paramValue.Value());
                 }
             }
             benchmark.rules[id] = std::move(ruleMode);
@@ -548,6 +616,44 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
     }
 
     return plan;
+}
+
+Optional<Error> ValidatePlanForRun(const Plan& plan, const std::vector<BenchmarkDefinition::BenchmarkDocument>& documents, const DistributionInfo& distributionInfo)
+{
+    if (plan.benchmarks.size() != documents.size())
+    {
+        return Error("Plan validation received a mismatched definition set", EINVAL);
+    }
+
+    for (std::size_t b = 0; b < plan.benchmarks.size(); ++b)
+    {
+        const auto& benchmark = plan.benchmarks[b];
+        const auto& document = documents[b];
+        if (!document.benchmarkInfo.Match(distributionInfo))
+        {
+            return Error("Benchmark '" + benchmark.file + "' is not applicable for the current distribution", EINVAL);
+        }
+
+        std::map<string, const BenchmarkIO::Resource*> resources;
+        for (const auto& resource : document.resources)
+        {
+            resources.emplace(resource.id, &resource);
+        }
+        for (const auto& rule : benchmark.rules)
+        {
+            const auto resourceIt = resources.find(rule.first);
+            if (resourceIt == resources.end())
+            {
+                return Error("Unknown rule '" + rule.first + "' in benchmark definition '" + benchmark.file + "'", EINVAL);
+            }
+            auto parameterError = ValidateParameters(benchmark.file, rule.first, resourceIt->second->parameterMetadata, rule.second.parameters);
+            if (parameterError.HasValue())
+            {
+                return parameterError.Value();
+            }
+        }
+    }
+    return {};
 }
 
 Optional<Error> CheckUniqueBenchmarkIdentities(const std::vector<std::pair<string, BenchmarkInfo>>& benchmarks)
