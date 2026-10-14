@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <limits>
 #include <set>
+#include <stdexcept>
 #include <utility>
 
 namespace ComplianceEngine
@@ -30,11 +31,49 @@ Result<Document> SyntaxError(const std::string& source, std::size_t line, std::s
     return Error(source + ":" + std::to_string(line) + ":" + std::to_string(column) + ": login.defs " + problem, EBADMSG);
 }
 
-Error NumericError(const Document& document, std::size_t line, std::size_t column, const std::string& key, const Error& error)
+Error ValueError(const Document& document, std::size_t line, std::size_t column, const std::string& key, const Error& error)
 {
     return Error(document.source + ":" + std::to_string(line) + ":" + std::to_string(column) + ": invalid " + key + " value: " + error.message, EBADMSG);
 }
 } // anonymous namespace
+
+Result<EncryptionMethod> ParseEncryptionMethod(const std::string& value)
+{
+    const auto name = ToLower(value);
+    if (name == "des")
+        return EncryptionMethod::DES;
+    if (name == "md5")
+        return EncryptionMethod::MD5;
+    if (name == "sha256")
+        return EncryptionMethod::SHA256;
+    if (name == "sha512")
+        return EncryptionMethod::SHA512;
+    if (name == "yescrypt")
+        return EncryptionMethod::YESCRYPT;
+    if (name == "bcrypt")
+        return EncryptionMethod::BCRYPT;
+    return Error("Unsupported encryption method: " + value, EINVAL);
+}
+
+const char* EncryptionMethodName(EncryptionMethod method)
+{
+    switch (method)
+    {
+        case EncryptionMethod::DES:
+            return "DES";
+        case EncryptionMethod::MD5:
+            return "MD5";
+        case EncryptionMethod::SHA256:
+            return "SHA256";
+        case EncryptionMethod::SHA512:
+            return "SHA512";
+        case EncryptionMethod::YESCRYPT:
+            return "YESCRYPT";
+        case EncryptionMethod::BCRYPT:
+            return "BCRYPT";
+    }
+    throw std::invalid_argument("Unknown login.defs encryption method");
+}
 
 Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle logHandle)
 {
@@ -105,11 +144,11 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
                 const auto parsed = TryStringToUint(value);
                 if (!parsed.HasValue())
                 {
-                    return NumericError(document, lineNumber, valueStart - start + 1, key, parsed.Error());
+                    return ValueError(document, lineNumber, valueStart - start + 1, key, parsed.Error());
                 }
                 if (parsed.Value() > std::numeric_limits<uid_t>::max())
                 {
-                    return NumericError(document, lineNumber, valueStart - start + 1, key, Error("Integer value out of uid_t range: " + value, ERANGE));
+                    return ValueError(document, lineNumber, valueStart - start + 1, key, Error("Integer value out of uid_t range: " + value, ERANGE));
                 }
                 uid = static_cast<uid_t>(parsed.Value());
             }
@@ -118,9 +157,21 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
                 const auto parsed = TryStringToInt(TrimWhiteSpaces(input.substr(valueStart, end - valueStart)));
                 if (!parsed.HasValue())
                 {
-                    return NumericError(document, lineNumber, valueStart - start + 1, key, parsed.Error());
+                    return ValueError(document, lineNumber, valueStart - start + 1, key, parsed.Error());
                 }
                 number = parsed.Value();
+            }
+            else if (key == "ENCRYPT_METHOD")
+            {
+                const auto method = ParseEncryptionMethod(TrimWhiteSpaces(input.substr(valueStart, end - valueStart)));
+                if (!method.HasValue())
+                {
+                    return ValueError(document, lineNumber, valueStart - start + 1, key, method.Error());
+                }
+                if (firstOccurrence)
+                {
+                    document.encryptMethod = method.Value();
+                }
             }
             if (firstOccurrence && uid.HasValue())
             {
@@ -137,10 +188,6 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
             else if (firstOccurrence && key == "PASS_WARN_AGE")
             {
                 document.passWarnAge = number.Value();
-            }
-            else if (firstOccurrence && key == "ENCRYPT_METHOD")
-            {
-                document.encryptMethod = input.substr(valueStart, end - valueStart);
             }
         }
 

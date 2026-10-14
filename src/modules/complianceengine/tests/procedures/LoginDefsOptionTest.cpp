@@ -176,18 +176,64 @@ TEST_F(LoginDefsOptionTest, EncryptMethod_Equal_IgnoresCase)
     EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
-TEST_F(LoginDefsOptionTest, EncryptMethod_CaseFoldingPreservesHighBitBytes)
+TEST_F(LoginDefsOptionTest, EncryptMethod_RejectsUndocumentedHighBitBytes)
 {
     SetLoginDefsContent("ENCRYPT_METHOD yescrypt\x80\n");
 
     LoginDefsOptionParams params;
     params.option = "ENCRYPT_METHOD";
-    params.value = "YESCRYPT\x80";
+    params.value = "YESCRYPT";
     params.comparison = ComparisonOperation::Equal;
 
     auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, EncryptMethod_RejectsUndocumentedComparisonTarget)
+{
+    SetLoginDefsContent("ENCRYPT_METHOD SHA512\n");
+    LoginDefsOptionParams params;
+    params.option = "ENCRYPT_METHOD";
+    params.value = "SHA-512";
+    params.comparison = ComparisonOperation::Equal;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+    EXPECT_EQ("Invalid ENCRYPT_METHOD comparison target: Unsupported encryption method: SHA-512", result.Error().message);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, InvalidUnselectedEncryptionMethodRejectsDocument)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 365\nENCRYPT_METHOD SHA-512\n");
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_EQ("/etc/login.defs:2:16: invalid ENCRYPT_METHOD value: Unsupported encryption method: SHA-512", result.Error().message);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, EncryptMethod_NormalizesDocumentedNames)
+{
+    SetLoginDefsContent("ENCRYPT_METHOD bcrypt\n");
+    LoginDefsOptionParams params;
+    params.option = "ENCRYPT_METHOD";
+    params.value = "BCRYPT";
+    params.comparison = ComparisonOperation::Equal;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(result.Value(), Status::Compliant);
+    EXPECT_EQ(Status::Compliant, result.Value());
+    ASSERT_EQ(1U, mIndicators.Back().indicators.size());
+    EXPECT_NE(string::npos, mIndicators.Back().indicators.front().message.find("ENCRYPT_METHOD = BCRYPT"));
 }
 
 TEST_F(LoginDefsOptionTest, EncryptMethod_Equal_NonCompliant)

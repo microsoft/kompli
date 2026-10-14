@@ -8,7 +8,6 @@
 #include <StringTools.h>
 #include <TypedComparison.h>
 #include <parsers/LoginDefs.h>
-#include <sstream>
 #include <string>
 #include <utility>
 
@@ -50,7 +49,7 @@ Result<bool> NumericComparison(int lhs, int rhs, ComparisonOperation operation)
     return CompareTyped(lhs, rhs, mapped.Value());
 }
 
-Result<bool> StringComparison(const string& lhs, const string& rhs, ComparisonOperation operation)
+Result<bool> EncryptionComparison(LoginDefs::EncryptionMethod lhs, LoginDefs::EncryptionMethod rhs, ComparisonOperation operation)
 {
     if ((operation != ComparisonOperation::Equal) && (operation != ComparisonOperation::NotEqual))
     {
@@ -95,10 +94,25 @@ Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, Indicat
     }
 
     const bool numericOption = IsNumericLoginDefsOption(params.option);
-    auto rhsInt = TryStringToInt(params.value);
-    if ((numericOption) && (!rhsInt.HasValue()))
+    Optional<int> numericTarget;
+    Optional<LoginDefs::EncryptionMethod> methodTarget;
+    if (numericOption)
     {
-        return Error("Invalid " + params.option + " comparison target: " + rhsInt.Error().message, rhsInt.Error().code);
+        const auto target = TryStringToInt(params.value);
+        if (!target.HasValue())
+        {
+            return Error("Invalid " + params.option + " comparison target: " + target.Error().message, target.Error().code);
+        }
+        numericTarget = target.Value();
+    }
+    else
+    {
+        const auto target = LoginDefs::ParseEncryptionMethod(params.value);
+        if (!target.HasValue())
+        {
+            return Error("Invalid ENCRYPT_METHOD comparison target: " + target.Error().message, target.Error().code);
+        }
+        methodTarget = target.Value();
     }
 
     const auto parsed = LoginDefs::Parse(std::move(fileContents.Value()), filePath, context.GetLogHandle());
@@ -115,7 +129,7 @@ Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, Indicat
         }
         const auto actual = found->Value();
         OsConfigLogDebug(context.GetLogHandle(), "LoginDefsOption: found '%s' = '%d'", params.option.c_str(), actual);
-        auto result = NumericComparison(actual, rhsInt.Value(), params.comparison);
+        auto result = NumericComparison(actual, numericTarget.Value(), params.comparison);
         if (!result.HasValue())
         {
             return result.Error();
@@ -133,28 +147,10 @@ Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, Indicat
     {
         return indicators.NonCompliant("Option '" + params.option + "' is not set in " + filePath);
     }
-    std::istringstream valueStream(parsed.Value().encryptMethod.Value());
-    string value;
-    valueStream >> value;
+    const auto method = parsed.Value().encryptMethod.Value();
+    const string value = LoginDefs::EncryptionMethodName(method);
     OsConfigLogDebug(context.GetLogHandle(), "LoginDefsOption: found '%s' = '%s'", params.option.c_str(), value.c_str());
-    auto lhsInt = TryStringToInt(value);
-    if (lhsInt.HasValue() && rhsInt.HasValue())
-    {
-        auto result = NumericComparison(lhsInt.Value(), rhsInt.Value(), params.comparison);
-        if (!result.HasValue())
-        {
-            return result.Error();
-        }
-        return result.Value() ?
-                   indicators.Compliant(params.option + " = " + value + " (" + std::to_string(params.comparison) + " " + params.value + ")") :
-                   indicators.NonCompliant(params.option + " = " + value + " (expected " + std::to_string(params.comparison) + " " + params.value + ")");
-    }
-
-    // login.defs accepts ENCRYPT_METHOD names case-insensitively.
-    const bool ignoreCase = params.option == "ENCRYPT_METHOD";
-    const string actualValue = ignoreCase ? ToLower(value) : value;
-    const string expectedValue = ignoreCase ? ToLower(params.value) : params.value;
-    auto result = StringComparison(actualValue, expectedValue, params.comparison);
+    auto result = EncryptionComparison(method, methodTarget.Value(), params.comparison);
     if (!result.HasValue())
     {
         return result.Error();
