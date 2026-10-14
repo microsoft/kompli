@@ -11,7 +11,7 @@
 #include <cstdlib>
 #include <functional>
 #include <map>
-#include <set>
+#include <ranges/View.hpp>
 #include <string>
 #include <vector>
 
@@ -32,30 +32,94 @@ struct ObjectCollection
 
 using CollectObject = std::function<Result<ObjectCollection>(const std::string&)>;
 
-inline Result<std::vector<std::string>> ExtractObjectFields(const ObjectCollection& collection, const std::string& objectRef, const std::string& itemField)
+namespace Detail
 {
-    if (objectRef.empty() || itemField.empty())
+class ObjectFieldSource
+{
+public:
+    using value_type = std::string;
+
+    ObjectFieldSource(const ObjectCollection& collection, std::string objectRef, std::string itemField)
+        : mBorrowed(&collection),
+          mObjectRef(std::move(objectRef)),
+          mItemField(std::move(itemField))
     {
-        return Error("Object reference and field name must be nonempty", EINVAL);
-    }
-    if (!collection.complete)
-    {
-        return Error("Incomplete object collection: " + objectRef, EAGAIN);
-    }
-    if (collection.items.empty())
-    {
-        return Error("No items for object field resolution: " + objectRef, ENODATA);
     }
 
-    std::vector<std::string> values;
-    for (const auto& item : collection.items)
+    ObjectFieldSource(ObjectCollection&& collection, std::string objectRef, std::string itemField)
+        : mOwned(std::move(collection)),
+          mObjectRef(std::move(objectRef)),
+          mItemField(std::move(itemField))
     {
-        const auto field = item.fields.find(itemField);
+    }
+
+    Result<Optional<std::string>> Next()
+    {
+        const auto& collection = (nullptr == mBorrowed) ? mOwned : *mBorrowed;
+        if (mObjectRef.empty() || mItemField.empty())
+        {
+            return Error("Object reference and field name must be nonempty", EINVAL);
+        }
+        if (!collection.complete)
+        {
+            return Error("Incomplete object collection: " + mObjectRef, EAGAIN);
+        }
+        if (collection.items.empty())
+        {
+            return Error("No items for object field resolution: " + mObjectRef, ENODATA);
+        }
+        if (collection.items.size() == mItem)
+        {
+            return Optional<std::string>();
+        }
+        const auto& item = collection.items[mItem];
+        const auto field = item.fields.find(mItemField);
         if (field == item.fields.end() || field->second.empty())
         {
-            return Error("Missing object field '" + itemField + "' in " + objectRef, EINVAL);
+            return Error("Missing object field '" + mItemField + "' in " + mObjectRef, EINVAL);
         }
-        values.insert(values.end(), field->second.begin(), field->second.end());
+        auto value = Optional<std::string>(field->second[mValue++]);
+        if (field->second.size() == mValue)
+        {
+            ++mItem;
+            mValue = 0;
+        }
+        return value;
+    }
+
+private:
+    ObjectCollection mOwned;
+    const ObjectCollection* mBorrowed = nullptr;
+    std::string mObjectRef;
+    std::string mItemField;
+    std::size_t mItem = 0;
+    std::size_t mValue = 0;
+};
+} // namespace Detail
+
+inline Ranges::View<Detail::ObjectFieldSource> ObjectFieldRange(const ObjectCollection& collection, const std::string& objectRef, const std::string& itemField)
+{
+    return Ranges::View<Detail::ObjectFieldSource>(Detail::ObjectFieldSource(collection, objectRef, itemField));
+}
+
+inline Ranges::View<Detail::ObjectFieldSource> ObjectFieldRange(ObjectCollection&& collection, const std::string& objectRef, const std::string& itemField)
+{
+    return Ranges::View<Detail::ObjectFieldSource>(Detail::ObjectFieldSource(std::move(collection), objectRef, itemField));
+}
+
+void ObjectFieldRange(const ObjectCollection&&, const std::string&, const std::string&) = delete;
+
+inline Result<std::vector<std::string>> ExtractObjectFields(const ObjectCollection& collection, const std::string& objectRef, const std::string& itemField)
+{
+    auto range = ObjectFieldRange(collection, objectRef, itemField);
+    std::vector<std::string> values;
+    for (const auto& value : range)
+    {
+        if (!value.HasValue())
+        {
+            return value.Error();
+        }
+        values.push_back(value.Value());
     }
     return values;
 }
@@ -101,20 +165,6 @@ inline Result<std::vector<long long>> IntegerValues(const std::vector<std::strin
     return parsed;
 }
 
-inline std::vector<std::string> Unique(const std::vector<std::string>& values)
-{
-    std::set<std::string> seen;
-    std::vector<std::string> unique;
-    for (const auto& value : values)
-    {
-        if (seen.insert(value).second)
-        {
-            unique.push_back(value);
-        }
-    }
-    return unique;
-}
-
 inline Result<std::vector<std::string>> Split(const std::vector<std::string>& values, const std::string& delimiter)
 {
     if (delimiter.empty())
@@ -137,26 +187,6 @@ inline Result<std::vector<std::string>> Split(const std::vector<std::string>& va
     return parts;
 }
 
-template <typename T>
-Result<long long> Count(const std::vector<T>& values)
-{
-    if (values.size() > static_cast<unsigned long long>(LLONG_MAX))
-    {
-        return Error("Variable count out of range", ERANGE);
-    }
-    return static_cast<long long>(values.size());
-}
-
-template <typename T>
-Result<bool> CompareCount(const std::vector<T>& values, long long expected, TypedComparisonOperation operation)
-{
-    auto count = Count(values);
-    if (!count.HasValue())
-    {
-        return count.Error();
-    }
-    return CompareTyped(count.Value(), expected, operation);
-}
 } // namespace VariableResolution
 } // namespace ComplianceEngine
 

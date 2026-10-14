@@ -31,6 +31,7 @@ set(PROCEDURES
     procedures/MountPointExistsTest.cpp
     procedures/NetworkInterfaceFlagTest.cpp
     procedures/MtaLocalOnlyTest.cpp
+    procedures/NameserverCountTest.cpp
     procedures/NoDuplicateEntriesTest.cpp
     procedures/NoWorldWritableFilesTest.cpp
     procedures/PasswordChangeDateTest.cpp
@@ -73,12 +74,14 @@ add_executable(complianceenginetests
     DistributionInfoTest.cpp
     EngineTest.cpp
     EvaluatorTest.cpp
+    ExactFileObjectCollectorTest.cpp
     FilesystemScannerTest.cpp
     LuaEvaluatorTest.cpp
     LuaProceduresTest.cpp
     NetworkToolsTest.cpp
     NumericFileGroupTest.cpp
     OptionalTest.cpp
+    RangesTest.cpp
     VariableResolverTest.cpp
     RegexFallbackTest.cpp
     RegexTest.cpp

@@ -335,6 +335,16 @@ Result<Status> Evaluator::EvaluateBuiltinProcedure(const string& procedureName, 
         return Error("invalid argument");
     }
 
+    const auto* rawArguments = json_value_get_object(value);
+    if (procedureName == "NameserverCount")
+    {
+        const char* path = json_object_get_string(rawArguments, "path");
+        if ((nullptr != path) && (path[0] == '$'))
+        {
+            return Error("Parameter references are not supported by NameserverCount", EINVAL);
+        }
+    }
+
     auto arguments = GetBuiltinProcedureArguments(value);
     if (!arguments.HasValue())
     {
