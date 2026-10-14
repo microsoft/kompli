@@ -8,6 +8,8 @@
 #include <cstring>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <ranges/Count.hpp>
+#include <ranges/Unique.hpp>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>

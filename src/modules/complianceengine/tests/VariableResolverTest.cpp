@@ -5,6 +5,9 @@
 #include <cerrno>
 #include <climits>
 #include <gtest/gtest.h>
+#include <ranges/Count.hpp>
+#include <ranges/Range.hpp>
+#include <ranges/Unique.hpp>
 #include <string>
 #include <vector>
 

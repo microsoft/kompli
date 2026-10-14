@@ -6,6 +6,8 @@
 #include <ResultEvidence.h>
 #include <TypedComparison.h>
 #include <VariableResolver.h>
+#include <ranges/Count.hpp>
+#include <ranges/Unique.hpp>
 
 namespace ComplianceEngine
 {

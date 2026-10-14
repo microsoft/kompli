@@ -4,7 +4,6 @@
 #ifndef COMPLIANCEENGINE_VARIABLE_RESOLVER_H
 #define COMPLIANCEENGINE_VARIABLE_RESOLVER_H
 
-#include <Ranges.h>
 #include <Result.h>
 #include <TypedComparison.h>
 #include <cerrno>
@@ -12,6 +11,7 @@
 #include <cstdlib>
 #include <functional>
 #include <map>
+#include <ranges/View.hpp>
 #include <string>
 #include <vector>
 

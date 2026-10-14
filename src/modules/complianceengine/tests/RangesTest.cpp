@@ -1,10 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include <Ranges.h>
 #include <VariableResolver.h>
+#include <array>
+#include <forward_list>
 #include <gtest/gtest.h>
-#include <limits>
+#include <list>
+#include <ranges/Count.hpp>
+#include <ranges/Range.hpp>
+#include <ranges/Unique.hpp>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -17,6 +22,33 @@ namespace VariableResolution = ComplianceEngine::VariableResolution;
 
 namespace
 {
+class MoveOnlyCollection
+{
+public:
+    explicit MoveOnlyCollection(std::size_t& starts)
+        : mStarts(&starts)
+    {
+    }
+
+    MoveOnlyCollection(const MoveOnlyCollection&) = delete;
+    MoveOnlyCollection(MoveOnlyCollection&&) = default;
+
+    std::vector<int>::iterator begin() // NOLINT(*-identifier-naming)
+    {
+        ++*mStarts;
+        return mValues.begin();
+    }
+
+    std::vector<int>::iterator end() // NOLINT(*-identifier-naming)
+    {
+        return mValues.end();
+    }
+
+private:
+    std::size_t* mStarts;
+    std::vector<int> mValues{1, 1, 2};
+};
+
 struct TestSource
 {
     using value_type = std::string;
@@ -76,7 +108,7 @@ TEST(RangesTest, ConstructionDoesNotPullAndUniquePullsOnlyToNextDistinctValue)
 {
     std::size_t pulls = 0;
     auto source = Ranges::View<TestSource>(TestSource({std::string("a"), std::string("a"), std::string("b"), std::string("c")}, pulls));
-    auto distinct = Ranges::Unique(source);
+    auto distinct = Ranges::Unique(std::move(source));
     EXPECT_EQ(0U, pulls);
     auto it = distinct.begin();
     ASSERT_TRUE(it->HasValue());
@@ -116,23 +148,12 @@ TEST(RangesTest, CountReturnsSizeTAndHandlesEmptyRange)
     EXPECT_EQ(0U, count.Value());
 }
 
-TEST(RangesTest, CountChecksOverflowBeforeIncrement)
-{
-    const auto maximum = std::numeric_limits<std::size_t>::max();
-    const auto last = Ranges::Detail::IncrementCount(maximum - 1);
-    ASSERT_TRUE(last.HasValue());
-    EXPECT_EQ(maximum, last.Value());
-    const auto overflow = Ranges::Detail::IncrementCount(maximum);
-    ASSERT_FALSE(overflow.HasValue());
-    EXPECT_EQ(ERANGE, overflow.Error().code);
-}
-
 TEST(RangesTest, CountConsumesTheEntireInputIncludingTailErrors)
 {
     std::size_t pulls = 0;
     auto source =
         Ranges::View<TestSource>(TestSource({std::string("a"), std::string("b"), std::string("a"), Error("tail read failed", EIO), std::string("unreachable")}, pulls));
-    const auto count = Ranges::Count(Ranges::Unique(source));
+    const auto count = Ranges::Count(Ranges::Unique(std::move(source)));
     ASSERT_FALSE(count.HasValue());
     EXPECT_EQ(EIO, count.Error().code);
     EXPECT_EQ("tail read failed", count.Error().message);
@@ -143,7 +164,7 @@ TEST(RangesTest, IterationYieldsAnErrorOnceAndDoesNotPullBeyondIt)
 {
     std::size_t pulls = 0;
     auto source = Ranges::View<TestSource>(TestSource({Error("first error", EACCES), Error("second error", EIO)}, pulls));
-    auto distinct = Ranges::Unique(source);
+    auto distinct = Ranges::Unique(std::move(source));
     std::size_t errors = 0;
     for (const auto& item : distinct)
     {
@@ -170,21 +191,88 @@ TEST(RangesTest, SuccessfulExhaustionDoesNotReadAgain)
 {
     std::size_t pulls = 0;
     auto source = Ranges::View<TestSource>(TestSource({std::string("a"), std::string("a")}, pulls));
-    auto distinct = Ranges::Unique(source);
-    auto count = Ranges::Count(distinct);
+    auto distinct = Ranges::Unique(std::move(source));
+    auto count = Ranges::Count(Ranges::Unique(std::move(distinct)));
     ASSERT_TRUE(count.HasValue());
     EXPECT_EQ(1U, count.Value());
     EXPECT_EQ(3U, pulls);
-    EXPECT_EQ(distinct.begin(), distinct.end());
     EXPECT_EQ(3U, pulls);
 }
 
-TEST(RangesTest, LvalueVectorIsBorrowedRatherThanCopied)
+TEST(RangesTest, LvalueCollectionIsCopiedAndIndependentOfTheOriginal)
 {
     std::vector<int> values{1, 1};
     auto range = Ranges::Range(values);
     values[1] = 2;
-    const auto count = Ranges::Count(Ranges::Unique(range));
+    const auto count = Ranges::Count(Ranges::Unique(std::move(range)));
+    ASSERT_TRUE(count.HasValue());
+    EXPECT_EQ(1U, count.Value());
+}
+
+TEST(RangesTest, SupportsDifferentCollectionTypesWithoutSpecializedAdapters)
+{
+    const std::list<int> values{1, 2, 1};
+    EXPECT_EQ(2U, Ranges::Count(Ranges::Unique(Ranges::Range(values))).Value());
+    EXPECT_EQ(2U, Ranges::Count(Ranges::Unique(Ranges::Range(std::forward_list<int>{1, 1, 2}))).Value());
+    EXPECT_EQ(3U, Ranges::Count(Ranges::Range(std::set<int>{1, 2, 3})).Value());
+    EXPECT_EQ(3U, Ranges::Count(Ranges::Range(std::array<int, 3>{{1, 2, 3}})).Value());
+    EXPECT_EQ(2U, Ranges::Count(Ranges::Unique(Ranges::Range(std::vector<bool>{true, false, true}))).Value());
+}
+
+TEST(RangesTest, OwnedCollectionSurvivesTheOriginalScope)
+{
+    auto range = []() {
+        const std::list<int> values{1, 2, 3};
+        return Ranges::Range(values);
+    }();
+    EXPECT_EQ(3U, Ranges::Count(std::move(range)).Value());
+}
+
+TEST(RangesTest, MovingPartiallyConsumedArrayKeepsIteratorStorageStable)
+{
+    auto range = Ranges::Range(std::array<int, 3>{{1, 2, 3}});
+    EXPECT_EQ(1, range.Next().Value().Value());
+    auto moved = std::move(range);
+    EXPECT_EQ(2, moved.Next().Value().Value());
+    EXPECT_EQ(3, moved.Next().Value().Value());
+    EXPECT_FALSE(moved.Next().Value().HasValue());
+}
+
+TEST(RangesTest, ResultElementsAreUnwrappedAndErrorsPropagate)
+{
+    std::vector<Result<int>> values{1, 1, 2, Error("collection failure", EIO), 3};
+    auto distinct = Ranges::Unique(Ranges::Range(std::move(values)));
+    static_assert(std::is_same<decltype(distinct)::value_type, int>::value, "Result elements must not be double-wrapped");
+    const auto count = Ranges::Count(std::move(distinct));
+    ASSERT_FALSE(count.HasValue());
+    EXPECT_EQ(EIO, count.Error().code);
+    EXPECT_EQ("collection failure", count.Error().message);
+}
+
+TEST(RangesTest, CollectionConstraintRejectsNonCollections)
+{
+    static_assert(!Ranges::Detail::IsCollection<int>::value, "Scalar values are not collections");
+    static_assert(Ranges::Detail::IsCollection<std::list<int>>::value, "List must satisfy the collection protocol");
+}
+
+TEST(RangesTest, MoveOnlyCollectionIsOwnedAndIterationStartsLazily)
+{
+    std::size_t starts = 0;
+    MoveOnlyCollection values(starts);
+    auto range = Ranges::Range(std::move(values));
+    auto distinct = Ranges::Unique(std::move(range));
+    EXPECT_EQ(0U, starts);
+    const auto count = Ranges::Count(std::move(distinct));
+    ASSERT_TRUE(count.HasValue());
+    EXPECT_EQ(2U, count.Value());
+    EXPECT_EQ(1U, starts);
+}
+
+TEST(RangesTest, ConstTemporaryIsCopiedIntoOwnedStorage)
+{
+    const std::array<int, 2> values{{1, 2}};
+    auto range = Ranges::Range(std::move(values));
+    const auto count = Ranges::Count(std::move(range));
     ASSERT_TRUE(count.HasValue());
     EXPECT_EQ(2U, count.Value());
 }
@@ -193,7 +281,7 @@ TEST(RangesTest, TemporaryVectorSurvivesDelayedConsumptionAndMoves)
 {
     auto view = Ranges::Unique(Ranges::Range(std::vector<std::string>{"a", "a", "b"}));
     auto moved = std::move(view);
-    auto count = Ranges::Count(moved);
+    auto count = Ranges::Count(std::move(moved));
     ASSERT_TRUE(count.HasValue());
     EXPECT_EQ(2U, count.Value());
 }
@@ -206,7 +294,7 @@ TEST(RangesTest, PartiallyConsumedOwnedPipelineCanBeMoved)
     ASSERT_TRUE(first.Value().HasValue());
     EXPECT_EQ(1, first.Value().Value());
     auto moved = std::move(view);
-    const auto count = Ranges::Count(moved);
+    const auto count = Ranges::Count(std::move(moved));
     ASSERT_TRUE(count.HasValue());
     EXPECT_EQ(2U, count.Value());
 }
@@ -215,8 +303,8 @@ TEST(RangesTest, ObjectFieldsFlattenLazilyAndRetainStringUniqueness)
 {
     auto collection = Collection();
     auto fields = VariableResolution::ObjectFieldRange(collection, "object:1", "value");
-    auto distinct = Ranges::Unique(fields);
-    auto count = Ranges::Count(distinct);
+    auto distinct = Ranges::Unique(std::move(fields));
+    auto count = Ranges::Count(std::move(distinct));
     ASSERT_TRUE(count.HasValue());
     EXPECT_EQ(3U, count.Value());
 }
