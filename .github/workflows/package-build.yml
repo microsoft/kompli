@@ -163,3 +163,4 @@ jobs:
             ./build/*.zip
             ./build/modules/bin/*.so
             ./build/tests/fuzzer/kompli-fuzzer
+            ./build/tests/fuzzer/parsers/login-defs-parser-fuzzer
