@@ -213,6 +213,18 @@ TEST(CliOptionsSmokeTest, RenderAcceptsRuleFilters)
     EXPECT_FALSE(result.Value().ruleFilters.Empty());
 }
 
+TEST(CliOptionsSmokeTest, RenderRejectsPlanOnlyOptions)
+{
+    ArgvHelper output{"prog", "-o", "report.xml", "render", "result.json"};
+    EXPECT_FALSE(ParseCommandLine(output.Argc(), output.Argv()).HasValue());
+
+    ArgvHelper toggle{"prog", "--audit=1.1", "render", "result.json"};
+    EXPECT_FALSE(ParseCommandLine(toggle.Argc(), toggle.Argv()).HasValue());
+
+    ArgvHelper parameter{"prog", "--param=1.1.name=value", "render", "result.json"};
+    EXPECT_FALSE(ParseCommandLine(parameter.Argc(), parameter.Argv()).HasValue());
+}
+
 TEST(CliOptionsSmokeTest, EmptyRuleFilterIsRejected)
 {
     ArgvHelper a{"prog", "--tag=", "plan", "bench.json"};
