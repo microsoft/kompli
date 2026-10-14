@@ -2,19 +2,18 @@
 // Licensed under the MIT License.
 
 #include <CommonContext.h>
-#include <StringTools.h>
 #include <Users.h>
 #include <cerrno>
 #include <parsers/LoginDefs.h>
 
 namespace ComplianceEngine
 {
-Result<unsigned int> GetUidMin(ContextInterface& context)
+Result<uid_t> GetUidMin(ContextInterface& context)
 {
     return GetUidMin(context, context.GetFileContents("/etc/login.defs"));
 }
 
-Result<unsigned int> GetUidMin(ContextInterface& context, const Result<std::string>& loginDefsResult)
+Result<uid_t> GetUidMin(ContextInterface& context, const Result<std::string>& loginDefsResult)
 {
     if (!loginDefsResult.HasValue())
     {
@@ -26,42 +25,16 @@ Result<unsigned int> GetUidMin(ContextInterface& context, const Result<std::stri
         OsConfigLogWarning(context.GetLogHandle(), "Failed to read /etc/login.defs");
         return Error("Failed to read /etc/login.defs");
     }
-    const auto parsed = LoginDefs::Parse(loginDefsResult.Value(), "/etc/login.defs");
+    const auto parsed = LoginDefs::Parse(loginDefsResult.Value(), "/etc/login.defs", context.GetLogHandle());
     if (!parsed.HasValue())
     {
         OsConfigLogWarning(context.GetLogHandle(), "Invalid /etc/login.defs: %s", parsed.Error().message.c_str());
         return parsed.Error();
     }
-    const std::string uidMinKey = "UID_MIN";
-    const LoginDefs::Record* record = nullptr;
-    for (const auto& candidate : parsed.Value().records)
-    {
-        if (candidate.key == uidMinKey)
-        {
-            record = &candidate;
-            break;
-        }
-        if (LoginDefs::IsNulCorruptedKey(candidate, uidMinKey))
-        {
-            OsConfigLogWarning(context.GetLogHandle(), "Invalid UID_MIN key in /etc/login.defs: embedded NUL");
-            return Error("Invalid UID_MIN key: embedded NUL", EBADMSG);
-        }
-    }
-    if (nullptr == record)
+    if (!parsed.Value().uidMin.HasValue())
     {
         return Error("Could not get UID_MIN find value");
     }
-    if (parsed.Value().HasEmbeddedNul(*record))
-    {
-        OsConfigLogWarning(context.GetLogHandle(), "Invalid UID_MIN value in /etc/login.defs: embedded NUL");
-        return Error("Invalid UID_MIN value: embedded NUL", EINVAL);
-    }
-    const auto value = TrimWhiteSpaces(parsed.Value().Text(record->valueSpan));
-    auto result = TryStringToUint(value);
-    if (!result.HasValue())
-    {
-        OsConfigLogWarning(context.GetLogHandle(), "Invalid UID_MIN value in /etc/login.defs %s", result.Error().message.c_str());
-    }
-    return result;
+    return parsed.Value().uidMin.Value();
 }
 } // namespace ComplianceEngine

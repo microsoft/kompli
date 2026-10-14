@@ -52,22 +52,32 @@ TEST_F(UsersIteratorTest, CorruptedFirstUidMinKeyCannotSelectLaterValue)
     EXPECT_EQ(EBADMSG, result.Error().code);
 }
 
-TEST_F(UsersIteratorTest, ValidFirstUidMinIgnoresLaterCorruptedKey)
+TEST_F(UsersIteratorTest, ValidFirstUidMinRejectsLaterCorruptedKey)
 {
     const char contents[] = "UID_MIN 500\nUID_MIN\0 1000\n";
     EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>(std::string(contents, sizeof(contents) - 1))));
     const auto result = GetUidMin(mContext);
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(500U, result.Value());
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_EQ("/etc/login.defs:2:8: login.defs embedded NUL", result.Error().message);
 }
 
-TEST_F(UsersIteratorTest, UnrelatedCorruptedKeyDoesNotBlockUidMin)
+TEST_F(UsersIteratorTest, UnrelatedCorruptedKeyBlocksUidMin)
 {
     const char contents[] = "NOT_UID_MIN\0 2000\nUID_MIN 500\n";
     EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>(std::string(contents, sizeof(contents) - 1))));
     const auto result = GetUidMin(mContext);
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(500U, result.Value());
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+}
+
+TEST_F(UsersIteratorTest, UnrelatedMissingValueBlocksUidMin)
+{
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>("UID_MIN 500\nOTHER\n")));
+    const auto result = GetUidMin(mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_EQ("/etc/login.defs:2:6: login.defs missing value", result.Error().message);
 }
 
 TEST_F(UsersIteratorTest, UidMinPropagatesRequiredReadError)
@@ -88,7 +98,7 @@ TEST_F(UsersIteratorTest, UidMinRejectsInlineHashRatherThanStrippingIt)
     EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>("UID_MIN 1000#note\n")));
     const auto result = GetUidMin(mContext);
     ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EINVAL, result.Error().code);
+    EXPECT_EQ(EBADMSG, result.Error().code);
 }
 
 TEST_F(UsersIteratorTest, UidMinRejectsSelectedEmbeddedNul)
@@ -96,7 +106,7 @@ TEST_F(UsersIteratorTest, UidMinRejectsSelectedEmbeddedNul)
     EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>(std::string("UID_MIN 1000 \0ignored\n", 22))));
     const auto result = GetUidMin(mContext);
     ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EINVAL, result.Error().code);
+    EXPECT_EQ(EBADMSG, result.Error().code);
 }
 
 TEST_F(UsersIteratorTest, UidMinRejectsOversizedInput)
@@ -112,7 +122,7 @@ TEST_F(UsersIteratorTest, UidMinRejectsMissingValue)
     EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>("UID_MIN # no value\n")));
     const auto result = GetUidMin(mContext);
     ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().code, EBADMSG);
 }
 
 TEST_F(UsersIteratorTest, UidMinRejectsMalformedSuffix)
@@ -120,5 +130,14 @@ TEST_F(UsersIteratorTest, UidMinRejectsMalformedSuffix)
     EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>("UID_MIN 1000junk\n")));
     const auto result = GetUidMin(mContext);
     ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_EQ(result.Error().code, EBADMSG);
+}
+
+TEST_F(UsersIteratorTest, UidMinRejectsNegativeValue)
+{
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>("UID_MIN -1\n")));
+    const auto result = GetUidMin(mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_NE(std::string::npos, result.Error().message.find("should be positive"));
 }

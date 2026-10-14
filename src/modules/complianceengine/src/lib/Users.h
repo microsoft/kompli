@@ -3,9 +3,10 @@
 
 #include <ContextInterface.h>
 #include <Result.h>
+#include <sys/types.h>
 
 namespace ComplianceEngine
 {
-Result<unsigned int> GetUidMin(ContextInterface& context);
-Result<unsigned int> GetUidMin(ContextInterface& context, const Result<std::string>& loginDefsResult);
+Result<uid_t> GetUidMin(ContextInterface& context);
+Result<uid_t> GetUidMin(ContextInterface& context, const Result<std::string>& loginDefsResult);
 } // namespace ComplianceEngine

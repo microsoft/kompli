@@ -3,7 +3,10 @@
 
 #include "LoginDefs.h"
 
+#include <StringTools.h>
 #include <cerrno>
+#include <limits>
+#include <set>
 #include <utility>
 
 namespace ComplianceEngine
@@ -21,80 +24,33 @@ Result<Document> LimitError(const char* limit)
 {
     return Error(std::string("login.defs ") + limit + " limit exceeded", E2BIG);
 }
+
+Result<Document> SyntaxError(const std::string& source, std::size_t line, std::size_t column, const char* problem)
+{
+    return Error(source + ":" + std::to_string(line) + ":" + std::to_string(column) + ": login.defs " + problem, EBADMSG);
+}
+
+Error NumericError(const Document& document, std::size_t line, std::size_t column, const std::string& key, const Error& error)
+{
+    return Error(document.source + ":" + std::to_string(line) + ":" + std::to_string(column) + ": invalid " + key + " value: " + error.message, EBADMSG);
+}
 } // anonymous namespace
 
-bool IsNulCorruptedKey(const Record& record, const std::string& expectedKey)
-{
-    return record.key.size() > expectedKey.size() && record.key.compare(0, expectedKey.size(), expectedKey) == 0 && record.key[expectedKey.size()] == '\0';
-}
-
-std::string Document::Text(Span span) const
-{
-    return bytes.substr(span.offset, span.length);
-}
-
-std::vector<const Record*> Document::FindAll(const std::string& key) const
-{
-    std::vector<const Record*> found;
-    for (const auto& record : records)
-    {
-        if (record.key == key)
-        {
-            found.push_back(&record);
-        }
-    }
-    return found;
-}
-
-const Record* Document::FindFirst(const std::string& key) const
-{
-    for (const auto& record : records)
-    {
-        if (record.key == key)
-        {
-            return &record;
-        }
-    }
-    return nullptr;
-}
-
-const Record* Document::FindLast(const std::string& key) const
-{
-    for (auto it = records.rbegin(); it != records.rend(); ++it)
-    {
-        if (it->key == key)
-        {
-            return &*it;
-        }
-    }
-    return nullptr;
-}
-
-bool Document::HasEmbeddedNul(const Record& record) const
-{
-    for (const auto& diagnostic : diagnostics)
-    {
-        if ((Diagnostic::Kind::EmbeddedNul == diagnostic.kind) && (record.lineSpan.offset <= diagnostic.span.offset) &&
-            (diagnostic.span.offset - record.lineSpan.offset < record.lineSpan.length))
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-Result<Document> Parse(std::string bytes, std::string source)
+Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle logHandle)
 {
     if (MaxBytes < bytes.size())
     {
         return LimitError("byte");
     }
 
-    Document document{std::move(source), std::move(bytes), {}, {}};
-    const auto& input = document.bytes;
+    Document document;
+    document.source = std::move(source);
+    std::set<std::string> seen;
+    std::size_t recordCount = 0;
+    const auto& input = bytes;
     std::size_t start = 0;
     std::size_t lineNumber = 1;
-    std::size_t nextNul = input.find('\0');
+    const auto firstNul = input.find('\0');
     while (start < input.size())
     {
         const auto newline = input.find('\n', start);
@@ -104,14 +60,9 @@ Result<Document> Parse(std::string bytes, std::string source)
             return LimitError("line");
         }
 
-        while (nextNul < end)
+        if (firstNul < end)
         {
-            if (MaxDiagnostics <= document.diagnostics.size())
-            {
-                return LimitError("diagnostic");
-            }
-            document.diagnostics.push_back({Diagnostic::Kind::EmbeddedNul, {nextNul, 1}, lineNumber, nextNul - start + 1});
-            nextNul = input.find('\0', nextNul + 1);
+            return SyntaxError(document.source, lineNumber, firstNul - start + 1, "embedded NUL");
         }
 
         std::size_t keyStart = start;
@@ -121,30 +72,75 @@ Result<Document> Parse(std::string bytes, std::string source)
         }
         if ((keyStart < end) && ('#' != input[keyStart]))
         {
-            if (MaxRecords <= document.records.size())
+            if (MaxRecords <= recordCount)
             {
                 return LimitError("record");
             }
+            ++recordCount;
             std::size_t keyEnd = keyStart;
             while ((keyEnd < end) && !IsSeparator(input[keyEnd]))
             {
                 ++keyEnd;
+            }
+            const auto key = input.substr(keyStart, keyEnd - keyStart);
+            const bool firstOccurrence = seen.insert(key).second;
+            if (!firstOccurrence)
+            {
+                OsConfigLogWarning(logHandle, "Duplicate %s in %s at line %zu", key.c_str(), document.source.c_str(), lineNumber);
             }
             std::size_t valueStart = keyEnd;
             while ((valueStart < end) && IsSeparator(input[valueStart]))
             {
                 ++valueStart;
             }
-            const bool hasValue = valueStart < end;
-            document.records.push_back({{start, end - start}, {keyStart, keyEnd - keyStart}, {valueStart, end - valueStart}, lineNumber, hasValue,
-                input.substr(keyStart, keyEnd - keyStart)});
-            if (!hasValue)
+            if (valueStart == end)
             {
-                if (MaxDiagnostics <= document.diagnostics.size())
+                return SyntaxError(document.source, lineNumber, valueStart - start + 1, "missing value");
+            }
+            Optional<uid_t> uid;
+            Optional<int> number;
+            if (key == "UID_MIN")
+            {
+                const auto value = TrimWhiteSpaces(input.substr(valueStart, end - valueStart));
+                const auto parsed = TryStringToUint(value);
+                if (!parsed.HasValue())
                 {
-                    return LimitError("diagnostic");
+                    return NumericError(document, lineNumber, valueStart - start + 1, key, parsed.Error());
                 }
-                document.diagnostics.push_back({Diagnostic::Kind::MissingValue, {valueStart, 0}, lineNumber, valueStart - start + 1});
+                if (parsed.Value() > std::numeric_limits<uid_t>::max())
+                {
+                    return NumericError(document, lineNumber, valueStart - start + 1, key, Error("Integer value out of uid_t range: " + value, ERANGE));
+                }
+                uid = static_cast<uid_t>(parsed.Value());
+            }
+            else if (key == "PASS_MAX_DAYS" || key == "PASS_MIN_DAYS" || key == "PASS_WARN_AGE")
+            {
+                const auto parsed = TryStringToInt(TrimWhiteSpaces(input.substr(valueStart, end - valueStart)));
+                if (!parsed.HasValue())
+                {
+                    return NumericError(document, lineNumber, valueStart - start + 1, key, parsed.Error());
+                }
+                number = parsed.Value();
+            }
+            if (firstOccurrence && uid.HasValue())
+            {
+                document.uidMin = uid.Value();
+            }
+            else if (firstOccurrence && key == "PASS_MAX_DAYS")
+            {
+                document.passMaxDays = number.Value();
+            }
+            else if (firstOccurrence && key == "PASS_MIN_DAYS")
+            {
+                document.passMinDays = number.Value();
+            }
+            else if (firstOccurrence && key == "PASS_WARN_AGE")
+            {
+                document.passWarnAge = number.Value();
+            }
+            else if (firstOccurrence && key == "ENCRYPT_METHOD")
+            {
+                document.encryptMethod = input.substr(valueStart, end - valueStart);
             }
         }
 
@@ -157,5 +153,6 @@ Result<Document> Parse(std::string bytes, std::string source)
     }
     return document;
 }
+
 } // namespace LoginDefs
 } // namespace ComplianceEngine

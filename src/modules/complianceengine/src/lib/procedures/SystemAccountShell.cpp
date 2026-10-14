@@ -4,14 +4,13 @@
 #include <Evaluator.h>
 #include <ListValidShells.h>
 #include <Result.h>
-#include <StringTools.h>
 #include <UsersIterator.h>
 #include <fstream>
 #include <parsers/LoginDefs.h>
 #include <set>
 #include <shadow.h>
-#include <sstream>
 #include <sys/stat.h>
+#include <utility>
 
 namespace ComplianceEngine
 {
@@ -59,54 +58,18 @@ Result<uid_t> LoadMinUID(ContextInterface& context)
         return Error(string("Failed to read ") + filename, EIO);
     }
     contents.resize(static_cast<size_t>(file.gcount()));
-    const auto parsed = LoginDefs::Parse(contents, filename);
+    const auto parsed = LoginDefs::Parse(std::move(contents), filename, context.GetLogHandle());
     if (!parsed.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to parse %s: %s", filename.c_str(), parsed.Error().message.c_str());
         return parsed.Error();
     }
-    const string uidMinKey = "UID_MIN";
-    const LoginDefs::Record* record = nullptr;
-    for (const auto& candidate : parsed.Value().records)
-    {
-        if (candidate.key == uidMinKey)
-        {
-            record = &candidate;
-            break;
-        }
-        if (LoginDefs::IsNulCorruptedKey(candidate, uidMinKey))
-        {
-            OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN key: embedded NUL");
-            return Error("Failed to parse UID_MIN key: embedded NUL", EINVAL);
-        }
-    }
-    if (nullptr == record)
+    if (!parsed.Value().uidMin.HasValue())
     {
         return defaultUID;
     }
-    if (parsed.Value().HasEmbeddedNul(*record))
-    {
-        OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN value: embedded NUL");
-        return Error("Failed to parse UID_MIN value: embedded NUL", EINVAL);
-    }
 
-    std::istringstream stream(parsed.Value().Text(record->valueSpan));
-    string value;
-    stream >> value;
-    auto uid = TryStringToInt(value);
-    if (!uid.HasValue())
-    {
-        OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN value: %s", uid.Error().message.c_str());
-        return uid.Error();
-    }
-
-    if (uid.Value() < 0)
-    {
-        OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN value: must not be negative");
-        return Error("Failed to parse UID_MIN value: must not be negative", EINVAL);
-    }
-
-    return static_cast<uid_t>(uid.Value());
+    return parsed.Value().uidMin.Value();
 }
 } // anonymous namespace
 
