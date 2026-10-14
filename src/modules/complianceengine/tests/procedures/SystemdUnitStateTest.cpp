@@ -472,6 +472,77 @@ TEST_F(SystemdUnitStateTest, SubStateBindingValidatesArguments)
     EXPECT_FALSE(ComplianceEngine::BindingsImpl::ParseArguments<SystemdUnitStateParams>(args).HasValue());
 }
 
+TEST_F(SystemdUnitStateTest, EmptyUnitFileStateIsAnOrdinaryMismatch)
+{
+    SystemdUnitStateParams params;
+    params.unitName = "isc-dhcp-server.service";
+    auto enabled = Pattern::Make("enabled");
+    ASSERT_TRUE(enabled.HasValue());
+    params.unitFileState = std::move(enabled.Value());
+
+    const std::string command = "systemctl show -p UnitFileState \"isc-dhcp-server.service\"";
+    for (const auto& output : {"UnitFileState=\n", "UnitFileState=\nUnitFileState=\n"})
+    {
+        EXPECT_CALL(mContext, ExecuteCommand(command)).WillOnce(::testing::Return(Result<std::string>(output)));
+        auto result = AuditSystemdUnitState(params, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue()) << output;
+        EXPECT_EQ(result.Value(), Status::NonCompliant) << output;
+    }
+
+    auto anyValue = Pattern::Make(".*");
+    ASSERT_TRUE(anyValue.HasValue());
+    params.unitFileState = std::move(anyValue.Value());
+    EXPECT_CALL(mContext, ExecuteCommand(command)).WillOnce(::testing::Return(Result<std::string>("UnitFileState=\n")));
+    auto result = AuditSystemdUnitState(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(SystemdUnitStateTest, OtherEmptyPropertiesRemainErrors)
+{
+    const struct
+    {
+        const char* field;
+        const char* property;
+    } cases[] = {
+        {"activeState", "ActiveState"},
+        {"subState", "SubState"},
+        {"loadState", "LoadState"},
+        {"unit", "Unit"},
+    };
+    for (const auto& testCase : cases)
+    {
+        const std::map<std::string, std::string> args = {{"unitName", "auditd.service"}, {testCase.field, "expected"}};
+        auto params = ComplianceEngine::BindingsImpl::ParseArguments<SystemdUnitStateParams>(args);
+        ASSERT_TRUE(params.HasValue()) << testCase.field;
+        EXPECT_CALL(mContext, ExecuteCommand("systemctl show -p " + std::string(testCase.property) + " \"auditd.service\""))
+            .WillOnce(::testing::Return(Result<std::string>(std::string(testCase.property) + "=\n")));
+        auto result = AuditSystemdUnitState(params.Value(), mIndicators, mContext);
+        EXPECT_FALSE(result.HasValue()) << testCase.property;
+    }
+}
+
+TEST_F(SystemdUnitStateTest, EmptyUnitFileStateDoesNotHideIncompleteResponseUnderNot)
+{
+    auto json = JsonWrapper::FromString(R"({"not":{"SystemdUnitState":{"unitName":"auditd.service","unitFileState":"enabled","activeState":"active"}}})");
+    ASSERT_TRUE(json.HasValue());
+    ASSERT_TRUE(json->get());
+    const std::string command = "systemctl show -p ActiveState -p UnitFileState \"auditd.service\"";
+    for (const auto& output :
+        {"UnitFileState=\n", "UnitFileState=\nActiveState=\n", "UnitFileState=\nOther=unexpected\n", "UnitFileState=\nActiveState"})
+    {
+        EXPECT_CALL(mContext, ExecuteCommand(command)).WillOnce(::testing::Return(Result<std::string>(output)));
+        Evaluator evaluator("CIS systemd service check", json_value_get_object(json->get()), {}, mContext);
+        auto result = evaluator.ExecuteAudit(ComplianceEngine::DebugFormatter{});
+        EXPECT_FALSE(result.HasValue()) << output;
+    }
+    EXPECT_CALL(mContext, ExecuteCommand(command)).WillOnce(::testing::Return(Result<std::string>("UnitFileState=\nActiveState=active\n")));
+    Evaluator evaluator("CIS systemd service check", json_value_get_object(json->get()), {}, mContext);
+    auto result = evaluator.ExecuteAudit(ComplianceEngine::DebugFormatter{});
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value().status, Status::Compliant);
+}
+
 TEST_F(SystemdUnitStateTest, NegatedCisPredicateDoesNotAcceptInvalidOutput)
 {
     auto json = JsonWrapper::FromString(R"({"not":{"SystemdUnitState":{"unitName":"isc-dhcp-server.service","unitFileState":"enabled"}}})");
@@ -490,9 +561,12 @@ TEST_F(SystemdUnitStateTest, NegatedCisPredicateDoesNotAcceptInvalidOutput)
         {"UnitFileState=disabled\nUnitFileState=enabled\n", false, Status::NonCompliant},
         {"UnitFileState=disabled\nUnitFileState=disabled\n", true, Status::Compliant},
         {"UnitFileState=enabled\nUnitFileState=enabled\n", true, Status::NonCompliant},
+        {"UnitFileState=\nUnitFileState=\n", true, Status::Compliant},
+        {"UnitFileState=\nUnitFileState=enabled\n", false, Status::NonCompliant},
+        {"UnitFileState=enabled\nUnitFileState=\n", false, Status::NonCompliant},
         {"", false, Status::NonCompliant},
         {"ActiveState=active\n", false, Status::NonCompliant},
-        {"UnitFileState=\n", false, Status::NonCompliant},
+        {"UnitFileState=\n", true, Status::Compliant},
         {"UnitFileState", false, Status::NonCompliant},
     };
     for (const auto& testCase : cases)
