@@ -6,6 +6,7 @@
 
 #include <GsettingsValue.h>
 #include <ProcedureMap.h>
+#include <cerrno>
 #include <dirent.h>
 #include <fstream>
 #include <gtest/gtest.h>
@@ -18,6 +19,7 @@ using ComplianceEngine::GsettingsKeyType;
 using ComplianceEngine::GsettingsOperationType;
 using ComplianceEngine::GsettingsValueParams;
 using ComplianceEngine::IndicatorsTree;
+using ComplianceEngine::RemediateGsettingsValue;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 
@@ -70,6 +72,63 @@ TEST_F(EnsureGsettings, AuditSuccessStringEqual)
     auto result = AuditGsettingsValue(mParams, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureGsettings, RemediateStringEqual)
+{
+    mParams.schema = "org.gnome.desktop.interface";
+    mParams.key = "cursor-theme";
+    mParams.keyType = GsettingsKeyType::String;
+    mParams.operation = GsettingsOperationType::Equal;
+    mParams.value = "Adwaita";
+
+    EXPECT_CALL(mContext, ExecuteCommand(GsettingsRangeCmd()))
+        .WillOnce(::testing::Return(Result<std::string>(gsettingsTypeS)))
+        .WillOnce(::testing::Return(Result<std::string>(gsettingsTypeS)));
+    EXPECT_CALL(mContext, ExecuteCommand(GsettingsGetCmd()))
+        .WillOnce(::testing::Return(Result<std::string>("\"OldTheme\"")))
+        .WillOnce(::testing::Return(Result<std::string>("\"Adwaita\"")));
+    EXPECT_CALL(mContext, ExecuteCommand("gsettings set \"org.gnome.desktop.interface\" \"cursor-theme\" \"Adwaita\""))
+        .WillOnce(::testing::Return(Result<std::string>("")));
+
+    auto result = RemediateGsettingsValue(mParams, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureGsettings, RemediateNumberEqual)
+{
+    mParams.schema = "org.gnome.desktop.interface";
+    mParams.key = "cursor-size";
+    mParams.keyType = GsettingsKeyType::Number;
+    mParams.operation = GsettingsOperationType::Equal;
+    mParams.value = "24";
+
+    EXPECT_CALL(mContext, ExecuteCommand(GsettingsRangeCmd()))
+        .WillOnce(::testing::Return(Result<std::string>(gsettingsTypeI)))
+        .WillOnce(::testing::Return(Result<std::string>(gsettingsTypeI)));
+    EXPECT_CALL(mContext, ExecuteCommand(GsettingsGetCmd()))
+        .WillOnce(::testing::Return(Result<std::string>("16")))
+        .WillOnce(::testing::Return(Result<std::string>("24")));
+    EXPECT_CALL(mContext, ExecuteCommand("gsettings set \"org.gnome.desktop.interface\" \"cursor-size\" \"24\""))
+        .WillOnce(::testing::Return(Result<std::string>("")));
+
+    auto result = RemediateGsettingsValue(mParams, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureGsettings, RemediateNonEqualityIsUnsupported)
+{
+    mParams.schema = "org.gnome.desktop.interface";
+    mParams.key = "cursor-size";
+    mParams.keyType = GsettingsKeyType::Number;
+    mParams.operation = GsettingsOperationType::LessThan;
+    mParams.value = "24";
+
+    auto result = RemediateGsettingsValue(mParams, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, ENOTSUP);
 }
 
 TEST_F(EnsureGsettings, AuditSuccessStringNotEqual)

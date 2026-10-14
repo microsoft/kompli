@@ -9,5 +9,6 @@
 namespace ComplianceEngine
 {
 Result<Status> AuditDefaultUmask(IndicatorsTree& indicators, ContextInterface& context);
+Result<Status> RemediateDefaultUmask(IndicatorsTree& indicators, ContextInterface& context);
 } // namespace ComplianceEngine
 #endif // COMPLIANCEENGINE_PROCEDURES_DEFAULT_UMASK_H

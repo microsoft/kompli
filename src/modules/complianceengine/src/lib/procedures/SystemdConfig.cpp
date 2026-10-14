@@ -1,10 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#include <AtomicFile.h>
 #include <StringTools.h>
 #include <SystemdConfig.h>
 #include <TypedComparison.h>
 #include <algorithm>
+#include <cerrno>
 #include <cstdlib>
 #include <fts.h>
 #include <iostream>
@@ -87,6 +89,118 @@ Result<bool> GetSystemdConfig(SystemdConfigMap_t& config, const std::string& fil
     }
 
     return true;
+}
+
+Result<std::string> GetSystemdConfigRemediationValue(const SystemdConfigValueParams& params)
+{
+    if (!params.file.HasValue() || params.dir.HasValue())
+    {
+        return Error("SystemdConfigValue remediation requires one config file below /etc/systemd", ENOTSUP);
+    }
+    const std::string& file = params.file.Value();
+    if (file.compare(0, strlen("/etc/systemd/"), "/etc/systemd/") != 0 || file.find("/../") != std::string::npos ||
+        (file.size() >= 3 && file.compare(file.size() - 3, 3, "/..") == 0))
+    {
+        return Error("SystemdConfigValue remediation requires one config file below /etc/systemd", ENOTSUP);
+    }
+    if (!params.block.HasValue() || params.block->empty() || params.block->find_first_of("[]\r\n") != std::string::npos)
+    {
+        return Error("SystemdConfigValue remediation requires one valid config block", ENOTSUP);
+    }
+    if (params.parameter.empty() || params.parameter.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-") != std::string::npos)
+    {
+        return Error("Invalid systemd config parameter", EINVAL);
+    }
+    if (params.valueRegex.HasValue() || !params.value.HasValue() || !params.op.HasValue() || params.op.Value() != SystemdConfigValueOperator::Equal)
+    {
+        return Error("SystemdConfigValue remediation requires an exact equality value", ENOTSUP);
+    }
+    if (params.value->find('\0') != std::string::npos || params.value->find_first_of("\r\n") != std::string::npos)
+    {
+        return Error("Invalid systemd config value", EINVAL);
+    }
+    return params.value.Value();
+}
+
+std::string ReplaceSystemdConfigValue(const std::string& contents, const std::string& block, const std::string& parameter, const std::string& value)
+{
+    const std::string targetBlock = "[" + block + "]";
+    const std::string lineEnding = contents.find("\r\n") == std::string::npos ? "\n" : "\r\n";
+    size_t replacementStart = std::string::npos;
+    size_t replacementEnd = std::string::npos;
+    size_t insertionPosition = std::string::npos;
+    bool inTargetBlock = false;
+    bool foundTargetBlock = false;
+
+    size_t lineStart = 0;
+    while (lineStart <= contents.size())
+    {
+        const size_t newline = contents.find('\n', lineStart);
+        size_t lineEnd = newline == std::string::npos ? contents.size() : newline;
+        if (lineEnd > lineStart && contents[lineEnd - 1] == '\r')
+        {
+            lineEnd--;
+        }
+
+        const std::string trimmed = TrimWhiteSpaces(contents.substr(lineStart, lineEnd - lineStart));
+        if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']')
+        {
+            if (inTargetBlock)
+            {
+                insertionPosition = lineStart;
+            }
+            inTargetBlock = trimmed == targetBlock;
+            foundTargetBlock = foundTargetBlock || inTargetBlock;
+        }
+        else if (inTargetBlock && !trimmed.empty() && trimmed.front() != '#' && trimmed.front() != ';')
+        {
+            const size_t equals = contents.find('=', lineStart);
+            if (equals != std::string::npos && equals < lineEnd)
+            {
+                const std::string key = TrimWhiteSpaces(contents.substr(lineStart, equals - lineStart));
+                if (key == parameter)
+                {
+                    replacementStart = equals + 1;
+                    replacementEnd = lineEnd;
+                }
+            }
+        }
+
+        if (newline == std::string::npos)
+        {
+            if (inTargetBlock)
+            {
+                insertionPosition = contents.size();
+            }
+            break;
+        }
+        lineStart = newline + 1;
+    }
+
+    std::string updated = contents;
+    if (replacementStart != std::string::npos)
+    {
+        updated.replace(replacementStart, replacementEnd - replacementStart, value);
+        return updated;
+    }
+
+    if (foundTargetBlock)
+    {
+        std::string setting = parameter + "=" + value + lineEnding;
+        if (insertionPosition > 0 && contents[insertionPosition - 1] != '\n')
+        {
+            setting.insert(0, lineEnding);
+        }
+        updated.insert(insertionPosition, setting);
+        return updated;
+    }
+
+    if (!updated.empty() && updated.back() != '\n')
+    {
+        updated += lineEnding;
+    }
+    updated += targetBlock + lineEnding + parameter + "=" + value + lineEnding;
+    return updated;
 }
 } // namespace
 
@@ -298,6 +412,53 @@ Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, I
                                            "' does not satisfy the comparison");
         }
     }
+}
+
+Result<Status> RemediateSystemdConfigValue(const SystemdConfigValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
+{
+    auto desired = GetSystemdConfigRemediationValue(params);
+    if (!desired.HasValue())
+    {
+        return desired.Error();
+    }
+
+    auto audit = AuditSystemdConfigValue(params, indicators, context);
+    if (!audit.HasValue() || audit.Value() == Status::Compliant)
+    {
+        return audit;
+    }
+
+    const std::string configPath = context.GetSpecialFilePath(params.file.Value());
+    auto original = context.GetFileContents(configPath);
+    if (!original.HasValue())
+    {
+        return original.Error();
+    }
+    const std::string updated = ReplaceSystemdConfigValue(original.Value(), params.block.Value(), params.parameter, desired.Value());
+    if (updated == original.Value())
+    {
+        return Error("SystemdConfigValue remediation produced no change", EINVAL);
+    }
+
+    auto replaced = ReplaceFileContentsAtomic(configPath, updated);
+    if (!replaced.HasValue())
+    {
+        return replaced.Error();
+    }
+
+    auto postAudit = AuditSystemdConfigValue(params, indicators, context);
+    if (postAudit.HasValue() && postAudit.Value() == Status::Compliant)
+    {
+        return postAudit;
+    }
+
+    auto rollback = ReplaceFileContentsAtomic(configPath, original.Value());
+    if (!rollback.HasValue())
+    {
+        const std::string reason = postAudit.HasValue() ? "Systemd config remained noncompliant" : postAudit.Error().message;
+        return Error(reason + "; rollback failed: " + rollback.Error().message, rollback.Error().code);
+    }
+    return postAudit;
 }
 
 } // namespace ComplianceEngine

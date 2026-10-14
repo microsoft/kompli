@@ -252,7 +252,7 @@ Result<Status> IsKernelModuleBlocked(std::string moduleName, bool requireMask, I
     }
     else
     {
-        indicators.Compliant("Failed to execute modprobe: " + modprobeOutput.Error().message + ", ignoring modprobe output");
+        return Error("Failed to execute modprobe --showconfig: " + modprobeOutput.Error().message, modprobeOutput.Error().code);
     }
 
     return indicators.Compliant("Module " + moduleName + " is disabled");
