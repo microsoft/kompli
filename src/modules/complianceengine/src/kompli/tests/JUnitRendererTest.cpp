@@ -6,6 +6,7 @@
 #include <JUnitRenderer.hpp>
 #include <Resource.hpp>
 #include <RuleFilters.hpp>
+#include <cerrno>
 #include <gtest/gtest.h>
 #include <string>
 
@@ -98,6 +99,16 @@ TEST(JUnitRendererTest, SuiteNameIsEscaped)
     EXPECT_TRUE(Contains(r.Value(), "name=\"a&quot;b\""));
 }
 
+TEST(JUnitRendererTest, AttributeWhitespaceUsesCharacterReferences)
+{
+    auto r = RenderJUnit(R"({"rules":[{"id":"1\t2","title":"A\nB\rC","status":"Compliant","tags":["axis:x\ty"]}]})", "S\tN\nR");
+    ASSERT_TRUE(r.HasValue()) << r.Error().message;
+    EXPECT_TRUE(Contains(r.Value(), "classname=\"1&#9;2\""));
+    EXPECT_TRUE(Contains(r.Value(), "name=\"A&#10;B&#13;C\""));
+    EXPECT_TRUE(Contains(r.Value(), "<tag value=\"axis:x&#9;y\"/>"));
+    EXPECT_TRUE(Contains(r.Value(), "<testsuite name=\"S&#9;N&#10;R\""));
+}
+
 TEST(JUnitRendererTest, MixedRulesCountFailuresCorrectly)
 {
     const std::string json = R"({"rules":[)"
@@ -166,6 +177,34 @@ TEST(JUnitRendererTest, RejectsMalformedTagsWithoutMisreportingThem)
     EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":"level:l1"}]})", "s").HasValue());
     EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":["level:l1",42]}]})", "s").HasValue());
     EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":["a:\u0000b"]}]})", "s").HasValue());
+}
+
+TEST(JUnitRendererTest, RejectsOversizeTagsAndBoundedJUnitOutput)
+{
+    const std::string tag256 = "x:" + std::string(254, 'a');
+    const std::string prefix = R"({"rules":[{"title":"R","status":"Compliant","tags":[")";
+    const std::string suffix = R"("]}]})";
+    EXPECT_TRUE(RenderJUnit(prefix + tag256 + suffix, "s").HasValue());
+
+    auto longTag = RenderJUnit(prefix + tag256 + "a" + suffix, "s");
+    ASSERT_FALSE(longTag.HasValue());
+    EXPECT_NE(longTag.Error().message.find("256 bytes"), std::string::npos);
+    EXPECT_FALSE(RenderJUnit(prefix + "x:" + std::string(253, 'a') + "\xC3\xA9" + suffix, "s").HasValue());
+
+    // Each tag is short, but their combined XML expansion exceeds the output cap.
+    std::string tags;
+    const std::string amplified = "x:" + std::string(200, '&');
+    for (size_t i = 0; i < 17000; ++i)
+    {
+        if (!tags.empty())
+        {
+            tags += ",";
+        }
+        tags += "\"" + amplified + "\"";
+    }
+    auto tooLarge = RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":[)" + tags + R"(]}]})", "s");
+    ASSERT_FALSE(tooLarge.HasValue());
+    EXPECT_EQ(tooLarge.Error().code, EFBIG);
 }
 
 TEST(JUnitRendererTest, LegacyResultUsesRuleNameWhenTitleIsAbsent)

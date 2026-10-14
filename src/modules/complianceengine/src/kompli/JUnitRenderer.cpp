@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <parson.h>
 #include <sstream>
+#include <streambuf>
 #include <string>
 
 namespace ComplianceEngine
@@ -17,44 +18,105 @@ using std::string;
 
 namespace
 {
-// Escapes XML entities and neutralises low control characters. The completed
-// document is checked for other invalid XML 1.0 characters and UTF-8 sequences.
-string EscapeXml(const string& in)
+constexpr size_t kMaxTagBytes = 256;
+constexpr size_t kMaxJUnitBytes = static_cast<size_t>(16) * 1024 * 1024;
+
+class BoundedXmlBuffer : public std::streambuf
 {
-    string out;
-    out.reserve(in.size());
+public:
+    explicit BoundedXmlBuffer(size_t limit)
+        : mLimit(limit)
+    {
+    }
+
+    const string& Value() const
+    {
+        return mValue;
+    }
+
+    void RemoveLast(size_t count)
+    {
+        mValue.resize(mValue.size() - count);
+    }
+
+protected:
+    std::streamsize xsputn(const char* data, std::streamsize count) override
+    {
+        if (count < 0 || static_cast<size_t>(count) > mLimit - mValue.size())
+        {
+            return 0;
+        }
+        mValue.append(data, static_cast<size_t>(count));
+        return count;
+    }
+
+    int_type overflow(int_type ch) override
+    {
+        if (traits_type::eq_int_type(ch, traits_type::eof()))
+        {
+            return traits_type::not_eof(ch);
+        }
+        if (mValue.size() == mLimit)
+        {
+            return traits_type::eof();
+        }
+        mValue.push_back(traits_type::to_char_type(ch));
+        return ch;
+    }
+
+private:
+    size_t mLimit;
+    string mValue;
+};
+
+// Attribute whitespace needs character references to survive XML parsing.
+// The completed document is checked for invalid XML 1.0 characters and UTF-8.
+void EscapeXml(const string& in, std::ostream& out, bool attribute = false)
+{
     for (const char ch : in)
     {
         switch (ch)
         {
             case '&':
-                out += "&amp;";
+                out << "&amp;";
                 break;
             case '<':
-                out += "&lt;";
+                out << "&lt;";
                 break;
             case '>':
-                out += "&gt;";
+                out << "&gt;";
                 break;
             case '"':
-                out += "&quot;";
+                out << "&quot;";
                 break;
             case '\'':
-                out += "&apos;";
+                out << "&apos;";
+                break;
+            case '\t':
+                out << (attribute ? "&#9;" : "\t");
+                break;
+            case '\n':
+                out << (attribute ? "&#10;" : "\n");
+                break;
+            case '\r':
+                out << (attribute ? "&#13;" : "\r");
                 break;
             default:
                 if (static_cast<unsigned char>(ch) < 0x20 && ch != '\t' && ch != '\n' && ch != '\r')
                 {
-                    out += ' ';
+                    out << ' ';
                 }
                 else
                 {
-                    out += ch;
+                    out << ch;
                 }
                 break;
         }
+        if (!out)
+        {
+            return;
+        }
     }
-    return out;
 }
 
 bool HasValidXmlCharacters(const string& xml)
@@ -121,7 +183,7 @@ bool HasValidXmlCharacters(const string& xml)
 // silently dropped from the rendered output.
 constexpr size_t cMaxIndicatorDepth = 16;
 
-void AppendIndicators(const JSON_Array* indicators, size_t depth, std::ostringstream& body)
+void AppendIndicators(const JSON_Array* indicators, size_t depth, std::ostream& body)
 {
     if (nullptr == indicators || depth >= cMaxIndicatorDepth)
     {
@@ -154,9 +216,10 @@ void AppendIndicators(const JSON_Array* indicators, size_t depth, std::ostringst
 // Builds the human-readable failure body for a rule: the engine's `ruleName`,
 // a Parameters section (present when the canonical JSON carries per-rule
 // parameters) followed by an indented Indicators tree.
-string BuildBody(const JSON_Object* rule)
+Result<string> BuildBody(const JSON_Object* rule)
 {
-    std::ostringstream body;
+    BoundedXmlBuffer buffer(kMaxJUnitBytes);
+    std::ostream body(&buffer);
     body << "Rule: " << StringOrEmpty(json_object_get_string(rule, "ruleName")) << "\n\n";
 
     const JSON_Object* parameters = json_object_get_object(rule, "parameters");
@@ -186,19 +249,21 @@ string BuildBody(const JSON_Object* rule)
 
     body << "\nIndicators:\n";
     AppendIndicators(json_object_get_array(rule, "indicators"), 0, body);
-    return body.str();
+    if (!body)
+    {
+        return Error("JUnit result exceeds the maximum output size", EFBIG);
+    }
+    return buffer.Value();
 }
 
-// Renders a rule's `tags` array (flat "axis:value" strings) as a <tags> block
-// mirroring the definition's own field name, one <tag value="..."/> per
-// entry. Returns empty when there are no tags, so a bare passing testcase
-// with no tags can still self-close.
-Result<string> BuildTags(const JSON_Object* rule)
+// Renders a rule's `tags` array as a <tags> block. Returns false when
+// there are no tags, so a bare passing testcase can still self-close.
+Result<bool> BuildTags(const JSON_Object* rule, std::ostream& out)
 {
     const JSON_Value* tagsValue = json_object_get_value(rule, "tags");
     if (nullptr == tagsValue)
     {
-        return string();
+        return false;
     }
     const JSON_Array* tags = json_value_get_array(tagsValue);
     if (nullptr == tags)
@@ -207,9 +272,8 @@ Result<string> BuildTags(const JSON_Object* rule)
     }
     if (0 == json_array_get_count(tags))
     {
-        return string();
+        return false;
     }
-    std::ostringstream out;
     out << "    <tags>\n";
     const size_t count = json_array_get_count(tags);
     for (size_t i = 0; i < count; ++i)
@@ -219,15 +283,30 @@ Result<string> BuildTags(const JSON_Object* rule)
         {
             return Error("Canonical result JSON rule has a non-string tag", EINVAL);
         }
-        const string value(tag, json_array_get_string_len(tags, i));
+        const size_t length = json_array_get_string_len(tags, i);
+        if (kMaxTagBytes < length)
+        {
+            return Error("Canonical result JSON rule has a tag exceeding 256 bytes", E2BIG);
+        }
+        const string value(tag, length);
         if (string::npos != value.find('\0'))
         {
             return Error("Canonical result JSON rule has a tag with an embedded NUL", EINVAL);
         }
-        out << "      <tag value=\"" << EscapeXml(value) << "\"/>\n";
+        out << "      <tag value=\"";
+        EscapeXml(value, out, true);
+        out << "\"/>\n";
+        if (!out)
+        {
+            return Error("JUnit result exceeds the maximum output size", EFBIG);
+        }
     }
     out << "    </tags>\n";
-    return out.str();
+    if (!out)
+    {
+        return Error("JUnit result exceeds the maximum output size", EFBIG);
+    }
+    return true;
 }
 } // anonymous namespace
 
@@ -262,7 +341,8 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
     const size_t ruleCount = json_array_get_count(rules);
     size_t failureCount = 0;
     size_t skippedCount = 0;
-    std::ostringstream cases;
+    BoundedXmlBuffer casesBuffer(kMaxJUnitBytes);
+    std::ostream cases(&casesBuffer);
     for (size_t i = 0; i < ruleCount; ++i)
     {
         const JSON_Object* rule = json_array_get_object(rules, i);
@@ -297,18 +377,36 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             return Error("Canonical result JSON rule has invalid 'status' value: '" + status + "'", EINVAL);
         }
 
-        auto tagsXml = BuildTags(rule);
-        if (!tagsXml.HasValue())
+        cases << "  <testcase classname=\"";
+        EscapeXml(id, cases, true);
+        cases << "\" name=\"";
+        EscapeXml(title, cases, true);
+        cases << "\"";
+        if (!cases)
         {
-            return tagsXml.Error();
+            return Error("JUnit result exceeds the maximum output size", EFBIG);
         }
-
-        cases << "  <testcase classname=\"" << EscapeXml(id) << "\" name=\"" << EscapeXml(title) << "\"";
+        cases << ">\n";
+        if (!cases)
+        {
+            return Error("JUnit result exceeds the maximum output size", EFBIG);
+        }
+        auto hasTags = BuildTags(rule, cases);
+        if (!hasTags.HasValue())
+        {
+            return hasTags.Error();
+        }
         if (status == "NonCompliant")
         {
             ++failureCount;
-            cases << ">\n" << tagsXml.Value();
-            cases << "    <failure message=\"Rule is non-compliant\" type=\"NonCompliant\">" << EscapeXml(BuildBody(rule)) << "</failure>\n";
+            auto body = BuildBody(rule);
+            if (!body.HasValue())
+            {
+                return body.Error();
+            }
+            cases << "    <failure message=\"Rule is non-compliant\" type=\"NonCompliant\">";
+            EscapeXml(body.Value(), cases);
+            cases << "</failure>\n";
             cases << "  </testcase>\n";
         }
         else if (status == "NotApplicable" || status == "Skipped")
@@ -316,32 +414,48 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             // Neither a pass nor a failure; JUnit models both as a skipped test case.
             ++skippedCount;
             const string message = (status == "NotApplicable") ? "Rule is not applicable" : "Rule was skipped";
-            cases << ">\n" << tagsXml.Value();
-            cases << "    <skipped message=\"" << message << "\">" << EscapeXml(BuildBody(rule)) << "</skipped>\n";
+            auto body = BuildBody(rule);
+            if (!body.HasValue())
+            {
+                return body.Error();
+            }
+            cases << "    <skipped message=\"" << message << "\">";
+            EscapeXml(body.Value(), cases);
+            cases << "</skipped>\n";
             cases << "  </testcase>\n";
         }
-        else if (!tagsXml.Value().empty())
+        else if (hasTags.Value())
         {
             // status == "Compliant" but tags are present: can't self-close.
-            cases << ">\n" << tagsXml.Value();
             cases << "  </testcase>\n";
         }
         else
         {
             // status == "Compliant", no tags: a bare passing test case.
+            casesBuffer.RemoveLast(2);
             cases << "/>\n";
+        }
+        if (!cases)
+        {
+            return Error("JUnit result exceeds the maximum output size", EFBIG);
         }
     }
 
-    std::ostringstream out;
+    BoundedXmlBuffer outputBuffer(kMaxJUnitBytes);
+    std::ostream out(&outputBuffer);
     out << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
     out << "<testsuites>\n";
-    out << "  <testsuite name=\"" << EscapeXml(suiteName) << "\" tests=\"" << ruleCount << "\" failures=\"" << failureCount << "\" skipped=\""
-        << skippedCount << "\">\n";
-    out << cases.str();
+    out << "  <testsuite name=\"";
+    EscapeXml(suiteName, out, true);
+    out << "\" tests=\"" << ruleCount << "\" failures=\"" << failureCount << "\" skipped=\"" << skippedCount << "\">\n";
+    out << casesBuffer.Value();
     out << "  </testsuite>\n";
     out << "</testsuites>\n";
-    const string xml = out.str();
+    if (!out)
+    {
+        return Error("JUnit result exceeds the maximum output size", EFBIG);
+    }
+    const string xml = outputBuffer.Value();
     if (!HasValidXmlCharacters(xml))
     {
         return Error("Canonical result contains invalid XML 1.0 characters or UTF-8", EINVAL);

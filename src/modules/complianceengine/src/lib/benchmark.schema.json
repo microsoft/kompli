@@ -206,9 +206,10 @@
         },
         "tags": {
           "type": "array",
-          "description": "Flat, sparse set of framework-agnostic 'axis:value' tags.",
+          "description": "Flat, sparse set of framework-agnostic 'axis:value' tags. Runtime limits each decoded UTF-8 tag to 256 bytes; maxLength also bounds code points.",
           "items": {
             "type": "string",
+            "maxLength": 256,
             "pattern": "^[a-z0-9-]+:[^\\u0000]+$"
           }
         },
