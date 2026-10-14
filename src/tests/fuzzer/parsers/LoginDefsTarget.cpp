@@ -61,12 +61,13 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     const auto equalInt = [](const ComplianceEngine::Optional<int>& left, const ComplianceEngine::Optional<int>& right) {
         return left.HasValue() == right.HasValue() && (!left.HasValue() || left.Value() == right.Value());
     };
-    const auto equalString = [](const ComplianceEngine::Optional<std::string>& left, const ComplianceEngine::Optional<std::string>& right) {
+    const auto equalMethod = [](const ComplianceEngine::Optional<ComplianceEngine::LoginDefs::EncryptionMethod>& left,
+                                 const ComplianceEngine::Optional<ComplianceEngine::LoginDefs::EncryptionMethod>& right) {
         return left.HasValue() == right.HasValue() && (!left.HasValue() || left.Value() == right.Value());
     };
     if (!equalUid(document.uidMin, repeated.uidMin) || !equalInt(document.passMaxDays, repeated.passMaxDays) ||
         !equalInt(document.passMinDays, repeated.passMinDays) || !equalInt(document.passWarnAge, repeated.passWarnAge) ||
-        !equalString(document.encryptMethod, repeated.encryptMethod))
+        !equalMethod(document.encryptMethod, repeated.encryptMethod))
     {
         std::abort();
     }

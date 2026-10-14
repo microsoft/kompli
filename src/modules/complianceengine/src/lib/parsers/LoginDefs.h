@@ -22,6 +22,16 @@ enum : std::size_t
     MaxRecords = 8192
 };
 
+enum class EncryptionMethod
+{
+    DES,
+    MD5,
+    SHA256,
+    SHA512,
+    YESCRYPT,
+    BCRYPT
+};
+
 struct Document
 {
     std::string source;
@@ -29,9 +39,11 @@ struct Document
     Optional<int> passMaxDays;
     Optional<int> passMinDays;
     Optional<int> passWarnAge;
-    Optional<std::string> encryptMethod;
+    Optional<EncryptionMethod> encryptMethod;
 };
 
+Result<EncryptionMethod> ParseEncryptionMethod(const std::string& value);
+const char* EncryptionMethodName(EncryptionMethod method);
 // Error columns count bytes; lines and columns are 1-based.
 // LF ends a physical line; a preceding CR remains in the raw value.
 Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle logHandle);

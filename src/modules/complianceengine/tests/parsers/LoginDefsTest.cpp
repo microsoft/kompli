@@ -61,7 +61,7 @@ TEST(LoginDefsTest, StoresFirstValuesForRepeatedAndUnknownKeys)
     ASSERT_TRUE(doc.passWarnAge.HasValue());
     EXPECT_EQ(7, doc.passWarnAge.Value());
     ASSERT_TRUE(doc.encryptMethod.HasValue());
-    EXPECT_EQ("YESCRYPT", doc.encryptMethod.Value());
+    EXPECT_EQ(ld::EncryptionMethod::YESCRYPT, doc.encryptMethod.Value());
 }
 
 TEST(LoginDefsTest, RejectsMalformedNumericValuesWithLocation)
@@ -95,12 +95,47 @@ TEST(LoginDefsTest, InvalidNumericValueInUnselectedKeyOrDuplicateRejectsDocument
     EXPECT_EQ("source:1:9: invalid UID_MIN value: Integer value out of range: 2147483648", overflow.Error().message);
 }
 
-TEST(LoginDefsTest, KeepsStringAndUnknownSettingsUninterpreted)
+TEST(LoginDefsTest, AcceptsOnlyDocumentedEncryptionMethods)
 {
-    const auto parsed = ld::Parse("ENCRYPT_METHOD \"YESCRYPT # note\"\nOTHER 5junk\n", "source", nullptr);
+    const struct
+    {
+        const char* value;
+        ld::EncryptionMethod method;
+    } cases[] = {
+        {"DES", ld::EncryptionMethod::DES},
+        {"MD5", ld::EncryptionMethod::MD5},
+        {"SHA256", ld::EncryptionMethod::SHA256},
+        {"SHA512", ld::EncryptionMethod::SHA512},
+        {"YESCRYPT", ld::EncryptionMethod::YESCRYPT},
+        {"BCRYPT", ld::EncryptionMethod::BCRYPT},
+    };
+    for (const auto& item : cases)
+    {
+        const auto parsed = ld::Parse(std::string("ENCRYPT_METHOD ") + item.value + "\n", "source", nullptr);
+        ASSERT_TRUE(parsed.HasValue()) << item.value;
+        ASSERT_TRUE(parsed.Value().encryptMethod.HasValue());
+        EXPECT_EQ(item.method, parsed.Value().encryptMethod.Value());
+        EXPECT_EQ(item.value, std::string(ld::EncryptionMethodName(item.method)));
+    }
+    const auto parsed = ld::Parse("ENCRYPT_METHOD yescrypt \r\nOTHER 5junk\n", "source", nullptr);
     ASSERT_TRUE(parsed.HasValue());
     ASSERT_TRUE(parsed.Value().encryptMethod.HasValue());
-    EXPECT_EQ("\"YESCRYPT # note\"", parsed.Value().encryptMethod.Value());
+    EXPECT_EQ(ld::EncryptionMethod::YESCRYPT, parsed.Value().encryptMethod.Value());
+}
+
+TEST(LoginDefsTest, RejectsUndocumentedEncryptionMethodsEvenOnLaterOccurrence)
+{
+    for (const std::string value : {"SHA-512", "Blowfish", "None", "yescrypt\x80", "\"YESCRYPT\"", "YESCRYPT extra", "\"\""})
+    {
+        const auto parsed = ld::Parse("ENCRYPT_METHOD " + value + "\n", "source", nullptr);
+        ASSERT_FALSE(parsed.HasValue()) << value;
+        EXPECT_EQ(EBADMSG, parsed.Error().code);
+        EXPECT_EQ("source:1:16: invalid ENCRYPT_METHOD value: Unsupported encryption method: " + value, parsed.Error().message);
+    }
+    const auto duplicate = ld::Parse("ENCRYPT_METHOD SHA512\nENCRYPT_METHOD unsupported\n", "source", nullptr);
+    ASSERT_FALSE(duplicate.HasValue());
+    EXPECT_EQ(EBADMSG, duplicate.Error().code);
+    EXPECT_TRUE(ld::Parse("OTHER 5junk\n", "source", nullptr).HasValue());
 }
 
 TEST(LoginDefsTest, MissingValueRejectsWholeDocumentWithLocation)
@@ -112,7 +147,7 @@ TEST(LoginDefsTest, MissingValueRejectsWholeDocumentWithLocation)
     const auto whitespace = ld::Parse("UID_MIN \t\n", "source", nullptr);
     ASSERT_FALSE(whitespace.HasValue());
     EXPECT_EQ("source:1:10: login.defs missing value", whitespace.Error().message);
-    EXPECT_TRUE(ld::Parse("ENCRYPT_METHOD \"\"\n", "source", nullptr).HasValue());
+    EXPECT_TRUE(ld::Parse("OTHER \"\"\n", "source", nullptr).HasValue());
 }
 
 TEST(LoginDefsTest, EmbeddedNulRejectsWholeDocumentWithByteLocation)
