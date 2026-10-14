@@ -23,7 +23,7 @@ namespace ComplianceEngine
 {
 namespace
 {
-std::string ReplaceAuidPlaceholder(const std::string& option, int uidMin)
+std::string ReplaceAuidPlaceholder(const std::string& option, uid_t uidMin)
 {
     regex auidRegex(R"(auid>=[0-9]+\b)");
     smatch m;

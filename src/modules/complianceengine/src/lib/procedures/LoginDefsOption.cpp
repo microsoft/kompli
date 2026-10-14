@@ -10,6 +10,7 @@
 #include <parsers/LoginDefs.h>
 #include <sstream>
 #include <string>
+#include <utility>
 
 using std::string;
 
@@ -58,30 +59,30 @@ Result<bool> StringComparison(const string& lhs, const string& rhs, ComparisonOp
     return CompareTyped(lhs, rhs, operation == ComparisonOperation::Equal ? TypedComparisonOperation::Equal : TypedComparisonOperation::NotEqual);
 }
 
-Optional<string> FindLoginDefsValue(const LoginDefs::Document& document, const string& optionName, OsConfigLogHandle logHandle)
+const Optional<int>* NumericOption(const LoginDefs::Document& document, const string& option)
 {
-    Optional<string> foundValue;
-
-    for (const auto* record : document.FindAll(optionName))
-    {
-        std::istringstream valueStream(document.Text(record->valueSpan));
-        string value;
-        valueStream >> value;
-        foundValue = value;
-        OsConfigLogDebug(logHandle, "LoginDefsOption: found '%s' = '%s'", optionName.c_str(), value.c_str());
-    }
-
-    return foundValue;
+    if (option == "PASS_MAX_DAYS")
+        return &document.passMaxDays;
+    if (option == "PASS_MIN_DAYS")
+        return &document.passMinDays;
+    if (option == "PASS_WARN_AGE")
+        return &document.passWarnAge;
+    return nullptr;
 }
 
 bool IsNumericLoginDefsOption(const string& option)
 {
-    return (option == "PASS_MAX_DAYS") || (option == "PASS_MIN_DAYS") || (option == "PASS_WARN_AGE") || (option == "UID_MIN") || (option == "UID_MAX");
+    return (option == "PASS_MAX_DAYS") || (option == "PASS_MIN_DAYS") || (option == "PASS_WARN_AGE");
 }
 } // anonymous namespace
 
 Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
+    if (!IsNumericLoginDefsOption(params.option) && params.option != "ENCRYPT_METHOD")
+    {
+        OsConfigLogError(context.GetLogHandle(), "LoginDefsOption: unsupported option '%s'", params.option.c_str());
+        return Error("Unsupported login.defs option: " + params.option, EINVAL);
+    }
     const string filePath = context.GetSpecialFilePath("/etc/login.defs");
 
     OsConfigLogDebug(context.GetLogHandle(), "LoginDefsOption: checking option '%s' %s '%s' in %s", params.option.c_str(),
@@ -100,67 +101,58 @@ Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, Indicat
         return Error("Invalid " + params.option + " comparison target: " + rhsInt.Error().message, rhsInt.Error().code);
     }
 
-    const auto parsed = LoginDefs::Parse(fileContents.Value(), filePath);
+    const auto parsed = LoginDefs::Parse(std::move(fileContents.Value()), filePath, context.GetLogHandle());
     if (!parsed.HasValue())
     {
         return parsed.Error();
     }
-    const LoginDefs::Record* selected = nullptr;
-    for (auto it = parsed.Value().records.rbegin(); it != parsed.Value().records.rend(); ++it)
+    if (numericOption)
     {
-        if (it->key == params.option)
+        const auto* found = NumericOption(parsed.Value(), params.option);
+        if (found == nullptr || !found->HasValue())
         {
-            selected = &*it;
-            break;
+            return indicators.NonCompliant("Option '" + params.option + "' is not set in " + filePath);
         }
-        if (LoginDefs::IsNulCorruptedKey(*it, params.option))
+        const auto actual = found->Value();
+        OsConfigLogDebug(context.GetLogHandle(), "LoginDefsOption: found '%s' = '%d'", params.option.c_str(), actual);
+        auto result = NumericComparison(actual, rhsInt.Value(), params.comparison);
+        if (!result.HasValue())
         {
-            return Error("Invalid " + params.option + " key: embedded NUL", EINVAL);
+            return result.Error();
         }
+        if (result.Value())
+        {
+            return indicators.Compliant(params.option + " = " + std::to_string(actual) + " (" + std::to_string(params.comparison) + " " + params.value +
+                                        ")");
+        }
+        return indicators.NonCompliant(params.option + " = " + std::to_string(actual) + " (expected " + std::to_string(params.comparison) + " " +
+                                       params.value + ")");
     }
-    if ((nullptr != selected) && parsed.Value().HasEmbeddedNul(*selected))
-    {
-        return Error("Invalid " + params.option + " value: embedded NUL", EINVAL);
-    }
-    auto foundValue = FindLoginDefsValue(parsed.Value(), params.option, context.GetLogHandle());
-    if (!foundValue.HasValue())
+
+    if (!parsed.Value().encryptMethod.HasValue())
     {
         return indicators.NonCompliant("Option '" + params.option + "' is not set in " + filePath);
     }
-
-    // Try numeric comparison first
-    auto lhsInt = TryStringToInt(foundValue.Value());
-
-    if (numericOption)
-    {
-        if (!lhsInt.HasValue())
-        {
-            return Error("Invalid " + params.option + " value: " + lhsInt.Error().message, lhsInt.Error().code);
-        }
-    }
-
+    std::istringstream valueStream(parsed.Value().encryptMethod.Value());
+    string value;
+    valueStream >> value;
+    OsConfigLogDebug(context.GetLogHandle(), "LoginDefsOption: found '%s' = '%s'", params.option.c_str(), value.c_str());
+    auto lhsInt = TryStringToInt(value);
     if (lhsInt.HasValue() && rhsInt.HasValue())
     {
-        // Both values are numeric — use numeric comparison
         auto result = NumericComparison(lhsInt.Value(), rhsInt.Value(), params.comparison);
         if (!result.HasValue())
         {
             return result.Error();
         }
-
-        if (result.Value())
-        {
-            return indicators.Compliant(params.option + " = " + foundValue.Value() + " (" + std::to_string(params.comparison) + " " + params.value +
-                                        ")");
-        }
-
-        return indicators.NonCompliant(params.option + " = " + foundValue.Value() + " (expected " + std::to_string(params.comparison) + " " +
-                                       params.value + ")");
+        return result.Value() ?
+                   indicators.Compliant(params.option + " = " + value + " (" + std::to_string(params.comparison) + " " + params.value + ")") :
+                   indicators.NonCompliant(params.option + " = " + value + " (expected " + std::to_string(params.comparison) + " " + params.value + ")");
     }
 
     // login.defs accepts ENCRYPT_METHOD names case-insensitively.
     const bool ignoreCase = params.option == "ENCRYPT_METHOD";
-    const string actualValue = ignoreCase ? ToLower(foundValue.Value()) : foundValue.Value();
+    const string actualValue = ignoreCase ? ToLower(value) : value;
     const string expectedValue = ignoreCase ? ToLower(params.value) : params.value;
     auto result = StringComparison(actualValue, expectedValue, params.comparison);
     if (!result.HasValue())
@@ -170,10 +162,9 @@ Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, Indicat
 
     if (result.Value())
     {
-        return indicators.Compliant(params.option + " = " + foundValue.Value() + " (" + std::to_string(params.comparison) + " " + params.value + ")");
+        return indicators.Compliant(params.option + " = " + value + " (" + std::to_string(params.comparison) + " " + params.value + ")");
     }
 
-    return indicators.NonCompliant(params.option + " = " + foundValue.Value() + " (expected " + std::to_string(params.comparison) + " " + params.value +
-                                   ")");
+    return indicators.NonCompliant(params.option + " = " + value + " (expected " + std::to_string(params.comparison) + " " + params.value + ")");
 }
 } // namespace ComplianceEngine

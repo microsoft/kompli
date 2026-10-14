@@ -3,6 +3,7 @@
 
 #include <parsers/LoginDefs.h>
 
+#include <Optional.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -34,15 +35,15 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         maxObservedInputBytes = size;
     }
     const std::string bytes = 0 == size ? std::string() : std::string(reinterpret_cast<const char*>(data), size);
-    const auto first = ComplianceEngine::LoginDefs::Parse(bytes, "fuzz");
-    const auto second = ComplianceEngine::LoginDefs::Parse(bytes, "fuzz");
+    const auto first = ComplianceEngine::LoginDefs::Parse(bytes, "fuzz", nullptr);
+    const auto second = ComplianceEngine::LoginDefs::Parse(bytes, "fuzz", nullptr);
     if (first.HasValue() != second.HasValue())
     {
         std::abort();
     }
     if (!first.HasValue())
     {
-        if (first.Error().code != second.Error().code)
+        if ((first.Error().code != second.Error().code) || (first.Error().message != second.Error().message))
         {
             std::abort();
         }
@@ -50,59 +51,22 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     }
     const auto& document = first.Value();
     const auto& repeated = second.Value();
-    if ((document.records.size() != repeated.records.size()) || (document.diagnostics.size() != repeated.diagnostics.size()) ||
-        (document.bytes != bytes))
+    if ((document.source != repeated.source) || (bytes.find('\0') != std::string::npos))
     {
         std::abort();
     }
-    std::size_t previous = 0;
-    for (std::size_t i = 0; i < document.records.size(); ++i)
-    {
-        const auto& record = document.records[i];
-        if ((record.lineSpan.offset < previous) || (record.lineSpan.offset > bytes.size()) ||
-            (record.lineSpan.length > bytes.size() - record.lineSpan.offset) ||
-            (record.keySpan.offset < record.lineSpan.offset) || (record.keySpan.offset > bytes.size()) ||
-            (record.keySpan.offset > record.lineSpan.offset + record.lineSpan.length) ||
-            (record.keySpan.length > bytes.size() - record.keySpan.offset) ||
-            (record.keySpan.length > record.lineSpan.length - (record.keySpan.offset - record.lineSpan.offset)) ||
-            (record.valueSpan.offset < record.keySpan.offset) || (record.valueSpan.offset > bytes.size()) ||
-            (record.valueSpan.length > bytes.size() - record.valueSpan.offset) ||
-            (record.valueSpan.offset > record.lineSpan.offset + record.lineSpan.length) ||
-            (record.valueSpan.length > record.lineSpan.offset + record.lineSpan.length - record.valueSpan.offset) ||
-            (record.key != repeated.records[i].key) ||
-            (record.valueSpan.offset != repeated.records[i].valueSpan.offset))
-        {
-            std::abort();
-        }
-        previous = record.lineSpan.offset + record.lineSpan.length;
-    }
-    std::size_t nextNul = bytes.find('\0');
-    std::size_t previousDiagnosticOffset = 0;
-    for (std::size_t i = 0; i < document.diagnostics.size(); ++i)
-    {
-        const auto& diagnostic = document.diagnostics[i];
-        if ((diagnostic.span.offset > bytes.size()) ||
-            (diagnostic.span.length > bytes.size() - diagnostic.span.offset) ||
-            (diagnostic.span.offset < previousDiagnosticOffset) ||
-            (diagnostic.kind != repeated.diagnostics[i].kind) ||
-            (diagnostic.span.offset != repeated.diagnostics[i].span.offset) ||
-            (diagnostic.span.length != repeated.diagnostics[i].span.length) ||
-            (diagnostic.line != repeated.diagnostics[i].line) ||
-            (diagnostic.column != repeated.diagnostics[i].column))
-        {
-            std::abort();
-        }
-        if (diagnostic.kind == ComplianceEngine::LoginDefs::Diagnostic::Kind::EmbeddedNul)
-        {
-            if ((diagnostic.span.length != 1) || (diagnostic.span.offset != nextNul))
-            {
-                std::abort();
-            }
-            nextNul = bytes.find('\0', nextNul + 1);
-        }
-        previousDiagnosticOffset = diagnostic.span.offset;
-    }
-    if (nextNul != std::string::npos)
+    const auto equalUid = [](const ComplianceEngine::Optional<uid_t>& left, const ComplianceEngine::Optional<uid_t>& right) {
+        return left.HasValue() == right.HasValue() && (!left.HasValue() || left.Value() == right.Value());
+    };
+    const auto equalInt = [](const ComplianceEngine::Optional<int>& left, const ComplianceEngine::Optional<int>& right) {
+        return left.HasValue() == right.HasValue() && (!left.HasValue() || left.Value() == right.Value());
+    };
+    const auto equalString = [](const ComplianceEngine::Optional<std::string>& left, const ComplianceEngine::Optional<std::string>& right) {
+        return left.HasValue() == right.HasValue() && (!left.HasValue() || left.Value() == right.Value());
+    };
+    if (!equalUid(document.uidMin, repeated.uidMin) || !equalInt(document.passMaxDays, repeated.passMaxDays) ||
+        !equalInt(document.passMinDays, repeated.passMinDays) || !equalInt(document.passWarnAge, repeated.passWarnAge) ||
+        !equalString(document.encryptMethod, repeated.encryptMethod))
     {
         std::abort();
     }
