@@ -17,12 +17,12 @@ result = {
     "status": "NonCompliant",
     "rules": [
         {
-            "id": "1.1",
+            "id": "1.1\tid",
             "ruleId": "rule-1",
-            "title": "Pass & verify",
+            "title": "Pass\tand\nverify\ragain",
             "ruleName": "PassRule",
             "status": "Compliant",
-            "tags": ["level:l1", "owner:Ops & Sec"],
+            "tags": ["level:l1", "owner:Ops\t&\nSec\rteam"],
             "metadata": {},
             "parameters": {},
             "indicators": [],
@@ -52,8 +52,9 @@ result = {
     ],
 }
 
+suite_name = "Suite\twith\nlines\rtoo"
 completed = subprocess.run(
-    [sys.argv[1], "-f", "junit", "render"],
+    [sys.argv[1], "-f", "junit", "--suite-name", suite_name, "render"],
     input=json.dumps(result),
     text=True,
     capture_output=True,
@@ -63,10 +64,12 @@ root = ET.fromstring(completed.stdout)
 suite = root.find("testsuite")
 if suite is None or suite.attrib["tests"] != "3" or suite.attrib["failures"] != "1" or suite.attrib["skipped"] != "1":
     raise AssertionError("Unexpected JUnit suite counts")
+if suite.attrib["name"] != suite_name:
+    raise AssertionError("Suite name whitespace was not preserved")
 cases = suite.findall("testcase")
-if len(cases) != 3 or cases[0].attrib["name"] != "Pass & verify":
-    raise AssertionError("Testcase names were not preserved")
-if [tag.attrib["value"] for tag in cases[0].findall("tags/tag")] != ["level:l1", "owner:Ops & Sec"]:
-    raise AssertionError("Tags were not preserved")
+if len(cases) != 3 or cases[0].attrib["name"] != "Pass\tand\nverify\ragain" or cases[0].attrib["classname"] != "1.1\tid":
+    raise AssertionError("Testcase attributes were not preserved")
+if [tag.attrib["value"] for tag in cases[0].findall("tags/tag")] != ["level:l1", "owner:Ops\t&\nSec\rteam"]:
+    raise AssertionError("Tag whitespace was not preserved")
 if cases[1].find("failure") is None or cases[2].find("skipped") is None:
     raise AssertionError("Failure or skipped status was not preserved")
