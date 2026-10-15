@@ -312,8 +312,7 @@ TEST(CliOptionsSmokeTest, PlanWithParamOverride)
     auto result = ParseCommandLine(a.Argc(), a.Argv());
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value().paramOverrides.size(), 1u);
-    EXPECT_EQ(result.Value().paramOverrides[0].ref, "1.1");
-    EXPECT_EQ(result.Value().paramOverrides[0].name, "mountPoint");
+    EXPECT_EQ(result.Value().paramOverrides[0].selector, "1.1.mountPoint");
     EXPECT_EQ(result.Value().paramOverrides[0].value, "/tmp");
 }
 
@@ -323,8 +322,7 @@ TEST(CliOptionsSmokeTest, PlanWithQualifiedParamOverride)
     auto result = ParseCommandLine(a.Argc(), a.Argv());
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value().paramOverrides.size(), 1u);
-    EXPECT_EQ(result.Value().paramOverrides[0].ref, "bench1.json:1.1");
-    EXPECT_EQ(result.Value().paramOverrides[0].name, "mountPoint");
+    EXPECT_EQ(result.Value().paramOverrides[0].selector, "bench1.json:1.1.mountPoint");
     EXPECT_EQ(result.Value().paramOverrides[0].value, "/var/tmp");
 }
 
@@ -334,7 +332,7 @@ TEST(CliOptionsSmokeTest, PlanWithParamOverrideValueContainingEquals)
     auto result = ParseCommandLine(a.Argc(), a.Argv());
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value().paramOverrides.size(), 1u);
-    EXPECT_EQ(result.Value().paramOverrides[0].name, "opts");
+    EXPECT_EQ(result.Value().paramOverrides[0].selector, "1.1.opts");
     EXPECT_EQ(result.Value().paramOverrides[0].value, "a=b");
 }
 

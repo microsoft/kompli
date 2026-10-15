@@ -59,6 +59,7 @@
       "additionalProperties": true,
       "required": [
         "indicators",
+        "benchmark",
         "title",
         "id",
         "ruleId",
@@ -69,6 +70,30 @@
         "parameters"
       ],
       "properties": {
+        "benchmark": {
+          "type": "object",
+          "description": "Identity of the benchmark definition that produced this rule result. Rule id is unique only within this identity.",
+          "additionalProperties": false,
+          "required": ["framework", "distribution", "distributionVersion", "benchmarkVersion"],
+          "properties": {
+            "framework": {
+              "type": "string",
+              "minLength": 1
+            },
+            "distribution": {
+              "type": "string",
+              "minLength": 1
+            },
+            "distributionVersion": {
+              "type": "string",
+              "minLength": 1
+            },
+            "benchmarkVersion": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
         "indicators": {
           "type": "array",
           "description": "The engine's step-by-step reasoning tree for the rule."

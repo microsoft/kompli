@@ -44,6 +44,10 @@ std::string ReadFile(const std::string& path)
 Resource MakeResource(const std::string& id, const std::string& title, const std::string& ruleName)
 {
     Resource r;
+    r.benchmarkInfo.framework = "cis";
+    r.benchmarkInfo.distribution = LinuxDistribution::Ubuntu;
+    r.benchmarkInfo.version = "22.04";
+    r.benchmarkInfo.benchmarkVersion = "v2.0.0";
     r.resourceID = title;
     r.ruleName = ruleName;
     r.id = id;
@@ -129,7 +133,10 @@ TEST(KompliResultSchemaTest, GeneratedResultSatisfiesSchemaRequiredFields)
     ASSERT_GT(json_array_get_count(rules), 0u);
     for (size_t i = 0; i < json_array_get_count(rules); ++i)
     {
-        ExpectAllRequiredPresent(json_array_get_object(rules, i), ruleRequired, "rule[" + std::to_string(i) + "]");
+        JSON_Object* rule = json_array_get_object(rules, i);
+        ExpectAllRequiredPresent(rule, ruleRequired, "rule[" + std::to_string(i) + "]");
+        ExpectAllRequiredPresent(json_object_get_object(rule, "benchmark"),
+            json_object_dotget_array(schemaObject, "$defs.rule.properties.benchmark.required"), "rule[" + std::to_string(i) + "].benchmark");
     }
 
     // Each rule's action must be one of the schema's enum values and match

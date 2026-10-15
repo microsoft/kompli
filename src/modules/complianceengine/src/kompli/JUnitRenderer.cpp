@@ -308,6 +308,29 @@ Result<bool> BuildTags(const JSON_Object* rule, std::ostream& out)
     }
     return true;
 }
+
+Result<string> TestcaseClassname(const JSON_Object* rule, const string& id)
+{
+    const JSON_Value* benchmarkValue = json_object_get_value(rule, "benchmark");
+    if (nullptr == benchmarkValue)
+    {
+        return id;
+    }
+    const JSON_Object* benchmark = json_value_get_object(benchmarkValue);
+    if (nullptr == benchmark)
+    {
+        return Error("Canonical result JSON rule has invalid 'benchmark' value", EINVAL);
+    }
+    const string framework = StringOrEmpty(json_object_get_string(benchmark, "framework"));
+    const string distribution = StringOrEmpty(json_object_get_string(benchmark, "distribution"));
+    const string distributionVersion = StringOrEmpty(json_object_get_string(benchmark, "distributionVersion"));
+    const string benchmarkVersion = StringOrEmpty(json_object_get_string(benchmark, "benchmarkVersion"));
+    if (framework.empty() || distribution.empty() || distributionVersion.empty() || benchmarkVersion.empty())
+    {
+        return Error("Canonical result JSON rule has incomplete benchmark provenance", EINVAL);
+    }
+    return framework + "/" + distribution + "/" + distributionVersion + "/" + benchmarkVersion + ":" + id;
+}
 } // anonymous namespace
 
 Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
@@ -376,6 +399,11 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             return Error("Canonical result JSON rule has an embedded NUL in its testcase name", EINVAL);
         }
         const string status = StringOrEmpty(json_object_get_string(rule, "status"));
+        auto classname = TestcaseClassname(rule, id);
+        if (!classname.HasValue())
+        {
+            return classname.Error();
+        }
 
         // Guard against schema drift / upstream bugs: an unrecognised or missing
         // status must not be silently rendered as a passing test case. `Skipped`
@@ -387,7 +415,7 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
         }
 
         cases << "  <testcase classname=\"";
-        EscapeXml(id, cases, true);
+        EscapeXml(classname.Value(), cases, true);
         cases << "\" name=\"";
         EscapeXml(title, cases, true);
         cases << "\"";

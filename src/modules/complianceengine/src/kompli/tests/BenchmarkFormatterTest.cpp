@@ -31,6 +31,10 @@ DistributionInfo TestDistribution()
 Resource MakeResource(const std::string& id, const std::string& resourceID, const std::string& ruleName)
 {
     Resource r;
+    r.benchmarkInfo.framework = "cis";
+    r.benchmarkInfo.distribution = LinuxDistribution::Ubuntu;
+    r.benchmarkInfo.version = "22.04";
+    r.benchmarkInfo.benchmarkVersion = "v2.0.0";
     r.resourceID = resourceID;
     r.ruleName = ruleName;
     r.id = id;
@@ -208,6 +212,12 @@ TEST(BenchmarkFormatterTest, AddEntryEmitsTitleIdRuleIdRuleNameStatus)
     ASSERT_NE(rules, nullptr);
     ASSERT_EQ(json_array_get_count(rules), 1u);
     JSON_Object* rule = json_array_get_object(rules, 0);
+    JSON_Object* benchmark = json_object_get_object(rule, "benchmark");
+    ASSERT_NE(benchmark, nullptr);
+    EXPECT_STREQ(json_object_get_string(benchmark, "framework"), "cis");
+    EXPECT_STREQ(json_object_get_string(benchmark, "distribution"), "ubuntu");
+    EXPECT_STREQ(json_object_get_string(benchmark, "distributionVersion"), "22.04");
+    EXPECT_STREQ(json_object_get_string(benchmark, "benchmarkVersion"), "v2.0.0");
     ASSERT_NE(rule, nullptr);
 
     EXPECT_STREQ(json_object_get_string(rule, "title"), "1.1.1 Ensure something");
