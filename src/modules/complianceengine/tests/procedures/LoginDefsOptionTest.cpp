@@ -911,7 +911,7 @@ TEST_F(LoginDefsOptionTest, RemediateUpdatesEffectiveValueAndPreservesOtherConte
         "# Password policy\n"
         "PASS_MAX_DAYS 99999\n"
         "PASS_MIN_DAYS 7\n"
-        "PASS_MAX_DAYS 730\n"
+        "PASS_MAX_DAYS 99999\n"
         "# Other settings remain intact\n");
     mContext.SetSpecialFilePath(cLoginDefsPath, path);
     EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
@@ -931,13 +931,13 @@ TEST_F(LoginDefsOptionTest, RemediateUpdatesEffectiveValueAndPreservesOtherConte
         "# Password policy\n"
         "PASS_MAX_DAYS 365\n"
         "PASS_MIN_DAYS 7\n"
-        "PASS_MAX_DAYS 730\n"
+        "PASS_MAX_DAYS 365\n"
         "# Other settings remain intact\n");
 }
 
-TEST_F(LoginDefsOptionTest, RemediateUpdatesFirstValueWithParserWhitespace)
+TEST_F(LoginDefsOptionTest, RemediateUpdatesEqualDuplicatesWithParserWhitespace)
 {
-    const auto path = mContext.MakeTempfile(" \tPASS_MAX_DAYS\v99999\nPASS_MAX_DAYS 730\n");
+    const auto path = mContext.MakeTempfile(" \tPASS_MAX_DAYS\v099999\nPASS_MAX_DAYS 99999\n");
     mContext.SetSpecialFilePath(cLoginDefsPath, path);
     EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
 
@@ -952,7 +952,28 @@ TEST_F(LoginDefsOptionTest, RemediateUpdatesFirstValueWithParserWhitespace)
 
     const auto contents = ReadFile(path);
     ASSERT_TRUE(contents.HasValue());
-    EXPECT_EQ(" \tPASS_MAX_DAYS\v365\nPASS_MAX_DAYS 730\n", contents.Value());
+    EXPECT_EQ(" \tPASS_MAX_DAYS\v365\nPASS_MAX_DAYS 365\n", contents.Value());
+}
+
+TEST_F(LoginDefsOptionTest, RemediateRefusesConflictingDuplicatesWithoutChangingFile)
+{
+    const string original = "PASS_MAX_DAYS 99999\nPASS_MAX_DAYS 730\n";
+    const auto path = mContext.MakeTempfile(original);
+    mContext.SetSpecialFilePath(cLoginDefsPath, path);
+    EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+    const auto contents = ReadFile(path);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(original, contents.Value());
 }
 
 TEST_F(LoginDefsOptionTest, RemediatePreservesExtendedAttributes)

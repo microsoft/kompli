@@ -76,6 +76,11 @@ bool IsNumericLoginDefsOption(const string& option)
     return (option == "PASS_MAX_DAYS") || (option == "PASS_MIN_DAYS") || (option == "PASS_WARN_AGE");
 }
 
+bool IsLoginDefsSeparator(char value)
+{
+    return value == ' ' || value == '\t' || value == '\r' || value == '\v' || value == '\f';
+}
+
 Result<string> GetRemediationValue(const LoginDefsOptionParams& params)
 {
     if (params.option.empty() || params.option.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != string::npos)
@@ -122,42 +127,41 @@ Result<string> GetRemediationValue(const LoginDefsOptionParams& params)
 
 string ReplaceEffectiveLoginDefsValue(const string& contents, const string& option, const string& value)
 {
-    string result = contents;
-    size_t replacementStart = string::npos;
-    size_t replacementEnd = string::npos;
+    string result;
+    size_t copiedEnd = 0;
+    bool replaced = false;
     size_t lineStart = 0;
     while (lineStart <= contents.size())
     {
         const size_t lineEnd = contents.find('\n', lineStart);
         const size_t end = lineEnd == string::npos ? contents.size() : lineEnd;
         size_t cursor = lineStart;
-        while (cursor < end && IsAsciiWhitespace(contents[cursor]))
+        while (cursor < end && IsLoginDefsSeparator(contents[cursor]))
         {
             cursor++;
         }
         if (cursor < end && contents[cursor] != '#')
         {
             const size_t keyStart = cursor;
-            while (cursor < end && !IsAsciiWhitespace(contents[cursor]))
+            while (cursor < end && !IsLoginDefsSeparator(contents[cursor]))
             {
                 cursor++;
             }
             if (contents.compare(keyStart, cursor - keyStart, option) == 0)
             {
-                if (replacementStart != string::npos)
-                {
-                    break;
-                }
-                while (cursor < end && IsAsciiWhitespace(contents[cursor]))
+                while (cursor < end && IsLoginDefsSeparator(contents[cursor]))
                 {
                     cursor++;
                 }
-                replacementStart = cursor;
-                while (cursor < end && !IsAsciiWhitespace(contents[cursor]) && contents[cursor] != '#')
+                size_t valueEnd = end;
+                while (valueEnd > cursor && IsLoginDefsSeparator(contents[valueEnd - 1]))
                 {
-                    cursor++;
+                    --valueEnd;
                 }
-                replacementEnd = cursor;
+                result.append(contents, copiedEnd, cursor - copiedEnd);
+                result += value;
+                copiedEnd = valueEnd;
+                replaced = true;
             }
         }
         if (lineEnd == string::npos)
@@ -167,9 +171,9 @@ string ReplaceEffectiveLoginDefsValue(const string& contents, const string& opti
         lineStart = lineEnd + 1;
     }
 
-    if (replacementStart != string::npos)
+    result.append(contents, copiedEnd, string::npos);
+    if (replaced)
     {
-        result.replace(replacementStart, replacementEnd - replacementStart, value);
         return result;
     }
     if (!result.empty() && result.back() != '\n')
