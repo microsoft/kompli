@@ -487,8 +487,11 @@ int main(int argc, char* argv[])
                 procedure = std::move(overrideResult.Value());
             }
 
-            // The rule is selected for evaluation (past the plan lookup).
-            ++evaluatedRules;
+            // Reserved modes do not evaluate a rule.
+            if (mode != ToggleMode::Enforce)
+            {
+                ++evaluatedRules;
+            }
 
             // Per-rule action for the result JSON (docs/CLI.md section 3): `run`
             // can mix audit/remediate across rules, so this is derived from each
