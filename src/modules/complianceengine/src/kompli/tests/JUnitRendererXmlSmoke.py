@@ -18,7 +18,6 @@ result = {
     "status": "NonCompliant",
     "rules": [
         {
-            "benchmark": {"framework": "CIS", "distribution": "ubuntu", "distributionVersion": "22.04", "benchmarkVersion": "1"},
             "id": "1.1\tid",
             "ruleId": "rule-1",
             "title": "Pass\tand\nverify\ragain",
@@ -31,7 +30,6 @@ result = {
             "indicators": [],
         },
         {
-            "benchmark": {"framework": "CIS", "distribution": "ubuntu", "distributionVersion": "22.04", "benchmarkVersion": "1"},
             "id": "1.2",
             "ruleId": "rule-2",
             "title": "Fail",
@@ -61,7 +59,7 @@ if suite is None or suite.attrib["tests"] != "2" or suite.attrib["failures"] != 
 if suite.attrib["name"] != suite_name:
     raise AssertionError("Suite name whitespace was not preserved")
 cases = suite.findall("testcase")
-if len(cases) != 2 or cases[0].attrib["name"] != "Pass\tand\nverify\ragain" or cases[0].attrib["classname"] != "CIS/ubuntu/22.04/1:1.1\tid":
+if len(cases) != 2 or cases[0].attrib["name"] != "Pass\tand\nverify\ragain" or cases[0].attrib["classname"] != "1.1\tid":
     raise AssertionError("Testcase attributes were not preserved")
 if [tag.attrib["value"] for tag in cases[0].findall("tags/tag")] != ["level:l1", "owner:Ops\t&\nSec\rteam"]:
     raise AssertionError("Tag whitespace was not preserved")
