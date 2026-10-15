@@ -300,14 +300,13 @@ TEST_F(LoginDefsOptionTest, CommentSkipped)
     EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
-TEST_F(LoginDefsOptionTest, FirstOccurrenceWinsAndLogsDuplicates)
+TEST_F(LoginDefsOptionTest, ConflictingDuplicateFailsWithoutIndicatorAndLogsWarning)
 {
     SetLoginDefsContent(
         "PASS_MAX_DAYS 99999\n"
         "PASS_MAX_DAYS 180\n"
         "UNKNOWN yes\n"
-        "UNKNOWN no\n"
-        "PASS_MAX_DAYS 90\n");
+        "UNKNOWN no\n");
 
     LoginDefsOptionParams params;
     params.option = "PASS_MAX_DAYS";
@@ -321,15 +320,56 @@ TEST_F(LoginDefsOptionTest, FirstOccurrenceWinsAndLogsDuplicates)
     auto result = AuditLoginDefsOption(params, mIndicators, mContext);
     CloseLog(&logHandle);
     mContext.SetLogHandle(nullptr);
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_EQ("/etc/login.defs:2:15: conflicting duplicate PASS_MAX_DAYS value", result.Error().message);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
     EXPECT_NE(string::npos, text.find("Duplicate PASS_MAX_DAYS in /etc/login.defs at line 2"));
-    EXPECT_NE(string::npos, text.find("Duplicate UNKNOWN in /etc/login.defs at line 4"));
-    EXPECT_NE(string::npos, text.find("Duplicate PASS_MAX_DAYS in /etc/login.defs at line 5"));
     EXPECT_NE(string::npos, text.find("WARNING"));
+}
+
+TEST_F(LoginDefsOptionTest, EquivalentDuplicatesRemainAuditableAndLogWarnings)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 0180\nUNKNOWN yes\nUNKNOWN no\nPASS_MAX_DAYS 180\n");
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const string logPath = mContext.GetTempdirPath() + "/equivalent-duplicates.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    mContext.SetLogHandle(logHandle);
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    CloseLog(&logHandle);
+    mContext.SetLogHandle(nullptr);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+    std::ifstream log(logPath);
+    ASSERT_TRUE(log.is_open());
+    const string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+    EXPECT_NE(string::npos, text.find("Duplicate UNKNOWN in /etc/login.defs at line 3"));
+    EXPECT_NE(string::npos, text.find("Duplicate PASS_MAX_DAYS in /etc/login.defs at line 4"));
+}
+
+TEST_F(LoginDefsOptionTest, ConflictingUnselectedSettingFailsWithoutIndicator)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 180\nPASS_MIN_DAYS 1\nPASS_MIN_DAYS 2\n");
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_EQ("/etc/login.defs:3:15: conflicting duplicate PASS_MIN_DAYS value", result.Error().message);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }
 
 TEST_F(LoginDefsOptionTest, MalformedLastOccurrenceCannotFallBackToEarlierValue)
