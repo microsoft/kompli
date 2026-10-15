@@ -335,7 +335,11 @@ Result<string> TestcaseClassname(const JSON_Object* rule, const string& id)
 
 Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
 {
-    JSON_Value* root = json_parse_string(canonicalJson.c_str());
+    if (canonicalJson.find('\0') != string::npos)
+    {
+        return Error("Canonical result JSON contains a NUL byte", EINVAL);
+    }
+    JSON_Value* root = json_parse_string_complete(canonicalJson.c_str());
     if (nullptr == root)
     {
         return Error("Failed to parse canonical result JSON", EINVAL);
@@ -379,6 +383,10 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             return Error("Canonical result JSON rule is missing a string 'id'", EINVAL);
         }
         const string id(json_value_get_string(idValue), json_value_get_string_len(idValue));
+        if (id.empty())
+        {
+            return Error("Canonical result JSON rule has an empty 'id'", EINVAL);
+        }
         if (string::npos != id.find('\0'))
         {
             return Error("Canonical result JSON rule has an embedded NUL in its testcase classname", EINVAL);
