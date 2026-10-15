@@ -420,13 +420,13 @@ TEST_F(GeneratePlanTest, RejectsPlanThatExceedsParserLimit)
         GTEST_SKIP() << "chown requires root";
     }
     std::string json = kParameterizedBenchmarkJson;
-    const std::string original = "\"default\": \"/tmp\"";
-    const auto position = json.find(original);
+    const std::string validationRegex = R"(, "validationRegex": "^/[a-zA-Z0-9/_.-]+$")";
+    const auto position = json.find(validationRegex);
     ASSERT_NE(position, std::string::npos);
-    json.replace(position, original.size(), "\"default\": \"" + std::string(8 * 1024 * 1024, 'x') + "\"");
+    json.erase(position, validationRegex.size());
     const std::string path = MakeVerifiedFile("plan_oversized_dir", "bench.benchmark.json", json);
 
-    auto result = GeneratePlan({path}, {}, {}, nullptr);
+    auto result = GeneratePlan({path}, {}, {ParamOverride{"1.1.1.1.mountPoint", std::string(8 * 1024 * 1024, 'x')}}, nullptr);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, EFBIG);
 }
