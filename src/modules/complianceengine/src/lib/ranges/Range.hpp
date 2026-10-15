@@ -6,8 +6,10 @@
 
 #include "View.hpp"
 
+#include <initializer_list>
 #include <memory>
 #include <type_traits>
+#include <vector>
 
 namespace ComplianceEngine
 {
@@ -32,6 +34,16 @@ struct IsCollection<Collection,
         decltype(++std::declval<decltype(std::begin(std::declval<Collection&>()))&>()), decltype(*std::declval<decltype(std::begin(std::declval<Collection&>()))&>()),
         decltype(static_cast<bool>(std::declval<decltype(std::begin(std::declval<Collection&>()))&>() != std::declval<decltype(std::end(std::declval<Collection&>()))&>())),
         typename std::iterator_traits<decltype(std::begin(std::declval<Collection&>()))>::value_type>::type> : std::true_type
+{
+};
+
+template <typename T>
+struct IsInitializerList : std::false_type
+{
+};
+
+template <typename T>
+struct IsInitializerList<std::initializer_list<T>> : std::true_type
 {
 };
 
@@ -116,7 +128,9 @@ private:
 
 template <typename Collection>
 using EnableIfOwnedCollection =
-    typename std::enable_if<IsCollection<typename std::decay<Collection>::type>::value && std::is_constructible<typename std::decay<Collection>::type, Collection&&>::value, int>::type;
+    typename std::enable_if<IsCollection<typename std::decay<Collection>::type>::value && !IsInitializerList<typename std::decay<Collection>::type>::value &&
+                                std::is_constructible<typename std::decay<Collection>::type, Collection&&>::value,
+        int>::type;
 } // namespace Detail
 
 template <typename Collection, Detail::EnableIfOwnedCollection<Collection> = 0>
@@ -124,6 +138,13 @@ View<Detail::CollectionSource<typename std::decay<Collection>::type>> Range(Coll
 {
     using Source = Detail::CollectionSource<typename std::decay<Collection>::type>;
     return View<Source>(Source(std::forward<Collection>(values)));
+}
+
+template <typename T>
+View<Detail::CollectionSource<std::vector<T>>> Range(std::initializer_list<T> values)
+{
+    using Source = Detail::CollectionSource<std::vector<T>>;
+    return View<Source>(Source(std::vector<T>(values)));
 }
 } // namespace Ranges
 } // namespace ComplianceEngine
