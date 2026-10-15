@@ -61,6 +61,7 @@ using ComplianceEngine::BenchmarkDefinition::ParseFile;
 using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
 using ComplianceEngine::Cli::Context;
 using ComplianceEngine::Kompli::ApplyParameterOverrides;
+using ComplianceEngine::Kompli::CheckUniqueBenchmarkFiles;
 using ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities;
 using ComplianceEngine::Kompli::Command;
 using ComplianceEngine::Kompli::FilterResultRules;
@@ -76,6 +77,7 @@ using ComplianceEngine::Kompli::RenderText;
 using ComplianceEngine::Kompli::TextStyle;
 using ComplianceEngine::Kompli::ToggleMode;
 using ComplianceEngine::Kompli::ValidatePlanForRun;
+using ComplianceEngine::Kompli::WritePlanFile;
 using std::string;
 
 #ifdef BUILD_TELEMETRY
@@ -183,16 +185,10 @@ int RunPlan(const Options& options)
 
     if (options.output.HasValue())
     {
-        std::ofstream file(options.output.Value(), std::ios::binary | std::ios::trunc);
-        if (!file.is_open())
+        auto writeError = WritePlanFile(options.output.Value(), planResult.Value());
+        if (writeError.HasValue())
         {
-            std::cerr << "Error: failed to open output file '" << options.output.Value() << "'." << std::endl;
-            return 1;
-        }
-        file << planResult.Value();
-        if (!file)
-        {
-            std::cerr << "Error: failed to write output file '" << options.output.Value() << "'." << std::endl;
+            std::cerr << "Error: " << writeError.Value().message << std::endl;
             return 1;
         }
     }
@@ -290,6 +286,19 @@ int main(int argc, char* argv[])
     }
     Plan plan = std::move(planResult.Value());
 
+    std::vector<string> benchmarkFiles;
+    benchmarkFiles.reserve(plan.benchmarks.size());
+    for (const auto& benchmark : plan.benchmarks)
+    {
+        benchmarkFiles.push_back(benchmark.file);
+    }
+    auto duplicateFileError = CheckUniqueBenchmarkFiles(benchmarkFiles);
+    if (duplicateFileError.HasValue())
+    {
+        std::cerr << "Error: refusing to run plan: " << duplicateFileError.Value().message << std::endl;
+        return 1;
+    }
+
     // Reject a plan whose blocks don't all resolve to distinct benchmark
     // identities, before evaluating any rule (fail fast) - two blocks
     // pointing at files that share a (framework, distribution,
@@ -311,13 +320,13 @@ int main(int argc, char* argv[])
             return 1;
         }
         identities.emplace_back(benchmark.file, identityDocResult.Value().benchmarkInfo);
+        auto duplicateIdentityError = CheckUniqueBenchmarkIdentities(identities);
+        if (duplicateIdentityError.HasValue())
+        {
+            std::cerr << "Error: refusing to run plan: " << duplicateIdentityError.Value().message << std::endl;
+            return 1;
+        }
         documents.push_back(std::move(identityDocResult.Value()));
-    }
-    auto duplicateIdentityError = CheckUniqueBenchmarkIdentities(identities);
-    if (duplicateIdentityError.HasValue())
-    {
-        std::cerr << "Error: refusing to run plan: " << duplicateIdentityError.Value().message << std::endl;
-        return 1;
     }
 
     // The CLI logs to stderr unconditionally (no `--log-file`; see
