@@ -188,6 +188,7 @@ add_library(complianceenginelib STATIC
     NetworkTools.cpp
     PasswordEntriesIterator.cpp
     PasswordCreditUnionEvidence.cpp
+    parsers/NameserverSelection.cpp
     Pattern.cpp
     Procedure.cpp
     ProcedureMap.cpp
