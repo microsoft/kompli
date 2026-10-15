@@ -48,8 +48,9 @@ suite_name = "Suite\twith\nlines\rtoo"
 completed = subprocess.run(
     [sys.argv[1], "-f", "junit", "--suite-name", suite_name, "render"],
     input=json.dumps(result),
-    text=True,
-    capture_output=True,
+    universal_newlines=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
     check=True,
 )
 root = ET.fromstring(completed.stdout)
@@ -73,8 +74,9 @@ skipped_result = {**result, "status": "NotApplicable", "rules": [skipped_rule]}
 skipped_output = subprocess.run(
     [sys.argv[1], "-f", "junit", "--suite-name", suite_name, "render"],
     input=json.dumps(skipped_result),
-    text=True,
-    capture_output=True,
+    universal_newlines=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
     check=True,
 )
 skipped_suite = ET.fromstring(skipped_output.stdout).find("testsuite")
