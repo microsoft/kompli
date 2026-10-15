@@ -104,10 +104,20 @@ TEST(LoginDefsTest, InvalidNumericValueInUnselectedKeyOrDuplicateRejectsDocument
     ASSERT_FALSE(duplicate.HasValue());
     EXPECT_EQ("source:2:9: invalid UID_MIN value: Invalid integer value (should be positive): -1", duplicate.Error().message);
 
-    const auto overflow = ld::Parse("UID_MIN 2147483648\n", "source", nullptr);
+    const auto aboveSignedMax = ld::Parse("UID_MIN 2147483648\n", "source", nullptr);
+    ASSERT_TRUE(aboveSignedMax.HasValue());
+    ASSERT_TRUE(aboveSignedMax.Value().uidMin.HasValue());
+    EXPECT_EQ(2147483648U, aboveSignedMax.Value().uidMin.Value());
+
+    const auto maximum = ld::Parse("UID_MIN 4294967295\n", "source", nullptr);
+    ASSERT_TRUE(maximum.HasValue());
+    ASSERT_TRUE(maximum.Value().uidMin.HasValue());
+    EXPECT_EQ(4294967295U, maximum.Value().uidMin.Value());
+
+    const auto overflow = ld::Parse("UID_MIN 4294967296\n", "source", nullptr);
     ASSERT_FALSE(overflow.HasValue());
     EXPECT_EQ(EBADMSG, overflow.Error().code);
-    EXPECT_EQ("source:1:9: invalid UID_MIN value: Integer value out of range: 2147483648", overflow.Error().message);
+    EXPECT_EQ("source:1:9: invalid UID_MIN value: Integer value out of range: 4294967296", overflow.Error().message);
 }
 
 TEST(LoginDefsTest, AcceptsOnlyDocumentedEncryptionMethods)
