@@ -154,7 +154,8 @@ Result<string> TestcaseClassname(const JSON_Object* rule, const string& id)
     {
         return Error("Canonical result JSON rule has incomplete benchmark provenance", EINVAL);
     }
-    return framework + "/" + distribution + "/" + distributionVersion + "/" + benchmarkVersion + ":" + id;
+    const auto encode = [](const string& component) { return std::to_string(component.size()) + ":" + component; };
+    return encode(framework) + encode(distribution) + encode(distributionVersion) + encode(benchmarkVersion) + encode(id);
 }
 } // anonymous namespace
 

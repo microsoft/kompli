@@ -8,6 +8,7 @@
 #include "Regex.h"
 
 #include <JsonWrapper.h>
+#include <cctype>
 #include <cerrno>
 #include <climits>
 #include <cstdlib>
@@ -117,6 +118,78 @@ Optional<Error> ValidateParameters(const string& benchmarkFile, const string& ru
         catch (const regex_error&)
         {
             return Error("Parameter '" + parameter.first + "' has an invalid validationRegex", EINVAL);
+        }
+    }
+    return {};
+}
+
+Optional<Error> RejectTrailingPlanData(const string& content)
+{
+    std::size_t position = 0;
+    while (position < content.size() && std::isspace(static_cast<unsigned char>(content[position])))
+    {
+        ++position;
+    }
+    if (position == content.size() || content[position] != '{')
+    {
+        return {};
+    }
+
+    std::vector<char> delimiters;
+    bool inString = false;
+    bool escaped = false;
+    for (; position < content.size(); ++position)
+    {
+        const char ch = content[position];
+        if (inString)
+        {
+            if (escaped)
+            {
+                escaped = false;
+            }
+            else if (ch == '\\')
+            {
+                escaped = true;
+            }
+            else if (ch == '"')
+            {
+                inString = false;
+            }
+            continue;
+        }
+        if (ch == '"')
+        {
+            inString = true;
+        }
+        else if (ch == '{' || ch == '[')
+        {
+            delimiters.push_back(ch);
+        }
+        else if (ch == '}' || ch == ']')
+        {
+            if (delimiters.empty())
+            {
+                return {};
+            }
+            const char expected = (ch == '}') ? '{' : '[';
+            if (delimiters.back() != expected)
+            {
+                return {};
+            }
+            delimiters.pop_back();
+            if (delimiters.empty())
+            {
+                ++position;
+                while (position < content.size() && std::isspace(static_cast<unsigned char>(content[position])))
+                {
+                    ++position;
+                }
+                if (position != content.size())
+                {
+                    return Error("Plan file contains trailing data after the JSON document", EINVAL);
+                }
+                return {};
+            }
         }
     }
     return {};
@@ -428,15 +501,19 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
         }
         const auto& ref = refResult.Value();
         auto ruleIt = ref.file->rules.find(ref.id);
-        const auto& metadata = ref.file->parameterMetadata[ref.id];
-        auto candidate = ruleIt->second.parameters;
-        candidate[ref.name] = paramOverride.value;
-        auto validationError = ValidateParameters(ref.file->file, ref.id, metadata, candidate);
-        if (validationError.HasValue())
-        {
-            return validationError.Value();
-        }
         ruleIt->second.parameters[ref.name] = paramOverride.value;
+    }
+    for (const auto& parsed : parsedFiles)
+    {
+        for (const auto& rule : parsed.rules)
+        {
+            const auto& metadata = parsed.parameterMetadata.at(rule.first);
+            auto validationError = ValidateParameters(parsed.file, rule.first, metadata, rule.second.parameters);
+            if (validationError.HasValue())
+            {
+                return validationError.Value();
+            }
+        }
     }
 
     auto jsonResult = JsonWrapper::MakeObject();
@@ -525,6 +602,11 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
     if (string::npos != content.find('\0'))
     {
         return Error("Plan file contains a raw NUL byte", EINVAL);
+    }
+    auto trailingDataError = RejectTrailingPlanData(content);
+    if (trailingDataError.HasValue())
+    {
+        return trailingDataError.Value();
     }
 
     auto document = JsonWrapper::FromString(content);
@@ -646,10 +728,66 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
 
 Optional<Error> WritePlanFile(const string& path, const string& content)
 {
-    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0600);
+    const std::size_t slash = path.rfind('/');
+    const string parentPath = (slash == string::npos) ? "." : (slash == 0 ? "/" : path.substr(0, slash));
+    const string filename = (slash == string::npos) ? path : path.substr(slash + 1);
+    if (filename.empty() || filename == "." || filename == "..")
+    {
+        return Error("Invalid output file path '" + path + "'", EINVAL);
+    }
+
+    int parentFd = ::open(parentPath[0] == '/' ? "/" : ".", O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (parentFd < 0)
+    {
+        return Error("Failed to open output parent for '" + path + "': " + std::strerror(errno), errno);
+    }
+    std::size_t position = parentPath[0] == '/' ? 1 : 0;
+    while (position < parentPath.size())
+    {
+        const std::size_t nextSlash = parentPath.find('/', position);
+        const string component = parentPath.substr(position, nextSlash == string::npos ? string::npos : nextSlash - position);
+        position = (nextSlash == string::npos) ? parentPath.size() : nextSlash + 1;
+        if (component.empty() || component == ".")
+        {
+            continue;
+        }
+        if (component == "..")
+        {
+            ::close(parentFd);
+            return Error("Refusing output path '" + path + "': contains path traversal component '..'", EINVAL);
+        }
+        const int nextFd = ::openat(parentFd, component.c_str(), O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (nextFd < 0)
+        {
+            const int error = errno;
+            ::close(parentFd);
+            return Error("Failed to resolve output parent for '" + path + "': " + std::strerror(error), error);
+        }
+        ::close(parentFd);
+        parentFd = nextFd;
+    }
+
+    struct stat parentInfo
+    {
+    };
+    if (::fstat(parentFd, &parentInfo) != 0)
+    {
+        const int error = errno;
+        ::close(parentFd);
+        return Error("Failed to inspect output parent for '" + path + "': " + std::strerror(error), error);
+    }
+    if (!S_ISDIR(parentInfo.st_mode) || parentInfo.st_uid != ::geteuid() || (parentInfo.st_mode & (S_IWGRP | S_IWOTH)) != 0)
+    {
+        ::close(parentFd);
+        return Error("Refusing output path '" + path + "': parent directory is not trusted", EPERM);
+    }
+
+    const int fd = ::openat(parentFd, filename.c_str(), O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0600);
+    const int openError = errno;
+    ::close(parentFd);
     if (fd < 0)
     {
-        return Error("Failed to open output file '" + path + "': " + std::strerror(errno), errno);
+        return Error("Failed to open output file '" + path + "': " + std::strerror(openError), openError);
     }
 
     struct stat info

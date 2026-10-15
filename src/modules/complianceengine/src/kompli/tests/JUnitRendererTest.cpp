@@ -43,8 +43,21 @@ TEST(JUnitRendererTest, BenchmarkProvenanceDisambiguatesSameRuleId)
                              R"("id":"1.1","title":"Same title","ruleName":"SameRule","status":"Compliant","indicators":[]}]})";
     auto result = RenderJUnit(json, "s");
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    EXPECT_TRUE(Contains(result.Value(), "classname=\"cis/ubuntu/22.04/v2.0.0:1.1\""));
-    EXPECT_TRUE(Contains(result.Value(), "classname=\"stig/ubuntu/22.04/v1.0.0:1.1\""));
+    EXPECT_TRUE(Contains(result.Value(), "classname=\"3:cis6:ubuntu5:22.046:v2.0.03:1.1\""));
+    EXPECT_TRUE(Contains(result.Value(), "classname=\"4:stig6:ubuntu5:22.046:v1.0.03:1.1\""));
+}
+
+TEST(JUnitRendererTest, BenchmarkClassnameEncodingPreventsDelimiterCollisions)
+{
+    const std::string json = R"({"rules":[)"
+                             R"({"benchmark":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04","benchmarkVersion":"v1"},)"
+                             R"("id":"part:rule","title":"First","ruleName":"SameRule","status":"Compliant","indicators":[]},)"
+                             R"({"benchmark":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04","benchmarkVersion":"v1:part"},)"
+                             R"("id":"rule","title":"Second","ruleName":"SameRule","status":"Compliant","indicators":[]}]})";
+    auto result = RenderJUnit(json, "s");
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_TRUE(Contains(result.Value(), "classname=\"3:cis6:ubuntu5:22.042:v19:part:rule\""));
+    EXPECT_TRUE(Contains(result.Value(), "classname=\"3:cis6:ubuntu5:22.047:v1:part4:rule\""));
 }
 
 TEST(JUnitRendererTest, NonCompliantRuleHasFailureWithIndicatorBody)

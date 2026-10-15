@@ -383,7 +383,34 @@ TEST_F(GeneratePlanTest, ResolvesDottedParameterNameFromMetadata)
 
     auto result = GeneratePlan({path}, {}, {ParamOverride{"1.1.1.1.mount.point", "/var/tmp"}}, nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    EXPECT_NE(result.Value().find("\"mount.point\": \"/var/tmp\""), std::string::npos);
+    const std::string planPath = MakeVerifiedFile("plan_dotted_param_out_dir", "plan.json", result.Value());
+    auto planResult = ParsePlanFile(planPath, nullptr);
+    ASSERT_TRUE(planResult.HasValue()) << planResult.Error().message;
+    EXPECT_EQ(planResult.Value().benchmarks[0].rules.at("1.1.1.1").parameters.at("mount.point"), "/var/tmp");
+}
+
+TEST_F(GeneratePlanTest, ValidatesParametersAfterApplyingAllOverrides)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    std::string json = kParameterizedBenchmarkJson;
+    const std::string oldPayload = R"("parameters": {"mountPoint": "/tmp"})";
+    const std::string newPayload = R"("parameters": {"first": "", "second": ""})";
+    const std::string oldMetadata = R"("mountPoint": {"type": "string", "default": "/tmp", "validationRegex": "^/[a-zA-Z0-9/_.-]+$"})";
+    const std::string newMetadata =
+        R"("first": {"type": "string", "default": "", "validationRegex": "^.+$"}, "second": {"type": "string", "default": "", "validationRegex": "^.+$"})";
+    auto position = json.find(oldPayload);
+    ASSERT_NE(position, std::string::npos);
+    json.replace(position, oldPayload.size(), newPayload);
+    position = json.find(oldMetadata);
+    ASSERT_NE(position, std::string::npos);
+    json.replace(position, oldMetadata.size(), newMetadata);
+    const std::string path = MakeVerifiedFile("plan_multi_override_dir", "bench.benchmark.json", json);
+
+    auto result = GeneratePlan({path}, {}, {ParamOverride{"1.1.1.1.first", "one"}, ParamOverride{"1.1.1.1.second", "two"}}, nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
 }
 
 TEST_F(GeneratePlanTest, RejectsPlanThatExceedsParserLimit)
@@ -446,6 +473,17 @@ TEST_F(PlanFixture, WritePlanFileRefusesSymlinkWithoutChangingTarget)
     auto error = WritePlanFile(link, "replacement");
     EXPECT_TRUE(error.HasValue());
     EXPECT_EQ(ReadFile(target), "preserve me");
+}
+
+TEST_F(PlanFixture, WritePlanFileRefusesSymlinkedParent)
+{
+    const std::string targetDir = MakeSubdir("output_target");
+    const std::string alias = TempPath("output_alias");
+    ASSERT_EQ(0, ::symlink(targetDir.c_str(), alias.c_str())) << std::strerror(errno);
+
+    auto error = WritePlanFile(alias + "/plan.json", "replacement");
+    EXPECT_TRUE(error.HasValue());
+    EXPECT_NE(0, ::access((targetDir + "/plan.json").c_str(), F_OK));
 }
 
 TEST_F(PlanFixture, CheckUniqueBenchmarkFilesRejectsLiteralAndCanonicalDuplicates)
@@ -552,6 +590,24 @@ TEST_F(ParsePlanFileTest, RejectsEscapedNulInDecodedString)
     auto result = ParsePlanFile(path, nullptr);
     ASSERT_FALSE(result.HasValue());
     EXPECT_NE(result.Error().message.find("embedded NUL"), std::string::npos);
+}
+
+TEST_F(ParsePlanFileTest, RejectsTrailingData)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const std::string valid = R"({"benchmarks":[{"file":"x","rules":{}}]})";
+    const std::string garbagePath = MakeVerifiedFile("parse_plan_trailing_garbage", "plan.json", valid + " garbage");
+    auto result = ParsePlanFile(garbagePath, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("trailing data"), std::string::npos);
+
+    const std::string secondPath = MakeVerifiedFile("parse_plan_second_document", "plan.json", valid + valid);
+    result = ParsePlanFile(secondPath, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("trailing data"), std::string::npos);
 }
 
 TEST_F(ParsePlanFileTest, RejectsPresentNonObjectParameters)
