@@ -103,7 +103,8 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
             {
                 continue;
             }
-            if (value.empty())
+            // Units without enablement metadata legitimately have an empty UnitFileState.
+            if (value.empty() && (name != "UnitFileState"))
             {
                 OsConfigLogError(log, "Empty systemctl property '%s' for unit '%s'", name.c_str(), params.unitName.c_str());
                 return Error("Empty systemctl property '" + name + "' for unit '" + params.unitName + "'");
