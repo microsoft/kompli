@@ -20,6 +20,10 @@ struct MockContext : public ComplianceEngine::ContextInterface
 {
     MOCK_METHOD(ComplianceEngine::Result<std::string>, ExecuteCommand, (const std::string& cmd), (const, override));
     MOCK_METHOD(ComplianceEngine::Result<std::string>, GetFileContents, (const std::string& filePath), (const, override));
+    MOCK_METHOD(int, OpenExistingFile, (const char* path, int flags), (const, override));
+    MOCK_METHOD(int, StatFileDescriptor, (int descriptor, struct stat* metadata), (const, override));
+    MOCK_METHOD(ssize_t, ReadFileDescriptor, (int descriptor, void* buffer, std::size_t size), (const, override));
+    MOCK_METHOD(int, CloseFileDescriptor, (int descriptor), (const, override));
     MOCK_METHOD(ComplianceEngine::Result<std::vector<ComplianceEngine::InterfaceInfo>>, GetNetworkInterfaces, (), (const, override));
 
     ComplianceEngine::Result<std::string> GetRunningKernelRelease() const override
@@ -53,6 +57,18 @@ struct MockContext : public ComplianceEngine::ContextInterface
         : mTempOwner(CreateTempdir()),
           mTempdir(mTempOwner.Path())
     {
+        ON_CALL(*this, OpenExistingFile(testing::_, testing::_)).WillByDefault([this](const char* path, int flags) {
+            return ContextInterface::OpenExistingFile(path, flags);
+        });
+        ON_CALL(*this, StatFileDescriptor(testing::_, testing::_)).WillByDefault([this](int descriptor, struct stat* metadata) {
+            return ContextInterface::StatFileDescriptor(descriptor, metadata);
+        });
+        ON_CALL(*this, ReadFileDescriptor(testing::_, testing::_, testing::_)).WillByDefault([this](int descriptor, void* buffer, std::size_t size) {
+            return ContextInterface::ReadFileDescriptor(descriptor, buffer, size);
+        });
+        ON_CALL(*this, CloseFileDescriptor(testing::_)).WillByDefault([this](int descriptor) {
+            return ContextInterface::CloseFileDescriptor(descriptor);
+        });
         mTempRootDir = mTempdir + "/rootfs";
         ::mkdir(mTempRootDir.c_str(), 0755);
 

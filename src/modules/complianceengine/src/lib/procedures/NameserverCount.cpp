@@ -18,7 +18,7 @@ Result<Status> AuditNameserverCount(const NameserverCountParams& params, Indicat
     {
         return Error("NameserverCount supports only /etc/resolv.conf", EINVAL);
     }
-    const auto collection = CollectNameserverObject(context.GetSpecialFilePath(params.path));
+    const auto collection = CollectNameserverObject(context, context.GetSpecialFilePath(params.path));
     if (!collection.HasValue())
     {
         return collection.Error();
