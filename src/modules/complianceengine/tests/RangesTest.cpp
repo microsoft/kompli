@@ -5,6 +5,7 @@
 #include <array>
 #include <forward_list>
 #include <gtest/gtest.h>
+#include <initializer_list>
 #include <list>
 #include <ranges/Count.hpp>
 #include <ranges/Range.hpp>
@@ -217,6 +218,16 @@ TEST(RangesTest, SupportsDifferentCollectionTypesWithoutSpecializedAdapters)
     EXPECT_EQ(3U, Ranges::Count(Ranges::Range(std::set<int>{1, 2, 3})).Value());
     EXPECT_EQ(3U, Ranges::Count(Ranges::Range(std::array<int, 3>{{1, 2, 3}})).Value());
     EXPECT_EQ(2U, Ranges::Count(Ranges::Unique(Ranges::Range(std::vector<bool>{true, false, true}))).Value());
+}
+
+TEST(RangesTest, InitializerListRangeOwnsValuesForDelayedConsumption)
+{
+    auto range = Ranges::Range(std::initializer_list<int>{1, 2, 2, 3});
+    auto distinct = Ranges::Unique(std::move(range));
+    const auto count = Ranges::Count(std::move(distinct));
+
+    ASSERT_TRUE(count.HasValue());
+    EXPECT_EQ(3U, count.Value());
 }
 
 TEST(RangesTest, OwnedCollectionSurvivesTheOriginalScope)
