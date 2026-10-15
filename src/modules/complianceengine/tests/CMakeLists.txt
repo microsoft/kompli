@@ -77,10 +77,12 @@ add_executable(complianceenginetests
     LuaEvaluatorTest.cpp
     LuaProceduresTest.cpp
     NetworkToolsTest.cpp
+    NumericFileGroupTest.cpp
     OptionalTest.cpp
     RegexFallbackTest.cpp
     RegexTest.cpp
     ResultTest.cpp
+    ResultEvidenceTest.cpp
     StringToolsTest.cpp
     TemporaryDirectoryTest.cpp
     UsersIteratorTest.cpp

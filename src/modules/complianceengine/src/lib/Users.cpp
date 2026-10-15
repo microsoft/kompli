@@ -10,7 +10,6 @@ namespace ComplianceEngine
 {
 Result<unsigned int> GetUidMin(ContextInterface& context)
 {
-    const std::string prefix = "UID_MIN ";
     auto loginDefsResult = context.GetFileContents("/etc/login.defs");
     if (!loginDefsResult.HasValue() || loginDefsResult.Value().empty())
     {
@@ -21,10 +20,14 @@ Result<unsigned int> GetUidMin(ContextInterface& context)
     std::string line;
     while (std::getline(ss, line))
     {
-        line = TrimWhiteSpaces(line);
-        if (line.length() > prefix.length() && line.substr(0, prefix.length()) == prefix)
+        line = TrimWhiteSpaces(StripComment(line));
+        std::istringstream lineStream(line);
+        std::string key;
+        lineStream >> key;
+        if (key == "UID_MIN")
         {
-            auto value = line.substr(prefix.length());
+            std::string value;
+            std::getline(lineStream, value);
             value = TrimWhiteSpaces(value);
             auto result = TryStringToUint(value);
             if (!result.HasValue())

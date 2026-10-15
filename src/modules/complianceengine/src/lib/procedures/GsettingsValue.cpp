@@ -6,14 +6,33 @@
 #include <GsettingsValue.h>
 #include <ProcedureMap.h>
 #include <StringTools.h>
+#include <TypedComparison.h>
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
-#include <functional>
-#include <map>
 
 namespace ComplianceEngine
 {
+namespace
+{
+Result<TypedComparisonOperation> MapComparison(GsettingsOperationType operation)
+{
+    switch (operation)
+    {
+        case GsettingsOperationType::LessThan:
+            return TypedComparisonOperation::LessThan;
+        case GsettingsOperationType::GreaterThan:
+            return TypedComparisonOperation::GreaterThan;
+        case GsettingsOperationType::Equal:
+        case GsettingsOperationType::IsUnlocked:
+            return TypedComparisonOperation::Equal;
+        case GsettingsOperationType::NotEqual:
+            return TypedComparisonOperation::NotEqual;
+    }
+    return Error("Unsupported operation " + std::to_string(static_cast<int>(operation)), EINVAL);
+}
+} // namespace
+
 Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
     auto log = context.GetLogHandle();
@@ -21,20 +40,13 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
     const auto escapedSchema = EscapeForShell(params.schema);
     const auto escapedKey = EscapeForShell(params.key);
 
-    std::map<GsettingsOperationType, std::pair<std::function<bool(const int&, const int&)>, std::function<bool(const std::string&, const std::string&)>>> operations{
-        {GsettingsOperationType::LessThan,
-            std::make_pair([](const int& x, const int& y) { return x < y; }, [](const std::string&, const std::string&) { return false; })},
-        {GsettingsOperationType::GreaterThan,
-            std::make_pair([](const int& x, const int& y) { return x > y; }, [](const std::string&, const std::string&) { return false; })},
-        {GsettingsOperationType::Equal,
-            std::make_pair([](const int& x, const int& y) { return x == y; }, [](const std::string& x, const std::string& y) { return x == y; })},
-        {GsettingsOperationType::NotEqual,
-            std::make_pair([](const int& x, const int& y) { return x != y; }, [](const std::string& x, const std::string& y) { return x != y; })},
-        {GsettingsOperationType::IsUnlocked,
-            std::make_pair([](const int&, const int&) { return false; }, [](const std::string& x, const std::string& y) { return x == y; })}};
-    auto genericOp = operations.find(params.operation);
-    if (genericOp == operations.end() || (params.keyType != GsettingsKeyType::Number && (genericOp->first == GsettingsOperationType::LessThan ||
-                                                                                            genericOp->first == GsettingsOperationType::GreaterThan)))
+    auto comparison = MapComparison(params.operation);
+    if (!comparison.HasValue())
+    {
+        return comparison.Error();
+    }
+    if ((params.keyType != GsettingsKeyType::Number) &&
+        ((params.operation == GsettingsOperationType::LessThan) || (params.operation == GsettingsOperationType::GreaterThan)))
     {
         return Error("Unsupported operation " + std::to_string(params.operation), EINVAL);
     }
@@ -61,9 +73,13 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
     }
 
     Result<std::string> gsettingsType = context.ExecuteCommand("gsettings range \"" + escapedSchema + "\" \"" + escapedKey + "\"");
-    if (!gsettingsType.HasValue() || gsettingsType.Value().empty())
+    if (!gsettingsType.HasValue())
     {
         return Error("Failed to execute gsettings range command " + params.key + " error: " + gsettingsType.Error().message, gsettingsType.Error().code);
+    }
+    if (gsettingsType.Value().empty())
+    {
+        return Error("gsettings range returned no type for " + params.schema + " " + params.key, EINVAL);
     }
     auto gsettingKeyType = gsettingsType.Value();
 
@@ -100,10 +116,14 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
     }
 
     Result<std::string> gsettingsOutput = context.ExecuteCommand(gsettingsCmd);
-    if (!gsettingsOutput.HasValue() || gsettingsOutput.Value().empty())
+    if (!gsettingsOutput.HasValue())
     {
         return Error("Failed to execute gsettings get command " + params.schema + " " + params.key + " error: " + gsettingsOutput.Error().message,
             gsettingsOutput.Error().code);
+    }
+    if (gsettingsOutput.Value().empty())
+    {
+        return Error("gsettings get returned no value for " + params.schema + " " + params.key, EINVAL);
     }
     auto gsettingsValue = gsettingsOutput.Value();
 
@@ -139,8 +159,13 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
     bool isCompliant = false;
     if (params.keyType == GsettingsKeyType::Number)
     {
-        auto op = genericOp->second.first;
-        isCompliant = op(gsettingsNumberValue, numberValue);
+        // Preserve the previous numeric comparator's int operand width.
+        auto result = CompareTyped(static_cast<int>(gsettingsNumberValue), static_cast<int>(numberValue), comparison.Value());
+        if (!result.HasValue())
+        {
+            return result.Error();
+        }
+        isCompliant = result.Value();
     }
     else
     {
@@ -155,8 +180,12 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
             }
             gsettingsValue = gsettingsValue.substr(1, gsettingsValue.length() - 2);
         }
-        auto op = genericOp->second.second;
-        isCompliant = op(gsettingsValue, params.value);
+        auto result = CompareTyped(gsettingsValue, params.value, comparison.Value());
+        if (!result.HasValue())
+        {
+            return result.Error();
+        }
+        isCompliant = result.Value();
     }
 
     if (isCompliant)
@@ -167,8 +196,35 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
     {
         return indicators.NonCompliant("Gsettings key " + params.schema + " " + params.key + " " + std::to_string(params.operation) + " value " + params.value);
     }
+}
 
-    return indicators.NonCompliant("Not supported Gsettings key operation '" + std::to_string(params.operation) + "'");
+Result<Status> RemediateGsettingsValue(const GsettingsValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
+{
+    if (params.operation != GsettingsOperationType::Equal)
+    {
+        return Error("Cannot safely remediate a non-equality gsettings operation", ENOTSUP);
+    }
+    if (params.schema.empty() || params.key.empty() || params.value.empty() || params.schema.find('\0') != std::string::npos ||
+        params.key.find('\0') != std::string::npos || params.value.find('\0') != std::string::npos)
+    {
+        return Error("Gsettings schema, key, and value must be specified", EINVAL);
+    }
+
+    auto audit = AuditGsettingsValue(params, indicators, context);
+    if (!audit.HasValue() || audit.Value() == Status::Compliant)
+    {
+        return audit;
+    }
+
+    const auto schema = EscapeForShell(params.schema);
+    const auto key = EscapeForShell(params.key);
+    const auto value = EscapeForShell(params.value);
+    auto write = context.ExecuteCommand("gsettings set \"" + schema + "\" \"" + key + "\" \"" + value + "\"");
+    if (!write.HasValue())
+    {
+        return Error("Failed to execute gsettings set " + params.schema + " " + params.key + ": " + write.Error().message, write.Error().code);
+    }
+    return AuditGsettingsValue(params, indicators, context);
 }
 
 } // namespace ComplianceEngine

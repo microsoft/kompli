@@ -381,9 +381,9 @@ template <>
 struct Bindings<FilePermissionsParams>
 {
     using T = FilePermissionsParams;
-    static constexpr size_t size = 6;
+    static constexpr size_t size = 7;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::path, &T::owner, &T::group, &T::permissions, &T::mask, &T::behavior);
+    static constexpr auto members = std::make_tuple(&T::path, &T::owner, &T::group, &T::groupId, &T::permissions, &T::mask, &T::behavior);
 };
 
 // Defines the bindings for the FilePermissionsCollectionParams structure.
@@ -391,9 +391,9 @@ template <>
 struct Bindings<FilePermissionsCollectionParams>
 {
     using T = FilePermissionsCollectionParams;
-    static constexpr size_t size = 15;
+    static constexpr size_t size = 16;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::directory, &T::recurse, &T::directoriesOnly, &T::allFileTypes, &T::excludeSymlinks, &T::excludeDirectories, &T::maximumUid, &T::maximumGid, &T::filePattern, &T::filePatternIsRegex, &T::owner, &T::group, &T::permissions, &T::mask, &T::behavior);
+    static constexpr auto members = std::make_tuple(&T::directory, &T::recurse, &T::directoriesOnly, &T::allFileTypes, &T::excludeSymlinks, &T::excludeDirectories, &T::maximumUid, &T::maximumGid, &T::filePattern, &T::filePatternIsRegex, &T::owner, &T::group, &T::groupId, &T::permissions, &T::mask, &T::behavior);
 };
 
 // Defines the bindings for the FileRegexMatchParams structure.
@@ -591,9 +591,9 @@ template <>
 struct Bindings<SystemdUnitStateParams>
 {
     using T = SystemdUnitStateParams;
-    static constexpr size_t size = 5;
+    static constexpr size_t size = 6;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::unitName, &T::activeState, &T::loadState, &T::unitFileState, &T::unit);
+    static constexpr auto members = std::make_tuple(&T::unitName, &T::activeState, &T::subState, &T::loadState, &T::unitFileState, &T::unit);
 };
 
 // Defines the bindings for the TestingProcedureParams structure.

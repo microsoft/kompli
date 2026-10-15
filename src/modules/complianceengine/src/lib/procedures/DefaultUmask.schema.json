@@ -21,7 +21,23 @@
       ]
     },
     "remediation": {
-      "anyOf": []
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "DefaultUmask"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "DefaultUmask": {
+              "type": "object",
+              "required": [],
+              "additionalProperties": false,
+              "properties": {}
+            }
+          }
+        }
+      ]
     }
   }
 }

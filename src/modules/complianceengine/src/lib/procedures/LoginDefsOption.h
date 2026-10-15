@@ -23,5 +23,6 @@ struct LoginDefsOptionParams
 };
 
 Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
+Result<Status> RemediateLoginDefsOption(const LoginDefsOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace ComplianceEngine
 #endif // COMPLIANCEENGINE_PROCEDURES_LOGIN_DEFS_OPTION_H
