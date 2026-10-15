@@ -25,6 +25,7 @@
 #include <LoginDefsOption.h>
 #include <MountPointExists.h>
 #include <MtaLocalOnly.h>
+#include <NameserverCount.h>
 #include <NetworkInterfaceFlag.h>
 #include <NoDuplicateEntries.h>
 #include <NoShadowPrimaryGroup.h>
@@ -484,6 +485,16 @@ struct Bindings<MtaLocalOnlyParams>
     static constexpr size_t size = 1;
     static const char* names[];
     static constexpr auto members = std::make_tuple(&T::configurationVersion);
+};
+
+// Defines the bindings for the NameserverCountParams structure.
+template <>
+struct Bindings<NameserverCountParams>
+{
+    using T = NameserverCountParams;
+    static constexpr size_t size = 1;
+    static const char* names[];
+    static constexpr auto members = std::make_tuple(&T::path);
 };
 
 // Defines the bindings for the NetworkInterfaceFlagParams structure.
