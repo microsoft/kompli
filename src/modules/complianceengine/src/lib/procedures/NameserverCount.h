@@ -10,9 +10,9 @@ namespace ComplianceEngine
 {
 struct NameserverCountParams
 {
-    /// Logical source path. Only /etc/resolv.conf is supported.
-    /// pattern: ^/etc/resolv[.]conf$
-    std::string path;
+    /// Logical source path. Defaults to /etc/resolv.conf.
+    /// pattern: ^/.*$
+    Optional<std::string> path = std::string("/etc/resolv.conf");
 };
 
 Result<Status> AuditNameserverCount(const NameserverCountParams& params, IndicatorsTree& indicators, ContextInterface& context);

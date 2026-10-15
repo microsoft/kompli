@@ -12,15 +12,13 @@
           "properties": {
             "NameserverCount": {
               "type": "object",
-              "required": [
-                "path"
-              ],
+              "required": [],
               "additionalProperties": false,
               "properties": {
                 "path": {
                   "type": "string",
-                  "description": "Logical source path. Only /etc/resolv.conf is supported.",
-                  "pattern": "(^\\$[a-zA-Z0-9_]+:(/etc/resolv[.]conf)$|(^/etc/resolv[.]conf$))"
+                  "description": "Logical source path. Defaults to /etc/resolv.conf.",
+                  "pattern": "(^\\$[a-zA-Z0-9_]+:(/.*)$|(^/.*$))"
                 }
               }
             }
