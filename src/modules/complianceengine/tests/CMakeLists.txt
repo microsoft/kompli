@@ -74,7 +74,7 @@ add_executable(complianceenginetests
     DistributionInfoTest.cpp
     EngineTest.cpp
     EvaluatorTest.cpp
-    ExactFileObjectCollectorTest.cpp
+    FileObjectCollectorTest.cpp
     FilesystemScannerTest.cpp
     LuaEvaluatorTest.cpp
     LuaProceduresTest.cpp

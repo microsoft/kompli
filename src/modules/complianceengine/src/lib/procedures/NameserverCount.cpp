@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include <ExactFileObjectCollector.h>
+#include <FileObjectCollector.h>
 #include <NameserverCount.h>
 #include <ResultEvidence.h>
 #include <TypedComparison.h>

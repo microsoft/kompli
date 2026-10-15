@@ -174,7 +174,7 @@ add_library(complianceenginelib STATIC
     DlTools.cpp
     Engine.cpp
     Evaluator.cpp
-    ExactFileObjectCollector.cpp
+    FileObjectCollector.cpp
     FileTreeWalk.cpp
     GuestConfigurationContext.cpp
     FilesystemScanner.cpp

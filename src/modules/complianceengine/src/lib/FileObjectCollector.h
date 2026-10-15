@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_EXACT_FILE_OBJECT_COLLECTOR_H
-#define COMPLIANCEENGINE_EXACT_FILE_OBJECT_COLLECTOR_H
+#ifndef COMPLIANCEENGINE_FILE_OBJECT_COLLECTOR_H
+#define COMPLIANCEENGINE_FILE_OBJECT_COLLECTOR_H
 
 #include <Result.h>
 #include <VariableResolver.h>
@@ -19,8 +19,9 @@ enum class RootSymlinkPolicy
     Reject,
 };
 
-struct ExactFileCollectionLimits
+struct FileCollectionPolicy
 {
+    RootSymlinkPolicy rootSymlinks = RootSymlinkPolicy::FollowRegular;
     std::size_t contentBytes = 1024 * 1024;
     std::size_t occurrences = 16384;
     std::size_t captureBytes = 65536;
@@ -29,8 +30,7 @@ struct ExactFileCollectionLimits
     std::size_t readRetries = 128;
 };
 
-Result<VariableResolution::ObjectCollection> CollectNameserverObject(const ContextInterface& context, const std::string& path,
-    ExactFileCollectionLimits limits = {}, RootSymlinkPolicy rootSymlinks = RootSymlinkPolicy::FollowRegular);
+Result<VariableResolution::ObjectCollection> CollectNameserverObject(const ContextInterface& context, const std::string& path, FileCollectionPolicy policy = {});
 } // namespace ComplianceEngine
 
-#endif // COMPLIANCEENGINE_EXACT_FILE_OBJECT_COLLECTOR_H
+#endif // COMPLIANCEENGINE_FILE_OBJECT_COLLECTOR_H

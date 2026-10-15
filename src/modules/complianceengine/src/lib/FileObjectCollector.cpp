@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 #include <ContextInterface.h>
-#include <ExactFileObjectCollector.h>
+#include <FileObjectCollector.h>
 #include <algorithm>
 #include <cerrno>
 #include <exception>
@@ -89,16 +89,16 @@ bool SameObservedFile(const struct stat& left, const struct stat& right)
            left.st_mtim.tv_nsec == right.st_mtim.tv_nsec && left.st_ctim.tv_sec == right.st_ctim.tv_sec && left.st_ctim.tv_nsec == right.st_ctim.tv_nsec;
 }
 
-Result<std::string> ReadCompleteFile(int descriptor, const struct stat& before, ExactFileCollectionLimits limits, const ContextInterface& context)
+Result<std::string> ReadCompleteFile(int descriptor, const struct stat& before, FileCollectionPolicy policy, const ContextInterface& context)
 {
     std::string content;
-    if (limits.contentBytes > content.max_size())
+    if (policy.contentBytes > content.max_size())
     {
         return Error("Exact file content limit is not representable", EOVERFLOW);
     }
     try
     {
-        content.reserve(std::min<std::size_t>(limits.contentBytes, before.st_size > 0 ? static_cast<std::size_t>(before.st_size) : 0));
+        content.reserve(std::min<std::size_t>(policy.contentBytes, before.st_size > 0 ? static_cast<std::size_t>(before.st_size) : 0));
     }
     catch (const std::bad_alloc&)
     {
@@ -113,7 +113,7 @@ Result<std::string> ReadCompleteFile(int descriptor, const struct stat& before, 
     char buffer[8192];
     while (true)
     {
-        const std::size_t remaining = limits.contentBytes - content.size();
+        const std::size_t remaining = policy.contentBytes - content.size();
         const std::size_t request = std::min<std::size_t>(sizeof(buffer), remaining + (remaining == 0 ? 1 : 0));
         const ssize_t count = context.ReadFileDescriptor(descriptor, buffer, request);
         if (count == 0)
@@ -124,7 +124,7 @@ Result<std::string> ReadCompleteFile(int descriptor, const struct stat& before, 
         {
             if (errno == EINTR)
             {
-                if (retries < limits.readRetries)
+                if (retries < policy.readRetries)
                 {
                     ++retries;
                     continue;
@@ -194,19 +194,18 @@ Result<VariableResolution::ObjectCollection> ProjectNameservers(const Nameserver
 }
 } // namespace
 
-Result<VariableResolution::ObjectCollection> CollectNameserverObject(const ContextInterface& context, const std::string& path,
-    ExactFileCollectionLimits limits, RootSymlinkPolicy rootSymlinks)
+Result<VariableResolution::ObjectCollection> CollectNameserverObject(const ContextInterface& context, const std::string& path, FileCollectionPolicy policy)
 {
     if (path.empty() || path.front() != '/' || path.find('\0') != std::string::npos)
     {
         return Error("A NUL-free absolute path is required", EINVAL);
     }
-    if (limits.contentBytes == 0 || limits.occurrences == 0 || limits.captureBytes == 0 || limits.capturedBytes == 0 || limits.values == 0 || limits.readRetries == 0)
+    if (policy.contentBytes == 0 || policy.occurrences == 0 || policy.captureBytes == 0 || policy.capturedBytes == 0 || policy.values == 0 || policy.readRetries == 0)
     {
         return Error("Exact file limits must be positive", EINVAL);
     }
     int pathFlags = O_PATH | O_CLOEXEC;
-    switch (rootSymlinks)
+    switch (policy.rootSymlinks)
     {
         case RootSymlinkPolicy::FollowRegular:
             break;
@@ -257,7 +256,7 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
             return Error("Pinned exact file identity changed", EAGAIN);
         }
 
-        auto content = ReadCompleteFile(data.Get(), dataMetadata, limits, context);
+        auto content = ReadCompleteFile(data.Get(), dataMetadata, policy, context);
         if (!content.HasValue())
         {
             return content.Error();
@@ -274,15 +273,15 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
         }
 
         NameserverSelection::Limits selectionLimits;
-        selectionLimits.occurrences = limits.occurrences;
-        selectionLimits.captureBytes = limits.captureBytes;
-        selectionLimits.capturedBytes = limits.capturedBytes;
+        selectionLimits.occurrences = policy.occurrences;
+        selectionLimits.captureBytes = policy.captureBytes;
+        selectionLimits.capturedBytes = policy.capturedBytes;
         auto selection = NameserverSelection::Select(std::move(content.Value()), path, selectionLimits);
         if (!selection.HasValue())
         {
             return selection.Error();
         }
-        return ProjectNameservers(selection.Value(), limits.values);
+        return ProjectNameservers(selection.Value(), policy.values);
     }
     catch (const std::bad_alloc&)
     {
