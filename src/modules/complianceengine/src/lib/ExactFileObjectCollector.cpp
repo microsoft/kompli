@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#include <ContextInterface.h>
 #include <ExactFileObjectCollector.h>
 #include <algorithm>
 #include <cerrno>
@@ -11,7 +12,6 @@
 #include <parsers/NameserverSelection.h>
 #include <stdexcept>
 #include <string>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -22,9 +22,9 @@ namespace
 class Descriptor
 {
 public:
-    Descriptor(int descriptor, const Detail::ExactFileOperations& operations)
+    Descriptor(int descriptor, const ContextInterface& context)
         : mDescriptor(descriptor),
-          mOperations(operations)
+          mContext(context)
     {
     }
 
@@ -34,7 +34,7 @@ public:
         {
             try
             {
-                mOperations.closeDescriptor(mDescriptor);
+                mContext.CloseFileDescriptor(mDescriptor);
             }
             catch (...)
             {
@@ -57,7 +57,7 @@ public:
         mDescriptor = -1;
         try
         {
-            if (mOperations.closeDescriptor(descriptor) != 0)
+            if (mContext.CloseFileDescriptor(descriptor) != 0)
             {
                 return Error("Failed to finalize exact file descriptor", errno == 0 ? EIO : errno);
             }
@@ -75,7 +75,7 @@ public:
 
 private:
     int mDescriptor;
-    const Detail::ExactFileOperations& mOperations;
+    const ContextInterface& mContext;
 };
 
 bool SameIdentity(const struct stat& left, const struct stat& right)
@@ -89,7 +89,7 @@ bool SameObservedFile(const struct stat& left, const struct stat& right)
            left.st_mtim.tv_nsec == right.st_mtim.tv_nsec && left.st_ctim.tv_sec == right.st_ctim.tv_sec && left.st_ctim.tv_nsec == right.st_ctim.tv_nsec;
 }
 
-Result<std::string> ReadCompleteFile(int descriptor, const struct stat& before, const ExactFileCollectionLimits& limits, const Detail::ExactFileOperations& operations)
+Result<std::string> ReadCompleteFile(int descriptor, const struct stat& before, ExactFileCollectionLimits limits, const ContextInterface& context)
 {
     std::string content;
     if (limits.contentBytes > content.max_size())
@@ -115,7 +115,7 @@ Result<std::string> ReadCompleteFile(int descriptor, const struct stat& before, 
     {
         const std::size_t remaining = limits.contentBytes - content.size();
         const std::size_t request = std::min<std::size_t>(sizeof(buffer), remaining + (remaining == 0 ? 1 : 0));
-        const ssize_t count = operations.readDescriptor(descriptor, buffer, request);
+        const ssize_t count = context.ReadFileDescriptor(descriptor, buffer, request);
         if (count == 0)
         {
             break;
@@ -161,7 +161,7 @@ Result<std::string> ReadCompleteFile(int descriptor, const struct stat& before, 
     }
 
     struct stat after = {};
-    if (operations.statDescriptor(descriptor, &after) != 0)
+    if (context.StatFileDescriptor(descriptor, &after) != 0)
     {
         return Error("Failed to verify exact file after reading", errno == 0 ? EIO : errno);
     }
@@ -194,18 +194,8 @@ Result<VariableResolution::ObjectCollection> ProjectNameservers(const Nameserver
 }
 } // namespace
 
-namespace Detail
-{
-ExactFileOperations::ExactFileOperations()
-    : openPath([](const char* path, int flags) { return ::open(path, flags); }),
-      statDescriptor([](int descriptor, struct stat* metadata) { return ::fstat(descriptor, metadata); }),
-      readDescriptor([](int descriptor, void* buffer, std::size_t size) { return ::read(descriptor, buffer, size); }),
-      closeDescriptor([](int descriptor) { return ::close(descriptor); })
-{
-}
-
-Result<VariableResolution::ObjectCollection> CollectNameserverObjectWithOperations(const std::string& path, const ExactFileCollectionLimits& limits,
-    RootSymlinkPolicy rootSymlinks, const ExactFileOperations& operations)
+Result<VariableResolution::ObjectCollection> CollectNameserverObject(const ContextInterface& context, const std::string& path,
+    ExactFileCollectionLimits limits, RootSymlinkPolicy rootSymlinks)
 {
     if (path.empty() || path.front() != '/' || path.find('\0') != std::string::npos)
     {
@@ -215,11 +205,6 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObjectWithOperatio
     {
         return Error("Exact file limits must be positive", EINVAL);
     }
-    if (!operations.openPath || !operations.statDescriptor || !operations.readDescriptor || !operations.closeDescriptor)
-    {
-        return Error("Exact file operations must be complete", EINVAL);
-    }
-
     int pathFlags = O_PATH | O_CLOEXEC;
     switch (rootSymlinks)
     {
@@ -233,15 +218,15 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObjectWithOperatio
     }
     try
     {
-        const int pathDescriptor = operations.openPath(path.c_str(), pathFlags);
+        const int pathDescriptor = context.OpenExistingFile(path.c_str(), pathFlags);
         if (pathDescriptor < 0)
         {
             return Error("Failed to open exact file path", errno == 0 ? EIO : errno);
         }
-        Descriptor pinned(pathDescriptor, operations);
+        Descriptor pinned(pathDescriptor, context);
 
         struct stat pathMetadata = {};
-        if (operations.statDescriptor(pinned.Get(), &pathMetadata) != 0)
+        if (context.StatFileDescriptor(pinned.Get(), &pathMetadata) != 0)
         {
             return Error("Failed to inspect exact file path", errno == 0 ? EIO : errno);
         }
@@ -255,15 +240,15 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObjectWithOperatio
         }
 
         const std::string descriptorPath = "/proc/self/fd/" + std::to_string(pinned.Get());
-        const int dataDescriptor = operations.openPath(descriptorPath.c_str(), O_RDONLY | O_CLOEXEC);
+        const int dataDescriptor = context.OpenExistingFile(descriptorPath.c_str(), O_RDONLY | O_CLOEXEC);
         if (dataDescriptor < 0)
         {
             return Error("Failed to open pinned exact file", errno == 0 ? EIO : errno);
         }
-        Descriptor data(dataDescriptor, operations);
+        Descriptor data(dataDescriptor, context);
 
         struct stat dataMetadata = {};
-        if (operations.statDescriptor(data.Get(), &dataMetadata) != 0)
+        if (context.StatFileDescriptor(data.Get(), &dataMetadata) != 0)
         {
             return Error("Failed to inspect pinned exact file", errno == 0 ? EIO : errno);
         }
@@ -272,7 +257,7 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObjectWithOperatio
             return Error("Pinned exact file identity changed", EAGAIN);
         }
 
-        auto content = ReadCompleteFile(data.Get(), dataMetadata, limits, operations);
+        auto content = ReadCompleteFile(data.Get(), dataMetadata, limits, context);
         if (!content.HasValue())
         {
             return content.Error();
@@ -315,12 +300,5 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObjectWithOperatio
     {
         return Error("Exact file operation threw an unknown exception", EIO);
     }
-}
-} // namespace Detail
-
-Result<VariableResolution::ObjectCollection> CollectNameserverObject(const std::string& path, const ExactFileCollectionLimits& limits, RootSymlinkPolicy rootSymlinks)
-{
-    const Detail::ExactFileOperations operations;
-    return Detail::CollectNameserverObjectWithOperations(path, limits, rootSymlinks, operations);
 }
 } // namespace ComplianceEngine

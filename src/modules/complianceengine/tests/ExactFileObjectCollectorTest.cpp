@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <ranges/Count.hpp>
@@ -17,7 +18,8 @@
 
 using ComplianceEngine::ExactFileCollectionLimits;
 using ComplianceEngine::RootSymlinkPolicy;
-using ComplianceEngine::Detail::ExactFileOperations;
+using testing::_;
+using testing::NiceMock;
 namespace VariableResolution = ComplianceEngine::VariableResolution;
 
 namespace
@@ -37,9 +39,34 @@ std::vector<std::string> Captures(const VariableResolution::ObjectCollection& co
 }
 } // namespace
 
+TEST(ExactFileObjectCollectorTest, DefaultContextOpenRejectsCreationAndWriteFlags)
+{
+    NiceMock<MockContext> context;
+    const auto path = context.MakeTempfile("nameserver unchanged\n");
+    const auto missing = context.GetTempdirPath() + "/missing";
+    for (const int flags : {O_WRONLY, O_RDWR, O_TRUNC, O_CREAT, O_TMPFILE})
+    {
+        errno = 0;
+        EXPECT_EQ(-1, context.ContextInterface::OpenExistingFile(path.c_str(), flags));
+        EXPECT_EQ(EINVAL, errno);
+    }
+    errno = 0;
+    EXPECT_EQ(-1, context.ContextInterface::OpenExistingFile(missing.c_str(), O_CREAT | O_RDONLY));
+    EXPECT_EQ(EINVAL, errno);
+    EXPECT_NE(0, ::access(missing.c_str(), F_OK));
+
+    errno = 0;
+    EXPECT_EQ(-1, context.ContextInterface::OpenExistingFile(missing.c_str(), O_RDONLY | O_CLOEXEC));
+    EXPECT_EQ(ENOENT, errno);
+
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ((std::vector<std::string>{"unchanged"}), Captures(result.Value()));
+}
+
 TEST(ExactFileObjectCollectorTest, ProjectsSelectedCapturesWithoutLosingBytesOrDuplicates)
 {
-    MockContext context;
+    NiceMock<MockContext> context;
     std::string content =
         " nameserver ignored\n"
         "nameserver 192.0.2.1 # retained\r\n"
@@ -50,7 +77,7 @@ TEST(ExactFileObjectCollectorTest, ProjectsSelectedCapturesWithoutLosingBytesOrD
     content += "\nnameserver ";
     const auto path = context.MakeTempfile(content);
 
-    const auto result = ComplianceEngine::CollectNameserverObject(path);
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path);
 
     ASSERT_TRUE(result.HasValue());
     EXPECT_TRUE(result.Value().complete);
@@ -60,10 +87,10 @@ TEST(ExactFileObjectCollectorTest, ProjectsSelectedCapturesWithoutLosingBytesOrD
 
 TEST(ExactFileObjectCollectorTest, ZeroMatchesRemainACompleteEmptyCollection)
 {
-    MockContext context;
+    NiceMock<MockContext> context;
     const auto path = context.MakeTempfile("# no nameservers\n");
 
-    const auto result = ComplianceEngine::CollectNameserverObject(path);
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path);
 
     ASSERT_TRUE(result.HasValue());
     EXPECT_TRUE(result.Value().complete);
@@ -72,80 +99,78 @@ TEST(ExactFileObjectCollectorTest, ZeroMatchesRemainACompleteEmptyCollection)
 
 TEST(ExactFileObjectCollectorTest, ContentAndCaptureLimitsFailWithoutPartialPublication)
 {
-    MockContext context;
+    NiceMock<MockContext> context;
     const auto path = context.MakeTempfile("nameserver one\nnameserver two\n");
 
     ExactFileCollectionLimits contentLimit;
     contentLimit.contentBytes = 4;
-    auto result = ComplianceEngine::CollectNameserverObject(path, contentLimit);
+    auto result = ComplianceEngine::CollectNameserverObject(context, path, contentLimit);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);
 
     ExactFileCollectionLimits aggregateLimit;
     aggregateLimit.capturedBytes = 5;
-    result = ComplianceEngine::CollectNameserverObject(path, aggregateLimit);
+    result = ComplianceEngine::CollectNameserverObject(context, path, aggregateLimit);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);
 
     ExactFileCollectionLimits valueLimit;
     valueLimit.values = 1;
-    result = ComplianceEngine::CollectNameserverObject(path, valueLimit);
+    result = ComplianceEngine::CollectNameserverObject(context, path, valueLimit);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);
 
     ExactFileCollectionLimits exactContentLimit;
     exactContentLimit.contentBytes = std::string("nameserver one\nnameserver two\n").size();
-    result = ComplianceEngine::CollectNameserverObject(path, exactContentLimit);
+    result = ComplianceEngine::CollectNameserverObject(context, path, exactContentLimit);
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ((std::vector<std::string>{"one", "two"}), Captures(result.Value()));
 
     ExactFileCollectionLimits occurrenceLimit;
     occurrenceLimit.occurrences = 1;
-    result = ComplianceEngine::CollectNameserverObject(path, occurrenceLimit);
+    result = ComplianceEngine::CollectNameserverObject(context, path, occurrenceLimit);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);
 
     ExactFileCollectionLimits captureLimit;
     captureLimit.captureBytes = 2;
-    result = ComplianceEngine::CollectNameserverObject(path, captureLimit);
+    result = ComplianceEngine::CollectNameserverObject(context, path, captureLimit);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);
 }
 
 TEST(ExactFileObjectCollectorTest, RejectPolicyRefusesFinalSymlink)
 {
-    MockContext context;
+    NiceMock<MockContext> context;
     const auto target = context.MakeTempfile("nameserver 192.0.2.1\n");
     const auto link = context.GetTempdirPath() + "/resolv.conf";
     ASSERT_EQ(0, ::symlink(target.c_str(), link.c_str()));
 
-    auto followed = ComplianceEngine::CollectNameserverObject(link);
+    auto followed = ComplianceEngine::CollectNameserverObject(context, link);
     ASSERT_TRUE(followed.HasValue());
     EXPECT_EQ((std::vector<std::string>{"192.0.2.1"}), Captures(followed.Value()));
 
-    const auto rejected = ComplianceEngine::CollectNameserverObject(link, {}, RootSymlinkPolicy::Reject);
+    const auto rejected = ComplianceEngine::CollectNameserverObject(context, link, {}, RootSymlinkPolicy::Reject);
     ASSERT_FALSE(rejected.HasValue());
     EXPECT_EQ(ELOOP, rejected.Error().code);
 }
 
 TEST(ExactFileObjectCollectorTest, NonregularTargetIsRejected)
 {
-    MockContext context;
-    const auto result = ComplianceEngine::CollectNameserverObject(context.GetTempdirPath());
+    NiceMock<MockContext> context;
+    const auto result = ComplianceEngine::CollectNameserverObject(context, context.GetTempdirPath());
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);
 }
 
 TEST(ExactFileObjectCollectorTest, PinnedDescriptorSurvivesPathReplacement)
 {
-    MockContext context;
+    NiceMock<MockContext> context;
     const auto path = context.MakeTempfile("nameserver original\n");
     const auto pinnedPath = path + ".pinned";
-    ExactFileOperations operations;
-    const auto openPath = operations.openPath;
     int opens = 0;
-    operations.openPath = [&](const char* requested, int flags) {
-        const int descriptor = openPath(requested, flags);
+    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&](const char* requested, int flags) {
+        const int descriptor = context.ContextInterface::OpenExistingFile(requested, flags);
         if (opens++ == 0 && descriptor >= 0)
         {
             EXPECT_EQ(path, requested);
@@ -158,9 +183,9 @@ TEST(ExactFileObjectCollectorTest, PinnedDescriptorSurvivesPathReplacement)
             EXPECT_EQ(0U, std::string(requested).find("/proc/self/fd/"));
         }
         return descriptor;
-    };
+    });
 
-    const auto result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations(path, {}, RootSymlinkPolicy::FollowRegular, operations);
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path, {}, RootSymlinkPolicy::FollowRegular);
 
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ((std::vector<std::string>{"original"}), Captures(result.Value()));
@@ -168,22 +193,22 @@ TEST(ExactFileObjectCollectorTest, PinnedDescriptorSurvivesPathReplacement)
 
 TEST(ExactFileObjectCollectorTest, ReadFailureIsAnError)
 {
-    ExactFileOperations operations;
-    operations.openPath = [](const char*, int) { return 10; };
-    operations.statDescriptor = [](int, struct stat* metadata) {
+    NiceMock<MockContext> context;
+    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([](const char*, int) { return 10; });
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int, struct stat* metadata) {
         *metadata = {};
         metadata->st_mode = S_IFREG | 0600;
         metadata->st_dev = 1;
         metadata->st_ino = 2;
         return 0;
-    };
-    operations.readDescriptor = [](int, void*, std::size_t) -> ssize_t {
+    });
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t {
         errno = EIO;
         return -1;
-    };
-    operations.closeDescriptor = [](int) { return 0; };
+    });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int) { return 0; });
 
-    const auto result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations("/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular, operations);
+    const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular);
 
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
@@ -191,50 +216,50 @@ TEST(ExactFileObjectCollectorTest, ReadFailureIsAnError)
 
 TEST(ExactFileObjectCollectorTest, RetryExhaustionAndOverreportedReadsAreErrors)
 {
-    ExactFileOperations operations;
+    NiceMock<MockContext> context;
     int opens = 0;
-    operations.openPath = [&opens](const char*, int) { return ++opens == 1 ? 10 : 11; };
-    operations.statDescriptor = [](int, struct stat* metadata) {
+    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&opens](const char*, int) { return ++opens == 1 ? 10 : 11; });
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int, struct stat* metadata) {
         *metadata = {};
         metadata->st_mode = S_IFREG | 0600;
         metadata->st_dev = 1;
         metadata->st_ino = 2;
         return 0;
-    };
-    operations.closeDescriptor = [](int) { return 0; };
-    operations.readDescriptor = [](int, void*, std::size_t) -> ssize_t {
+    });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int) { return 0; });
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t {
         errno = EINTR;
         return -1;
-    };
+    });
     ExactFileCollectionLimits limits;
     limits.readRetries = 1;
-    auto result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations("/etc/resolv.conf", limits, RootSymlinkPolicy::FollowRegular, operations);
+    auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", limits, RootSymlinkPolicy::FollowRegular);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);
 
     opens = 0;
-    operations.readDescriptor = [](int, void*, std::size_t size) -> ssize_t { return static_cast<ssize_t>(size + 1); };
-    result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations("/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular, operations);
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t size) -> ssize_t { return static_cast<ssize_t>(size + 1); });
+    result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
 }
 
 TEST(ExactFileObjectCollectorTest, InterruptedReadCanRecoverWithinTheRetryLimit)
 {
-    ExactFileOperations operations;
+    NiceMock<MockContext> context;
     const std::string content = "nameserver recovered\n";
     int opens = 0;
     int reads = 0;
-    operations.openPath = [&opens](const char*, int) { return ++opens == 1 ? 10 : 11; };
-    operations.statDescriptor = [&content](int, struct stat* metadata) {
+    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&opens](const char*, int) { return ++opens == 1 ? 10 : 11; });
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&content](int, struct stat* metadata) {
         *metadata = {};
         metadata->st_mode = S_IFREG | 0600;
         metadata->st_dev = 1;
         metadata->st_ino = 2;
         metadata->st_size = static_cast<off_t>(content.size());
         return 0;
-    };
-    operations.readDescriptor = [&content, &reads](int, void* buffer, std::size_t size) -> ssize_t {
+    });
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&content, &reads](int, void* buffer, std::size_t size) -> ssize_t {
         if (reads++ == 0)
         {
             errno = EINTR;
@@ -247,12 +272,12 @@ TEST(ExactFileObjectCollectorTest, InterruptedReadCanRecoverWithinTheRetryLimit)
             return static_cast<ssize_t>(copied);
         }
         return 0;
-    };
-    operations.closeDescriptor = [](int) { return 0; };
+    });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int) { return 0; });
     ExactFileCollectionLimits limits;
     limits.readRetries = 1;
 
-    const auto result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations("/etc/resolv.conf", limits, RootSymlinkPolicy::FollowRegular, operations);
+    const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", limits, RootSymlinkPolicy::FollowRegular);
 
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ((std::vector<std::string>{"recovered"}), Captures(result.Value()));
@@ -261,11 +286,11 @@ TEST(ExactFileObjectCollectorTest, InterruptedReadCanRecoverWithinTheRetryLimit)
 
 TEST(ExactFileObjectCollectorTest, MetadataMutationAndThrowingOperationsAreErrors)
 {
-    ExactFileOperations operations;
+    NiceMock<MockContext> context;
     int opens = 0;
     int stats = 0;
-    operations.openPath = [&opens](const char*, int) { return ++opens == 1 ? 10 : 11; };
-    operations.statDescriptor = [&stats](int, struct stat* metadata) {
+    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&opens](const char*, int) { return ++opens == 1 ? 10 : 11; });
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&stats](int, struct stat* metadata) {
         *metadata = {};
         metadata->st_mode = S_IFREG | 0600;
         metadata->st_dev = 1;
@@ -275,51 +300,51 @@ TEST(ExactFileObjectCollectorTest, MetadataMutationAndThrowingOperationsAreError
             metadata->st_mtim.tv_nsec = 1;
         }
         return 0;
-    };
-    operations.readDescriptor = [](int, void*, std::size_t) -> ssize_t { return 0; };
-    operations.closeDescriptor = [](int) { return 0; };
-    auto result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations("/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular, operations);
+    });
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t { return 0; });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int) { return 0; });
+    auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EAGAIN, result.Error().code);
 
-    ExactFileOperations throwing;
-    throwing.openPath = [](const char*, int) -> int { throw std::runtime_error("open failed"); };
-    result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations("/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular, throwing);
+    NiceMock<MockContext> throwing;
+    ON_CALL(throwing, OpenExistingFile(_, _)).WillByDefault([](const char*, int) -> int { throw std::runtime_error("open failed"); });
+    result = ComplianceEngine::CollectNameserverObject(throwing, "/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
 }
 
 TEST(ExactFileObjectCollectorTest, TailReadAndIdentityFailuresAreErrors)
 {
-    ExactFileOperations operations;
+    NiceMock<MockContext> context;
     int opens = 0;
-    operations.openPath = [&opens](const char*, int) { return ++opens == 1 ? 10 : 11; };
-    operations.statDescriptor = [](int descriptor, struct stat* metadata) {
+    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&opens](const char*, int) { return ++opens == 1 ? 10 : 11; });
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int descriptor, struct stat* metadata) {
         *metadata = {};
         metadata->st_mode = S_IFREG | 0600;
         metadata->st_dev = 1;
         metadata->st_ino = descriptor == 10 ? 2 : 3;
         return 0;
-    };
-    operations.readDescriptor = [](int, void*, std::size_t) -> ssize_t { return 0; };
-    operations.closeDescriptor = [](int) { return 0; };
+    });
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t { return 0; });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int) { return 0; });
 
-    auto result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations("/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular, operations);
+    auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EAGAIN, result.Error().code);
 
     opens = 0;
     const std::string content = "nameserver one\n";
     int reads = 0;
-    operations.statDescriptor = [&content](int, struct stat* metadata) {
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&content](int, struct stat* metadata) {
         *metadata = {};
         metadata->st_mode = S_IFREG | 0600;
         metadata->st_dev = 1;
         metadata->st_ino = 2;
         metadata->st_size = static_cast<off_t>(content.size());
         return 0;
-    };
-    operations.readDescriptor = [&content, &reads](int, void* buffer, std::size_t size) -> ssize_t {
+    });
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&content, &reads](int, void* buffer, std::size_t size) -> ssize_t {
         if (reads++ == 0)
         {
             const std::size_t copied = std::min(size, content.size());
@@ -328,35 +353,35 @@ TEST(ExactFileObjectCollectorTest, TailReadAndIdentityFailuresAreErrors)
         }
         errno = EIO;
         return -1;
-    };
-    result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations("/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular, operations);
+    });
+    result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
 }
 
 TEST(ExactFileObjectCollectorTest, CloseFailureIsAnError)
 {
-    ExactFileOperations operations;
+    NiceMock<MockContext> context;
     int opens = 0;
-    operations.openPath = [&opens](const char*, int) { return ++opens == 1 ? 10 : 11; };
-    operations.statDescriptor = [](int, struct stat* metadata) {
+    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&opens](const char*, int) { return ++opens == 1 ? 10 : 11; });
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int, struct stat* metadata) {
         *metadata = {};
         metadata->st_mode = S_IFREG | 0600;
         metadata->st_dev = 1;
         metadata->st_ino = 2;
         return 0;
-    };
-    operations.readDescriptor = [](int, void*, std::size_t) -> ssize_t { return 0; };
-    operations.closeDescriptor = [](int descriptor) {
+    });
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t { return 0; });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int descriptor) {
         if (descriptor == 11)
         {
             errno = EIO;
             return -1;
         }
         return 0;
-    };
+    });
 
-    const auto result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations("/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular, operations);
+    const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular);
 
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
@@ -364,62 +389,56 @@ TEST(ExactFileObjectCollectorTest, CloseFailureIsAnError)
 
 TEST(ExactFileObjectCollectorTest, RejectsEmbeddedNulAndInvalidInputsBeforeOpening)
 {
-    ExactFileOperations operations;
+    NiceMock<MockContext> context;
     int opens = 0;
-    operations.openPath = [&opens](const char*, int) {
+    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&opens](const char*, int) {
         ++opens;
         return -1;
-    };
+    });
 
     const std::string embeddedNul("/etc/resolv.conf\0/decoy", 23);
-    auto result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations(embeddedNul, {}, RootSymlinkPolicy::FollowRegular, operations);
+    auto result = ComplianceEngine::CollectNameserverObject(context, embeddedNul, {}, RootSymlinkPolicy::FollowRegular);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);
 
-    result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations("/etc/resolv.conf", {}, static_cast<RootSymlinkPolicy>(2), operations);
+    result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", {}, static_cast<RootSymlinkPolicy>(2));
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);
 
     ExactFileCollectionLimits invalidLimits;
     invalidLimits.readRetries = 0;
-    result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations("/etc/resolv.conf", invalidLimits, RootSymlinkPolicy::FollowRegular, operations);
+    result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", invalidLimits, RootSymlinkPolicy::FollowRegular);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);
     EXPECT_EQ(0, opens);
 
-    ExactFileOperations incomplete;
-    incomplete.readDescriptor = {};
-    result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations("/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular, incomplete);
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EINVAL, result.Error().code);
-
-    ExactFileOperations failedOpen;
-    failedOpen.openPath = [](const char*, int) {
+    NiceMock<MockContext> failedOpen;
+    ON_CALL(failedOpen, OpenExistingFile(_, _)).WillByDefault([](const char*, int) {
         errno = EACCES;
         return -1;
-    };
-    result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations("/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular, failedOpen);
+    });
+    result = ComplianceEngine::CollectNameserverObject(failedOpen, "/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
 }
 
 TEST(ExactFileObjectCollectorTest, PrematureEofWithStableMetadataIsAnError)
 {
-    ExactFileOperations operations;
+    NiceMock<MockContext> context;
     int opens = 0;
-    operations.openPath = [&opens](const char*, int) { return ++opens == 1 ? 10 : 11; };
-    operations.statDescriptor = [](int descriptor, struct stat* metadata) {
+    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&opens](const char*, int) { return ++opens == 1 ? 10 : 11; });
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int descriptor, struct stat* metadata) {
         *metadata = {};
         metadata->st_mode = S_IFREG | 0600;
         metadata->st_dev = 1;
         metadata->st_ino = 2;
         metadata->st_size = 20;
         return descriptor == 10 || descriptor == 11 ? 0 : -1;
-    };
-    operations.readDescriptor = [](int, void*, std::size_t) -> ssize_t { return 0; };
-    operations.closeDescriptor = [](int) { return 0; };
+    });
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t { return 0; });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int) { return 0; });
 
-    const auto result = ComplianceEngine::Detail::CollectNameserverObjectWithOperations("/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular, operations);
+    const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", {}, RootSymlinkPolicy::FollowRegular);
 
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
@@ -428,9 +447,9 @@ TEST(ExactFileObjectCollectorTest, PrematureEofWithStableMetadataIsAnError)
 
 TEST(ExactFileObjectCollectorTest, ResolverPipelineCountsDistinctNameservers)
 {
-    MockContext context;
+    NiceMock<MockContext> context;
     const auto path = context.MakeTempfile("nameserver one\nnameserver one\nnameserver two\n");
-    auto collection = ComplianceEngine::CollectNameserverObject(path);
+    auto collection = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_TRUE(collection.HasValue());
 
     namespace Ranges = ComplianceEngine::Ranges;
