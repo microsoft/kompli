@@ -77,7 +77,7 @@ add_executable(complianceenginetests
     DistributionInfoTest.cpp
     EngineTest.cpp
     EvaluatorTest.cpp
-    ExactFileObjectCollectorTest.cpp
+    FileObjectCollectorTest.cpp
     FileTreeWalkTest.cpp
     FilesystemCollectionTest.cpp
     FilesystemScannerTest.cpp
