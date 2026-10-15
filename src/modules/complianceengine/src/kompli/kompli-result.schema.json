@@ -99,14 +99,15 @@
         },
         "status": {
           "type": "string",
-          "enum": ["Compliant", "NonCompliant", "NotApplicable"],
-          "description": "Per-rule status. Overall status is aggregated with the engine's allOf three-valued logic (CombineAllOf): NonCompliant dominates; otherwise NotApplicable propagates; otherwise Compliant."
+          "enum": ["Compliant", "NonCompliant", "NotApplicable", "Skipped"],
+          "description": "Per-rule status. Skipped is accepted for forward compatibility with unevaluated rules. Overall status is aggregated with the engine's allOf three-valued logic (CombineAllOf): NonCompliant dominates; otherwise NotApplicable propagates; otherwise Compliant."
         },
         "tags": {
           "type": "array",
-          "description": "Flat, sparse 'axis:value' tags echoed verbatim from the definition.",
+          "description": "Flat, sparse 'axis:value' tags echoed verbatim from the definition. Runtime limits each decoded UTF-8 tag to 256 bytes; maxLength also bounds code points.",
           "items": {
             "type": "string",
+            "maxLength": 256,
             "pattern": "^[a-z0-9-]+:[^\\u0000]+$"
           }
         },
