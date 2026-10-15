@@ -315,7 +315,11 @@ Result<bool> BuildTags(const JSON_Object* rule, std::ostream& out)
 
 Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
 {
-    JSON_Value* root = json_parse_string(canonicalJson.c_str());
+    if (canonicalJson.find('\0') != string::npos)
+    {
+        return Error("Canonical result JSON contains a NUL byte", EINVAL);
+    }
+    JSON_Value* root = json_parse_string_complete(canonicalJson.c_str());
     if (nullptr == root)
     {
         return Error("Failed to parse canonical result JSON", EINVAL);

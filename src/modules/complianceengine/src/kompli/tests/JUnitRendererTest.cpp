@@ -210,6 +210,22 @@ TEST(JUnitRendererTest, RejectsMalformedTestcaseId)
     auto missing = RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant"}]})", "s");
     ASSERT_FALSE(missing.HasValue());
     EXPECT_EQ(missing.Error().code, EINVAL);
+
+    auto empty = RenderJUnit(R"({"rules":[{"id":"","title":"R","status":"Compliant"}]})", "s");
+    ASSERT_FALSE(empty.HasValue());
+    EXPECT_EQ(empty.Error().code, EINVAL);
+}
+
+TEST(JUnitRendererTest, RejectsTrailingDataAndEmbeddedInputNul)
+{
+    const std::string json = R"({"rules":[]})";
+    EXPECT_TRUE(RenderJUnit(json + " \n\t", "s").HasValue());
+    for (const auto& malformed : {json + "{}", json + " garbage", json + "\v", json + std::string("\0{}", 3)})
+    {
+        auto result = RenderJUnit(malformed, "s");
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(result.Error().code, EINVAL);
+    }
 }
 
 TEST(JUnitRendererTest, RejectsMalformedIdsAndEmbeddedNul)
