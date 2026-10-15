@@ -2,41 +2,39 @@
 // Licensed under the MIT License.
 
 #include <CommonContext.h>
-#include <StringTools.h>
 #include <Users.h>
-#include <sstream>
+#include <cerrno>
+#include <parsers/LoginDefs.h>
 
 namespace ComplianceEngine
 {
-Result<unsigned int> GetUidMin(ContextInterface& context)
+Result<uid_t> GetUidMin(ContextInterface& context)
 {
-    auto loginDefsResult = context.GetFileContents("/etc/login.defs");
-    if (!loginDefsResult.HasValue() || loginDefsResult.Value().empty())
+    return GetUidMin(context, context.GetFileContents("/etc/login.defs"));
+}
+
+Result<uid_t> GetUidMin(ContextInterface& context, const Result<std::string>& loginDefsResult)
+{
+    if (!loginDefsResult.HasValue())
+    {
+        OsConfigLogWarning(context.GetLogHandle(), "Failed to read /etc/login.defs: %s", loginDefsResult.Error().message.c_str());
+        return loginDefsResult.Error();
+    }
+    if (loginDefsResult.Value().empty())
     {
         OsConfigLogWarning(context.GetLogHandle(), "Failed to read /etc/login.defs");
         return Error("Failed to read /etc/login.defs");
     }
-    std::stringstream ss(loginDefsResult.Value());
-    std::string line;
-    while (std::getline(ss, line))
+    const auto parsed = LoginDefs::Parse(loginDefsResult.Value(), "/etc/login.defs", context.GetLogHandle());
+    if (!parsed.HasValue())
     {
-        line = TrimWhiteSpaces(StripComment(line));
-        std::istringstream lineStream(line);
-        std::string key;
-        lineStream >> key;
-        if (key == "UID_MIN")
-        {
-            std::string value;
-            std::getline(lineStream, value);
-            value = TrimWhiteSpaces(value);
-            auto result = TryStringToUint(value);
-            if (!result.HasValue())
-            {
-                OsConfigLogWarning(context.GetLogHandle(), "Invalid UID_MIN value in /etc/login.defs %s", result.Error().message.c_str());
-            }
-            return result;
-        }
+        OsConfigLogWarning(context.GetLogHandle(), "Invalid /etc/login.defs: %s", parsed.Error().message.c_str());
+        return parsed.Error();
     }
-    return Error("Could not get UID_MIN find value");
+    if (!parsed.Value().uidMin.HasValue())
+    {
+        return Error("Could not get UID_MIN find value");
+    }
+    return parsed.Value().uidMin.Value();
 }
 } // namespace ComplianceEngine

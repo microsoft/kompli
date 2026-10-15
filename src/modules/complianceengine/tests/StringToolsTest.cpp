@@ -4,6 +4,7 @@
 #include "StringTools.h"
 
 #include <gtest/gtest.h>
+#include <limits>
 
 using ComplianceEngine::EscapeForShell;
 using ComplianceEngine::TrimWhiteSpaces;
@@ -196,6 +197,21 @@ TEST_F(StringToolsTest, IntegerConversionKeepsLeadingWhitespaceSignsAndBases)
 
     const auto unsignedResult = ComplianceEngine::TryStringToUint("-1");
     ASSERT_FALSE(unsignedResult.HasValue());
+}
+
+TEST_F(StringToolsTest, UnsignedConversionSupportsFullWidthAndRejectsOverflow)
+{
+    const auto aboveSignedMax = ComplianceEngine::TryStringToUint("2147483648");
+    ASSERT_TRUE(aboveSignedMax.HasValue());
+    EXPECT_EQ(2147483648U, aboveSignedMax.Value());
+
+    const auto maximum = ComplianceEngine::TryStringToUint(std::to_string(std::numeric_limits<unsigned int>::max()));
+    ASSERT_TRUE(maximum.HasValue());
+    EXPECT_EQ(std::numeric_limits<unsigned int>::max(), maximum.Value());
+
+    const auto overflow = ComplianceEngine::TryStringToUint("4294967296");
+    ASSERT_FALSE(overflow.HasValue());
+    EXPECT_EQ(ERANGE, overflow.Error().code);
 }
 
 TEST_F(StringToolsTest, IntegerConversionRetainsOverflowAndInvalidErrors)

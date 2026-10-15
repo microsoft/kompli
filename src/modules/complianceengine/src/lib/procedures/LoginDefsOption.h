@@ -12,6 +12,7 @@ namespace ComplianceEngine
 struct LoginDefsOptionParams
 {
     /// The login.defs option name to check (e.g., PASS_MAX_DAYS, PASS_MIN_DAYS, PASS_WARN_AGE, ENCRYPT_METHOD)
+    /// pattern: ^(PASS_MAX_DAYS|PASS_MIN_DAYS|PASS_WARN_AGE|ENCRYPT_METHOD)$
     std::string option;
 
     /// The expected value to compare against

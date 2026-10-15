@@ -53,7 +53,7 @@ const char* Bindings<KernelModuleUnavailableParams>::names[] = {"moduleName"};
 // LogFilePermissions.h:15
 const char* Bindings<LogFilePermissionsParams>::names[] = {"path"};
 
-// LoginDefsOption.h:23
+// LoginDefsOption.h:24
 const char* Bindings<LoginDefsOptionParams>::names[] = {"option", "value", "comparison"};
 
 // MountPointExists.h:15

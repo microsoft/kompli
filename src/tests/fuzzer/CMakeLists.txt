@@ -20,3 +20,5 @@ target_link_libraries(kompli-fuzzer PRIVATE
 if(BUILD_TELEMETRY)
     add_dependencies(kompli-fuzzer telemetry-external)
 endif()
+
+add_subdirectory(parsers)

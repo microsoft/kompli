@@ -84,7 +84,7 @@ jobs:
         with:
           container: ${{ steps.container.outputs.id }}
           working-directory: ${{ env.MOUNT }}/tests/fuzzer
-          cmd: mkdir -p ${{ env.MOUNT }}/output/artifacts && mkdir /tmp/corpus && cp -r ${{ env.MOUNT }}/src/tests/fuzzer/seed_corpus/* /tmp/corpus && chmod u+x ./kompli-fuzzer
+          cmd: mkdir -p ${{ env.MOUNT }}/output/artifacts ${{ env.MOUNT }}/output/login-defs-artifacts && mkdir /tmp/corpus /tmp/login-defs-corpus && cp -r ${{ env.MOUNT }}/src/tests/fuzzer/seed_corpus/* /tmp/corpus && cp -r ${{ env.MOUNT }}/src/tests/fuzzer/parsers/corpus/login-defs/. /tmp/login-defs-corpus/ && chmod u+x ./kompli-fuzzer ./parsers/login-defs-parser-fuzzer
 
       - name: Run kompli-fuzzer
         uses: ./.github/actions/container-exec
@@ -92,6 +92,13 @@ jobs:
           container: ${{ steps.container.outputs.id }}
           working-directory: ${{ env.MOUNT }}/tests/fuzzer
           cmd: set -o pipefail && LSAN_OPTIONS=suppressions=${{ env.MOUNT }}/src/tests/fuzzer/lsan.suppressions ./kompli-fuzzer -artifact_prefix=${{ env.MOUNT }}/output/artifacts/ -max_total_time=${{ inputs.timeout-seconds }} /tmp/corpus 2>&1 >/dev/null | tee ${{ env.MOUNT }}/output/kompli-fuzzer.log
+
+      - name: Run login.defs parser fuzzer
+        uses: ./.github/actions/container-exec
+        with:
+          container: ${{ steps.container.outputs.id }}
+          working-directory: ${{ env.MOUNT }}/tests/fuzzer
+          cmd: set -o pipefail && LSAN_OPTIONS=suppressions=${{ env.MOUNT }}/src/tests/fuzzer/lsan.suppressions ./parsers/login-defs-parser-fuzzer -artifact_prefix=${{ env.MOUNT }}/output/login-defs-artifacts/ -max_len=65536 -timeout=2 -rss_limit_mb=1024 -max_total_time=${{ inputs.timeout-seconds }} /tmp/login-defs-corpus 2>&1 >/dev/null | tee ${{ env.MOUNT }}/output/login-defs-parser-fuzzer.log
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: success() || failure()

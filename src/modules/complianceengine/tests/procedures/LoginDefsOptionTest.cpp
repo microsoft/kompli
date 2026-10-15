@@ -193,18 +193,64 @@ TEST_F(LoginDefsOptionTest, EncryptMethod_Equal_IgnoresCase)
     EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
-TEST_F(LoginDefsOptionTest, EncryptMethod_CaseFoldingPreservesHighBitBytes)
+TEST_F(LoginDefsOptionTest, EncryptMethod_RejectsUndocumentedHighBitBytes)
 {
     SetLoginDefsContent("ENCRYPT_METHOD yescrypt\x80\n");
 
     LoginDefsOptionParams params;
     params.option = "ENCRYPT_METHOD";
-    params.value = "YESCRYPT\x80";
+    params.value = "YESCRYPT";
     params.comparison = ComparisonOperation::Equal;
 
     auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, EncryptMethod_RejectsUndocumentedComparisonTarget)
+{
+    SetLoginDefsContent("ENCRYPT_METHOD SHA512\n");
+    LoginDefsOptionParams params;
+    params.option = "ENCRYPT_METHOD";
+    params.value = "SHA-512";
+    params.comparison = ComparisonOperation::Equal;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+    EXPECT_EQ("Invalid ENCRYPT_METHOD comparison target: Unsupported encryption method: SHA-512", result.Error().message);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, InvalidUnselectedEncryptionMethodRejectsDocument)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 365\nENCRYPT_METHOD SHA-512\n");
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_EQ("/etc/login.defs:2:16: invalid ENCRYPT_METHOD value: Unsupported encryption method: SHA-512", result.Error().message);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, EncryptMethod_NormalizesDocumentedNames)
+{
+    SetLoginDefsContent("ENCRYPT_METHOD bcrypt\n");
+    LoginDefsOptionParams params;
+    params.option = "ENCRYPT_METHOD";
+    params.value = "BCRYPT";
+    params.comparison = ComparisonOperation::Equal;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(result.Value(), Status::Compliant);
+    EXPECT_EQ(Status::Compliant, result.Value());
+    ASSERT_EQ(1U, mIndicators.Back().indicators.size());
+    EXPECT_NE(string::npos, mIndicators.Back().indicators.front().message.find("ENCRYPT_METHOD = BCRYPT"));
 }
 
 TEST_F(LoginDefsOptionTest, EncryptMethod_Equal_NonCompliant)
@@ -271,20 +317,163 @@ TEST_F(LoginDefsOptionTest, CommentSkipped)
     EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
-TEST_F(LoginDefsOptionTest, LastOccurrenceWins)
+TEST_F(LoginDefsOptionTest, ConflictingDuplicateFailsWithoutIndicatorAndLogsWarning)
 {
     SetLoginDefsContent(
         "PASS_MAX_DAYS 99999\n"
-        "PASS_MAX_DAYS 180\n");
+        "PASS_MAX_DAYS 180\n"
+        "UNKNOWN yes\n"
+        "UNKNOWN no\n");
 
     LoginDefsOptionParams params;
     params.option = "PASS_MAX_DAYS";
     params.value = "365";
     params.comparison = ComparisonOperation::LessOrEqual;
 
+    const string logPath = mContext.GetTempdirPath() + "/duplicates.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    mContext.SetLogHandle(logHandle);
     auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    CloseLog(&logHandle);
+    mContext.SetLogHandle(nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_EQ("/etc/login.defs:2:15: conflicting duplicate PASS_MAX_DAYS value", result.Error().message);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+    std::ifstream log(logPath);
+    ASSERT_TRUE(log.is_open());
+    const string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+    EXPECT_NE(string::npos, text.find("Duplicate PASS_MAX_DAYS in /etc/login.defs at line 2"));
+    EXPECT_NE(string::npos, text.find("WARNING"));
+}
+
+TEST_F(LoginDefsOptionTest, EquivalentDuplicatesRemainAuditableAndLogWarnings)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 0180\nUNKNOWN yes\nUNKNOWN no\nPASS_MAX_DAYS 180\n");
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const string logPath = mContext.GetTempdirPath() + "/equivalent-duplicates.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    mContext.SetLogHandle(logHandle);
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    CloseLog(&logHandle);
+    mContext.SetLogHandle(nullptr);
     ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(result.Value(), Status::Compliant);
+    EXPECT_EQ(Status::Compliant, result.Value());
+    std::ifstream log(logPath);
+    ASSERT_TRUE(log.is_open());
+    const string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+    EXPECT_NE(string::npos, text.find("Duplicate UNKNOWN in /etc/login.defs at line 3"));
+    EXPECT_NE(string::npos, text.find("Duplicate PASS_MAX_DAYS in /etc/login.defs at line 4"));
+}
+
+TEST_F(LoginDefsOptionTest, ConflictingUnselectedSettingFailsWithoutIndicator)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 180\nPASS_MIN_DAYS 1\nPASS_MIN_DAYS 2\n");
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_EQ("/etc/login.defs:3:15: conflicting duplicate PASS_MIN_DAYS value", result.Error().message);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, MalformedLastOccurrenceCannotFallBackToEarlierValue)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 180\nPASS_MAX_DAYS\n");
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const string logPath = mContext.GetTempdirPath() + "/malformed-duplicate.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    mContext.SetLogHandle(logHandle);
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    CloseLog(&logHandle);
+    mContext.SetLogHandle(nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+    std::ifstream log(logPath);
+    ASSERT_TRUE(log.is_open());
+    const string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+    EXPECT_NE(string::npos, text.find("Duplicate PASS_MAX_DAYS in /etc/login.defs at line 2"));
+}
+
+TEST_F(LoginDefsOptionTest, CorruptedLastKeyCannotExposeEarlierPassingValue)
+{
+    const char contents[] = "PASS_MAX_DAYS 180\nPASS_MAX_DAYS\0 99999\n";
+    SetLoginDefsContent(string(contents, sizeof(contents) - 1));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, EarlierCorruptedKeyRejectsWholeDocument)
+{
+    const char contents[] = "PASS_MAX_DAYS\0 99999\nPASS_MAX_DAYS 180\n";
+    SetLoginDefsContent(string(contents, sizeof(contents) - 1));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, UnrelatedMissingValueRejectsWholeDocument)
+{
+    SetLoginDefsContent("PASS_MAX_DAYS 180\nOTHER\n");
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, SelectedEmbeddedNulCannotProduceIndicator)
+{
+    SetLoginDefsContent(string("PASS_MAX_DAYS 180 \0ignored\n", 27));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }
 
 TEST_F(LoginDefsOptionTest, TabSeparated)
@@ -512,8 +701,6 @@ TEST_F(LoginDefsOptionTest, StringComparisonPreservesCasePolicyAndUnsupportedOrd
     const Case cases[] = {
         {"ENCRYPT_METHOD", "YESCRYPT", "yescrypt", ComparisonOperation::Equal, Status::Compliant},
         {"ENCRYPT_METHOD", "YESCRYPT", "md5", ComparisonOperation::NotEqual, Status::Compliant},
-        {"OTHER", "YESCRYPT", "yescrypt", ComparisonOperation::Equal, Status::NonCompliant},
-        {"OTHER", "YESCRYPT", "yescrypt", ComparisonOperation::NotEqual, Status::Compliant},
     };
     for (const auto& test : cases)
     {
@@ -532,16 +719,6 @@ TEST_F(LoginDefsOptionTest, StringComparisonPreservesCasePolicyAndUnsupportedOrd
         EXPECT_EQ(indicators.Back().indicators.front().message, test.option + " = " + test.actual + (test.status == Status::Compliant ? " (" : " (expected ") +
                                                                     std::to_string(test.operation) + " " + test.expected + ")");
     }
-
-    SetLoginDefsContent("OTHER yescrypt\n");
-    LoginDefsOptionParams params;
-    params.option = "OTHER";
-    params.value = "yescrypt";
-    params.comparison = ComparisonOperation::LessThan;
-    auto result = AuditLoginDefsOption(params, mIndicators, mContext);
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(result.Error().code, EINVAL);
-    EXPECT_EQ(result.Error().message, "Unsupported comparison operation for string value (only eq and ne are supported)");
 }
 
 TEST_F(LoginDefsOptionTest, NumericEndpointsPreserveBothOperandDirections)
@@ -592,8 +769,8 @@ TEST_F(LoginDefsOptionTest, NumericOverflowReturnsErrorWithoutIndicator)
     params.comparison = ComparisonOperation::Equal;
     const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(result.Error().code, ERANGE);
-    EXPECT_EQ(result.Error().message, "Invalid PASS_MAX_DAYS value: Integer value out of range: 2147483648");
+    EXPECT_EQ(result.Error().code, EBADMSG);
+    EXPECT_EQ(result.Error().message, "/etc/login.defs:1:15: invalid PASS_MAX_DAYS value: Integer value out of range: 2147483648");
     EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }
 
@@ -648,14 +825,14 @@ TEST_F(LoginDefsOptionTest, MalformedNumericValueReturnsError)
     params.comparison = ComparisonOperation::Equal;
     const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(result.Error().code, EINVAL);
-    EXPECT_EQ(result.Error().message, "Invalid PASS_MAX_DAYS value: Invalid integer value: 5junk");
+    EXPECT_EQ(result.Error().code, EBADMSG);
+    EXPECT_EQ(result.Error().message, "/etc/login.defs:1:15: invalid PASS_MAX_DAYS value: Invalid integer value: 5junk");
     EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }
 
 TEST_F(LoginDefsOptionTest, EqualMalformedNumericValuesCannotPass)
 {
-    for (const string option : {"PASS_MAX_DAYS", "PASS_MIN_DAYS", "PASS_WARN_AGE", "UID_MIN", "UID_MAX"})
+    for (const string option : {"PASS_MAX_DAYS", "PASS_MIN_DAYS", "PASS_WARN_AGE"})
     {
         SetLoginDefsContent(option + " 5junk\n");
         LoginDefsOptionParams params;
@@ -669,26 +846,25 @@ TEST_F(LoginDefsOptionTest, EqualMalformedNumericValuesCannotPass)
     }
 }
 
-TEST_F(LoginDefsOptionTest, UidRangeOptionsRejectMalformedTargetsEvenWhenMissing)
+TEST_F(LoginDefsOptionTest, UnsupportedRequestedOptionsFailBeforeReadingFile)
 {
-    for (const string option : {"UID_MIN", "UID_MAX"})
+    for (const string option : {"UID_MIN", "UID_MAX", "OTHER", ""})
     {
-        SetLoginDefsContent("ENCRYPT_METHOD SHA512\n");
         LoginDefsOptionParams params;
         params.option = option;
-        params.value = "5junk";
+        params.value = "5";
         params.comparison = ComparisonOperation::Equal;
         const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
         ASSERT_FALSE(result.HasValue()) << option;
         EXPECT_EQ(result.Error().code, EINVAL) << option;
-        EXPECT_EQ(result.Error().message, "Invalid " + option + " comparison target: Invalid integer value: 5junk");
+        EXPECT_EQ(result.Error().message, "Unsupported login.defs option: " + option);
         EXPECT_TRUE(mIndicators.Back().indicators.empty()) << option;
     }
 }
 
-TEST_F(LoginDefsOptionTest, UidRangeOptionsRejectOverflowingValues)
+TEST_F(LoginDefsOptionTest, NumericOptionsRejectOverflowingValues)
 {
-    for (const string option : {"UID_MIN", "UID_MAX"})
+    for (const string option : {"PASS_MAX_DAYS", "PASS_MIN_DAYS", "PASS_WARN_AGE"})
     {
         SetLoginDefsContent(option + " 2147483648\n");
         LoginDefsOptionParams params;
@@ -697,33 +873,18 @@ TEST_F(LoginDefsOptionTest, UidRangeOptionsRejectOverflowingValues)
         params.comparison = ComparisonOperation::Equal;
         const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
         ASSERT_FALSE(result.HasValue()) << option;
-        EXPECT_EQ(result.Error().code, ERANGE) << option;
-        EXPECT_EQ(result.Error().message, "Invalid " + option + " value: Integer value out of range: 2147483648");
+        EXPECT_EQ(result.Error().code, EBADMSG) << option;
+        EXPECT_NE(result.Error().message.find("invalid " + option + " value: Integer value out of range: 2147483648"), string::npos);
         EXPECT_TRUE(mIndicators.Back().indicators.empty()) << option;
     }
 }
 
-TEST_F(LoginDefsOptionTest, UidRangeOptionsKeepValidNumericComparisons)
+TEST_F(LoginDefsOptionTest, UnknownFileSettingsDoNotInvalidateSupportedOption)
 {
-    for (const string option : {"UID_MIN", "UID_MAX"})
-    {
-        SetLoginDefsContent(option + " 1000\n");
-        LoginDefsOptionParams params;
-        params.option = option;
-        params.value = "900";
-        params.comparison = ComparisonOperation::GreaterOrEqual;
-        const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
-        ASSERT_TRUE(result.HasValue()) << option;
-        EXPECT_EQ(result.Value(), Status::Compliant) << option;
-    }
-}
-
-TEST_F(LoginDefsOptionTest, UnknownStringOptionPreservesStringComparison)
-{
-    SetLoginDefsContent("OTHER 5junk\n");
+    SetLoginDefsContent("OTHER 5junk\nENCRYPT_METHOD SHA512\n");
     LoginDefsOptionParams params;
-    params.option = "OTHER";
-    params.value = "5junk";
+    params.option = "ENCRYPT_METHOD";
+    params.value = "SHA512";
     params.comparison = ComparisonOperation::Equal;
     const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
@@ -748,9 +909,10 @@ TEST_F(LoginDefsOptionTest, RemediateUpdatesEffectiveValueAndPreservesOtherConte
 {
     const auto path = mContext.MakeTempfile(
         "# Password policy\n"
-        "PASS_MAX_DAYS 99999 # old default\n"
+        "PASS_MAX_DAYS 99999\n"
         "PASS_MIN_DAYS 7\n"
-        "PASS_MAX_DAYS 730 # effective\n");
+        "PASS_MAX_DAYS 99999\n"
+        "# Other settings remain intact\n");
     mContext.SetSpecialFilePath(cLoginDefsPath, path);
     EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
 
@@ -767,9 +929,51 @@ TEST_F(LoginDefsOptionTest, RemediateUpdatesEffectiveValueAndPreservesOtherConte
     ASSERT_TRUE(contents.HasValue());
     EXPECT_EQ(contents.Value(),
         "# Password policy\n"
-        "PASS_MAX_DAYS 99999 # old default\n"
+        "PASS_MAX_DAYS 365\n"
         "PASS_MIN_DAYS 7\n"
-        "PASS_MAX_DAYS 365 # effective\n");
+        "PASS_MAX_DAYS 365\n"
+        "# Other settings remain intact\n");
+}
+
+TEST_F(LoginDefsOptionTest, RemediateUpdatesEqualDuplicatesWithParserWhitespace)
+{
+    const auto path = mContext.MakeTempfile(" \tPASS_MAX_DAYS\v099999\nPASS_MAX_DAYS 99999\n");
+    mContext.SetSpecialFilePath(cLoginDefsPath, path);
+    EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+
+    const auto contents = ReadFile(path);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(" \tPASS_MAX_DAYS\v365\nPASS_MAX_DAYS 365\n", contents.Value());
+}
+
+TEST_F(LoginDefsOptionTest, RemediateRefusesConflictingDuplicatesWithoutChangingFile)
+{
+    const string original = "PASS_MAX_DAYS 99999\nPASS_MAX_DAYS 730\n";
+    const auto path = mContext.MakeTempfile(original);
+    mContext.SetSpecialFilePath(cLoginDefsPath, path);
+    EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+    const auto contents = ReadFile(path);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(original, contents.Value());
 }
 
 TEST_F(LoginDefsOptionTest, RemediatePreservesExtendedAttributes)
