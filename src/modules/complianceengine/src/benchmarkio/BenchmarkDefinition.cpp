@@ -4,6 +4,7 @@
 #include "BenchmarkDefinition.hpp"
 
 #include "InputSecurity.hpp"
+#include "TagLimits.hpp"
 
 #include <BenchmarkInfo.h>
 #include <JsonWrapper.h>
@@ -307,7 +308,7 @@ Result<std::vector<string>> ParseTags(const JSON_Object* ruleObject, const strin
 
         const char* tag = json_value_get_string(tagValue);
         const size_t tagLength = json_value_get_string_len(tagValue);
-        if (256 < tagLength)
+        if (BenchmarkIO::kMaxTagBytes < tagLength)
         {
             return Error("Benchmark definition " + context + " has a 'tags' entry exceeding 256 bytes", E2BIG);
         }
