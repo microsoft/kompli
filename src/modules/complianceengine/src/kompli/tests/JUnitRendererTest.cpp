@@ -223,6 +223,13 @@ TEST(JUnitRendererTest, RejectsInvalidXmlCharactersAndUtf8)
     ASSERT_TRUE(valid.HasValue()) << valid.Error().message;
 }
 
+TEST(JUnitRendererTest, RejectsXmlIllegalControlCharactersInAttributes)
+{
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"bad\u0001title","status":"Compliant"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":["owner:Ops\u0001Sec"]}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[]})", std::string("bad\x01suite", 9)).HasValue());
+}
+
 TEST(JUnitRendererTest, InvalidJsonIsError)
 {
     EXPECT_FALSE(RenderJUnit("not json", "s").HasValue());

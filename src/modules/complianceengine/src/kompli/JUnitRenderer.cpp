@@ -70,7 +70,8 @@ private:
 };
 
 // Attribute whitespace needs character references to survive XML parsing.
-// The completed document is checked for invalid XML 1.0 characters and UTF-8.
+// Illegal ASCII controls are normalized only in legacy element text; attributes
+// retain them so the completed document validation can reject them.
 void EscapeXml(const string& in, std::ostream& out, bool attribute = false)
 {
     for (const char ch : in)
@@ -102,7 +103,7 @@ void EscapeXml(const string& in, std::ostream& out, bool attribute = false)
                 out << (attribute ? "&#13;" : "\r");
                 break;
             default:
-                if (static_cast<unsigned char>(ch) < 0x20 && ch != '\t' && ch != '\n' && ch != '\r')
+                if (!attribute && static_cast<unsigned char>(ch) < 0x20 && ch != '\t' && ch != '\n' && ch != '\r')
                 {
                     out << ' ';
                 }
