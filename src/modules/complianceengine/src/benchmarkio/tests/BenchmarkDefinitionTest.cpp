@@ -242,6 +242,35 @@ TEST(BenchmarkDefinitionParserTest, ParsesParameterMetadataFields)
     EXPECT_TRUE(mountPoint.mandatory);
 }
 
+TEST(BenchmarkDefinitionParserTest, RejectsNonBooleanMandatoryParameterMetadata)
+{
+    const std::string ruleWithParams = R"({
+        "ruleName": "EnsureMountPoint",
+        "title": "Ensure mount point",
+        "id": "1.1.2.1.1",
+        "ruleId": "rule-id",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {"X": {}}, "parameters": {"mountPoint": "/tmp"}},
+        "parameterMetadata": {
+            "mountPoint": {
+                "type": "string",
+                "default": "/tmp",
+                "mandatory": INVALID_MANDATORY
+            }
+        }
+    })";
+
+    for (const char* const invalidValue : {R"("true")", "1"})
+    {
+        std::string invalidRule = ruleWithParams;
+        ReplaceOnce(invalidRule, "INVALID_MANDATORY", invalidValue);
+        auto result = ParseString(MakeDoc("[" + invalidRule + "]"), nullptr);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_NE(result.Error().message.find("'mandatory' field that is not a boolean"), std::string::npos);
+    }
+}
+
 TEST(BenchmarkDefinitionParserTest, ParsesMultipleParameterMetadataEntries)
 {
     const char* const ruleWithParams = R"({

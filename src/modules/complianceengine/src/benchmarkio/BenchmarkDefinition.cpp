@@ -234,7 +234,12 @@ Result<std::map<string, BenchmarkIO::ParameterMetadata>> ParseParameterMetadata(
             return validationFailedMessage.Error();
         }
         metadata.validationFailedMessage = std::move(validationFailedMessage.Value());
-        metadata.mandatory = (1 == json_object_get_boolean(entryObject, "mandatory"));
+        const JSON_Value* mandatoryValue = json_object_get_value(entryObject, "mandatory");
+        if (nullptr != mandatoryValue && JSONBoolean != json_value_get_type(mandatoryValue))
+        {
+            return Error("Benchmark definition " + entryContext + " has a 'mandatory' field that is not a boolean", EINVAL);
+        }
+        metadata.mandatory = (nullptr != mandatoryValue && 1 == json_value_get_boolean(mandatoryValue));
         result[name] = std::move(metadata);
     }
 
