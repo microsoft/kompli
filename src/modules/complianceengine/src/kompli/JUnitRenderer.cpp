@@ -21,6 +21,42 @@ namespace
 {
 constexpr size_t kMaxJUnitBytes = static_cast<size_t>(16) * 1024 * 1024;
 
+// Parson validates the object but accepts trailing input. Locate its end without
+// treating braces in strings as structure; only JSON whitespace may follow.
+bool HasTrailingObjectData(const string& json)
+{
+    size_t depth = 0;
+    bool inString = false;
+    for (size_t i = json.find('{'); i < json.size(); ++i)
+    {
+        const char ch = json[i];
+        if (inString)
+        {
+            if (ch == '\\')
+            {
+                ++i;
+            }
+            else if (ch == '"')
+            {
+                inString = false;
+            }
+        }
+        else if (ch == '"')
+        {
+            inString = true;
+        }
+        else if (ch == '{')
+        {
+            ++depth;
+        }
+        else if (ch == '}' && --depth == 0)
+        {
+            return json.find_first_not_of(" \t\r\n", i + 1) != string::npos;
+        }
+    }
+    return true;
+}
+
 class BoundedXmlBuffer : public std::streambuf
 {
 public:
@@ -319,7 +355,7 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
     {
         return Error("Canonical result JSON contains a NUL byte", EINVAL);
     }
-    JSON_Value* root = json_parse_string_complete(canonicalJson.c_str());
+    JSON_Value* root = json_parse_string(canonicalJson.c_str());
     if (nullptr == root)
     {
         return Error("Failed to parse canonical result JSON", EINVAL);
@@ -338,6 +374,10 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
     if (nullptr == rootObject)
     {
         return Error("Canonical result JSON is not an object", EINVAL);
+    }
+    if (HasTrailingObjectData(canonicalJson))
+    {
+        return Error("Canonical result JSON contains trailing data", EINVAL);
     }
     const JSON_Array* rules = json_object_get_array(rootObject, "rules");
     if (nullptr == rules)

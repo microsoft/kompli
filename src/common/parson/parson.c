@@ -1149,28 +1149,6 @@ JSON_Value * json_parse_string(const char *string) {
     return parse_value((const char**)&string, 0);
 }
 
-JSON_Value * json_parse_string_complete(const char *string) {
-    JSON_Value *result = NULL;
-    if (string == NULL) {
-        return NULL;
-    }
-    if (string[0] == '\xEF' && string[1] == '\xBB' && string[2] == '\xBF') {
-        string += 3;
-    }
-    result = parse_value(&string, 0);
-    if (result == NULL) {
-        return NULL;
-    }
-    while (*string == ' ' || *string == '\t' || *string == '\n' || *string == '\r') {
-        string++;
-    }
-    if (*string != '\0') {
-        json_value_free(result);
-        return NULL;
-    }
-    return result;
-}
-
 JSON_Value * json_parse_string_with_comments(const char *string) {
     JSON_Value *result = NULL;
     char *string_mutable_copy = NULL, *string_mutable_copy_ptr = NULL;

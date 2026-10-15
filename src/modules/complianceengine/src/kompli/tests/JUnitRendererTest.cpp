@@ -228,6 +228,22 @@ TEST(JUnitRendererTest, RejectsTrailingDataAndEmbeddedInputNul)
     }
 }
 
+TEST(JUnitRendererTest, CompleteInputCheckHandlesNestedObjectsAndEscapedStrings)
+{
+    const std::string json = R"({"rules":[],"extra":{"text":"} { \" \\","nested":[{},{"text":"\u007d"}]}})";
+    for (const auto& input : {json, " \r\n\t" + json, std::string("\xEF\xBB\xBF") + json})
+    {
+        auto result = RenderJUnit(input + " \t\r\n", "s");
+        ASSERT_TRUE(result.HasValue()) << result.Error().message;
+        for (const auto* suffix : {"{}", "[]", "}", " true", "\f", "\v", " garbage"})
+        {
+            auto malformed = RenderJUnit(input + suffix, "s");
+            ASSERT_FALSE(malformed.HasValue()) << suffix;
+            EXPECT_EQ(malformed.Error().code, EINVAL);
+        }
+    }
+}
+
 TEST(JUnitRendererTest, RejectsOversizeTagsAndBoundedJUnitOutput)
 {
     const std::string tag256 = "x:" + std::string(254, 'a');
