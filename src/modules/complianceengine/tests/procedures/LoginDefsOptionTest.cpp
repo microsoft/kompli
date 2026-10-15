@@ -6,8 +6,11 @@
 
 #include <LoginDefsOption.h>
 #include <ProcedureMap.h>
+#include <cerrno>
 #include <fstream>
 #include <iterator>
+#include <sys/stat.h>
+#include <sys/xattr.h>
 
 using ComplianceEngine::AuditLoginDefsOption;
 using ComplianceEngine::ComparisonOperation;
@@ -15,10 +18,24 @@ using ComplianceEngine::Error;
 using ComplianceEngine::IndicatorsTree;
 using ComplianceEngine::LoginDefsOptionParams;
 using ComplianceEngine::NestedListFormatter;
+using ComplianceEngine::RemediateLoginDefsOption;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 using std::string;
 using testing::Return;
+
+namespace
+{
+Result<string> ReadFile(const string& path)
+{
+    std::ifstream input(path);
+    if (!input.is_open())
+    {
+        return Error("Failed to read test file", errno);
+    }
+    return string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+} // namespace
 
 static const char* cLoginDefsPath = "/etc/login.defs";
 
@@ -886,4 +903,217 @@ TEST_F(LoginDefsOptionTest, UnsupportedNumericOperatorReturnsErrorWithoutIndicat
     EXPECT_EQ(result.Error().code, EINVAL);
     EXPECT_EQ(result.Error().message, "Unsupported comparison operation for numeric value: Unsupported comparison operation 6");
     EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(LoginDefsOptionTest, RemediateUpdatesEffectiveValueAndPreservesOtherContent)
+{
+    const auto path = mContext.MakeTempfile(
+        "# Password policy\n"
+        "PASS_MAX_DAYS 99999\n"
+        "PASS_MIN_DAYS 7\n"
+        "PASS_MAX_DAYS 99999\n"
+        "# Other settings remain intact\n");
+    mContext.SetSpecialFilePath(cLoginDefsPath, path);
+    EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    auto contents = ReadFile(path);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(contents.Value(),
+        "# Password policy\n"
+        "PASS_MAX_DAYS 365\n"
+        "PASS_MIN_DAYS 7\n"
+        "PASS_MAX_DAYS 365\n"
+        "# Other settings remain intact\n");
+}
+
+TEST_F(LoginDefsOptionTest, RemediateUpdatesEqualDuplicatesWithParserWhitespace)
+{
+    const auto path = mContext.MakeTempfile(" \tPASS_MAX_DAYS\v099999\nPASS_MAX_DAYS 99999\n");
+    mContext.SetSpecialFilePath(cLoginDefsPath, path);
+    EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+    const auto contents = ReadFile(path);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(" \tPASS_MAX_DAYS\v365\nPASS_MAX_DAYS 365\n", contents.Value());
+}
+
+TEST_F(LoginDefsOptionTest, RemediateRefusesConflictingDuplicatesWithoutChangingFile)
+{
+    const string original = "PASS_MAX_DAYS 99999\nPASS_MAX_DAYS 730\n";
+    const auto path = mContext.MakeTempfile(original);
+    mContext.SetSpecialFilePath(cLoginDefsPath, path);
+    EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+    const auto contents = ReadFile(path);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(original, contents.Value());
+}
+
+TEST_F(LoginDefsOptionTest, RemediatePreservesExtendedAttributes)
+{
+    const auto path = mContext.MakeTempfile("PASS_MAX_DAYS 99999\n");
+    const string attribute = "preserved";
+    ASSERT_EQ(setxattr(path.c_str(), "user.kompli-test", attribute.data(), attribute.size(), 0), 0);
+    mContext.SetSpecialFilePath(cLoginDefsPath, path);
+    EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::Equal;
+
+    auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    char value[32];
+    const ssize_t size = getxattr(path.c_str(), "user.kompli-test", value, sizeof(value));
+    ASSERT_EQ(size, static_cast<ssize_t>(attribute.size()));
+    EXPECT_EQ(string(value, static_cast<size_t>(size)), attribute);
+}
+
+TEST_F(LoginDefsOptionTest, RemediateRollsBackWhenPostAuditFails)
+{
+    const string original = "PASS_MAX_DAYS 99999\n";
+    const auto path = mContext.MakeTempfile(original);
+    mContext.SetSpecialFilePath(cLoginDefsPath, path);
+    EXPECT_CALL(mContext, GetFileContents(path))
+        .WillOnce(testing::Invoke([path](const string&) { return ReadFile(path); }))
+        .WillOnce(testing::Invoke([path](const string&) { return ReadFile(path); }))
+        .WillOnce(Return(Result<string>(Error("Post-audit failed", EIO))));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::Equal;
+
+    auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EIO);
+
+    auto contents = ReadFile(path);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(contents.Value(), original);
+}
+
+TEST_F(LoginDefsOptionTest, RemediateAppendsMissingOption)
+{
+    const auto path = mContext.MakeTempfile("# Existing settings\nPASS_MIN_DAYS 7");
+    mContext.SetSpecialFilePath(cLoginDefsPath, path);
+    EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::Equal;
+
+    auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    auto contents = ReadFile(path);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(contents.Value(), "# Existing settings\nPASS_MIN_DAYS 7\nPASS_MAX_DAYS\t365\n");
+}
+
+TEST_F(LoginDefsOptionTest, RemediateStrictComparisonUsesSatisfyingValue)
+{
+    const auto path = mContext.MakeTempfile("PASS_MAX_DAYS 365\n");
+    mContext.SetSpecialFilePath(cLoginDefsPath, path);
+    EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessThan;
+
+    auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    auto contents = ReadFile(path);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(contents.Value(), "PASS_MAX_DAYS 364\n");
+}
+
+TEST_F(LoginDefsOptionTest, RemediateNotEqualIsUnsupported)
+{
+    LoginDefsOptionParams params;
+    params.option = "ENCRYPT_METHOD";
+    params.value = "MD5";
+    params.comparison = ComparisonOperation::NotEqual;
+
+    auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, ENOTSUP);
+}
+
+TEST_F(LoginDefsOptionTest, RemediateCompliantFileIsNoOp)
+{
+    const auto path = mContext.MakeTempfile("PASS_MAX_DAYS 365\n");
+    mContext.SetSpecialFilePath(cLoginDefsPath, path);
+    EXPECT_CALL(mContext, GetFileContents(path)).WillOnce(testing::Invoke([path](const string&) { return ReadFile(path); }));
+    struct stat before;
+    ASSERT_EQ(stat(path.c_str(), &before), 0);
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::Equal;
+
+    auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    struct stat after;
+    ASSERT_EQ(stat(path.c_str(), &after), 0);
+    EXPECT_EQ(before.st_ino, after.st_ino);
+}
+
+TEST_F(LoginDefsOptionTest, RemediateRejectsSymlink)
+{
+    const auto target = mContext.MakeTempfile("PASS_MAX_DAYS 99999\n");
+    const auto link = mContext.GetTempdirPath() + "/login.defs";
+    ASSERT_EQ(symlink(target.c_str(), link.c_str()), 0);
+    mContext.SetSpecialFilePath(cLoginDefsPath, link);
+    EXPECT_CALL(mContext, GetFileContents(link)).WillRepeatedly(testing::Invoke([target](const string&) { return ReadFile(target); }));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::Equal;
+
+    auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+
+    auto contents = ReadFile(target);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(contents.Value(), "PASS_MAX_DAYS 99999\n");
 }
