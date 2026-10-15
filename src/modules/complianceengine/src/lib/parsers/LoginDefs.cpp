@@ -35,6 +35,11 @@ Error ValueError(const Document& document, std::size_t line, std::size_t column,
 {
     return Error(document.source + ":" + std::to_string(line) + ":" + std::to_string(column) + ": invalid " + key + " value: " + error.message, EBADMSG);
 }
+
+Error ConflictError(const Document& document, std::size_t line, std::size_t column, const std::string& key)
+{
+    return Error(document.source + ":" + std::to_string(line) + ":" + std::to_string(column) + ": conflicting duplicate " + key + " value", EBADMSG);
+}
 } // anonymous namespace
 
 Result<EncryptionMethod> ParseEncryptionMethod(const std::string& value)
@@ -136,8 +141,7 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
             {
                 return SyntaxError(document.source, lineNumber, valueStart - start + 1, "missing value");
             }
-            Optional<uid_t> uid;
-            Optional<int> number;
+            // Shadow-utils duplicate precedence varies by backend; never assess a conflicting known value.
             if (key == "UID_MIN")
             {
                 const auto value = TrimWhiteSpaces(input.substr(valueStart, end - valueStart));
@@ -150,7 +154,15 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
                 {
                     return ValueError(document, lineNumber, valueStart - start + 1, key, Error("Integer value out of uid_t range: " + value, ERANGE));
                 }
-                uid = static_cast<uid_t>(parsed.Value());
+                const auto uid = static_cast<uid_t>(parsed.Value());
+                if (!firstOccurrence && document.uidMin.Value() != uid)
+                {
+                    return ConflictError(document, lineNumber, valueStart - start + 1, key);
+                }
+                if (firstOccurrence)
+                {
+                    document.uidMin = uid;
+                }
             }
             else if (key == "PASS_MAX_DAYS" || key == "PASS_MIN_DAYS" || key == "PASS_WARN_AGE")
             {
@@ -159,7 +171,15 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
                 {
                     return ValueError(document, lineNumber, valueStart - start + 1, key, parsed.Error());
                 }
-                number = parsed.Value();
+                auto& number = key == "PASS_MAX_DAYS" ? document.passMaxDays : key == "PASS_MIN_DAYS" ? document.passMinDays : document.passWarnAge;
+                if (!firstOccurrence && number.Value() != parsed.Value())
+                {
+                    return ConflictError(document, lineNumber, valueStart - start + 1, key);
+                }
+                if (firstOccurrence)
+                {
+                    number = parsed.Value();
+                }
             }
             else if (key == "ENCRYPT_METHOD")
             {
@@ -168,26 +188,14 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
                 {
                     return ValueError(document, lineNumber, valueStart - start + 1, key, method.Error());
                 }
+                if (!firstOccurrence && document.encryptMethod.Value() != method.Value())
+                {
+                    return ConflictError(document, lineNumber, valueStart - start + 1, key);
+                }
                 if (firstOccurrence)
                 {
                     document.encryptMethod = method.Value();
                 }
-            }
-            if (firstOccurrence && uid.HasValue())
-            {
-                document.uidMin = uid.Value();
-            }
-            else if (firstOccurrence && key == "PASS_MAX_DAYS")
-            {
-                document.passMaxDays = number.Value();
-            }
-            else if (firstOccurrence && key == "PASS_MIN_DAYS")
-            {
-                document.passMinDays = number.Value();
-            }
-            else if (firstOccurrence && key == "PASS_WARN_AGE")
-            {
-                document.passWarnAge = number.Value();
             }
         }
 

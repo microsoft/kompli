@@ -34,13 +34,14 @@ TEST_F(UsersIteratorTest, UidMinAcceptsCommentAndWhitespace)
     EXPECT_EQ(result.Value(), 1000U);
 }
 
-TEST_F(UsersIteratorTest, UidMinSelectsFirstExactOccurrence)
+TEST_F(UsersIteratorTest, ConflictingUidMinDuplicatesReturnError)
 {
     EXPECT_CALL(mContext, GetFileContents("/etc/login.defs"))
         .WillOnce(testing::Return(Result<std::string>("NOT_UID_MIN 500\nUID_MIN 1000\nUID_MIN 2000\n")));
     const auto result = GetUidMin(mContext);
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(1000U, result.Value());
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_EQ("/etc/login.defs:3:9: conflicting duplicate UID_MIN value", result.Error().message);
 }
 
 TEST_F(UsersIteratorTest, CorruptedFirstUidMinKeyCannotSelectLaterValue)

@@ -42,12 +42,13 @@ TEST(LoginDefsTest, AcceptsMovedInputAndPreservesLvalueArguments)
     EXPECT_EQ(1000U, moved.Value().uidMin.Value());
 }
 
-TEST(LoginDefsTest, StoresFirstValuesForRepeatedAndUnknownKeys)
+TEST(LoginDefsTest, AcceptsEquivalentKnownDuplicatesAndUnknownKeys)
 {
     const auto parsed = ld::Parse(
-        "# ignored\n  UID_MIN\t1000 \nUNRECOGNIZED yes\nUID_MIN 2000\n"
+        "# ignored\n  UID_MIN\t1000 \nUNRECOGNIZED yes\nUID_MIN 01000\n"
         "PASS_MAX_DAYS 365\nPASS_MIN_DAYS 1\nPASS_WARN_AGE 7\nENCRYPT_METHOD YESCRYPT\n"
-        "UNRECOGNIZED no\nUID_MIN 3000\n",
+        "UNRECOGNIZED no\nUID_MIN 1000\nPASS_MAX_DAYS 0365\nPASS_MIN_DAYS 1\n"
+        "PASS_WARN_AGE 07\nENCRYPT_METHOD yescrypt\n",
         "logical", nullptr);
     ASSERT_TRUE(parsed.HasValue());
     const auto& doc = parsed.Value();
@@ -62,6 +63,20 @@ TEST(LoginDefsTest, StoresFirstValuesForRepeatedAndUnknownKeys)
     EXPECT_EQ(7, doc.passWarnAge.Value());
     ASSERT_TRUE(doc.encryptMethod.HasValue());
     EXPECT_EQ(ld::EncryptionMethod::YESCRYPT, doc.encryptMethod.Value());
+}
+
+TEST(LoginDefsTest, ConflictingKnownDuplicatesRejectWholeDocument)
+{
+    for (const std::string key : {"UID_MIN", "PASS_MAX_DAYS", "PASS_MIN_DAYS", "PASS_WARN_AGE", "ENCRYPT_METHOD"})
+    {
+        const std::string first = key == "ENCRYPT_METHOD" ? "SHA512" : "1";
+        const std::string second = key == "ENCRYPT_METHOD" ? "YESCRYPT" : "2";
+        const auto parsed = ld::Parse(key + " " + first + "\n" + key + " " + second + "\n", "source", nullptr);
+        ASSERT_FALSE(parsed.HasValue()) << key;
+        EXPECT_EQ(EBADMSG, parsed.Error().code) << key;
+        EXPECT_EQ("source:2:" + std::to_string(key.size() + 2) + ": conflicting duplicate " + key + " value", parsed.Error().message);
+    }
+    EXPECT_TRUE(ld::Parse("UNKNOWN yes\nUNKNOWN no\n", "source", nullptr).HasValue());
 }
 
 TEST(LoginDefsTest, RejectsMalformedNumericValuesWithLocation)

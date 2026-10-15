@@ -280,12 +280,12 @@ TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, UidMinRejectsSelectedEmbedde
     EXPECT_TRUE(root->indicators.empty());
 }
 
-TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, UidMinSelectsFirstExactOccurrence)
+TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, ConflictingUidMinDuplicatesDoNotProduceVerdict)
 {
     mContext.SetSpecialFilePath("/etc/login.defs", mContext.MakeTempfile("UID_MIN 100\nUID_MIN 2000\n"));
     const auto result = AuditSystemAccountShell(mIndicators, mContext);
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(Status::Compliant, result.Value());
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
     const auto* root = mIndicators.GetRootNode();
     ASSERT_NE(nullptr, root);
     EXPECT_TRUE(root->indicators.empty());
