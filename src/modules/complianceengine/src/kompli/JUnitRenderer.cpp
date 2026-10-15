@@ -4,6 +4,7 @@
 #include <JUnitRenderer.hpp>
 #include <StringTools.h>
 #include <TagLimits.hpp>
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <parson.h>
@@ -332,6 +333,12 @@ Result<bool> BuildTags(const JSON_Object* rule, std::ostream& out)
         {
             return Error("Canonical result JSON rule has a tag with an embedded NUL", EINVAL);
         }
+        const auto colon = value.find(':');
+        if (string::npos == colon || colon == 0 || colon + 1 == value.size() ||
+            !std::all_of(value.begin(), value.begin() + colon, [](char ch) { return ('a' <= ch && ch <= 'z') || ('0' <= ch && ch <= '9') || ch == '-'; }))
+        {
+            return Error("Canonical result JSON rule has an invalid 'axis:value' tag", EINVAL);
+        }
         out << "      <tag value=\"";
         EscapeXml(value, out, true);
         out << "\"/>\n";
@@ -426,7 +433,16 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
         {
             return Error("Canonical result JSON rule has an embedded NUL in its testcase name", EINVAL);
         }
-        const string status = StringOrEmpty(json_object_get_string(rule, "status"));
+        const JSON_Value* statusValue = json_object_get_value(rule, "status");
+        if (nullptr == statusValue || JSONString != json_value_get_type(statusValue))
+        {
+            return Error("Canonical result JSON rule has no string 'status'", EINVAL);
+        }
+        const string status(json_value_get_string(statusValue), json_value_get_string_len(statusValue));
+        if (string::npos != status.find('\0'))
+        {
+            return Error("Canonical result JSON rule has an embedded NUL in its status", EINVAL);
+        }
 
         // Guard against schema drift / upstream bugs: an unrecognised or missing
         // status must not be silently rendered as a passing test case. `Skipped`

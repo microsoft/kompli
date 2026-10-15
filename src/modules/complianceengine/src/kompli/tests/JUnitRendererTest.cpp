@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+#include <BenchmarkFormatter.hpp>
 #include <JUnitRenderer.hpp>
 #include <cerrno>
 #include <gtest/gtest.h>
@@ -23,6 +24,59 @@ TEST(JUnitRendererTest, EmptyRulesProduceEmptySuite)
     EXPECT_TRUE(Contains(r.Value(), "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
     EXPECT_TRUE(Contains(r.Value(), "<testsuite name=\"mysuite\" tests=\"0\" failures=\"0\" skipped=\"0\">"));
     EXPECT_TRUE(Contains(r.Value(), "</testsuites>"));
+}
+
+TEST(JUnitRendererTest, FormatterOutputPreservesIdentityTitleTagsAndCounts)
+{
+    using namespace ComplianceEngine;
+    auto formatter = BenchmarkFormatters::BenchmarkFormatter::Begin(DistributionInfo{}, Action::Audit);
+    ASSERT_TRUE(formatter.HasValue());
+    BenchmarkIO::Resource entry;
+    entry.id = "1.1";
+    entry.ruleId = "stable-1";
+    entry.ruleName = "RuleName";
+    entry.resourceID = "Human <title>";
+    entry.tags = {"level:l1", "owner:Ops & Sec"};
+    ASSERT_FALSE(formatter.Value().AddEntry(entry, Status::Compliant, "[]", {}).HasValue());
+    entry.id = "1.2";
+    ASSERT_FALSE(formatter.Value().AddEntry(entry, Status::NonCompliant, "[]", {}).HasValue());
+    auto json = std::move(formatter.Value()).Finish(Status::NonCompliant);
+    ASSERT_TRUE(json.HasValue());
+    auto rendered = RenderJUnit(json.Value(), "suite");
+    ASSERT_TRUE(rendered.HasValue()) << rendered.Error().message;
+    EXPECT_TRUE(Contains(rendered.Value(), "classname=\"1.1\""));
+    EXPECT_TRUE(Contains(rendered.Value(), "name=\"Human &lt;title&gt;\""));
+    EXPECT_TRUE(Contains(rendered.Value(), "<tag value=\"level:l1\"/>"));
+    EXPECT_TRUE(Contains(rendered.Value(), "<tag value=\"owner:Ops &amp; Sec\"/>"));
+    EXPECT_TRUE(Contains(rendered.Value(), "tests=\"2\" failures=\"1\" skipped=\"0\""));
+}
+
+TEST(JUnitRendererTest, RejectsNulSuffixedAndNonStringStatuses)
+{
+    for (const auto* status : {R"("Compliant\u0000NonCompliant")", R"("NonCompliant\u0000")", R"("Skipped\u0000")", R"("NotApplicable\u0000")", "null",
+             "42", "true", "[]", "{}"})
+    {
+        auto result = RenderJUnit(std::string(R"({"rules":[{"id":"1","title":"R","status":)") + status + "}]}", "s");
+        ASSERT_FALSE(result.HasValue()) << status;
+        EXPECT_EQ(result.Error().code, EINVAL);
+    }
+}
+
+TEST(JUnitRendererTest, ValidatesTagAxisAndValue)
+{
+    const std::string prefix = R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":[")";
+    const std::string suffix = R"("]}]})";
+    for (const auto* tag : {"", "severity", ":critical", "severity:", "Severity:critical", "bad_axis:value", "bad axis:value"})
+    {
+        auto result = RenderJUnit(prefix + tag + suffix, "s");
+        ASSERT_FALSE(result.HasValue()) << tag;
+        EXPECT_EQ(result.Error().code, EINVAL);
+    }
+    for (const auto* tag : {"severity:critical", "axis-1:two:parts", "owner:Ops & Sec", "owner:\\u00e9"})
+    {
+        auto result = RenderJUnit(prefix + tag + suffix, "s");
+        ASSERT_TRUE(result.HasValue()) << tag << ": " << result.Error().message;
+    }
 }
 
 TEST(JUnitRendererTest, CompliantRuleIsBarePassingTestcase)
