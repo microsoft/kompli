@@ -180,6 +180,7 @@ TEST(JUnitRendererTest, RejectsMalformedIdsAndEmbeddedNul)
     EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant"}]})", "s").HasValue());
     EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":null,"title":"R","status":"Compliant"}]})", "s").HasValue());
     EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":1,"title":"R","status":"Compliant"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"","title":"R","status":"Compliant"}]})", "s").HasValue());
     EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"bad\u0000id","title":"R","status":"Compliant"}]})", "s").HasValue());
 }
 

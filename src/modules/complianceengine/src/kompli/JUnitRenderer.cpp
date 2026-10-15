@@ -359,6 +359,10 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             return Error("Canonical result JSON rule has no string 'id'", EINVAL);
         }
         const string id(json_value_get_string(idValue), json_value_get_string_len(idValue));
+        if (id.empty())
+        {
+            return Error("Canonical result JSON rule has an empty 'id'", EINVAL);
+        }
         if (string::npos != id.find('\0'))
         {
             return Error("Canonical result JSON rule has an embedded NUL in its testcase classname", EINVAL);
