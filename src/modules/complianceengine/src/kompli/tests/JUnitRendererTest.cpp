@@ -212,6 +212,15 @@ TEST(JUnitRendererTest, RejectsMalformedTestcaseId)
     EXPECT_EQ(missing.Error().code, EINVAL);
 }
 
+TEST(JUnitRendererTest, RejectsMalformedIdsAndEmbeddedNul)
+{
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":null,"title":"R","status":"Compliant"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":1,"title":"R","status":"Compliant"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"","title":"R","status":"Compliant"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"bad\u0000id","title":"R","status":"Compliant"}]})", "s").HasValue());
+}
+
 TEST(JUnitRendererTest, RejectsOversizeTagsAndBoundedJUnitOutput)
 {
     const std::string tag256 = "x:" + std::string(254, 'a');
@@ -258,6 +267,13 @@ TEST(JUnitRendererTest, RejectsInvalidXmlCharactersAndUtf8)
 
     auto valid = RenderJUnit(R"({"rules":[{"id":"1","title":"\u00E9\uD83D\uDE00","status":"Compliant"}]})", "s");
     ASSERT_TRUE(valid.HasValue()) << valid.Error().message;
+}
+
+TEST(JUnitRendererTest, RejectsXmlIllegalControlCharactersInAttributes)
+{
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","title":"bad\u0001title","status":"Compliant"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":["owner:Ops\u0001Sec"]}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[]})", std::string("bad\x01suite", 9)).HasValue());
 }
 
 TEST(JUnitRendererTest, InvalidJsonIsError)

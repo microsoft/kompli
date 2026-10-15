@@ -209,9 +209,9 @@ Result<std::vector<string>> ParseTags(const JSON_Object* ruleObject, const strin
             return Error("Benchmark definition " + context + " has a non-string 'tags' entry", EINVAL);
         }
         const size_t tagLength = json_value_get_string_len(tagValue);
-        if (BenchmarkIO::kMaxTagBytes < tagLength)
+        if (kMaxTagBytes < tagLength)
         {
-            return Error("Benchmark definition " + context + " has a 'tags' entry exceeding 256 bytes", E2BIG);
+            return Error("Benchmark definition " + context + " has a 'tags' entry exceeding " + std::to_string(kMaxTagBytes) + " bytes", E2BIG);
         }
         string tag(json_value_get_string(tagValue), tagLength);
         if (string::npos != tag.find('\0'))

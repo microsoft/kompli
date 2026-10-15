@@ -70,7 +70,8 @@ private:
 };
 
 // Attribute whitespace needs character references to survive XML parsing.
-// Legacy body text replaces control characters; attributes fail validation.
+// Illegal ASCII controls are normalized only in legacy element text; attributes
+// retain them so the completed document validation can reject them.
 void EscapeXml(const string& in, std::ostream& out, bool attribute = false)
 {
     for (const char ch : in)
@@ -284,9 +285,11 @@ Result<bool> BuildTags(const JSON_Object* rule, std::ostream& out)
             return Error("Canonical result JSON rule has a non-string tag", EINVAL);
         }
         const size_t length = json_array_get_string_len(tags, i);
-        if (BenchmarkIO::kMaxTagBytes < length)
+        if (ComplianceEngine::BenchmarkDefinition::kMaxTagBytes < length)
         {
-            return Error("Canonical result JSON rule has a tag exceeding 256 bytes", E2BIG);
+            return Error("Canonical result JSON rule has a tag exceeding " + std::to_string(ComplianceEngine::BenchmarkDefinition::kMaxTagBytes) +
+                             " bytes",
+                E2BIG);
         }
         const string value(tag, length);
         if (string::npos != value.find('\0'))
@@ -353,9 +356,13 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
         const JSON_Value* idValue = json_object_get_value(rule, "id");
         if (nullptr == idValue || JSONString != json_value_get_type(idValue))
         {
-            return Error("Canonical result JSON rule is missing a string 'id'", EINVAL);
+            return Error("Canonical result JSON rule has no string 'id'", EINVAL);
         }
         const string id(json_value_get_string(idValue), json_value_get_string_len(idValue));
+        if (id.empty())
+        {
+            return Error("Canonical result JSON rule has an empty 'id'", EINVAL);
+        }
         if (string::npos != id.find('\0'))
         {
             return Error("Canonical result JSON rule has an embedded NUL in its testcase classname", EINVAL);

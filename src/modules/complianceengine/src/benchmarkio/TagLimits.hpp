@@ -8,10 +8,10 @@
 
 namespace ComplianceEngine
 {
-namespace BenchmarkIO
+namespace BenchmarkDefinition
 {
-constexpr std::size_t kMaxTagBytes = 256;
-} // namespace BenchmarkIO
+constexpr size_t kMaxTagBytes = 256;
+}
 } // namespace ComplianceEngine
 
 #endif // COMPLIANCE_ENGINE_BENCHMARKIO_TAG_LIMITS_HPP
