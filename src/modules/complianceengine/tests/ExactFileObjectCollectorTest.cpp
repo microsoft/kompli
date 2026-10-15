@@ -37,11 +37,12 @@ std::vector<std::string> Captures(const VariableResolution::ObjectCollection& co
 }
 } // namespace
 
-TEST(ExactFileObjectCollectorTest, NameserverSelectionPreservesSourceBytesAndOrder)
+TEST(ExactFileObjectCollectorTest, ProjectsSelectedCapturesWithoutLosingBytesOrDuplicates)
 {
     MockContext context;
     std::string content =
         " nameserver ignored\n"
+        "nameserver 192.0.2.1 # retained\r\n"
         "nameserver 192.0.2.1 # retained\r\n"
         "nameserver \n  198.51.100.1\n"
         "nameserver ";
@@ -53,7 +54,8 @@ TEST(ExactFileObjectCollectorTest, NameserverSelectionPreservesSourceBytesAndOrd
 
     ASSERT_TRUE(result.HasValue());
     EXPECT_TRUE(result.Value().complete);
-    EXPECT_EQ((std::vector<std::string>{"192.0.2.1 # retained\r", "198.51.100.1", std::string("\0\x80", 2), ""}), Captures(result.Value()));
+    EXPECT_EQ((std::vector<std::string>{"192.0.2.1 # retained\r", "192.0.2.1 # retained\r", "198.51.100.1", std::string("\0\x80", 2), ""}),
+        Captures(result.Value()));
 }
 
 TEST(ExactFileObjectCollectorTest, ZeroMatchesRemainACompleteEmptyCollection)

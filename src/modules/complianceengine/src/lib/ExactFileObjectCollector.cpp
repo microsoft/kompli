@@ -2,13 +2,13 @@
 // Licensed under the MIT License.
 
 #include <ExactFileObjectCollector.h>
-#include <StringTools.h>
 #include <algorithm>
 #include <cerrno>
 #include <exception>
 #include <fcntl.h>
 #include <limits>
 #include <new>
+#include <parsers/NameserverSelection.h>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
@@ -172,71 +172,24 @@ Result<std::string> ReadCompleteFile(int descriptor, const struct stat& before, 
     return content;
 }
 
-Result<VariableResolution::ObjectCollection> SelectNameservers(const std::string& content, const ExactFileCollectionLimits& limits)
+Result<VariableResolution::ObjectCollection> ProjectNameservers(const NameserverSelection::Document& selection, std::size_t maxValues)
 {
     VariableResolution::ObjectCollection collection;
-    collection.complete = true;
-    std::size_t capturedBytes = 0;
-    static const char prefix[] = "nameserver";
-    static const std::size_t prefixLength = sizeof(prefix) - 1;
-
-    for (std::size_t anchor = 0; anchor <= content.size();)
+    for (const auto& capture : selection.captures)
     {
-        if (content.compare(anchor, prefixLength, prefix) == 0)
+        if (collection.items.size() >= maxValues)
         {
-            std::size_t cursor = anchor + prefixLength;
-            if (cursor < content.size() && IsAsciiWhitespace(static_cast<unsigned char>(content[cursor])))
-            {
-                do
-                {
-                    ++cursor;
-                } while (cursor < content.size() && IsAsciiWhitespace(static_cast<unsigned char>(content[cursor])));
-
-                const std::size_t end = content.find('\n', cursor);
-                const std::size_t captureEnd = end == std::string::npos ? content.size() : end;
-                const std::size_t captureLength = captureEnd - cursor;
-                if (collection.items.size() >= limits.occurrences || collection.items.size() >= limits.values)
-                {
-                    return Error("Exact file occurrence limit exceeded", E2BIG);
-                }
-                if (collection.items.size() >= collection.items.max_size() || captureLength > std::string().max_size())
-                {
-                    return Error("Exact file capture collection is not representable", EOVERFLOW);
-                }
-                if (captureLength > limits.captureBytes || captureLength > limits.capturedBytes - capturedBytes)
-                {
-                    return Error("Exact file capture limit exceeded", E2BIG);
-                }
-                capturedBytes += captureLength;
-                try
-                {
-                    VariableResolution::ObjectItem item;
-                    item.fields["subexpression"] = {content.substr(cursor, captureLength)};
-                    collection.items.push_back(std::move(item));
-                }
-                catch (const std::bad_alloc&)
-                {
-                    return Error("Failed to retain exact file capture", ENOMEM);
-                }
-                catch (const std::length_error&)
-                {
-                    return Error("Exact file capture is not representable", EOVERFLOW);
-                }
-                if (end == std::string::npos)
-                {
-                    break;
-                }
-                anchor = end + 1;
-                continue;
-            }
+            return Error("Exact file value limit exceeded", E2BIG);
         }
-        const std::size_t newline = content.find('\n', anchor);
-        if (newline == std::string::npos)
+        if (collection.items.size() >= collection.items.max_size())
         {
-            break;
+            return Error("Exact file capture collection is not representable", EOVERFLOW);
         }
-        anchor = newline + 1;
+        VariableResolution::ObjectItem item;
+        item.fields["subexpression"] = {selection.bytes.substr(capture.offset, capture.length)};
+        collection.items.push_back(std::move(item));
     }
+    collection.complete = true;
     return collection;
 }
 } // namespace
@@ -335,7 +288,16 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObjectWithOperatio
             return pathClosed.Error();
         }
 
-        return SelectNameservers(content.Value(), limits);
+        NameserverSelection::Limits selectionLimits;
+        selectionLimits.occurrences = limits.occurrences;
+        selectionLimits.captureBytes = limits.captureBytes;
+        selectionLimits.capturedBytes = limits.capturedBytes;
+        auto selection = NameserverSelection::Select(std::move(content.Value()), path, selectionLimits);
+        if (!selection.HasValue())
+        {
+            return selection.Error();
+        }
+        return ProjectNameservers(selection.Value(), limits.values);
     }
     catch (const std::bad_alloc&)
     {
