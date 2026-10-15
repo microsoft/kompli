@@ -175,10 +175,18 @@ TEST(JUnitRendererTest, RejectsMalformedTagsWithoutMisreportingThem)
     EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":["a:\u0000b"]}]})", "s").HasValue());
 }
 
+TEST(JUnitRendererTest, RejectsMalformedIdsAndEmbeddedNul)
+{
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":null,"title":"R","status":"Compliant"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":1,"title":"R","status":"Compliant"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"bad\u0000id","title":"R","status":"Compliant"}]})", "s").HasValue());
+}
+
 TEST(JUnitRendererTest, RejectsOversizeTagsAndBoundedJUnitOutput)
 {
     const std::string tag256 = "x:" + std::string(254, 'a');
-    const std::string prefix = R"({"rules":[{"title":"R","status":"Compliant","tags":[")";
+    const std::string prefix = R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":[")";
     const std::string suffix = R"("]}]})";
     EXPECT_TRUE(RenderJUnit(prefix + tag256 + suffix, "s").HasValue());
 
@@ -198,7 +206,7 @@ TEST(JUnitRendererTest, RejectsOversizeTagsAndBoundedJUnitOutput)
         }
         tags += "\"" + amplified + "\"";
     }
-    auto tooLarge = RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":[)" + tags + R"(]}]})", "s");
+    auto tooLarge = RenderJUnit(R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":[)" + tags + R"(]}]})", "s");
     ASSERT_FALSE(tooLarge.HasValue());
     EXPECT_EQ(tooLarge.Error().code, EFBIG);
 }
