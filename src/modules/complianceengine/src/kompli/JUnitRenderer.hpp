@@ -11,12 +11,13 @@ namespace ComplianceEngine
 {
 namespace Kompli
 {
-// Renders a canonical kompli result JSON (as emitted by `audit` / `remediate`)
+// Renders a canonical kompli result JSON (as emitted by `run`)
 // into a JUnit XML document.
 //
 // - one <testcase classname=<id> name=<ruleName>> per rule,
 // - a <failure> only for NonCompliant rules (Compliant rules are bare
 //   passing <testcase/>),
+// - NotApplicable and Skipped rules render as skipped test cases,
 // - the failure body carries the rule's Parameters and Indicators, modelled on
 //   the augmentation engine's tests/reporting/junit.py.
 //

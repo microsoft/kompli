@@ -34,6 +34,32 @@ TEST(JUnitRendererTest, CompliantRuleIsBarePassingTestcase)
     EXPECT_TRUE(Contains(r.Value(), "tests=\"1\" failures=\"0\""));
 }
 
+TEST(JUnitRendererTest, BenchmarkProvenanceDisambiguatesSameRuleId)
+{
+    const std::string json = R"({"rules":[)"
+                             R"({"benchmark":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04","benchmarkVersion":"v2.0.0"},)"
+                             R"("id":"1.1","title":"Same title","ruleName":"SameRule","status":"Compliant","indicators":[]},)"
+                             R"({"benchmark":{"framework":"stig","distribution":"ubuntu","distributionVersion":"22.04","benchmarkVersion":"v1.0.0"},)"
+                             R"("id":"1.1","title":"Same title","ruleName":"SameRule","status":"Compliant","indicators":[]}]})";
+    auto result = RenderJUnit(json, "s");
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_TRUE(Contains(result.Value(), "classname=\"3:cis6:ubuntu5:22.046:v2.0.03:1.1\""));
+    EXPECT_TRUE(Contains(result.Value(), "classname=\"4:stig6:ubuntu5:22.046:v1.0.03:1.1\""));
+}
+
+TEST(JUnitRendererTest, BenchmarkClassnameEncodingPreventsDelimiterCollisions)
+{
+    const std::string json = R"({"rules":[)"
+                             R"({"benchmark":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04","benchmarkVersion":"v1"},)"
+                             R"("id":"part:rule","title":"First","ruleName":"SameRule","status":"Compliant","indicators":[]},)"
+                             R"({"benchmark":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04","benchmarkVersion":"v1:part"},)"
+                             R"("id":"rule","title":"Second","ruleName":"SameRule","status":"Compliant","indicators":[]}]})";
+    auto result = RenderJUnit(json, "s");
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_TRUE(Contains(result.Value(), "classname=\"3:cis6:ubuntu5:22.042:v19:part:rule\""));
+    EXPECT_TRUE(Contains(result.Value(), "classname=\"3:cis6:ubuntu5:22.047:v1:part4:rule\""));
+}
+
 TEST(JUnitRendererTest, NonCompliantRuleHasFailureWithIndicatorBody)
 {
     const std::string json = R"({"rules":[{"id":"2.3","ruleName":"RuleB","status":"NonCompliant",)"
@@ -112,6 +138,16 @@ TEST(JUnitRendererTest, NotApplicableRuleIsSkipped)
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
     EXPECT_TRUE(Contains(r.Value(), "<skipped message=\"Rule is not applicable\">"));
     EXPECT_TRUE(Contains(r.Value(), "- n/a on this distro [NotApplicable]"));
+    EXPECT_TRUE(Contains(r.Value(), "skipped=\"1\""));
+    EXPECT_FALSE(Contains(r.Value(), "<failure"));
+}
+
+TEST(JUnitRendererTest, SkippedStatusRendersAsSkipped)
+{
+    const std::string json = R"({"rules":[{"id":"4.2","ruleName":"R","status":"Skipped","indicators":[]}]})";
+    auto r = RenderJUnit(json, "s");
+    ASSERT_TRUE(r.HasValue()) << r.Error().message;
+    EXPECT_TRUE(Contains(r.Value(), "<skipped message=\"Rule was skipped\">"));
     EXPECT_TRUE(Contains(r.Value(), "skipped=\"1\""));
     EXPECT_FALSE(Contains(r.Value(), "<failure"));
 }

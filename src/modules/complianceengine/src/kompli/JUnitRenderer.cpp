@@ -133,6 +133,30 @@ string BuildBody(const JSON_Object* rule)
     AppendIndicators(json_object_get_array(rule, "indicators"), 0, body);
     return body.str();
 }
+
+Result<string> TestcaseClassname(const JSON_Object* rule, const string& id)
+{
+    const JSON_Value* benchmarkValue = json_object_get_value(rule, "benchmark");
+    if (nullptr == benchmarkValue)
+    {
+        return id;
+    }
+    const JSON_Object* benchmark = json_value_get_object(benchmarkValue);
+    if (nullptr == benchmark)
+    {
+        return Error("Canonical result JSON rule has invalid 'benchmark' value", EINVAL);
+    }
+    const string framework = StringOrEmpty(json_object_get_string(benchmark, "framework"));
+    const string distribution = StringOrEmpty(json_object_get_string(benchmark, "distribution"));
+    const string distributionVersion = StringOrEmpty(json_object_get_string(benchmark, "distributionVersion"));
+    const string benchmarkVersion = StringOrEmpty(json_object_get_string(benchmark, "benchmarkVersion"));
+    if (framework.empty() || distribution.empty() || distributionVersion.empty() || benchmarkVersion.empty())
+    {
+        return Error("Canonical result JSON rule has incomplete benchmark provenance", EINVAL);
+    }
+    const auto encode = [](const string& component) { return std::to_string(component.size()) + ":" + component; };
+    return encode(framework) + encode(distribution) + encode(distributionVersion) + encode(benchmarkVersion) + encode(id);
+}
 } // anonymous namespace
 
 Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
@@ -177,15 +201,20 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
         const string id = StringOrEmpty(json_object_get_string(rule, "id"));
         const string ruleName = StringOrEmpty(json_object_get_string(rule, "ruleName"));
         const string status = StringOrEmpty(json_object_get_string(rule, "status"));
+        auto classname = TestcaseClassname(rule, id);
+        if (!classname.HasValue())
+        {
+            return classname.Error();
+        }
 
         // Guard against schema drift / upstream bugs: an unrecognised or missing
         // status must not be silently rendered as a passing test case.
-        if (status != "Compliant" && status != "NonCompliant" && status != "NotApplicable")
+        if (status != "Compliant" && status != "NonCompliant" && status != "NotApplicable" && status != "Skipped")
         {
             return Error("Canonical result JSON rule has invalid 'status' value: '" + status + "'", EINVAL);
         }
 
-        cases << "  <testcase classname=\"" << EscapeXml(id) << "\" name=\"" << EscapeXml(ruleName) << "\"";
+        cases << "  <testcase classname=\"" << EscapeXml(classname.Value()) << "\" name=\"" << EscapeXml(ruleName) << "\"";
         if (status == "NonCompliant")
         {
             ++failureCount;
@@ -193,13 +222,12 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             cases << "    <failure message=\"Rule is non-compliant\" type=\"NonCompliant\">" << EscapeXml(BuildBody(rule)) << "</failure>\n";
             cases << "  </testcase>\n";
         }
-        else if (status == "NotApplicable")
+        else if (status == "NotApplicable" || status == "Skipped")
         {
-            // A not-applicable rule is neither a pass nor a failure; JUnit models
-            // this as a skipped test case.
             ++skippedCount;
             cases << ">\n";
-            cases << "    <skipped message=\"Rule is not applicable\">" << EscapeXml(BuildBody(rule)) << "</skipped>\n";
+            cases << "    <skipped message=\"" << (status == "Skipped" ? "Rule was skipped" : "Rule is not applicable") << "\">"
+                  << EscapeXml(BuildBody(rule)) << "</skipped>\n";
             cases << "  </testcase>\n";
         }
         else

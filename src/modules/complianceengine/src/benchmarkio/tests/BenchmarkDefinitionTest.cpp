@@ -198,6 +198,161 @@ TEST(BenchmarkDefinitionParserTest, ParsesLegacyDocumentWithoutHoistedIdentity)
     EXPECT_TRUE(result.Value().benchmarkInfo.section.empty());
 }
 
+TEST(BenchmarkDefinitionParserTest, RuleWithNoParameterMetadataYieldsEmptyMap)
+{
+    auto result = ParseString(OneRuleDoc(), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_TRUE(result.Value().resources[0].parameterMetadata.empty());
+}
+
+TEST(BenchmarkDefinitionParserTest, ParsesParameterMetadataFields)
+{
+    const char* const ruleWithParams = R"({
+        "ruleName": "EnsureMountPoint",
+        "title": "1.1.2.1.1 Ensure mount point",
+        "id": "1.1.2.1.1",
+        "ruleId": "rule-id",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {"X": {}}, "parameters": {"mountPoint": "/tmp"}},
+        "parameterMetadata": {
+            "mountPoint": {
+                "type": "string",
+                "default": "/tmp",
+                "displayName": "Mount Point",
+                "validationRegex": "^/[a-zA-Z0-9/_.-]+$",
+                "validationFailedMessage": "Must be an absolute path.",
+                "mandatory": true
+            }
+        }
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    const auto& metadata = result.Value().resources[0].parameterMetadata;
+    ASSERT_EQ(metadata.count("mountPoint"), 1u);
+    const auto& mountPoint = metadata.at("mountPoint");
+    EXPECT_EQ(mountPoint.type, "string");
+    EXPECT_EQ(mountPoint.defaultValue, "/tmp");
+    ASSERT_TRUE(mountPoint.displayName.HasValue());
+    EXPECT_EQ(mountPoint.displayName.Value(), "Mount Point");
+    ASSERT_TRUE(mountPoint.validationRegex.HasValue());
+    EXPECT_EQ(mountPoint.validationRegex.Value(), "^/[a-zA-Z0-9/_.-]+$");
+    ASSERT_TRUE(mountPoint.validationFailedMessage.HasValue());
+    EXPECT_EQ(mountPoint.validationFailedMessage.Value(), "Must be an absolute path.");
+    EXPECT_TRUE(mountPoint.mandatory);
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsNonBooleanMandatoryParameterMetadata)
+{
+    const std::string ruleWithParams = R"({
+        "ruleName": "EnsureMountPoint",
+        "title": "Ensure mount point",
+        "id": "1.1.2.1.1",
+        "ruleId": "rule-id",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {"X": {}}, "parameters": {"mountPoint": "/tmp"}},
+        "parameterMetadata": {
+            "mountPoint": {
+                "type": "string",
+                "default": "/tmp",
+                "mandatory": INVALID_MANDATORY
+            }
+        }
+    })";
+
+    for (const char* const invalidValue : {R"("true")", "1"})
+    {
+        std::string invalidRule = ruleWithParams;
+        ReplaceOnce(invalidRule, "INVALID_MANDATORY", invalidValue);
+        auto result = ParseString(MakeDoc("[" + invalidRule + "]"), nullptr);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_NE(result.Error().message.find("'mandatory' field that is not a boolean"), std::string::npos);
+    }
+}
+
+TEST(BenchmarkDefinitionParserTest, ParsesMultipleParameterMetadataEntries)
+{
+    const char* const ruleWithParams = R"({
+        "ruleName": "EnsureMountPoint",
+        "title": "1.1.2.1.2 Ensure mount point options",
+        "id": "1.1.2.1.2",
+        "ruleId": "rule-id",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {"X": {}}, "parameters": {"mountPoint": "/tmp", "requiredMountOptions": "nodev"}},
+        "parameterMetadata": {
+            "mountPoint": {"type": "string", "default": "/tmp"},
+            "requiredMountOptions": {"type": "string", "default": "nodev"}
+        }
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().resources[0].parameterMetadata.size(), 2u);
+}
+
+TEST(BenchmarkDefinitionParserTest, AcceptsEmptyParameterMetadataDefault)
+{
+    const char* const ruleWithParams = R"({
+        "ruleName": "EnsureOptionalValue",
+        "title": "Optional value",
+        "id": "1.1.2.1.3",
+        "ruleId": "rule-id",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {"X": {}}, "parameters": {"optionalValue": ""}},
+        "parameterMetadata": {
+            "optionalValue": {"type": "string", "default": ""}
+        }
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().resources[0].parameterMetadata.at("optionalValue").defaultValue, "");
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsUnsupportedParameterMetadataType)
+{
+    const char* const ruleWithParams = R"({
+        "ruleName": "EnsureOptionalValue",
+        "title": "Optional value",
+        "id": "1.1.2.1.3",
+        "ruleId": "rule-id",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {"X": {}}, "parameters": {"optionalValue": ""}},
+        "parameterMetadata": {
+            "optionalValue": {"type": "integer", "default": ""}
+        }
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("only 'string' is supported"), std::string::npos);
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsInvalidParameterMetadata)
+{
+    const char* const notObject = R"({
+        "ruleName": "R", "title": "t", "id": "1", "ruleId": "rule-id", "tags": [],
+        "metadata": {}, "payload": {"audit": {}, "parameters": {}},
+        "parameterMetadata": "not-an-object"
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + notObject + "]"), nullptr).HasValue());
+
+    const char* const missingDefault = R"({
+        "ruleName": "R", "title": "t", "id": "1", "ruleId": "rule-id", "tags": [],
+        "metadata": {}, "payload": {"audit": {}, "parameters": {}},
+        "parameterMetadata": {"mountPoint": {"type": "string"}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + missingDefault + "]"), nullptr).HasValue());
+
+    const char* const entryNotObject = R"({
+        "ruleName": "R", "title": "t", "id": "1", "ruleId": "rule-id", "tags": [],
+        "metadata": {}, "payload": {"audit": {}, "parameters": {}},
+        "parameterMetadata": {"mountPoint": "not-an-object"}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + entryNotObject + "]"), nullptr).HasValue());
+}
+
 // ---------------------------------------------------------------------------
 // Malformed documents
 // ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@
 #ifndef COMPLIANCE_ENGINE_BENCHMARKIO_RESOURCE_HPP
 #define COMPLIANCE_ENGINE_BENCHMARKIO_RESOURCE_HPP
 
+#include <BenchmarkInfo.h>
 #include <Optional.h>
 #include <map>
 #include <string>
@@ -24,12 +25,27 @@ struct Metadata
     std::map<std::string, std::string> additional;
 };
 
+struct ParameterMetadata
+{
+    std::string defaultValue;
+    std::string type;
+    Optional<std::string> displayName;
+    Optional<std::string> validationRegex;
+    Optional<std::string> validationFailedMessage;
+    bool mandatory = false;
+};
+
 // A single parsed benchmark rule, as consumed by callers (the `kompli` CLI's
 // main loop and output formatters today; `komplid` in the future). Populated
 // by the benchmark-definition parser (BenchmarkDefinition) from one entry of a
 // definition's spec.rules array.
 struct Resource
 {
+    // Identity of the benchmark definition containing this rule. Canonical
+    // results carry it so benchmark-local rule ids remain unambiguous when a
+    // plan combines multiple definitions.
+    BenchmarkInfo benchmarkInfo;
+
     // Human-readable rule title (the definition's `title`, e.g. "1.1.1.1 Ensure
     // cramfs kernel module is not available"). Emitted in the canonical result
     // JSON as `title`.
@@ -57,6 +73,7 @@ struct Resource
 
     std::vector<std::string> tags;
     Metadata metadata;
+    std::map<std::string, ParameterMetadata> parameterMetadata;
 
     // True when the rule carries an init object (always true for definitions).
     bool hasInitAudit = false;
