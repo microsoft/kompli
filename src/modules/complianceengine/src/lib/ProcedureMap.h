@@ -591,9 +591,9 @@ template <>
 struct Bindings<SystemdUnitStateParams>
 {
     using T = SystemdUnitStateParams;
-    static constexpr size_t size = 5;
+    static constexpr size_t size = 6;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::unitName, &T::activeState, &T::loadState, &T::unitFileState, &T::unit);
+    static constexpr auto members = std::make_tuple(&T::unitName, &T::activeState, &T::subState, &T::loadState, &T::unitFileState, &T::unit);
 };
 
 // Defines the bindings for the TestingProcedureParams structure.

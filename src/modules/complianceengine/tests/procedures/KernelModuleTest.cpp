@@ -17,6 +17,7 @@ using ComplianceEngine::AuditKernelModuleUnavailable;
 using ComplianceEngine::Error;
 using ComplianceEngine::IndicatorsTree;
 using ComplianceEngine::KernelModuleUnavailableParams;
+using ComplianceEngine::RemediateKernelModuleUnavailable;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 
@@ -24,6 +25,7 @@ using ComplianceEngine::Status;
 // find* outputs removed due to refactor away from executing find command.
 
 static const char procModulesPath[] = "/proc/modules";
+static const char managedConfigPath[] = "/etc/modprobe.d/60-kompli-disabled-modules.conf";
 static const char procModulesPositiveOutput[] =
     "usb_storage 110592 0 - Live 0xffffffffc135d000\n"
     "curve25519_x86_64 36864 1 usb-storage, Live 0xffffffffc12f7000\n"
@@ -54,6 +56,16 @@ static const char modprobeBlockedOverlayOutput[] =
     "black"
     "list"
     " usb-storage_overlay\ninstall usb_storage_overlay /usr/bin/true\n";
+
+static Result<std::string> ReadTestFile(const std::string& path)
+{
+    std::ifstream input(path);
+    if (!input.is_open())
+    {
+        return Error("Failed to read test file", errno);
+    }
+    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
 
 class EnsureKernelModuleTest : public ::testing::Test
 {
@@ -143,8 +155,178 @@ TEST_F(EnsureKernelModuleTest, FailedModprobeExecution)
     params.moduleName = "usb-storage";
 
     auto result = AuditKernelModuleUnavailable(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    ASSERT_EQ(result.Error().message, "Failed to execute modprobe --showconfig: Failed to execute modprobe");
+}
+
+TEST_F(EnsureKernelModuleTest, RemediateCreatesManagedConfiguration)
+{
+    CreateModulesTree(mContext, {"usb-storage.ko"});
+    const std::string configPath = mContext.GetTempdirPath() + "/managed-modules.conf";
+    mContext.SetSpecialFilePath(managedConfigPath, configPath);
+    EXPECT_CALL(mContext, GetFileContents(::testing::StrEq(procModulesPath))).WillRepeatedly(::testing::Return(Result<std::string>(procModulesNegativeOutput)));
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr(modprobeCommand))).WillRepeatedly(::testing::Invoke([configPath](const std::string&) {
+        auto contents = ReadTestFile(configPath);
+        return contents.HasValue() ? contents : Result<std::string>(modprobeNothingOutput);
+    }));
+
+    KernelModuleUnavailableParams params;
+    params.moduleName = "usb-storage";
+
+    auto result = RemediateKernelModuleUnavailable(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), Status::Compliant);
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    auto contents = ReadTestFile(configPath);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_NE(contents.Value().find("blacklist usb-storage\n"), std::string::npos);
+    EXPECT_NE(contents.Value().find("install usb-storage /bin/false\n"), std::string::npos);
+}
+
+TEST_F(EnsureKernelModuleTest, RemediatePreservesExistingManagedConfiguration)
+{
+    CreateModulesTree(mContext, {"usb-storage.ko"});
+    const std::string configPath = mContext.MakeTempfile("# existing setting\n");
+    mContext.SetSpecialFilePath(managedConfigPath, configPath);
+    EXPECT_CALL(mContext, GetFileContents(::testing::StrEq(procModulesPath))).WillRepeatedly(::testing::Return(Result<std::string>(procModulesNegativeOutput)));
+    EXPECT_CALL(mContext, GetFileContents(::testing::StrEq(configPath))).WillOnce(::testing::Invoke([](const std::string& path) {
+        return ReadTestFile(path);
+    }));
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr(modprobeCommand))).WillRepeatedly(::testing::Invoke([configPath](const std::string&) {
+        auto contents = ReadTestFile(configPath);
+        return contents.HasValue() ? contents : Result<std::string>(modprobeNothingOutput);
+    }));
+
+    KernelModuleUnavailableParams params;
+    params.moduleName = "usb-storage";
+
+    auto result = RemediateKernelModuleUnavailable(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    auto contents = ReadTestFile(configPath);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(contents.Value().find("# existing setting\n"), 0);
+}
+
+TEST_F(EnsureKernelModuleTest, RemediatePreservesPrefixModuleBlock)
+{
+    CreateModulesTree(mContext, {"hfs.ko"});
+    const std::string hfsplusBlock =
+        "# BEGIN KOMPLI DISABLE hfsplus\n"
+        "blacklist hfsplus\n"
+        "install hfsplus /bin/false\n"
+        "# END KOMPLI DISABLE hfsplus\n";
+    const std::string configPath = mContext.MakeTempfile(hfsplusBlock);
+    mContext.SetSpecialFilePath(managedConfigPath, configPath);
+    EXPECT_CALL(mContext, GetFileContents(::testing::StrEq(procModulesPath))).WillRepeatedly(::testing::Return(Result<std::string>(procModulesNegativeOutput)));
+    EXPECT_CALL(mContext, GetFileContents(::testing::StrEq(configPath))).WillOnce(::testing::Invoke([](const std::string& path) {
+        return ReadTestFile(path);
+    }));
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr(modprobeCommand))).WillRepeatedly(::testing::Invoke([configPath](const std::string&) {
+        auto contents = ReadTestFile(configPath);
+        return contents.HasValue() ? contents : Result<std::string>(modprobeNothingOutput);
+    }));
+
+    KernelModuleUnavailableParams params;
+    params.moduleName = "hfs";
+
+    auto result = RemediateKernelModuleUnavailable(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    auto contents = ReadTestFile(configPath);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(contents.Value().find(hfsplusBlock), 0);
+    EXPECT_NE(contents.Value().find("blacklist hfs\n"), std::string::npos);
+}
+
+TEST_F(EnsureKernelModuleTest, RemediateRefusesToUnloadActiveModule)
+{
+    CreateModulesTree(mContext, {"usb-storage.ko"});
+    const std::string configPath = mContext.GetTempdirPath() + "/managed-modules.conf";
+    mContext.SetSpecialFilePath(managedConfigPath, configPath);
+    EXPECT_CALL(mContext, GetFileContents(::testing::StrEq(procModulesPath))).WillRepeatedly(::testing::Return(Result<std::string>(procModulesPositiveOutput)));
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::_)).Times(0);
+
+    KernelModuleUnavailableParams params;
+    params.moduleName = "usb-storage";
+
+    auto result = RemediateKernelModuleUnavailable(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, ENOTSUP);
+    EXPECT_NE(access(configPath.c_str(), F_OK), 0);
+}
+
+TEST_F(EnsureKernelModuleTest, RemediateRejectsSymlinkedManagedConfiguration)
+{
+    CreateModulesTree(mContext, {"usb-storage.ko"});
+    const std::string targetPath = mContext.MakeTempfile("# target\n");
+    const std::string configPath = mContext.GetTempdirPath() + "/managed-modules.conf";
+    ASSERT_EQ(symlink(targetPath.c_str(), configPath.c_str()), 0);
+    mContext.SetSpecialFilePath(managedConfigPath, configPath);
+    EXPECT_CALL(mContext, GetFileContents(::testing::StrEq(procModulesPath))).WillRepeatedly(::testing::Return(Result<std::string>(procModulesNegativeOutput)));
+    EXPECT_CALL(mContext, GetFileContents(::testing::StrEq(configPath))).WillOnce(::testing::Invoke([](const std::string& path) {
+        return ReadTestFile(path);
+    }));
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr(modprobeCommand))).WillRepeatedly(::testing::Return(Result<std::string>(modprobeNothingOutput)));
+
+    KernelModuleUnavailableParams params;
+    params.moduleName = "usb-storage";
+
+    auto result = RemediateKernelModuleUnavailable(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    auto contents = ReadTestFile(targetPath);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(contents.Value(), "# target\n");
+}
+
+TEST_F(EnsureKernelModuleTest, RemediateRollsBackExistingConfiguration)
+{
+    CreateModulesTree(mContext, {"usb-storage.ko"});
+    const std::string original = "# existing setting\n";
+    const std::string configPath = mContext.MakeTempfile(original);
+    mContext.SetSpecialFilePath(managedConfigPath, configPath);
+    EXPECT_CALL(mContext, GetFileContents(::testing::StrEq(procModulesPath))).WillRepeatedly(::testing::Return(Result<std::string>(procModulesNegativeOutput)));
+    EXPECT_CALL(mContext, GetFileContents(::testing::StrEq(configPath))).WillOnce(::testing::Invoke([](const std::string& path) {
+        return ReadTestFile(path);
+    }));
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr(modprobeCommand))).WillRepeatedly(::testing::Return(Result<std::string>(modprobeNothingOutput)));
+
+    KernelModuleUnavailableParams params;
+    params.moduleName = "usb-storage";
+
+    auto result = RemediateKernelModuleUnavailable(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    auto contents = ReadTestFile(configPath);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(contents.Value(), original);
+}
+
+TEST_F(EnsureKernelModuleTest, RemediateRollsBackCreatedConfiguration)
+{
+    CreateModulesTree(mContext, {"usb-storage.ko"});
+    const std::string configPath = mContext.GetTempdirPath() + "/managed-modules.conf";
+    mContext.SetSpecialFilePath(managedConfigPath, configPath);
+    EXPECT_CALL(mContext, GetFileContents(::testing::StrEq(procModulesPath))).WillRepeatedly(::testing::Return(Result<std::string>(procModulesNegativeOutput)));
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr(modprobeCommand))).WillRepeatedly(::testing::Return(Result<std::string>(modprobeNothingOutput)));
+
+    KernelModuleUnavailableParams params;
+    params.moduleName = "usb-storage";
+
+    auto result = RemediateKernelModuleUnavailable(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    EXPECT_NE(access(configPath.c_str(), F_OK), 0);
+}
+
+TEST_F(EnsureKernelModuleTest, RemediateRejectsInvalidModuleName)
+{
+    KernelModuleUnavailableParams params;
+    params.moduleName = "../usb-storage";
+
+    auto result = RemediateKernelModuleUnavailable(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
 }
 
 TEST_F(EnsureKernelModuleTest, ModuleNotFoundInFilesystem)

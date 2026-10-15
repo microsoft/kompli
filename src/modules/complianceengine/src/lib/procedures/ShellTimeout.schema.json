@@ -21,7 +21,23 @@
       ]
     },
     "remediation": {
-      "anyOf": []
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "ShellTimeout"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "ShellTimeout": {
+              "type": "object",
+              "required": [],
+              "additionalProperties": false,
+              "properties": {}
+            }
+          }
+        }
+      ]
     }
   }
 }

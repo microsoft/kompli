@@ -9,6 +9,7 @@
 namespace ComplianceEngine
 {
 Result<Status> AuditShellTimeout(IndicatorsTree& indicators, ContextInterface& context);
+Result<Status> RemediateShellTimeout(IndicatorsTree& indicators, ContextInterface& context);
 } // namespace ComplianceEngine
 
 #endif // COMPLIANCEENGINE_PROCEDURES_SHELL_TIMEOUT_H
