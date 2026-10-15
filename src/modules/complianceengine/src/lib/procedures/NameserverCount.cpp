@@ -6,6 +6,7 @@
 #include <ResultEvidence.h>
 #include <TypedComparison.h>
 #include <VariableResolver.h>
+#include <cassert>
 #include <ranges/Count.hpp>
 #include <ranges/Unique.hpp>
 
@@ -14,11 +15,8 @@ namespace ComplianceEngine
 
 Result<Status> AuditNameserverCount(const NameserverCountParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
-    if (params.path != "/etc/resolv.conf")
-    {
-        return Error("NameserverCount supports only /etc/resolv.conf", EINVAL);
-    }
-    const auto collection = CollectNameserverObject(context, context.GetSpecialFilePath(params.path));
+    assert(params.path.HasValue());
+    const auto collection = CollectNameserverObject(context, context.GetSpecialFilePath(params.path.Value()));
     if (!collection.HasValue())
     {
         return collection.Error();
