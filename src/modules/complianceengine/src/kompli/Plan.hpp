@@ -93,6 +93,15 @@ Result<Plan> ParsePlanFile(const std::string& path, OsConfigLogHandle logHandle)
 // defaults unchanged.
 Result<std::string> ApplyParameterOverrides(const std::string& procedureJson, const std::map<std::string, std::string>& parameters);
 
+// Writes a generated plan without following a final-component symlink.
+// Existing regular files are truncated only after descriptor validation;
+// non-regular files and multiply-linked files are rejected.
+Optional<Error> WritePlanFile(const std::string& path, const std::string& content);
+
+// Rejects duplicate definition paths before parsing any definition. Existing
+// paths are compared by canonical path so aliases cannot bypass the check.
+Optional<Error> CheckUniqueBenchmarkFiles(const std::vector<std::string>& benchmarkFiles);
+
 // Validates every plan block against its already-parsed definition before
 // execution starts. This prevents partial host mutation when a later block is
 // inapplicable or malformed. Each plan rule must exist in its definition, and

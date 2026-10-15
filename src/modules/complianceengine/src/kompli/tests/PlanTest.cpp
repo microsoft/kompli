@@ -23,12 +23,14 @@
 #include <unistd.h>
 
 using ComplianceEngine::Kompli::ApplyParameterOverrides;
+using ComplianceEngine::Kompli::CheckUniqueBenchmarkFiles;
 using ComplianceEngine::Kompli::GeneratePlan;
 using ComplianceEngine::Kompli::ParamOverride;
 using ComplianceEngine::Kompli::ParsePlanFile;
 using ComplianceEngine::Kompli::Toggle;
 using ComplianceEngine::Kompli::ToggleMode;
 using ComplianceEngine::Kompli::ValidatePlanForRun;
+using ComplianceEngine::Kompli::WritePlanFile;
 
 namespace
 {
@@ -104,6 +106,12 @@ bool WriteFile(const std::string& path, const std::string& content)
     }
     file << content;
     return static_cast<bool>(file);
+}
+
+std::string ReadFile(const std::string& path)
+{
+    std::ifstream file(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
 
 // Base fixture: owns a MockContext whose mkdtemp() tree is removed on
@@ -378,6 +386,40 @@ TEST(ApplyParameterOverridesTest, RejectsNonObjectProcedureJson)
 {
     auto result = ApplyParameterOverrides("[]", {{"mountPoint", "tmp"}});
     EXPECT_FALSE(result.HasValue());
+}
+
+TEST_F(PlanFixture, WritePlanFileOverwritesRegularFile)
+{
+    const std::string path = TempPath("output.json");
+    ASSERT_TRUE(WriteFile(path, "old"));
+
+    auto error = WritePlanFile(path, "new plan");
+    EXPECT_FALSE(error.HasValue());
+    EXPECT_EQ(ReadFile(path), "new plan");
+}
+
+TEST_F(PlanFixture, WritePlanFileRefusesSymlinkWithoutChangingTarget)
+{
+    const std::string target = TempPath("target.json");
+    const std::string link = TempPath("output.json");
+    ASSERT_TRUE(WriteFile(target, "preserve me"));
+    ASSERT_EQ(0, ::symlink(target.c_str(), link.c_str())) << std::strerror(errno);
+
+    auto error = WritePlanFile(link, "replacement");
+    EXPECT_TRUE(error.HasValue());
+    EXPECT_EQ(ReadFile(target), "preserve me");
+}
+
+TEST_F(PlanFixture, CheckUniqueBenchmarkFilesRejectsLiteralAndCanonicalDuplicates)
+{
+    const std::string path = TempPath("definition.json");
+    const std::string alias = TempPath("alias.json");
+    ASSERT_TRUE(WriteFile(path, "{}"));
+    ASSERT_EQ(0, ::symlink(path.c_str(), alias.c_str())) << std::strerror(errno);
+
+    EXPECT_TRUE(CheckUniqueBenchmarkFiles({path, path}).HasValue());
+    EXPECT_TRUE(CheckUniqueBenchmarkFiles({path, alias}).HasValue());
+    EXPECT_FALSE(CheckUniqueBenchmarkFiles({path, TempPath("different.json")}).HasValue());
 }
 
 TEST_F(ParsePlanFileTest, RejectsMissingBenchmarksArray)

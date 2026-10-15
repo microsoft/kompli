@@ -11,10 +11,14 @@
 #include <cerrno>
 #include <climits>
 #include <cstdlib>
+#include <cstring>
 #include <ext/stdio_filebuf.h>
+#include <fcntl.h>
 #include <istream>
 #include <parson.h>
+#include <sys/stat.h>
 #include <tuple>
+#include <unistd.h>
 
 namespace ComplianceEngine
 {
@@ -295,22 +299,10 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
         return Error("At least one benchmark-definition file is required", EINVAL);
     }
 
-    // Reject the same file path given twice, or two paths that canonicalize
-    // to the same file (docs/CLI.md section 8.1) - fail fast, before parsing
-    // anything. Falls back to the literal path when realpath() can't resolve
-    // it (e.g. the file doesn't exist yet); ParseFile below still catches
-    // that case with its own, more specific error.
-    std::map<string, string> canonicalToOriginal;
-    for (const auto& file : benchmarkFiles)
+    auto duplicateFileError = CheckUniqueBenchmarkFiles(benchmarkFiles);
+    if (duplicateFileError.HasValue())
     {
-        char resolved[PATH_MAX];
-        const string canonical = (nullptr != ::realpath(file.c_str(), resolved)) ? string(resolved) : file;
-        auto it = canonicalToOriginal.find(canonical);
-        if (it != canonicalToOriginal.end())
-        {
-            return Error("Duplicate benchmark file: '" + it->second + "' and '" + file + "' refer to the same file", EINVAL);
-        }
-        canonicalToOriginal.emplace(canonical, file);
+        return duplicateFileError.Value();
     }
 
     std::vector<ParsedBenchmarkFile> parsedFiles;
@@ -616,6 +608,75 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
     }
 
     return plan;
+}
+
+Optional<Error> WritePlanFile(const string& path, const string& content)
+{
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0600);
+    if (fd < 0)
+    {
+        return Error("Failed to open output file '" + path + "': " + std::strerror(errno), errno);
+    }
+
+    struct stat info
+    {
+    };
+    if (::fstat(fd, &info) != 0)
+    {
+        const int error = errno;
+        ::close(fd);
+        return Error("Failed to inspect output file '" + path + "': " + std::strerror(error), error);
+    }
+    if (!S_ISREG(info.st_mode) || info.st_nlink != 1)
+    {
+        ::close(fd);
+        return Error("Refusing to write output file '" + path + "': destination is not a singly-linked regular file", EINVAL);
+    }
+    if (::ftruncate(fd, 0) != 0)
+    {
+        const int error = errno;
+        ::close(fd);
+        return Error("Failed to truncate output file '" + path + "': " + std::strerror(error), error);
+    }
+
+    std::size_t written = 0;
+    while (written < content.size())
+    {
+        const ssize_t result = ::write(fd, content.data() + written, content.size() - written);
+        if (result < 0)
+        {
+            if (EINTR == errno)
+            {
+                continue;
+            }
+            const int error = errno;
+            ::close(fd);
+            return Error("Failed to write output file '" + path + "': " + std::strerror(error), error);
+        }
+        written += static_cast<std::size_t>(result);
+    }
+    if (::close(fd) != 0)
+    {
+        return Error("Failed to close output file '" + path + "': " + std::strerror(errno), errno);
+    }
+    return {};
+}
+
+Optional<Error> CheckUniqueBenchmarkFiles(const std::vector<string>& benchmarkFiles)
+{
+    std::map<string, string> canonicalToOriginal;
+    for (const auto& file : benchmarkFiles)
+    {
+        char resolved[PATH_MAX];
+        const string canonical = (nullptr != ::realpath(file.c_str(), resolved)) ? string(resolved) : file;
+        auto it = canonicalToOriginal.find(canonical);
+        if (it != canonicalToOriginal.end())
+        {
+            return Error("Duplicate benchmark file: '" + it->second + "' and '" + file + "' refer to the same file", EINVAL);
+        }
+        canonicalToOriginal.emplace(canonical, file);
+    }
+    return {};
 }
 
 Optional<Error> ValidatePlanForRun(const Plan& plan, const std::vector<BenchmarkDefinition::BenchmarkDocument>& documents, const DistributionInfo& distributionInfo)
