@@ -148,6 +148,30 @@ TEST(KompliResultSchemaTest, GeneratedResultSatisfiesSchemaRequiredFields)
     json_value_free(schema);
 }
 
+TEST(KompliResultSchemaTest, SchemaRequiresActionExactlyForExecutedRules)
+{
+    JSON_Value* schema = json_parse_string(ReadFile(KOMPLI_RESULT_SCHEMA_PATH).c_str());
+    ASSERT_NE(schema, nullptr);
+    JSON_Object* schemaObject = json_value_get_object(schema);
+    ASSERT_NE(schemaObject, nullptr);
+
+    JSON_Object* ruleSchema = json_object_dotget_object(schemaObject, "$defs.rule");
+    ASSERT_NE(ruleSchema, nullptr);
+    EXPECT_STREQ(json_object_dotget_string(ruleSchema, "if.properties.status.const"), "Skipped");
+
+    JSON_Array* skippedForbidden = json_object_dotget_array(ruleSchema, "then.not.required");
+    ASSERT_NE(skippedForbidden, nullptr);
+    ASSERT_EQ(json_array_get_count(skippedForbidden), 1u);
+    EXPECT_STREQ(json_array_get_string(skippedForbidden, 0), "action");
+
+    JSON_Array* executedRequired = json_object_dotget_array(ruleSchema, "else.required");
+    ASSERT_NE(executedRequired, nullptr);
+    ASSERT_EQ(json_array_get_count(executedRequired), 1u);
+    EXPECT_STREQ(json_array_get_string(executedRequired, 0), "action");
+
+    json_value_free(schema);
+}
+
 TEST(KompliResultSchemaTest, SkippedRuleSatisfiesSchemaRequiredFields)
 {
     JSON_Value* schema = json_parse_string(ReadFile(KOMPLI_RESULT_SCHEMA_PATH).c_str());

@@ -69,6 +69,22 @@
         "metadata",
         "parameters"
       ],
+      "if": {
+        "properties": {
+          "status": {
+            "const": "Skipped"
+          }
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "not": {
+          "required": ["action"]
+        }
+      },
+      "else": {
+        "required": ["action"]
+      },
       "properties": {
         "benchmark": {
           "type": "object",
