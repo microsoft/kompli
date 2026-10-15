@@ -316,7 +316,7 @@ TEST_F(GeneratePlanTest, ParamOverrideReplacesDefault)
     }
     const std::string path = MakeVerifiedFile("plan_param_override_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
 
-    const std::vector<ParamOverride> overrides = {ParamOverride{"1.1.1.1", "mountPoint", "/var/tmp"}};
+    const std::vector<ParamOverride> overrides = {ParamOverride{"1.1.1.1.mountPoint", "/var/tmp"}};
     auto result = GeneratePlan({path}, {}, overrides, nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
 
@@ -335,7 +335,7 @@ TEST_F(GeneratePlanTest, ParamOverrideRejectsValueNotMatchingValidationRegex)
     }
     const std::string path = MakeVerifiedFile("plan_param_regex_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
 
-    const std::vector<ParamOverride> overrides = {ParamOverride{"1.1.1.1", "mountPoint", "relative/path"}};
+    const std::vector<ParamOverride> overrides = {ParamOverride{"1.1.1.1.mountPoint", "relative/path"}};
     auto result = GeneratePlan({path}, {}, overrides, nullptr);
     EXPECT_FALSE(result.HasValue());
 }
@@ -348,7 +348,7 @@ TEST_F(GeneratePlanTest, ParamOverrideRejectsUnknownParameterName)
     }
     const std::string path = MakeVerifiedFile("plan_param_unknown_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
 
-    const std::vector<ParamOverride> overrides = {ParamOverride{"1.1.1.1", "notAParameter", "x"}};
+    const std::vector<ParamOverride> overrides = {ParamOverride{"1.1.1.1.notAParameter", "x"}};
     auto result = GeneratePlan({path}, {}, overrides, nullptr);
     EXPECT_FALSE(result.HasValue());
 }
@@ -361,9 +361,47 @@ TEST_F(GeneratePlanTest, ParamOverrideRejectsUnknownRule)
     }
     const std::string path = MakeVerifiedFile("plan_param_unknown_rule_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
 
-    const std::vector<ParamOverride> overrides = {ParamOverride{"9.9.9.9", "mountPoint", "/var/tmp"}};
+    const std::vector<ParamOverride> overrides = {ParamOverride{"9.9.9.9.mountPoint", "/var/tmp"}};
     auto result = GeneratePlan({path}, {}, overrides, nullptr);
     EXPECT_FALSE(result.HasValue());
+}
+
+TEST_F(GeneratePlanTest, ResolvesDottedParameterNameFromMetadata)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    std::string json = kParameterizedBenchmarkJson;
+    const std::string name = "mountPoint";
+    for (std::size_t position = json.find(name); position != std::string::npos; position = json.find(name, position + 1))
+    {
+        json.replace(position, name.size(), "mount.point");
+        position += std::string("mount.point").size() - 1;
+    }
+    const std::string path = MakeVerifiedFile("plan_dotted_param_dir", "bench.benchmark.json", json);
+
+    auto result = GeneratePlan({path}, {}, {ParamOverride{"1.1.1.1.mount.point", "/var/tmp"}}, nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_NE(result.Value().find("\"mount.point\": \"/var/tmp\""), std::string::npos);
+}
+
+TEST_F(GeneratePlanTest, RejectsPlanThatExceedsParserLimit)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    std::string json = kParameterizedBenchmarkJson;
+    const std::string original = "\"default\": \"/tmp\"";
+    const auto position = json.find(original);
+    ASSERT_NE(position, std::string::npos);
+    json.replace(position, original.size(), "\"default\": \"" + std::string(8 * 1024 * 1024, 'x') + "\"");
+    const std::string path = MakeVerifiedFile("plan_oversized_dir", "bench.benchmark.json", json);
+
+    auto result = GeneratePlan({path}, {}, {}, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EFBIG);
 }
 
 TEST(ApplyParameterOverridesTest, AddsParametersObjectWhenAbsent)
@@ -627,6 +665,21 @@ TEST(ValidatePlanForRunTest, RejectsUnknownOrInvalidParameter)
     EXPECT_TRUE(ValidatePlanForRun(plan, {document}, MakeDistribution()).HasValue());
 }
 
+TEST(ValidatePlanForRunTest, RejectsMissingMandatoryParameter)
+{
+    auto document = ParseDocument(kParameterizedBenchmarkJson);
+    document.resources[0].parameterMetadata["mountPoint"].mandatory = true;
+    ComplianceEngine::Kompli::Plan plan;
+    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    benchmark.file = "bench.json";
+    benchmark.rules["1.1.1.1"] = ComplianceEngine::Kompli::PlanRuleMode(ToggleMode::Audit);
+    plan.benchmarks.push_back(benchmark);
+
+    auto error = ValidatePlanForRun(plan, {document}, MakeDistribution());
+    ASSERT_TRUE(error.HasValue());
+    EXPECT_NE(error.Value().message.find("Missing mandatory parameter 'mountPoint'"), std::string::npos);
+}
+
 TEST(CheckUniqueBenchmarkIdentitiesTest, AcceptsDistinctIdentities)
 {
     const std::vector<std::pair<std::string, ComplianceEngine::BenchmarkInfo>> benchmarks = {
@@ -672,4 +725,12 @@ TEST(CheckUniqueBenchmarkIdentitiesTest, DifferingBenchmarkVersionIsNotADuplicat
 
     auto result = ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities(benchmarks);
     EXPECT_FALSE(result.HasValue());
+}
+
+TEST(CheckUniqueBenchmarkIdentitiesTest, RejectsOptionalBenchmarkVersionPrefixDifference)
+{
+    const std::vector<std::pair<std::string, ComplianceEngine::BenchmarkInfo>> benchmarks = {
+        {"first.json", MakeInfo("cis", "ubuntu", "22.04", "v2.0.0")}, {"second.json", MakeInfo("cis", "ubuntu", "22.04", "2.0.0")}};
+
+    EXPECT_TRUE(ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities(benchmarks).HasValue());
 }

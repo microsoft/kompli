@@ -34,6 +34,19 @@ TEST(JUnitRendererTest, CompliantRuleIsBarePassingTestcase)
     EXPECT_TRUE(Contains(r.Value(), "tests=\"1\" failures=\"0\""));
 }
 
+TEST(JUnitRendererTest, BenchmarkProvenanceDisambiguatesSameRuleId)
+{
+    const std::string json = R"({"rules":[)"
+                             R"({"benchmark":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04","benchmarkVersion":"v2.0.0"},)"
+                             R"("id":"1.1","title":"Same title","ruleName":"SameRule","status":"Compliant","indicators":[]},)"
+                             R"({"benchmark":{"framework":"stig","distribution":"ubuntu","distributionVersion":"22.04","benchmarkVersion":"v1.0.0"},)"
+                             R"("id":"1.1","title":"Same title","ruleName":"SameRule","status":"Compliant","indicators":[]}]})";
+    auto result = RenderJUnit(json, "s");
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_TRUE(Contains(result.Value(), "classname=\"cis/ubuntu/22.04/v2.0.0:1.1\""));
+    EXPECT_TRUE(Contains(result.Value(), "classname=\"stig/ubuntu/22.04/v1.0.0:1.1\""));
+}
+
 TEST(JUnitRendererTest, NonCompliantRuleHasFailureWithIndicatorBody)
 {
     const std::string json = R"({"rules":[{"id":"2.3","ruleName":"RuleB","status":"NonCompliant",)"

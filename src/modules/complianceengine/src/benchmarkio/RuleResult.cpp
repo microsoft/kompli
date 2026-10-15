@@ -19,6 +19,18 @@ namespace
 // executed and Skipped builders below.
 Optional<Error> FillCommonRuleFields(JSON_Object* object, const Resource& entry, const std::map<string, string>& parameters)
 {
+    auto* benchmarkValue = json_value_init_object();
+    auto* benchmarkObject = (nullptr != benchmarkValue) ? json_value_get_object(benchmarkValue) : nullptr;
+    const auto distribution = std::to_string(entry.benchmarkInfo.distribution);
+    if (nullptr == benchmarkObject || JSONSuccess != json_object_set_string(benchmarkObject, "framework", entry.benchmarkInfo.framework.c_str()) ||
+        JSONSuccess != json_object_set_string(benchmarkObject, "distribution", distribution.c_str()) ||
+        JSONSuccess != json_object_set_string(benchmarkObject, "distributionVersion", entry.benchmarkInfo.version.c_str()) ||
+        JSONSuccess != json_object_set_string(benchmarkObject, "benchmarkVersion", entry.benchmarkInfo.benchmarkVersion.c_str()) ||
+        JSONSuccess != json_object_set_value(object, "benchmark", benchmarkValue))
+    {
+        json_value_free(benchmarkValue);
+        return Error("Failed to set JSON benchmark provenance", ENOMEM);
+    }
     if (JSONSuccess != json_object_set_string(object, "title", entry.resourceID.c_str()))
     {
         return Error("Failed to set JSON title", ENOMEM);

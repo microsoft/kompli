@@ -65,19 +65,16 @@ struct Toggle
 };
 
 // One `--param=<ref>.<name>=<value>` occurrence, in the order it appeared on
-// the command line. `ref` uses the same <id> / <file-basename>:<id> form as
-// a Toggle's `section` (docs/CLI.md section 8.1, "Parametrization");
-// GeneratePlan resolves it and validates `name` against the rule's
-// parameterMetadata.
+// the command line. The selector remains unsplit because both rule ids and
+// parameter names may contain dots; GeneratePlan resolves it against actual
+// rule parameter metadata.
 struct ParamOverride
 {
-    std::string ref;
-    std::string name;
+    std::string selector;
     std::string value;
 
-    ParamOverride(std::string ref, std::string name, std::string value)
-        : ref(std::move(ref)),
-          name(std::move(name)),
+    ParamOverride(std::string selector, std::string value)
+        : selector(std::move(selector)),
           value(std::move(value))
     {
     }

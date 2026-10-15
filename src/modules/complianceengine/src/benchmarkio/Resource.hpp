@@ -4,6 +4,7 @@
 #ifndef COMPLIANCE_ENGINE_BENCHMARKIO_RESOURCE_HPP
 #define COMPLIANCE_ENGINE_BENCHMARKIO_RESOURCE_HPP
 
+#include <BenchmarkInfo.h>
 #include <Optional.h>
 #include <map>
 #include <string>
@@ -40,6 +41,11 @@ struct ParameterMetadata
 // definition's spec.rules array.
 struct Resource
 {
+    // Identity of the benchmark definition containing this rule. Canonical
+    // results carry it so benchmark-local rule ids remain unambiguous when a
+    // plan combines multiple definitions.
+    BenchmarkInfo benchmarkInfo;
+
     // Human-readable rule title (the definition's `title`, e.g. "1.1.1.1 Ensure
     // cramfs kernel module is not available"). Emitted in the canonical result
     // JSON as `title`.

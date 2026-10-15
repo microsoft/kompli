@@ -85,6 +85,13 @@ Result<string> ReadPlanString(const JSON_Value* value, const string& context, bo
 Optional<Error> ValidateParameters(const string& benchmarkFile, const string& ruleId, const std::map<string, BenchmarkIO::ParameterMetadata>& metadata,
     const std::map<string, string>& parameters)
 {
+    for (const auto& entry : metadata)
+    {
+        if (entry.second.mandatory && parameters.find(entry.first) == parameters.end())
+        {
+            return Error("Missing mandatory parameter '" + entry.first + "' for rule '" + ruleId + "' in benchmark definition '" + benchmarkFile + "'", EINVAL);
+        }
+    }
     for (const auto& parameter : parameters)
     {
         const auto metadataIt = metadata.find(parameter.first);
@@ -258,6 +265,42 @@ struct ResolvedRuleRef
     string id;
 };
 
+struct ResolvedParameterOverride
+{
+    ParsedBenchmarkFile* file;
+    string id;
+    string name;
+};
+
+Result<ResolvedParameterOverride> ResolveParameterOverride(std::vector<ParsedBenchmarkFile>& parsedFiles, const string& selector, bool multiFile)
+{
+    Optional<ResolvedParameterOverride> match;
+    for (auto& parsed : parsedFiles)
+    {
+        const string qualifier = multiFile ? BaseName(parsed.file) + ":" : "";
+        for (const auto& rule : parsed.parameterMetadata)
+        {
+            for (const auto& parameter : rule.second)
+            {
+                if (qualifier + rule.first + "." + parameter.first != selector)
+                {
+                    continue;
+                }
+                if (match.HasValue())
+                {
+                    return Error("Ambiguous parameter selector '" + selector + "'; it matches more than one rule and parameter", EINVAL);
+                }
+                match = ResolvedParameterOverride{&parsed, rule.first, parameter.first};
+            }
+        }
+    }
+    if (!match.HasValue())
+    {
+        return Error("Unknown parameter selector '" + selector + "'", EINVAL);
+    }
+    return match.Value();
+}
+
 Result<ResolvedRuleRef> ResolveRuleRef(std::vector<ParsedBenchmarkFile>& parsedFiles, const string& ref, bool multiFile)
 {
     if (!multiFile)
@@ -374,39 +417,26 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
         it->second.mode = toggle.mode;
     }
 
-    // Apply `--param=` overrides the same way (docs/CLI.md "Parametrization"):
-    // `ref` uses the same qualification rule as a toggle's `section`. A
-    // parameter name not in the rule's parameterMetadata, or a value that
-    // doesn't match its validationRegex, is a fail-fast error - same
-    // eager-validation principle as an unrecognised toggle rule reference.
+    // Resolve the complete selector against metadata because dots are valid
+    // in both rule ids and parameter names.
     for (const auto& paramOverride : paramOverrides)
     {
-        auto refResult = ResolveRuleRef(parsedFiles, paramOverride.ref, multiFile);
+        auto refResult = ResolveParameterOverride(parsedFiles, paramOverride.selector, multiFile);
         if (!refResult.HasValue())
         {
             return refResult.Error();
         }
         const auto& ref = refResult.Value();
         auto ruleIt = ref.file->rules.find(ref.id);
-        if (ruleIt == ref.file->rules.end())
-        {
-            return Error("Unknown rule '" + ref.id + "' in benchmark definition '" + ref.file->file + "'", EINVAL);
-        }
-        // Always present alongside `rules` (seeded together above), so this
-        // lookup cannot miss for a ruleIt that was just found.
         const auto& metadata = ref.file->parameterMetadata[ref.id];
-        const auto paramIt = metadata.find(paramOverride.name);
-        if (paramIt == metadata.end())
-        {
-            return Error("Unknown parameter '" + paramOverride.name + "' for rule '" + ref.id + "' in benchmark definition '" + ref.file->file + "'", EINVAL);
-        }
-        const std::map<string, string> candidate = {{paramOverride.name, paramOverride.value}};
+        auto candidate = ruleIt->second.parameters;
+        candidate[ref.name] = paramOverride.value;
         auto validationError = ValidateParameters(ref.file->file, ref.id, metadata, candidate);
         if (validationError.HasValue())
         {
             return validationError.Value();
         }
-        ruleIt->second.parameters[paramOverride.name] = paramOverride.value;
+        ruleIt->second.parameters[ref.name] = paramOverride.value;
     }
 
     auto jsonResult = JsonWrapper::MakeObject();
@@ -457,6 +487,10 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
     string result(serialized);
     json_free_serialized_string(serialized);
     result += "\n";
+    if (result.size() > kMaxPlanInputBytes)
+    {
+        return Error("Generated plan exceeds the maximum size of " + std::to_string(kMaxPlanInputBytes) + " bytes", EFBIG);
+    }
     return result;
 }
 
@@ -724,7 +758,10 @@ Optional<Error> CheckUniqueBenchmarkIdentities(const std::vector<std::pair<strin
     for (const auto& entry : benchmarks)
     {
         const auto& benchmarkInfo = entry.second;
-        const Identity identity{benchmarkInfo.framework, benchmarkInfo.distribution, benchmarkInfo.version, benchmarkInfo.benchmarkVersion};
+        const string benchmarkVersion = (!benchmarkInfo.benchmarkVersion.empty() && benchmarkInfo.benchmarkVersion[0] == 'v') ?
+                                            benchmarkInfo.benchmarkVersion.substr(1) :
+                                            benchmarkInfo.benchmarkVersion;
+        const Identity identity{benchmarkInfo.framework, benchmarkInfo.distribution, benchmarkInfo.version, benchmarkVersion};
         auto it = seen.find(identity);
         if (it != seen.end())
         {

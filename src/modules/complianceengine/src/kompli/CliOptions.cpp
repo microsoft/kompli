@@ -179,10 +179,8 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
                 break;
             }
             case kParamOpt: {
-                // <ref>.<name>=<value>: split off the value at the first '=',
-                // then the name at the last '.' before it - a rule id may
-                // itself contain dots (e.g. CIS '1.1.1.1'), but a parameter
-                // name never does, so the last '.' unambiguously separates them.
+                // Keep <ref>.<name> intact: both components may contain dots,
+                // so only loaded rule metadata can resolve the boundary.
                 const std::string arg(optarg);
                 const auto eq = arg.find('=');
                 if (std::string::npos == eq || 0 == eq || eq + 1 == arg.size())
@@ -191,12 +189,12 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
                 }
                 const std::string key = arg.substr(0, eq);
                 const std::string value = arg.substr(eq + 1);
-                const auto dot = key.find_last_of('.');
-                if (std::string::npos == dot || 0 == dot || dot + 1 == key.size())
+                const auto dot = key.find('.');
+                if (std::string::npos == dot || 0 == dot || key.back() == '.')
                 {
                     return Error("--param must be of the form <ref>.<name>=<value>.");
                 }
-                result.paramOverrides.push_back(ParamOverride{key.substr(0, dot), key.substr(dot + 1), value});
+                result.paramOverrides.push_back(ParamOverride{key, value});
                 break;
             }
             default:

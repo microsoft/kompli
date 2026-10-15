@@ -205,6 +205,10 @@ Result<std::map<string, BenchmarkIO::ParameterMetadata>> ParseParameterMetadata(
         {
             return type.Error();
         }
+        if (type.Value() != "string")
+        {
+            return Error("Benchmark definition " + entryContext + " has unsupported type '" + type.Value() + "'; only 'string' is supported", EINVAL);
+        }
 
         BenchmarkIO::ParameterMetadata metadata;
         metadata.defaultValue = std::move(defaultValue.Value());
@@ -480,6 +484,7 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index, const Be
     }
 
     Resource resource;
+    resource.benchmarkInfo = documentInfo;
     resource.resourceID = std::move(title.Value());
     resource.id = std::move(id);
     resource.ruleId = std::move(ruleId.Value());
