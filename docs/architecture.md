@@ -340,9 +340,17 @@ turns that JSON into one of the presentation formats.
 
 JUnit uses a rule's `id` as the testcase classname and its `title` as the
 testcase name (`ruleName` for older results without `title`). Non-empty tags
-are rendered as XML-escaped `<tag value="..."/>` entries. A present malformed
-`tags` field, a non-string `title`, or text that cannot form valid XML 1.0
-causes `render` to fail rather than publish a misleading report.
+are rendered as XML-escaped `<tag value="..."/>` entries. Attribute tabs,
+newlines, and carriage returns use character references so XML parsers
+preserve title, identity, tag, and suite-name values. A present malformed
+`tags` field, a non-string `title`, a missing or non-string `id`, an embedded
+NUL in a testcase identity, or invalid XML 1.0 characters in an attribute
+cause `render` to fail
+rather than publish a misleading report. Legacy body text normalizes illegal
+ASCII control characters to spaces; other invalid XML 1.0 characters and
+invalid UTF-8 cause rendering to fail. Tags longer than 256 UTF-8 bytes and
+JUnit documents over 16 MiB are rejected rather than
+allowing unbounded expansion during XML escaping.
 
 `run` always emits the canonical result JSON; `render` is what turns that JSON into one of the formats above.
 

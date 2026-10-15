@@ -169,16 +169,53 @@ TEST(JUnitRendererTest, AbsentTagsOmitTagsBlock)
 TEST(JUnitRendererTest, RejectsMalformedTagsWithoutMisreportingThem)
 {
     // TM-17: malformed result tags cannot become a passing-looking JUnit report.
-    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":null}]})", "s").HasValue());
-    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":"level:l1"}]})", "s").HasValue());
-    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":["level:l1",42]}]})", "s").HasValue());
-    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":["a:\u0000b"]}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":null}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":"level:l1"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":["level:l1",42]}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":["a:\u0000b"]}]})", "s").HasValue());
+}
+
+TEST(JUnitRendererTest, RejectsInvalidXmlAttributeControls)
+{
+    const std::string prefix = R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":[")";
+    const std::string suffix = R"("]}]})";
+    auto tag = RenderJUnit(prefix + R"(owner:Ops\u0001Sec)" + suffix, "s");
+    ASSERT_FALSE(tag.HasValue());
+    EXPECT_EQ(tag.Error().code, EINVAL);
+
+    auto title = RenderJUnit(R"({"rules":[{"id":"1","title":"R\u0001S","status":"Compliant"}]})", "s");
+    ASSERT_FALSE(title.HasValue());
+    EXPECT_EQ(title.Error().code, EINVAL);
+
+    auto id = RenderJUnit(R"({"rules":[{"id":"1\u0001S","title":"R","status":"Compliant"}]})", "s");
+    ASSERT_FALSE(id.HasValue());
+    EXPECT_EQ(id.Error().code, EINVAL);
+
+    auto suite = RenderJUnit(R"({"rules":[]})", "Suite\x01Name");
+    ASSERT_FALSE(suite.HasValue());
+    EXPECT_EQ(suite.Error().code, EINVAL);
+}
+
+TEST(JUnitRendererTest, RejectsMalformedTestcaseId)
+{
+    auto nul = RenderJUnit(R"({"rules":[{"id":"1\u0000suffix","title":"R","status":"Compliant"}]})", "s");
+    ASSERT_FALSE(nul.HasValue());
+    EXPECT_EQ(nul.Error().code, EINVAL);
+    EXPECT_NE(nul.Error().message.find("classname"), std::string::npos);
+
+    auto nonString = RenderJUnit(R"({"rules":[{"id":12,"title":"R","status":"Compliant"}]})", "s");
+    ASSERT_FALSE(nonString.HasValue());
+    EXPECT_EQ(nonString.Error().code, EINVAL);
+
+    auto missing = RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant"}]})", "s");
+    ASSERT_FALSE(missing.HasValue());
+    EXPECT_EQ(missing.Error().code, EINVAL);
 }
 
 TEST(JUnitRendererTest, RejectsOversizeTagsAndBoundedJUnitOutput)
 {
     const std::string tag256 = "x:" + std::string(254, 'a');
-    const std::string prefix = R"({"rules":[{"title":"R","status":"Compliant","tags":[")";
+    const std::string prefix = R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":[")";
     const std::string suffix = R"("]}]})";
     EXPECT_TRUE(RenderJUnit(prefix + tag256 + suffix, "s").HasValue());
 
@@ -198,7 +235,7 @@ TEST(JUnitRendererTest, RejectsOversizeTagsAndBoundedJUnitOutput)
         }
         tags += "\"" + amplified + "\"";
     }
-    auto tooLarge = RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":[)" + tags + R"(]}]})", "s");
+    auto tooLarge = RenderJUnit(R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":[)" + tags + R"(]}]})", "s");
     ASSERT_FALSE(tooLarge.HasValue());
     EXPECT_EQ(tooLarge.Error().code, EFBIG);
 }
@@ -214,9 +251,9 @@ TEST(JUnitRendererTest, LegacyResultUsesRuleNameWhenTitleIsAbsent)
 
 TEST(JUnitRendererTest, RejectsInvalidXmlCharactersAndUtf8)
 {
-    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"bad\uFFFE","status":"Compliant"}]})", "s").HasValue());
-    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"Compliant","tags":["a:\uFFFF"]}]})", "s").HasValue());
-    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"title":"R","status":"NonCompliant","indicators":[{"message":"bad\uFFFE"}]}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","title":"bad\uFFFE","status":"Compliant"}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":["a:\uFFFF"]}]})", "s").HasValue());
+    EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","title":"R","status":"NonCompliant","indicators":[{"message":"bad\uFFFE"}]}]})", "s").HasValue());
     EXPECT_FALSE(RenderJUnit(R"({"rules":[]})", std::string("bad\xC3\x28", 5)).HasValue());
 
     auto valid = RenderJUnit(R"({"rules":[{"id":"1","title":"\u00E9\uD83D\uDE00","status":"Compliant"}]})", "s");
