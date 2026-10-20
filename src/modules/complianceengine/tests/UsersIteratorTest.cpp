@@ -94,12 +94,16 @@ TEST_F(UsersIteratorTest, UidMinPropagatesRequiredReadError)
     }
 }
 
-TEST_F(UsersIteratorTest, UidMinRejectsInlineHashRatherThanStrippingIt)
+TEST_F(UsersIteratorTest, UidMinPropagatesValueBeforeAttachedOrSpacedComment)
 {
-    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>("UID_MIN 1000#note\n")));
-    const auto result = GetUidMin(mContext);
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EBADMSG, result.Error().code);
+    for (const std::string contents : {"UID_MIN 1000#note\n", "UID_MIN 1000 #note\n"})
+    {
+        SCOPED_TRACE(contents);
+        EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>(contents)));
+        const auto result = GetUidMin(mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(1000U, result.Value());
+    }
 }
 
 TEST_F(UsersIteratorTest, UidMinRejectsSelectedEmbeddedNul)
