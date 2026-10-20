@@ -7,11 +7,13 @@
 #include "ScopeGuard.h"
 
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <fcntl.h>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <sys/file.h>
 #include <sys/inotify.h>
@@ -48,6 +50,34 @@ pid_t WaitForScannerPid(const std::string& path, pid_t previousPid = -1)
         ::usleep(10 * 1000);
     }
     return -1;
+}
+
+using ScanResult = Result<std::shared_ptr<const FilesystemScanner::FSCache>>;
+
+ScanResult WaitForPublishedCache(FilesystemScanner& scanner, const std::string& cachePath, time_t previousEnd, ScanResult result)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    time_t lastAttemptedEnd = previousEnd;
+    while (!result && (std::chrono::steady_clock::now() < deadline))
+    {
+        // The worker atomically renames the completed cache into place. Only
+        // retry GetFullFilesystem for a newer cache, not on every poll: with
+        // zero wait, each premature call could launch another background scan.
+        std::ifstream cache(cachePath.c_str());
+        std::string hash, magic;
+        long start = 0, end = 0;
+        if ((cache >> hash >> magic >> start >> end) && (hash == "#") && (magic == "FilesystemScanCache-V1") && (end > lastAttemptedEnd))
+        {
+            lastAttemptedEnd = end;
+            result = scanner.GetFullFilesystem();
+            if (result)
+            {
+                break;
+            }
+        }
+        ::usleep(10 * 1000);
+    }
+    return result;
 }
 } // namespace
 
@@ -264,39 +294,28 @@ TEST_F(FilesystemScannerTest, SoftTimeoutTriggersBackgroundButReturnsData)
 {
     FilesystemScanner scanner(rootDir, cachePath, lockPath, 1, 100, 0); // short soft timeout
     // Build cache
-    auto res = scanner.GetFullFilesystem();
-    if (!res)
-    {
-        ::usleep(300 * 1000);
-        res = scanner.GetFullFilesystem();
-    }
-    ASSERT_TRUE(res);
+    auto res = WaitForPublishedCache(scanner, cachePath, 0, scanner.GetFullFilesystem());
+    ASSERT_TRUE(res) << "Initial cache not published within 5s; last scanner error: " << (res ? "" : res.Error().message);
     auto firstEnd = res.Value()->scan_end_time;
     ASSERT_GT(firstEnd, 0);
     // Wait past soft timeout but before hard
     ::sleep(2);
     auto res2 = scanner.GetFullFilesystem();
-    ASSERT_TRUE(res2);                                // soft timeout returns stale data
-    EXPECT_EQ(res2.Value()->scan_end_time, firstEnd); // cache unchanged yet
+    ASSERT_TRUE(res2) << (res2 ? "" : res2.Error().message); // soft timeout returns stale data
+    EXPECT_EQ(res2.Value()->scan_end_time, firstEnd);        // cache unchanged yet
 }
 
 TEST_F(FilesystemScannerTest, HardTimeoutCausesErrorUntilRefreshFinishes)
 {
     FilesystemScanner scanner(rootDir, cachePath, lockPath, 1, 2, 0); // soft=1, hard=2
-    auto res = scanner.GetFullFilesystem();
-    if (!res)
-    {
-        ::usleep(500 * 1000);
-        res = scanner.GetFullFilesystem();
-    }
-    ASSERT_TRUE(res);
+    auto res = WaitForPublishedCache(scanner, cachePath, 0, scanner.GetFullFilesystem());
+    ASSERT_TRUE(res) << "Initial cache not published within 5s; last scanner error: " << (res ? "" : res.Error().message);
     ::sleep(3); // exceed hard timeout
     auto res2 = scanner.GetFullFilesystem();
     ASSERT_FALSE(res2); // should be error due to hard timeout and no wait
-    // Give background scan time to complete
-    ::usleep(400 * 1000);
-    auto res3 = scanner.GetFullFilesystem();
-    ASSERT_TRUE(res3); // new cache available
+    EXPECT_EQ(res2.Error().message, "filesystem cache expired (hard timeout); refresh started");
+    auto res3 = WaitForPublishedCache(scanner, cachePath, res.Value()->scan_end_time, std::move(res2));
+    ASSERT_TRUE(res3) << "Refreshed cache not published within 5s; last scanner error: " << (res3 ? "" : res3.Error().message);
     EXPECT_NE(res3.Value()->scan_end_time, res.Value()->scan_end_time);
 }
 
