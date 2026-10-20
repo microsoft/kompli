@@ -13,7 +13,7 @@ namespace ComplianceEngine
 {
 namespace NameserverSelection
 {
-Result<Document> Select(std::string bytes, std::string source, const Limits& limits)
+Result<Document> FindNameserverCaptures(std::string bytes, std::string source, const Limits& limits)
 {
     if ((0 == limits.occurrences) || (0 == limits.captureBytes) || (0 == limits.capturedBytes))
     {
@@ -34,6 +34,8 @@ Result<Document> Select(std::string bytes, std::string source, const Limits& lim
             if (0 == content.compare(anchor, prefixLength, prefix))
             {
                 std::size_t cursor = anchor + prefixLength;
+                // Match the source expression's fixed six ASCII whitespace bytes, including LF;
+                // std::isspace depends on the process locale and could change capture boundaries.
                 if ((cursor < content.size()) && IsAsciiWhitespace(static_cast<unsigned char>(content[cursor])))
                 {
                     do

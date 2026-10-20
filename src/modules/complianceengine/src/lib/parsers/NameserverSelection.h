@@ -36,7 +36,7 @@ struct Document
 
 // Select the source expression ^nameserver\s+(.*)$, not resolv.conf grammar.
 // Offsets count bytes; the maximal six-byte ASCII whitespace run may cross LF.
-Result<Document> Select(std::string bytes, std::string source, const Limits& limits = {});
+Result<Document> FindNameserverCaptures(std::string bytes, std::string source, const Limits& limits = {});
 } // namespace NameserverSelection
 } // namespace ComplianceEngine
 
