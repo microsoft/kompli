@@ -137,21 +137,12 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
             {
                 ++valueStart;
             }
-            // A hash after parser whitespace starts a trailing comment; an attached hash is part of the value.
-            std::size_t valueEnd = end;
-            for (std::size_t offset = valueStart; offset < end; ++offset)
-            {
-                if (('#' == input[offset]) && ((offset == valueStart) || IsSeparator(input[offset - 1])))
-                {
-                    valueEnd = offset;
-                    break;
-                }
-            }
-            if (valueStart == valueEnd)
+            const auto uncommented = StripComment(input.substr(valueStart, end - valueStart));
+            if (uncommented.empty())
             {
                 return SyntaxError(document.source, lineNumber, valueStart - start + 1, "missing value");
             }
-            const auto value = TrimWhiteSpaces(input.substr(valueStart, valueEnd - valueStart));
+            const auto value = TrimWhiteSpaces(uncommented);
             // Shadow-utils duplicate precedence varies by backend; never assess a conflicting known value.
             if (key == "UID_MIN")
             {

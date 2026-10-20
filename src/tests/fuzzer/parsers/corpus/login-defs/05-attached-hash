@@ -1,1 +1,4 @@
 UID_MIN 1000#literal
+PASS_MIN_DAYS 1#first#second
+PASS_MIN_DAYS 01 # equivalent
+ENCRYPT_METHOD SHA512#not a quote or escape
