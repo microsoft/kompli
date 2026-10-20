@@ -65,6 +65,44 @@ TEST(LoginDefsTest, AcceptsEquivalentKnownDuplicatesAndUnknownKeys)
     EXPECT_EQ(ld::EncryptionMethod::YESCRYPT, doc.encryptMethod.Value());
 }
 
+TEST(LoginDefsTest, AcceptsWhitespaceDelimitedTrailingCommentsOnKnownAndUnknownValues)
+{
+    const auto parsed = ld::Parse(
+        "UID_MIN\t1000 \t# uid\r\n"
+        "PASS_MAX_DAYS 365\f# max\n"
+        "PASS_MIN_DAYS 1  # Updated by CIS Build Kit\n"
+        "PASS_WARN_AGE 7\v# warn\n"
+        "ENCRYPT_METHOD sha512\r# method\r\n"
+        "UNKNOWN 1 # ignored\nUNKNOWN 2#attached\n",
+        "/etc/login.defs", nullptr);
+    ASSERT_TRUE(parsed.HasValue());
+    ASSERT_TRUE(parsed.Value().uidMin.HasValue());
+    EXPECT_EQ(1000U, parsed.Value().uidMin.Value());
+    ASSERT_TRUE(parsed.Value().passMaxDays.HasValue());
+    EXPECT_EQ(365, parsed.Value().passMaxDays.Value());
+    ASSERT_TRUE(parsed.Value().passMinDays.HasValue());
+    EXPECT_EQ(1, parsed.Value().passMinDays.Value());
+    ASSERT_TRUE(parsed.Value().passWarnAge.HasValue());
+    EXPECT_EQ(7, parsed.Value().passWarnAge.Value());
+    ASSERT_TRUE(parsed.Value().encryptMethod.HasValue());
+    EXPECT_EQ(ld::EncryptionMethod::SHA512, parsed.Value().encryptMethod.Value());
+}
+
+TEST(LoginDefsTest, CommentsDoNotChangeKnownDuplicateEquivalenceOrConflict)
+{
+    for (const std::string key : {"UID_MIN", "PASS_MAX_DAYS", "PASS_MIN_DAYS", "PASS_WARN_AGE", "ENCRYPT_METHOD"})
+    {
+        const std::string first = key == "ENCRYPT_METHOD" ? "SHA512" : "01";
+        const std::string equivalent = key == "ENCRYPT_METHOD" ? "sha512" : "1";
+        const std::string conflicting = key == "ENCRYPT_METHOD" ? "YESCRYPT" : "2";
+        EXPECT_TRUE(ld::Parse(key + " " + first + " # first\n" + key + " " + equivalent + "\t# equivalent\n", "source", nullptr).HasValue()) << key;
+        const auto parsed = ld::Parse(key + " " + first + " # first\n" + key + " " + conflicting + " # conflict\n", "source", nullptr);
+        ASSERT_FALSE(parsed.HasValue()) << key;
+        EXPECT_EQ(EBADMSG, parsed.Error().code) << key;
+        EXPECT_EQ("source:2:" + std::to_string(key.size() + 2) + ": conflicting duplicate " + key + " value", parsed.Error().message) << key;
+    }
+}
+
 TEST(LoginDefsTest, ConflictingKnownDuplicatesRejectWholeDocument)
 {
     for (const std::string key : {"UID_MIN", "PASS_MAX_DAYS", "PASS_MIN_DAYS", "PASS_WARN_AGE", "ENCRYPT_METHOD"})
@@ -81,7 +119,7 @@ TEST(LoginDefsTest, ConflictingKnownDuplicatesRejectWholeDocument)
 
 TEST(LoginDefsTest, RejectsMalformedNumericValuesWithLocation)
 {
-    for (const std::string value : {"1000 # note", "1000#note", "\"1000#note\"", "1000 extra", "1000\\#note"})
+    for (const std::string value : {"1000#note", "\"1000#note\"", "1000 extra", "1000\\#note"})
     {
         const auto parsed = ld::Parse("UID_MIN " + value + "\n", "source", nullptr);
         ASSERT_FALSE(parsed.HasValue()) << value;
@@ -91,6 +129,18 @@ TEST(LoginDefsTest, RejectsMalformedNumericValuesWithLocation)
     const auto crlf = ld::Parse("UID_MIN 1000\r\n", "source", nullptr);
     ASSERT_TRUE(crlf.HasValue());
     EXPECT_EQ(1000U, crlf.Value().uidMin.Value());
+}
+
+TEST(LoginDefsTest, AttachedHashRemainsInvalidForTypedValues)
+{
+    for (const std::string key : {"UID_MIN", "PASS_MAX_DAYS", "PASS_MIN_DAYS", "PASS_WARN_AGE", "ENCRYPT_METHOD"})
+    {
+        const std::string value = key == "ENCRYPT_METHOD" ? "SHA512#note" : "1#note";
+        const auto parsed = ld::Parse(key + " " + value + " # actual comment\n", "source", nullptr);
+        ASSERT_FALSE(parsed.HasValue()) << key;
+        EXPECT_EQ(EBADMSG, parsed.Error().code) << key;
+        EXPECT_NE(std::string::npos, parsed.Error().message.find("source:1:" + std::to_string(key.size() + 2) + ": invalid " + key + " value:")) << key;
+    }
 }
 
 TEST(LoginDefsTest, InvalidNumericValueInUnselectedKeyOrDuplicateRejectsDocument)
@@ -172,7 +222,23 @@ TEST(LoginDefsTest, MissingValueRejectsWholeDocumentWithLocation)
     const auto whitespace = ld::Parse("UID_MIN \t\n", "source", nullptr);
     ASSERT_FALSE(whitespace.HasValue());
     EXPECT_EQ("source:1:10: login.defs missing value", whitespace.Error().message);
+    for (const std::string key : {"UID_MIN", "UNKNOWN"})
+    {
+        const auto comment = ld::Parse(key + " \t# comment\n", "source", nullptr);
+        ASSERT_FALSE(comment.HasValue()) << key;
+        EXPECT_EQ(EBADMSG, comment.Error().code);
+        EXPECT_EQ("source:1:" + std::to_string(key.size() + 3) + ": login.defs missing value", comment.Error().message);
+    }
     EXPECT_TRUE(ld::Parse("OTHER \"\"\n", "source", nullptr).HasValue());
+}
+
+TEST(LoginDefsTest, EmbeddedNulInsideTrailingCommentStillRejectsWholeDocument)
+{
+    const char contents[] = "UID_MIN 1000 # note\0hidden\nPASS_MIN_DAYS 1\n";
+    const auto parsed = ld::Parse(std::string(contents, sizeof(contents) - 1), "source", nullptr);
+    ASSERT_FALSE(parsed.HasValue());
+    EXPECT_EQ(EBADMSG, parsed.Error().code);
+    EXPECT_EQ("source:1:20: login.defs embedded NUL", parsed.Error().message);
 }
 
 TEST(LoginDefsTest, EmbeddedNulRejectsWholeDocumentWithByteLocation)

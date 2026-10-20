@@ -150,7 +150,8 @@ TEST_F(AuditdRulesCheckTest, SyscallFieldLayoutUsesRuntimeUidMin)
     ASSERT_FALSE(directory.empty());
     const std::string filename = directory + "/sys.rules";
     mContext.SetSpecialFilePath("/etc/audit/rules.d", directory);
-    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillRepeatedly(Return(Result<std::string>("UID_MIN 500\n")));
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs"))
+        .WillRepeatedly(Return(Result<std::string>("UID_MIN 500 # runtime UID\nPASS_MIN_DAYS 1  # Updated by CIS Build Kit\n")));
     AuditdRulesParams params;
     params.searchItem = "-S init_module";
     params.requiredOptions.items = {"-F arch=b64",

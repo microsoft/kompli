@@ -149,6 +149,14 @@ string ReplaceEffectiveLoginDefsValue(const string& contents, const string& opti
                     cursor++;
                 }
                 size_t valueEnd = end;
+                for (size_t offset = cursor; offset < end; ++offset)
+                {
+                    if (('#' == contents[offset]) && ((offset == cursor) || IsAsciiWhitespace(static_cast<unsigned char>(contents[offset - 1]))))
+                    {
+                        valueEnd = offset;
+                        break;
+                    }
+                }
                 while (valueEnd > cursor && IsAsciiWhitespace(static_cast<unsigned char>(contents[valueEnd - 1])))
                 {
                     --valueEnd;
