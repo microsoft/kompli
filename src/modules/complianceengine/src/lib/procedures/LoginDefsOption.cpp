@@ -154,6 +154,14 @@ string ReplaceEffectiveLoginDefsValue(const string& contents, const string& opti
                     cursor++;
                 }
                 size_t valueEnd = end;
+                for (size_t offset = cursor; offset < end; ++offset)
+                {
+                    if (('#' == contents[offset]) && ((offset == cursor) || IsLoginDefsSeparator(contents[offset - 1])))
+                    {
+                        valueEnd = offset;
+                        break;
+                    }
+                }
                 while (valueEnd > cursor && IsLoginDefsSeparator(contents[valueEnd - 1]))
                 {
                     --valueEnd;

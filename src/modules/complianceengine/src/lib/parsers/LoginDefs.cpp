@@ -137,14 +137,24 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
             {
                 ++valueStart;
             }
-            if (valueStart == end)
+            // A hash after parser whitespace starts a trailing comment; an attached hash is part of the value.
+            std::size_t valueEnd = end;
+            for (std::size_t offset = valueStart; offset < end; ++offset)
+            {
+                if (('#' == input[offset]) && ((offset == valueStart) || IsSeparator(input[offset - 1])))
+                {
+                    valueEnd = offset;
+                    break;
+                }
+            }
+            if (valueStart == valueEnd)
             {
                 return SyntaxError(document.source, lineNumber, valueStart - start + 1, "missing value");
             }
+            const auto value = TrimWhiteSpaces(input.substr(valueStart, valueEnd - valueStart));
             // Shadow-utils duplicate precedence varies by backend; never assess a conflicting known value.
             if (key == "UID_MIN")
             {
-                const auto value = TrimWhiteSpaces(input.substr(valueStart, end - valueStart));
                 const auto parsed = TryStringToUint(value);
                 if (!parsed.HasValue())
                 {
@@ -166,7 +176,7 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
             }
             else if (key == "PASS_MAX_DAYS" || key == "PASS_MIN_DAYS" || key == "PASS_WARN_AGE")
             {
-                const auto parsed = TryStringToInt(TrimWhiteSpaces(input.substr(valueStart, end - valueStart)));
+                const auto parsed = TryStringToInt(value);
                 if (!parsed.HasValue())
                 {
                     return ValueError(document, lineNumber, valueStart - start + 1, key, parsed.Error());
@@ -183,7 +193,7 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
             }
             else if (key == "ENCRYPT_METHOD")
             {
-                const auto method = ParseEncryptionMethod(TrimWhiteSpaces(input.substr(valueStart, end - valueStart)));
+                const auto method = ParseEncryptionMethod(value);
                 if (!method.HasValue())
                 {
                     return ValueError(document, lineNumber, valueStart - start + 1, key, method.Error());

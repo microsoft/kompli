@@ -151,6 +151,20 @@ TEST_F(LoginDefsOptionTest, PassMinDays_GreaterOrEqual_Compliant)
     EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(LoginDefsOptionTest, PassMinDays_TrailingCisCommentDoesNotBlockAudit)
+{
+    SetLoginDefsContent("UID_MIN 1000\nPASS_MIN_DAYS 1  # Updated by CIS Build Kit\n");
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MIN_DAYS";
+    params.value = "1";
+    params.comparison = ComparisonOperation::GreaterOrEqual;
+
+    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+}
+
 TEST_F(LoginDefsOptionTest, PassWarnAge_GreaterOrEqual_Compliant)
 {
     SetLoginDefsContent("PASS_WARN_AGE 7\n");
@@ -953,6 +967,51 @@ TEST_F(LoginDefsOptionTest, RemediateUpdatesEqualDuplicatesWithParserWhitespace)
     const auto contents = ReadFile(path);
     ASSERT_TRUE(contents.HasValue());
     EXPECT_EQ(" \tPASS_MAX_DAYS\v365\nPASS_MAX_DAYS 365\n", contents.Value());
+}
+
+TEST_F(LoginDefsOptionTest, RemediatePreservesDistinctTrailingCommentsOnEqualNumericDuplicates)
+{
+    const auto path = mContext.MakeTempfile(
+        " \tPASS_MAX_DAYS\v099999 \t# first policy\r\n"
+        "PASS_MAX_DAYS\t99999\f# second policy\n"
+        "PASS_MIN_DAYS 7\n");
+    mContext.SetSpecialFilePath(cLoginDefsPath, path);
+    EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
+
+    LoginDefsOptionParams params;
+    params.option = "PASS_MAX_DAYS";
+    params.value = "365";
+    params.comparison = ComparisonOperation::LessOrEqual;
+
+    const auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+    const auto contents = ReadFile(path);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(
+        " \tPASS_MAX_DAYS\v365 \t# first policy\r\n"
+        "PASS_MAX_DAYS\t365\f# second policy\n"
+        "PASS_MIN_DAYS 7\n",
+        contents.Value());
+}
+
+TEST_F(LoginDefsOptionTest, RemediatePreservesEncryptionTrailingComment)
+{
+    const auto path = mContext.MakeTempfile("ENCRYPT_METHOD\tMD5  # algorithm note\r\nPASS_MIN_DAYS 7\n");
+    mContext.SetSpecialFilePath(cLoginDefsPath, path);
+    EXPECT_CALL(mContext, GetFileContents(path)).WillRepeatedly(testing::Invoke([path](const string&) { return ReadFile(path); }));
+
+    LoginDefsOptionParams params;
+    params.option = "ENCRYPT_METHOD";
+    params.value = "SHA512";
+    params.comparison = ComparisonOperation::Equal;
+
+    const auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+    const auto contents = ReadFile(path);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ("ENCRYPT_METHOD\tSHA512  # algorithm note\r\nPASS_MIN_DAYS 7\n", contents.Value());
 }
 
 TEST_F(LoginDefsOptionTest, RemediateRefusesConflictingDuplicatesWithoutChangingFile)
