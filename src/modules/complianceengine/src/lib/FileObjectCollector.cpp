@@ -217,6 +217,8 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
     }
     try
     {
+        // O_PATH pins the target without opening it for I/O, so nonregular targets
+        // (e.g. blocking FIFOs or devices with open side effects) can be rejected first.
         const int pathDescriptor = context.OpenExistingFile(path.c_str(), pathFlags);
         if (pathDescriptor < 0)
         {
@@ -238,6 +240,9 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
             return Error("Exact file target is not a regular file", EINVAL);
         }
 
+        // Open the validated inode through its pinned descriptor, not the original path:
+        // replacing that path or retargeting its symlink must not switch the file read.
+        // Verify identity below; this does not guarantee an atomic content snapshot.
         const std::string descriptorPath = "/proc/self/fd/" + std::to_string(pinned.Get());
         const int dataDescriptor = context.OpenExistingFile(descriptorPath.c_str(), O_RDONLY | O_CLOEXEC);
         if (dataDescriptor < 0)
@@ -276,7 +281,7 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
         selectionLimits.occurrences = policy.occurrences;
         selectionLimits.captureBytes = policy.captureBytes;
         selectionLimits.capturedBytes = policy.capturedBytes;
-        auto selection = NameserverSelection::Select(std::move(content.Value()), path, selectionLimits);
+        auto selection = NameserverSelection::FindNameserverCaptures(std::move(content.Value()), path, selectionLimits);
         if (!selection.HasValue())
         {
             return selection.Error();
