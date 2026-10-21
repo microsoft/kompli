@@ -45,6 +45,7 @@ char* LoadStringFromFile(const char* fileName, bool stopAtEol, OsConfigLogHandle
 {
     const int initialSize = 1024;
     int currentSize = 0;
+    int error = 0;
     FILE* file = NULL;
     int i = 0;
     int next = 0;
@@ -70,7 +71,19 @@ char* LoadStringFromFile(const char* fileName, bool stopAtEol, OsConfigLogHandle
                     next = fgetc(file);
                     if ((EOF == next) || (stopAtEol && (EOL == next)))
                     {
+                        if ((EOF == next) && ferror(file))
+                        {
+                            error = (0 == errno) ? EIO : errno;
+                            FREE_MEMORY(string);
+                            break;
+                        }
                         string[i] = 0;
+                        break;
+                    }
+                    if ('\0' == next)
+                    {
+                        error = EBADMSG;
+                        FREE_MEMORY(string);
                         break;
                     }
 
@@ -87,6 +100,7 @@ char* LoadStringFromFile(const char* fileName, bool stopAtEol, OsConfigLogHandle
                         }
                         else
                         {
+                            error = ENOMEM;
                             FREE_MEMORY(string);
                             break;
                         }
@@ -100,6 +114,10 @@ char* LoadStringFromFile(const char* fileName, bool stopAtEol, OsConfigLogHandle
         fclose(file);
     }
 
+    if (0 != error)
+    {
+        errno = error;
+    }
     return string;
 }
 

@@ -175,6 +175,7 @@ add_library(complianceenginelib STATIC
     Engine.cpp
     Evaluator.cpp
     FileObjectCollector.cpp
+    filesystem/FileReader.cpp
     FileTreeWalk.cpp
     FilesystemCollection.cpp
     GuestConfigurationContext.cpp

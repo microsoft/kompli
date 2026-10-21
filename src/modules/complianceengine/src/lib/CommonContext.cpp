@@ -48,10 +48,16 @@ Result<std::string> CommonContext::GetFileContents(const std::string& filePath) 
         return Error("Failed to stat file: " + std::string(strerror(status)), status);
     }
 
+    errno = 0;
     char* output = LoadStringFromFile(filePath.c_str(), false, mLog);
     if (output == nullptr)
     {
-        return Error("Failed to load file contents");
+        const int status = errno;
+        if (EBADMSG == status)
+        {
+            return Error("File contains embedded NUL: " + filePath, status);
+        }
+        return Error("Failed to load file contents", 0 == status ? -1 : status);
     }
     std::string result(output);
     free(output);
