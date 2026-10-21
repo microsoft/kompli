@@ -93,15 +93,42 @@ class Regex
         bool bracketExpressionCanClose = false;
         bool previousWasRepetitionOperator = false;
 
-        for (const char c : pattern)
+        for (std::size_t i = 0; i < pattern.size(); ++i)
         {
+            const char c = pattern[i];
+            // Inside a POSIX bracket expression a backslash is an ordinary character, not an escape
+            if (inBracketExpression)
+            {
+                previousWasRepetitionOperator = false;
+                if (bracketExpressionAtStart && c == '^')
+                {
+                    bracketExpressionAtStart = false;
+                    continue;
+                }
+                bracketExpressionAtStart = false;
+                if (c == ']' && bracketExpressionCanClose)
+                {
+                    inBracketExpression = false;
+                    continue;
+                }
+                bracketExpressionCanClose = true;
+                // Skip [:class:], [.symbol.] and [=equivalence=] so their closing ']' doesn't end the bracket expression
+                if (c == '[' && i + 1 < pattern.size() && (pattern[i + 1] == ':' || pattern[i + 1] == '.' || pattern[i + 1] == '='))
+                {
+                    const std::string terminator = std::string(1, pattern[i + 1]) + ']';
+                    const auto end = pattern.find(terminator, i + 2);
+                    if (end == std::string::npos)
+                    {
+                        // regcomp rejects it as well; failing here keeps the scan linear instead of searching the suffix again for every opener
+                        throw RegexException("Unmatched [, [^, [:, [., or [=", REG_EBRACK);
+                    }
+                    i = end + 1;
+                }
+                continue;
+            }
             if (escaped)
             {
                 escaped = false;
-                if (inBracketExpression)
-                {
-                    bracketExpressionCanClose = true;
-                }
                 previousWasRepetitionOperator = false;
                 continue;
             }
@@ -111,31 +138,11 @@ class Regex
                 previousWasRepetitionOperator = false;
                 continue;
             }
-            if (c == '[' && !inBracketExpression)
+            if (c == '[')
             {
                 inBracketExpression = true;
                 bracketExpressionAtStart = true;
                 bracketExpressionCanClose = false;
-                previousWasRepetitionOperator = false;
-                continue;
-            }
-            if (inBracketExpression)
-            {
-                if (bracketExpressionAtStart && c == '^')
-                {
-                    bracketExpressionAtStart = false;
-                    previousWasRepetitionOperator = false;
-                    continue;
-                }
-                bracketExpressionAtStart = false;
-                if (c == ']' && bracketExpressionCanClose)
-                {
-                    inBracketExpression = false;
-                }
-                else
-                {
-                    bracketExpressionCanClose = true;
-                }
                 previousWasRepetitionOperator = false;
                 continue;
             }
@@ -201,11 +208,6 @@ public:
         : pattern(r),
           options(options)
     {
-        if (HasStackedRepetitionOperators(pattern))
-        {
-            throw RegexException("Invalid preceding regular expression", REG_BADRPT);
-        }
-        preg = std::unique_ptr<regex_t>(new regex_t);
         std::string newR;
         newR.reserve(pattern.size() + 1);
         bool escapeNext = false;
@@ -247,6 +249,12 @@ public:
         {
             newR += '\\'; // add last backslash if it was not escaped
         }
+        // Must inspect the translated pattern: expansions such as \h -> [ \t] change bracket expression boundaries
+        if (HasStackedRepetitionOperators(newR))
+        {
+            throw RegexException("Invalid preceding regular expression", REG_BADRPT);
+        }
+        preg = std::unique_ptr<regex_t>(new regex_t);
         int v = regcomp(preg.get(), newR.c_str(), ConvertFlags(options));
         if (0 != v)
         {
