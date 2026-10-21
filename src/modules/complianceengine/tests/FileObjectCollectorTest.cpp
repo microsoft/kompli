@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <new>
 #include <ranges/Count.hpp>
 #include <ranges/Unique.hpp>
 #include <stdexcept>
@@ -135,6 +136,51 @@ TEST(FileObjectCollectorTest, ZeroMatchesRemainACompleteEmptyCollection)
     ASSERT_TRUE(result.HasValue());
     EXPECT_TRUE(result.Value().complete);
     EXPECT_TRUE(result.Value().items.empty());
+}
+
+TEST(FileObjectCollectorTest, FinalLfDoesNotTurnBareKeywordIntoAnEmptyCapture)
+{
+    NiceMock<MockContext> context;
+    for (const auto& content : {"nameserver", "nameserver\n"})
+    {
+        const auto path = context.MakeTempfile(content);
+        const auto result = ComplianceEngine::CollectNameserverObject(context, path);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_TRUE(result.Value().complete);
+        EXPECT_TRUE(result.Value().items.empty());
+    }
+    for (const auto& content : {"nameserver ", "nameserver \n", "nameserver \t\n"})
+    {
+        const auto path = context.MakeTempfile(content);
+        const auto result = ComplianceEngine::CollectNameserverObject(context, path);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ((std::vector<std::string>{""}), Captures(result.Value()));
+    }
+}
+
+TEST(FileObjectCollectorTest, BlankLinesCrossLineWhitespaceCrLfAndTailRetainRawCaptures)
+{
+    NiceMock<MockContext> context;
+    const std::string content =
+        "# nameserver ignored\n"
+        "nameserver\n"
+        " \t\n"
+        "\r\v\fvalue\r\n"
+        "nameserver one\n"
+        "nameserver one\n"
+        "nameserver tail\n"
+        "nameserver \n"
+        "\n";
+    const auto path = context.MakeTempfile(content);
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ((std::vector<std::string>{"value\r", "one", "one", "tail", ""}), Captures(result.Value()));
+
+    FileCollectionPolicy limit;
+    limit.contentBytes = content.size();
+    EXPECT_TRUE(ComplianceEngine::CollectNameserverObject(context, path, limit).HasValue());
+    --limit.contentBytes;
+    EXPECT_EQ(E2BIG, ComplianceEngine::CollectNameserverObject(context, path, limit).Error().code);
 }
 
 TEST(FileObjectCollectorTest, ContentAndCaptureLimitsFailWithoutPartialPublication)
@@ -384,7 +430,7 @@ TEST(FileObjectCollectorTest, InterruptedReadCanRecoverWithinTheRetryLimit)
     EXPECT_EQ(3, reads);
 }
 
-TEST(FileObjectCollectorTest, MetadataMutationAndThrowingOperationsAreErrors)
+TEST(FileObjectCollectorTest, MetadataMutationIsAnErrorAndThrowingOpenPropagates)
 {
     NiceMock<MockContext> context;
     int opens = 0;
@@ -409,9 +455,25 @@ TEST(FileObjectCollectorTest, MetadataMutationAndThrowingOperationsAreErrors)
 
     NiceMock<MockContext> throwing;
     ON_CALL(throwing, OpenExistingFile(_, _)).WillByDefault([](const char*, int) -> int { throw std::runtime_error("open failed"); });
-    result = ComplianceEngine::CollectNameserverObject(throwing, "/etc/resolv.conf");
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EIO, result.Error().code);
+    EXPECT_THROW(ComplianceEngine::CollectNameserverObject(throwing, "/etc/resolv.conf"), std::runtime_error);
+}
+
+TEST(FileObjectCollectorTest, ThrowingReadPropagatesEvenWhenCloseThrowsDuringUnwinding)
+{
+    NiceMock<MockContext> context;
+    const auto path = context.MakeTempfile("nameserver one\n");
+    int closes = 0;
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t { throw std::runtime_error("read failed"); });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
+        ++closes;
+        const int status = context.ContextInterface::CloseFileDescriptor(fd);
+        if (closes == 1)
+            throw std::bad_alloc();
+        return status;
+    });
+
+    EXPECT_THROW(ComplianceEngine::CollectNameserverObject(context, path), std::runtime_error);
+    EXPECT_EQ(2, closes);
 }
 
 TEST(FileObjectCollectorTest, TailReadAndIdentityFailuresAreErrors)

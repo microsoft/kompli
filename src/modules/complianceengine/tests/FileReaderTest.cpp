@@ -9,6 +9,7 @@
 #include <filesystem/FileReader.hpp>
 #include <gtest/gtest.h>
 #include <limits>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
@@ -58,6 +59,7 @@ protected:
             return std::move(opened).Error();
         auto& range = opened.Value();
         std::string bytes;
+        bool first = true;
         for (const auto& item : range)
         {
             if (!item.HasValue())
@@ -68,6 +70,9 @@ protected:
                     error.message += " [close: " + closed.Error().message + "]";
                 return error;
             }
+            if (!first)
+                bytes += '\n';
+            first = false;
             bytes += item.Value();
         }
         auto closed = range.Close();
@@ -109,7 +114,7 @@ TEST_F(PathFile, OmittedPolicyFollowsFinalSymlinkAndRejectsNul)
         ASSERT_TRUE(item.HasValue());
         collected += item.Value();
     }
-    EXPECT_EQ("plain\n", collected);
+    EXPECT_EQ("plain", collected);
     EXPECT_TRUE(range.Close().HasValue());
 
     Write(std::string("a\0b", 3));
@@ -191,7 +196,7 @@ TEST_F(PathFile, ValidationAndOpenAreFactoryOperations)
     EXPECT_EQ(1, opens);
 }
 
-TEST_F(PathFile, EmptyUnterminatedAndOriginalNewlines)
+TEST_F(PathFile, EmptyUnterminatedAndBareLines)
 {
     EXPECT_EQ("", Collect(path, Limited(1)).Value());
     Write("a\r\n\nlast");
@@ -206,10 +211,34 @@ TEST_F(PathFile, EmptyUnterminatedAndOriginalNewlines)
     }
     EXPECT_TRUE(range.Close().HasValue());
     ASSERT_EQ(3U, lines.size());
-    EXPECT_EQ("a\r\n", lines[0]);
-    EXPECT_EQ("\n", lines[1]);
+    EXPECT_EQ("a\r", lines[0]);
+    EXPECT_EQ("", lines[1]);
     EXPECT_EQ("last", lines[2]);
     EXPECT_EQ("a\r\n\nlast", Collect(path, Limited(8)).Value());
+}
+
+TEST_F(PathFile, FinalLfDoesNotProducePhantomItemAndCountsTowardByteCap)
+{
+    const std::vector<std::pair<std::string, std::vector<std::string>>> fixtures = {
+        {"", {}}, {"\n", {""}}, {"\n\n", {"", ""}}, {"tail", {"tail"}}, {"tail\n", {"tail"}}, {"tail\n\n", {"tail", ""}}};
+    for (const auto& fixture : fixtures)
+    {
+        const auto& content = fixture.first;
+        Write(content);
+        auto opened = Lines(context, path, Limited(std::max<std::size_t>(1, content.size())));
+        ASSERT_TRUE(opened.HasValue());
+        auto& range = opened.Value();
+        std::vector<std::string> items;
+        for (const auto& item : range)
+        {
+            ASSERT_TRUE(item.HasValue());
+            items.push_back(item.Value());
+        }
+        EXPECT_EQ(fixture.second, items) << content;
+        EXPECT_TRUE(range.Close().HasValue());
+        if (content.size() > 1)
+            EXPECT_EQ(E2BIG, Collect(path, Limited(content.size() - 1)).Error().code);
+    }
 }
 
 TEST_F(PathFile, RejectsNulButPreservesHighBitBytes)
@@ -218,7 +247,7 @@ TEST_F(PathFile, RejectsNulButPreservesHighBitBytes)
     Write(original);
     EXPECT_EQ(EBADMSG, Collect(path, Limited(5)).Error().code);
     Write(std::string("\xff\r\n", 3));
-    EXPECT_EQ(std::string("\xff\r\n", 3), Collect(path, Limited(3)).Value());
+    EXPECT_EQ(std::string("\xff\r", 2), Collect(path, Limited(3)).Value());
     EXPECT_EQ(E2BIG, Collect(path, Limited(2)).Error().code);
 }
 
@@ -266,7 +295,7 @@ TEST_F(PathFile, ValidLineThenNulAcrossReadChunksYieldsErrorNotTruncatedLine)
         auto it = range.begin();
         ASSERT_TRUE(it != range.end());
         ASSERT_TRUE(it->HasValue());
-        EXPECT_EQ(valid, it->Value());
+        EXPECT_EQ("ok", it->Value());
         ++it;
         ASSERT_TRUE(it != range.end());
         ASSERT_FALSE(it->HasValue());
@@ -305,7 +334,7 @@ TEST_F(PathFile, BoundedChunksAndLazyEarlyBreakCloseExactlyOnce)
         auto it = range.begin();
         EXPECT_TRUE(it != range.end());
         ASSERT_TRUE(it->HasValue());
-        EXPECT_EQ(20001U, it->Value().size());
+        EXPECT_EQ(20000U, it->Value().size());
         EXPECT_EQ(2, opens);
         EXPECT_EQ(3, reads); // 8 KiB chunks, no forced tail read.
         EXPECT_LE(largest, 8192U);
@@ -348,7 +377,7 @@ TEST_F(PathFile, RangeMoveAndEarlyCloseNeverReadTail)
         EXPECT_EQ(0, closes);
         auto cursor = moved.begin();
         ASSERT_TRUE(cursor->HasValue());
-        EXPECT_EQ("one\n", cursor->Value());
+        EXPECT_EQ("one", cursor->Value());
         const int before = reads;
         EXPECT_TRUE(moved.Close().HasValue());
         EXPECT_EQ(before, reads);
@@ -486,8 +515,8 @@ TEST_F(PathFile, ChunkBoundaryAndTrailingNewlineAreVerifiedWithoutExtraEmptyLine
         lines.push_back(item.Value());
     }
     ASSERT_EQ(2U, lines.size());
-    EXPECT_EQ(std::string(8191, 'a') + "\n", lines[0]);
-    EXPECT_EQ("\n", lines[1]);
+    EXPECT_EQ(std::string(8191, 'a'), lines[0]);
+    EXPECT_EQ("", lines[1]);
     EXPECT_TRUE(range.Close().HasValue());
 }
 
@@ -545,7 +574,7 @@ TEST_F(PathFile, VerificationAndFinalAdvanceReportErrors)
     auto& range = opened.Value();
     auto cursor = range.begin();
     ASSERT_TRUE(cursor->HasValue());
-    EXPECT_EQ("abc\n", cursor->Value());
+    EXPECT_EQ("abc", cursor->Value());
     ++cursor;
     ASSERT_TRUE(cursor != range.end());
     EXPECT_FALSE(cursor->HasValue());
@@ -684,7 +713,7 @@ TEST_F(PathFile, LastUnterminatedLineIsNotPublishedWhenVerificationOrCloseFails)
     EXPECT_EQ(2, closes);
 }
 
-TEST_F(PathFile, ThrowingOpenAndStatCloseOwnedDescriptors)
+TEST_F(PathFile, ThrowingOpenAndEofStatPropagateAndCloseOwnedDescriptors)
 {
     Write("a");
     int opens = 0, closes = 0;
@@ -697,7 +726,7 @@ TEST_F(PathFile, ThrowingOpenAndStatCloseOwnedDescriptors)
         ++closes;
         return context.ContextInterface::CloseFileDescriptor(fd);
     });
-    EXPECT_EQ(ENOMEM, Collect(path, Limited(1)).Error().code);
+    EXPECT_THROW(Collect(path, Limited(1)), std::bad_alloc);
     EXPECT_EQ(1, closes);
     ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&](const char* name, int flags) {
         return context.ContextInterface::OpenExistingFile(name, flags);
@@ -709,6 +738,36 @@ TEST_F(PathFile, ThrowingOpenAndStatCloseOwnedDescriptors)
             throw std::runtime_error("stat");
         return context.ContextInterface::StatFileDescriptor(fd, metadata);
     });
-    EXPECT_EQ(EIO, Collect(path, Limited(1)).Error().code);
+    EXPECT_THROW(Collect(path, Limited(1)), std::runtime_error);
+    EXPECT_EQ(2, closes);
+}
+
+TEST_F(PathFile, ThrowingReadDuringIterationPropagatesAndClosesBothDescriptors)
+{
+    Write("first\nsecond\n");
+    int reads = 0, closes = 0;
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int, void* buffer, std::size_t size) -> ssize_t {
+        if (++reads == 1)
+        {
+            const std::string line = "first\n";
+            EXPECT_GE(size, line.size());
+            std::memcpy(buffer, line.data(), line.size());
+            return static_cast<ssize_t>(line.size());
+        }
+        throw std::runtime_error("read failed");
+    });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+        ++closes;
+        return context.ContextInterface::CloseFileDescriptor(fd);
+    });
+    {
+        auto opened = Lines(context, path, Limited(13));
+        ASSERT_TRUE(opened.HasValue());
+        auto cursor = opened.Value().begin();
+        ASSERT_TRUE(cursor->HasValue());
+        EXPECT_EQ("first", cursor->Value());
+        EXPECT_THROW(++cursor, std::runtime_error);
+    }
+    EXPECT_EQ(2, reads);
     EXPECT_EQ(2, closes);
 }

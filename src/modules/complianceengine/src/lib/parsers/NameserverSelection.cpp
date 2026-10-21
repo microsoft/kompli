@@ -143,6 +143,28 @@ Result<bool> Stream::Finish()
     return true;
 }
 
+LineStream::LineStream(std::string source, Limits limits)
+    : mStream(std::move(source), limits, true)
+{
+}
+
+Result<bool> LineStream::FeedLine(const std::string& line)
+{
+    if (mHasLine)
+    {
+        auto separated = mStream.Feed("\n");
+        if (!separated.HasValue())
+            return separated.Error();
+    }
+    mHasLine = true;
+    return mStream.Feed(line);
+}
+
+Result<bool> LineStream::Finish()
+{
+    return mStream.Finish();
+}
+
 Result<Document> FindNameserverCaptures(std::string bytes, std::string source, const Limits& limits)
 {
     if ((0 == limits.occurrences) || (0 == limits.captureBytes) || (0 == limits.capturedBytes))

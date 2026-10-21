@@ -85,6 +85,26 @@ private:
     std::vector<std::string> mValues;
 };
 
+// Physical lines from FileReader (without terminating LF). Reuse the byte
+// selector's grammar, inserting LF only between observed lines: a final LF
+// cannot turn a bare "nameserver" into an empty capture. Raw document
+// selection and its exact-byte offsets remain on Stream/FindNameserverCaptures.
+class LineStream
+{
+public:
+    LineStream(std::string source, Limits limits);
+    Result<bool> FeedLine(const std::string& line);
+    Result<bool> Finish();
+    const std::vector<std::string>& Values() const
+    {
+        return mStream.Values();
+    }
+
+private:
+    Stream mStream;
+    bool mHasLine = false;
+};
+
 // Select the source expression ^nameserver\s+(.*)$, not resolv.conf grammar.
 // Offsets count bytes; the maximal six-byte ASCII whitespace run may cross LF.
 Result<Document> FindNameserverCaptures(std::string bytes, std::string source, const Limits& limits = {});

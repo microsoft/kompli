@@ -11,7 +11,6 @@
 #include <fcntl.h>
 #include <limits>
 #include <new>
-#include <stdexcept>
 #include <sys/stat.h>
 #include <utility>
 
@@ -63,6 +62,8 @@ public:
         }
         catch (...)
         {
+            // Close is noexcept and also runs from destructors: do not terminate
+            // while unwinding, and still attempt the other owned descriptor.
             return EIO;
         }
     }
@@ -130,19 +131,10 @@ struct LinesRange::State
     {
         const int dataError = data.Close();
         const int pinError = pin.Close();
-        try
-        {
-            if (dataError)
-                error.message += " [data close: " + std::to_string(dataError) + "]";
-            if (pinError)
-                error.message += " [pin close: " + std::to_string(pinError) + "]";
-        }
-        catch (const std::bad_alloc&)
-        {
-        }
-        catch (const std::length_error&)
-        {
-        }
+        if (dataError)
+            error.message += " [data close: " + std::to_string(dataError) + "]";
+        if (pinError)
+            error.message += " [pin close: " + std::to_string(pinError) + "]";
         return error;
     }
 
@@ -215,75 +207,60 @@ struct LinesRange::State
         current.reset();
         if (finished)
             return;
-        try
+        while (true)
         {
-            while (true)
+            if (position == available)
             {
-                if (position == available)
+                // A single-byte probe at the cap distinguishes exact EOF
+                // from excess, without buffering any excess content.
+                const std::size_t remaining = policy.limits.maxBytes - consumed;
+                const std::size_t requested = std::min(sizeof(buffer), remaining ? remaining : std::size_t(1));
+                const ssize_t count = context.ReadFileDescriptor(data.Get(), buffer, requested);
+                if (count < 0)
                 {
-                    // A single-byte probe at the cap distinguishes exact EOF
-                    // from excess, without buffering any excess content.
-                    const std::size_t remaining = policy.limits.maxBytes - consumed;
-                    const std::size_t requested = std::min(sizeof(buffer), remaining ? remaining : std::size_t(1));
-                    const ssize_t count = context.ReadFileDescriptor(data.Get(), buffer, requested);
-                    if (count < 0)
+                    const int error = SavedError();
+                    if (error == EINTR)
                     {
-                        const int error = SavedError();
-                        if (error == EINTR)
-                        {
-                            if (interrupts++ < policy.limits.maxInterruptedReads)
-                                continue;
-                            Fail(Error("File read interrupt retry limit exceeded", E2BIG));
-                        }
-                        else
-                            Fail(Error("Failed to read file bytes", error));
-                        return;
+                        if (interrupts++ < policy.limits.maxInterruptedReads)
+                            continue;
+                        Fail(Error("File read interrupt retry limit exceeded", E2BIG));
                     }
-                    if (static_cast<std::size_t>(count) > requested)
-                    {
-                        Fail(Error("File read returned more bytes than requested", EIO));
-                        return;
-                    }
-                    if (!count)
-                    {
-                        Complete();
-                        return;
-                    }
-                    if (static_cast<std::size_t>(count) > remaining)
-                    {
-                        Fail(Error("File byte limit exceeded", E2BIG));
-                        return;
-                    }
-                    available = static_cast<std::size_t>(count);
-                    position = 0;
-                }
-                const char byte = buffer[position++];
-                ++consumed;
-                if (byte == '\0')
-                {
-                    Fail(Error("Embedded NUL in text file", EBADMSG));
+                    else
+                        Fail(Error("Failed to read file bytes", error));
                     return;
                 }
-                pending.push_back(byte);
-                if (byte == '\n')
+                if (static_cast<std::size_t>(count) > requested)
                 {
-                    current.reset(new Result<std::string>(std::move(pending)));
-                    pending.clear();
+                    Fail(Error("File read returned more bytes than requested", EIO));
                     return;
                 }
+                if (!count)
+                {
+                    Complete();
+                    return;
+                }
+                if (static_cast<std::size_t>(count) > remaining)
+                {
+                    Fail(Error("File byte limit exceeded", E2BIG));
+                    return;
+                }
+                available = static_cast<std::size_t>(count);
+                position = 0;
             }
-        }
-        catch (const std::bad_alloc&)
-        {
-            Fail(Error("File read allocation failed", ENOMEM));
-        }
-        catch (const std::length_error&)
-        {
-            Fail(Error("File read size is not representable", EOVERFLOW));
-        }
-        catch (...)
-        {
-            Fail(Error("File operation threw an exception", EIO));
+            const char byte = buffer[position++];
+            ++consumed;
+            if (byte == '\0')
+            {
+                Fail(Error("Embedded NUL in text file", EBADMSG));
+                return;
+            }
+            if (byte == '\n')
+            {
+                current.reset(new Result<std::string>(std::move(pending)));
+                pending.clear();
+                return;
+            }
+            pending.push_back(byte);
         }
     }
 };
@@ -350,24 +327,9 @@ Result<bool> LinesRange::Close()
 Result<LinesRange> Lines(const ContextInterface& context, std::string path, Policy policy)
 {
     std::unique_ptr<LinesRange::State> state(new LinesRange::State(context, std::move(path), std::move(policy)));
-    try
-    {
-        auto opened = state->Open();
-        if (!opened.HasValue())
-            return state->CloseWithError(std::move(opened).Error());
-        return LinesRange(std::move(state));
-    }
-    catch (const std::bad_alloc&)
-    {
-        return state->CloseWithError(Error("File open allocation failed", ENOMEM));
-    }
-    catch (const std::length_error&)
-    {
-        return state->CloseWithError(Error("File open size is not representable", EOVERFLOW));
-    }
-    catch (...)
-    {
-        return state->CloseWithError(Error("File operation threw an exception", EIO));
-    }
+    auto opened = state->Open();
+    if (!opened.HasValue())
+        return state->CloseWithError(std::move(opened).Error());
+    return LinesRange(std::move(state));
 }
 } // namespace FileReader

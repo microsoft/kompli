@@ -30,8 +30,8 @@ enum class SymlinksPolicy
 // Close before EOF (or destruction) releases handles without verifying unread
 // input; reaching EOF verifies the entire file but does not close handles.
 // maxBytes bounds acquisition (including delimiters); no entire-file buffer
-// is retained by the reader. Every yielded string contains the original LF
-// when its line was LF-terminated; an unterminated final line has no added LF.
+// is retained by the reader. Every yielded string excludes only its
+// terminating LF, if present; an unterminated final line is unchanged.
 // Empty input yields nothing, and a trailing LF adds no synthetic empty line.
 // CR and non-ASCII bytes are preserved; embedded NUL is rejected with EBADMSG
 // before the affected line can be yielded.

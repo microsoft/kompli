@@ -107,6 +107,53 @@ TEST(NameserverSelectionTest, EofDoesNotSynthesizeANewlineAndAllowsEmptyCapture)
     EXPECT_EQ((std::vector<std::string>{"value"}), Captures(result.Value()));
 }
 
+TEST(NameserverSelectionTest, LineStreamOmitsOnlyFinalLfAndKeepsDocumentContract)
+{
+    // Both "nameserver" and "nameserver\n" produce this one physical line.
+    Selection::LineStream stream("fixture", {});
+    ASSERT_TRUE(stream.FeedLine("nameserver").HasValue());
+    ASSERT_TRUE(stream.Finish().HasValue());
+    EXPECT_TRUE(stream.Values().empty());
+    const auto raw = Selection::FindNameserverCaptures("nameserver\n", "fixture");
+    ASSERT_TRUE(raw.HasValue());
+    EXPECT_EQ((std::vector<std::string>{""}), Captures(raw.Value()));
+    ASSERT_EQ(1U, raw.Value().captures.size());
+    EXPECT_EQ(0U, raw.Value().captures.front().anchor);
+    EXPECT_EQ(11U, raw.Value().captures.front().offset);
+    EXPECT_EQ(0U, raw.Value().captures.front().length);
+}
+
+TEST(NameserverSelectionTest, LineStreamRetainsEmptyValuesCrossLineWhitespaceAndRawCr)
+{
+    const std::vector<std::pair<std::vector<std::string>, std::vector<std::string>>> fixtures = {{{}, {}}, {{"nameserver "}, {""}},
+        {{"nameserver \t"}, {""}}, {{"nameserver", ""}, {""}}, {{"nameserver ", ""}, {""}}, {{"nameserver", " \t", "\r\v\fvalue\r"}, {"value\r"}},
+        {{"nameserver", "nameserver two", "nameserver two", "nameserver \t"}, {"nameserver two", "two", ""}},
+        {{"# nameserver ignored", " nameserver ignored", "nameserver \x80\r"}, {std::string("\x80\r", 2)}}};
+    for (const auto& fixture : fixtures)
+    {
+        Selection::LineStream stream("fixture", {});
+        for (const auto& line : fixture.first)
+            ASSERT_TRUE(stream.FeedLine(line).HasValue());
+        ASSERT_TRUE(stream.Finish().HasValue());
+        EXPECT_EQ(fixture.second, stream.Values());
+    }
+}
+
+TEST(NameserverSelectionTest, LineStreamKeepsExistingSelectionLimits)
+{
+    Selection::Limits limits;
+    limits.occurrences = 1;
+    Selection::LineStream stream("fixture", limits);
+    ASSERT_TRUE(stream.FeedLine("nameserver one").HasValue());
+    ASSERT_TRUE(stream.FeedLine("nameserver two").HasValue());
+    EXPECT_EQ(E2BIG, stream.Finish().Error().code);
+
+    limits.captureBytes = 1;
+    Selection::LineStream oversized("fixture", limits);
+    ASSERT_TRUE(oversized.FeedLine("nameserver two").HasValue());
+    EXPECT_EQ(E2BIG, oversized.Finish().Error().code);
+}
+
 TEST(NameserverSelectionTest, OwnedInputAndOffsetsSurviveDocumentMove)
 {
     auto result = Selection::FindNameserverCaptures(std::string("nameserver value"), "fixture");
