@@ -12,6 +12,7 @@
 #include <map>
 #include <sstream>
 #include <sys/stat.h>
+#include <unistd.h>
 
 using ComplianceEngine::AuditSshKeyPermissions;
 using ComplianceEngine::IndicatorsTree;
@@ -22,6 +23,181 @@ using ComplianceEngine::Status;
 
 static const char kPublicKeySample[] = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyMaterial user@example\n";
 static const char kPrivateKeyHeader[] = "-----BEGIN OPENSSH PRIVATE KEY-----\n";
+
+TEST(SshKeyRangeTest, MissingRootRemainsCompliantAndDeniedRootIsAnError)
+{
+    MockContext context;
+    IndicatorsTree indicators;
+    indicators.Push("SSH");
+    const std::string root = context.GetTempdirPath() + "/missing-ssh";
+    context.SetSpecialFilePath("/etc/ssh", root);
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Public;
+    const auto absent = AuditSshKeyPermissions(params, indicators, context);
+    ASSERT_TRUE(absent.HasValue());
+    EXPECT_EQ(Status::Compliant, absent.Value());
+
+    ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([](const char*, struct stat*) {
+        errno = EACCES;
+        return -1;
+    });
+    const auto denied = RemediateSshKeyPermissions(params, indicators, context);
+    ASSERT_FALSE(denied.HasValue());
+    EXPECT_EQ(EACCES, denied.Error().code);
+}
+
+TEST(SshKeyRangeTest, FirstNoncomplianceBreaksWithoutReadingRemainderButCloseErrorWins)
+{
+    MockContext context;
+    IndicatorsTree indicators;
+    indicators.Push("SSH");
+    const std::string root = context.GetTempdirPath() + "/ssh";
+    ASSERT_EQ(0, mkdir(root.c_str(), 0700));
+    const std::string key = root + "/key";
+    std::ofstream(key) << kPublicKeySample;
+    context.SetSpecialFilePath("/etc/ssh", root);
+    EXPECT_CALL(context, GetFileContents(key)).WillOnce(::testing::Return(ComplianceEngine::Result<std::string>(kPublicKeySample)));
+    std::size_t entries = 0;
+    ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([&entries](DIR * directory) -> struct dirent* {
+        if (entries == 1)
+        {
+            errno = EIO;
+            return nullptr;
+        }
+        struct dirent* item = readdir(directory);
+        if (item && std::string(item->d_name) != "." && std::string(item->d_name) != "..")
+        {
+            ++entries;
+        }
+        return item;
+    });
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Public;
+    const auto verdict = AuditSshKeyPermissions(params, indicators, context);
+    ASSERT_TRUE(verdict.HasValue());
+    EXPECT_EQ(Status::NonCompliant, verdict.Value());
+    EXPECT_EQ(1u, entries);
+
+    ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([](DIR* stream) {
+        const int result = closedir(stream);
+        if (0 == result)
+        {
+            errno = EIO;
+            return -1;
+        }
+        return result;
+    });
+    EXPECT_CALL(context, GetFileContents(key)).WillOnce(::testing::Return(ComplianceEngine::Result<std::string>(kPublicKeySample)));
+    entries = 0;
+    const auto closeError = AuditSshKeyPermissions(params, indicators, context);
+    ASSERT_FALSE(closeError.HasValue());
+    EXPECT_EQ(EIO, closeError.Error().code);
+}
+
+TEST(SshKeyRangeTest, RequiredNonYieldedDirectoryFailureAndReachedReadErrorPropagate)
+{
+    MockContext context;
+    IndicatorsTree indicators;
+    indicators.Push("SSH");
+    const std::string root = context.GetTempdirPath() + "/ssh";
+    ASSERT_EQ(0, mkdir(root.c_str(), 0700));
+    const std::string nested = root + "/nested";
+    ASSERT_EQ(0, mkdir(nested.c_str(), 0700));
+    context.SetSpecialFilePath("/etc/ssh", root);
+    ON_CALL(context, OpenDirectory(::testing::_)).WillByDefault([&nested](const char* path) -> DIR* {
+        if (nested == path)
+        {
+            errno = EACCES;
+            return nullptr;
+        }
+        return opendir(path);
+    });
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Private;
+    const auto blocked = RemediateSshKeyPermissions(params, indicators, context);
+    ASSERT_FALSE(blocked.HasValue());
+    EXPECT_EQ(EACCES, blocked.Error().code);
+
+    ON_CALL(context, OpenDirectory(::testing::_)).WillByDefault([](const char* path) { return opendir(path); });
+    ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([](DIR*) -> struct dirent* {
+        errno = EIO;
+        return nullptr;
+    });
+    const auto readError = AuditSshKeyPermissions(params, indicators, context);
+    ASSERT_FALSE(readError.HasValue());
+    EXPECT_EQ(EIO, readError.Error().code);
+}
+
+TEST(SshKeyRangeTest, OriginalKeyReadErrorOutranksDestructorCloseFailure)
+{
+    MockContext context;
+    IndicatorsTree indicators;
+    indicators.Push("SSH");
+    const std::string root = context.GetTempdirPath() + "/ssh";
+    ASSERT_EQ(0, mkdir(root.c_str(), 0700));
+    const std::string key = root + "/key";
+    std::ofstream(key) << kPrivateKeyHeader;
+    context.SetSpecialFilePath("/etc/ssh", root);
+    EXPECT_CALL(context, GetFileContents(key))
+        .WillOnce(::testing::Return(ComplianceEngine::Result<std::string>(ComplianceEngine::Error("key read failed", EACCES))));
+    ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([](DIR* stream) {
+        const int result = closedir(stream);
+        if (0 == result)
+        {
+            errno = EIO;
+            return -1;
+        }
+        return result;
+    });
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Private;
+    const auto result = RemediateSshKeyPermissions(params, indicators, context);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EACCES, result.Error().code);
+    EXPECT_EQ("key read failed", result.Error().message);
+}
+
+TEST(SshKeyRangeTest, DepthThirtyThreeIsAnErrorEvenThoughDirectoriesAreNotYielded)
+{
+    MockContext context;
+    IndicatorsTree indicators;
+    indicators.Push("SSH");
+    std::string directory = context.GetTempdirPath() + "/ssh";
+    ASSERT_EQ(0, mkdir(directory.c_str(), 0700));
+    context.SetSpecialFilePath("/etc/ssh", directory);
+    for (int depth = 0; depth < 33; ++depth)
+    {
+        directory += "/d";
+        ASSERT_EQ(0, mkdir(directory.c_str(), 0700));
+    }
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Public;
+    const auto result = AuditSshKeyPermissions(params, indicators, context);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ("Maximum recursion depth reached", result.Error().message);
+}
+
+TEST(SshKeyRangeTest, RootSymlinkIsFollowedButInteriorDirectorySymlinkIsNot)
+{
+    MockContext context;
+    IndicatorsTree indicators;
+    indicators.Push("SSH");
+    const std::string root = context.GetTempdirPath() + "/ssh";
+    ASSERT_EQ(0, mkdir(root.c_str(), 0700));
+    const std::string outside = context.GetTempdirPath() + "/outside";
+    ASSERT_EQ(0, mkdir(outside.c_str(), 0700));
+    std::ofstream(outside + "/key") << kPublicKeySample;
+    ASSERT_EQ(0, symlink(outside.c_str(), (root + "/linked").c_str()));
+    const std::string alias = context.GetTempdirPath() + "/ssh-alias";
+    ASSERT_EQ(0, symlink(root.c_str(), alias.c_str()));
+    context.SetSpecialFilePath("/etc/ssh", alias);
+    EXPECT_CALL(context, GetFileContents(::testing::_)).Times(0);
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Public;
+    const auto result = AuditSshKeyPermissions(params, indicators, context);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+}
 
 class EnsureSshKeyPermsTest : public ::testing::Test
 {

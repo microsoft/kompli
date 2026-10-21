@@ -5,6 +5,7 @@
 
 #include <cerrno>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace ComplianceEngine
@@ -35,5 +36,30 @@ ssize_t ContextInterface::ReadFileDescriptor(int descriptor, void* buffer, std::
 int ContextInterface::CloseFileDescriptor(int descriptor) const
 {
     return ::close(descriptor);
+}
+
+DIR* ContextInterface::OpenDirectory(const char* path) const
+{
+    return ::opendir(path);
+}
+
+struct dirent* ContextInterface::ReadDirectory(DIR* directory) const
+{
+    return ::readdir(directory);
+}
+
+int ContextInterface::CloseDirectory(DIR* directory) const
+{
+    return ::closedir(directory);
+}
+
+int ContextInterface::StatPath(const char* path, struct stat* metadata) const
+{
+    return ::stat(path, metadata);
+}
+
+int ContextInterface::LstatPath(const char* path, struct stat* metadata) const
+{
+    return ::lstat(path, metadata);
 }
 } // namespace ComplianceEngine

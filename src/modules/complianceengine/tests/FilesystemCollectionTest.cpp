@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "FilesystemCollection.h"
-
+#include "MockContext.h"
 #include "TemporaryDirectory.h"
 
 #include <algorithm>
 #include <cerrno>
+#include <filesystem/FilesystemCollection.hpp>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <stdexcept>
@@ -18,24 +18,34 @@
 
 using ComplianceEngine::CollectFilesystem;
 using ComplianceEngine::FilesystemCollectionEntry;
-using ComplianceEngine::FilesystemCollectionOutcome;
 using ComplianceEngine::FilesystemCollectionRequest;
+using ComplianceEngine::FilesystemDepthAction;
 using ComplianceEngine::FilesystemDirection;
 using ComplianceEngine::FilesystemLinkAction;
 using ComplianceEngine::FilesystemRootKind;
 using ComplianceEngine::FilesystemScope;
 using ComplianceEngine::FilesystemVisitAction;
+using ComplianceEngine::FilesystemYieldType;
 using ComplianceEngine::ResolvedFilesystemCollectionRequest;
 using ComplianceEngine::ResolveFilesystemCollectionRequest;
 using ComplianceEngine::Result;
 using ComplianceEngine::StreamFilesystemCollection;
 using ComplianceEngine::TemporaryDirectory;
-using ComplianceEngine::Detail::CollectFilesystemWithOperations;
-using ComplianceEngine::Detail::FilesystemCollectionOperations;
-using ComplianceEngine::Detail::StreamFilesystemCollectionWithOperations;
-
+using ComplianceEngine::FTW::Files;
 namespace
 {
+Result<ComplianceEngine::FilesystemCollectionResult> CollectFilesystem(const FilesystemCollectionRequest& request)
+{
+    MockContext context;
+    return ComplianceEngine::CollectFilesystem(request, context);
+}
+
+Result<ComplianceEngine::FilesystemCollectionResult> StreamFilesystemCollection(const FilesystemCollectionRequest& request,
+    const ComplianceEngine::FilesystemCollectionVisitor& visitor)
+{
+    MockContext context;
+    return ComplianceEngine::StreamFilesystemCollection(request, visitor, context);
+}
 FilesystemCollectionRequest Request()
 {
     return FilesystemCollectionRequest("/root", FilesystemRootKind::Directory);
@@ -125,6 +135,8 @@ TEST(FilesystemCollectionTest, PreservesOmissionUntilResolutionAndAppliesNativeD
     EXPECT_FALSE(request.childFileLinkAction.HasValue());
     EXPECT_FALSE(request.childDirectoryLinkAction.HasValue());
     EXPECT_FALSE(request.scope.HasValue());
+    EXPECT_FALSE(request.yieldType.HasValue());
+    EXPECT_FALSE(request.depthAction.HasValue());
 
     const Result<ResolvedFilesystemCollectionRequest> result = ResolveFilesystemCollectionRequest(request);
 
@@ -137,6 +149,8 @@ TEST(FilesystemCollectionTest, PreservesOmissionUntilResolutionAndAppliesNativeD
     EXPECT_EQ(FilesystemLinkAction::Record, resolved.childFileLinkAction);
     EXPECT_EQ(FilesystemLinkAction::Record, resolved.childDirectoryLinkAction);
     EXPECT_EQ(FilesystemScope::RootDevice, resolved.scope);
+    EXPECT_EQ(FilesystemYieldType::All, resolved.yieldType);
+    EXPECT_EQ(FilesystemDepthAction::Stop, resolved.depthAction);
     EXPECT_EQ(128u, resolved.limits.operationalDescent);
     EXPECT_EQ(100000u, resolved.limits.entryWork);
     EXPECT_EQ(4096u, resolved.limits.directoryWidth);
@@ -336,10 +350,8 @@ TEST(FilesystemCollectionTest, DistinguishesAbsentRootFromEmptyDirectoryAndFileR
     const auto file = CollectFilesystem(FilesystemCollectionRequest(tree.Path("file"), FilesystemRootKind::File));
 
     ASSERT_TRUE(absent.HasValue());
-    EXPECT_EQ(FilesystemCollectionOutcome::Absent, absent->outcome);
     EXPECT_TRUE(absent->entries.empty());
     ASSERT_TRUE(directory.HasValue());
-    EXPECT_EQ(FilesystemCollectionOutcome::Complete, directory->outcome);
     EXPECT_EQ((std::vector<std::string>{tree.Path("empty")}), Paths(directory->entries));
     ASSERT_TRUE(file.HasValue());
     EXPECT_EQ((std::vector<std::string>{tree.Path("file")}), Paths(file->entries));
@@ -463,7 +475,7 @@ TEST(FilesystemCollectionTest, RejectsFollowedCyclesButPermitsDistinctAliases)
     EXPECT_NE(paths.end(), std::find(paths.begin(), paths.end(), tree.Path("root/target/item")));
 }
 
-TEST(FilesystemCollectionTest, StreamingStopAndCallbackErrorAreDistinctFromCompleteEvidence)
+TEST(FilesystemCollectionTest, StreamingStopAndCallbackErrorDoNotFabricateEntries)
 {
     TestTree tree;
     tree.Directory("root");
@@ -476,7 +488,6 @@ TEST(FilesystemCollectionTest, StreamingStopAndCallbackErrorAreDistinctFromCompl
         return Result<FilesystemVisitAction>(FilesystemVisitAction::Stop);
     });
     ASSERT_TRUE(stopped.HasValue());
-    EXPECT_EQ(FilesystemCollectionOutcome::Stopped, stopped->outcome);
     EXPECT_EQ(1u, visited.size());
     EXPECT_TRUE(stopped->entries.empty());
 
@@ -542,7 +553,6 @@ TEST(FilesystemCollectionTest, DescriptorContinuationVisitsEachEntryOnce)
         return Result<FilesystemVisitAction>(FilesystemVisitAction::Continue);
     });
     ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(FilesystemCollectionOutcome::Complete, result->outcome);
     EXPECT_EQ(19u, visited.size());
     EXPECT_EQ(1u, std::count(visited.begin(), visited.end(), tree.Path(parent + "/leaf")));
 }
@@ -614,7 +624,6 @@ TEST(FilesystemCollectionTest, StoppingBeforeReplayDoesNotInspectSuspendedAncest
         return Result<FilesystemVisitAction>(FilesystemVisitAction::Continue);
     });
     ASSERT_TRUE(stopped.HasValue());
-    EXPECT_EQ(FilesystemCollectionOutcome::Stopped, stopped->outcome);
 }
 
 TEST(FilesystemCollectionTest, ReplayConsumesEntryWorkWithoutRepeatingCallbacks)
@@ -740,13 +749,12 @@ TEST(FilesystemCollectionTest, RequiredDirectoryReadFailureDoesNotProducePartial
     TestTree tree;
     tree.Directory("root");
     tree.File("root/item");
-    FilesystemCollectionOperations operations;
-    operations.readDirectory = [](DIR*) -> struct dirent*
-    {
+    MockContext context;
+    ON_CALL(context, ReadDirectory(testing::_)).WillByDefault([](DIR*) -> struct dirent* {
         errno = EIO;
         return nullptr;
-    };
-    const auto result = CollectFilesystemWithOperations(FilesystemCollectionRequest(tree.Path("root"), FilesystemRootKind::Directory), operations);
+    });
+    const auto result = ComplianceEngine::CollectFilesystem(FilesystemCollectionRequest(tree.Path("root"), FilesystemRootKind::Directory), context);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
     EXPECT_NE(std::string::npos, result.Error().message.find(tree.Path("root")));
@@ -756,12 +764,12 @@ TEST(FilesystemCollectionTest, RequiredStatFailurePropagatesItsOriginalCode)
 {
     TestTree tree;
     tree.Directory("root");
-    FilesystemCollectionOperations operations;
-    operations.statDescriptor = [](int, struct stat*) {
+    MockContext context;
+    ON_CALL(context, StatFileDescriptor(testing::_, testing::_)).WillByDefault([](int, struct stat*) {
         errno = EACCES;
         return -1;
-    };
-    const auto result = CollectFilesystemWithOperations(FilesystemCollectionRequest(tree.Path("root"), FilesystemRootKind::Directory), operations);
+    });
+    const auto result = ComplianceEngine::CollectFilesystem(FilesystemCollectionRequest(tree.Path("root"), FilesystemRootKind::Directory), context);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
 }
@@ -771,8 +779,8 @@ TEST(FilesystemCollectionTest, StandaloneCloseFailureErrorsAndSecondaryClosePres
     TestTree tree;
     tree.Directory("root");
     tree.File("root/child");
-    FilesystemCollectionOperations operations;
-    operations.closeDirectory = [](DIR* stream) {
+    MockContext context;
+    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([](DIR* stream) {
         const int status = closedir(stream);
         if (0 != status)
         {
@@ -780,13 +788,13 @@ TEST(FilesystemCollectionTest, StandaloneCloseFailureErrorsAndSecondaryClosePres
         }
         errno = EIO;
         return -1;
-    };
+    });
     const FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
-    const auto standalone = CollectFilesystemWithOperations(request, operations);
+    const auto standalone = ComplianceEngine::CollectFilesystem(request, context);
     ASSERT_FALSE(standalone.HasValue());
     EXPECT_EQ(EIO, standalone.Error().code);
 
-    const auto secondary = StreamFilesystemCollectionWithOperations(
+    const auto secondary = ComplianceEngine::StreamFilesystemCollection(
         request,
         [&tree](const FilesystemCollectionEntry& entry) {
             if (entry.path == tree.Path("root/child"))
@@ -795,7 +803,7 @@ TEST(FilesystemCollectionTest, StandaloneCloseFailureErrorsAndSecondaryClosePres
             }
             return Result<FilesystemVisitAction>(FilesystemVisitAction::Continue);
         },
-        operations);
+        context);
     ASSERT_FALSE(secondary.HasValue());
     EXPECT_EQ(EACCES, secondary.Error().code);
     EXPECT_EQ("original callback", secondary.Error().message);
@@ -809,8 +817,8 @@ TEST(FilesystemCollectionTest, DescriptorHandoffCloseFailureStopsBeforeChildOpen
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.direction = FilesystemDirection::Down;
     request.openDirectories = 1;
-    FilesystemCollectionOperations operations;
-    operations.closeDirectory = [](DIR* stream) {
+    MockContext context;
+    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([](DIR* stream) {
         const int status = closedir(stream);
         if (0 != status)
         {
@@ -818,8 +826,8 @@ TEST(FilesystemCollectionTest, DescriptorHandoffCloseFailureStopsBeforeChildOpen
         }
         errno = EIO;
         return -1;
-    };
-    const auto result = CollectFilesystemWithOperations(request, operations);
+    });
+    const auto result = ComplianceEngine::CollectFilesystem(request, context);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
 }
@@ -829,31 +837,432 @@ TEST(FilesystemCollectionTest, RootDeviceExcludesInjectedCrossDeviceEntryButAllS
     TestTree tree;
     tree.Directory("root");
     tree.File("root/other-device");
-    FilesystemCollectionOperations operations;
-    operations.lstatPath = [&tree](const char* path, struct stat* metadata) {
+    MockContext context;
+    ON_CALL(context, LstatPath(testing::_, testing::_)).WillByDefault([&tree](const char* path, struct stat* metadata) {
         const int status = lstat(path, metadata);
         if ((0 == status) && (tree.Path("root/other-device") == path))
         {
             ++metadata->st_dev;
         }
         return status;
-    };
+    });
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
-    const auto bounded = CollectFilesystemWithOperations(request, operations);
+    const auto bounded = ComplianceEngine::CollectFilesystem(request, context);
     ASSERT_TRUE(bounded.HasValue());
     EXPECT_EQ(1u, bounded->entries.size());
     ASSERT_EQ(1u, bounded->exclusions.size());
     EXPECT_EQ(tree.Path("root/other-device"), bounded->exclusions[0].path);
 
     request.scope = FilesystemScope::Defined;
-    const auto defined = CollectFilesystemWithOperations(request, operations);
+    const auto defined = ComplianceEngine::CollectFilesystem(request, context);
     ASSERT_TRUE(defined.HasValue());
     EXPECT_EQ(1u, defined->entries.size());
     EXPECT_EQ(1u, defined->exclusions.size());
 
     request.scope = FilesystemScope::All;
-    const auto all = CollectFilesystemWithOperations(request, operations);
+    const auto all = ComplianceEngine::CollectFilesystem(request, context);
     ASSERT_TRUE(all.HasValue());
     EXPECT_EQ(2u, all->entries.size());
     EXPECT_TRUE(all->exclusions.empty());
+}
+
+TEST(FilesystemCollectionTest, FactoryAcquiresRootButReadsDescendantsOnePullAtATime)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.File("root/item");
+    MockContext context;
+    std::size_t stats = 0;
+    std::size_t reads = 0;
+    ON_CALL(context, LstatPath(testing::_, testing::_)).WillByDefault([&stats](const char* path, struct stat* metadata) {
+        ++stats;
+        return lstat(path, metadata);
+    });
+    ON_CALL(context, ReadDirectory(testing::_)).WillByDefault([&reads](DIR* stream) {
+        ++reads;
+        return readdir(stream);
+    });
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    auto opened = Files(request, context);
+    ASSERT_TRUE(opened.HasValue());
+    auto& files = opened.Value();
+    EXPECT_EQ(1u, stats);
+    EXPECT_EQ(0u, reads);
+    EXPECT_TRUE(files.RootExists());
+
+    auto first = files.Next();
+    ASSERT_TRUE(first.HasValue());
+    ASSERT_TRUE(first.Value().HasValue());
+    EXPECT_EQ(tree.Path("root"), first.Value()->path);
+    EXPECT_EQ(1u, stats);
+    EXPECT_EQ(0u, reads);
+
+    auto second = files.Next();
+    ASSERT_TRUE(second.HasValue());
+    ASSERT_TRUE(second.Value().HasValue());
+    EXPECT_EQ(tree.Path("root/item"), second.Value()->path);
+    EXPECT_EQ(2u, stats);
+    EXPECT_EQ(1u, reads);
+
+    auto exhausted = files.Next();
+    ASSERT_TRUE(exhausted.HasValue());
+    EXPECT_FALSE(exhausted.Value().HasValue());
+    EXPECT_TRUE(files.Close().HasValue());
+    EXPECT_EQ(2u, stats);
+}
+
+TEST(FilesystemCollectionTest, FactorySeparatesAbsentRootFromInitializationFailures)
+{
+    TestTree tree;
+    tree.Directory("root");
+    MockContext context;
+    FilesystemCollectionRequest request(tree.Path("missing"), FilesystemRootKind::Directory);
+    auto absent = Files(request, context);
+    ASSERT_TRUE(absent.HasValue());
+    EXPECT_FALSE(absent->RootExists());
+    EXPECT_TRUE(absent->Close().HasValue());
+    EXPECT_TRUE(absent->Close().HasValue());
+    EXPECT_FALSE(absent->Next().Value().HasValue());
+
+    request.rootPath = tree.Path("root");
+    request.yieldType = FilesystemYieldType::RegularFiles;
+    auto existing = Files(request, context);
+    ASSERT_TRUE(existing.HasValue());
+    EXPECT_TRUE(existing->RootExists());
+    EXPECT_FALSE(existing->Next().Value().HasValue());
+    EXPECT_TRUE(existing->Close().HasValue());
+    ON_CALL(context, OpenDirectory(testing::_)).WillByDefault([](const char*) -> DIR* {
+        errno = EACCES;
+        return nullptr;
+    });
+    const auto openFailure = Files(request, context);
+    ASSERT_FALSE(openFailure.HasValue());
+    EXPECT_EQ(EACCES, openFailure.Error().code);
+
+    ON_CALL(context, OpenDirectory(testing::_)).WillByDefault([](const char* path) { return opendir(path); });
+    ON_CALL(context, StatFileDescriptor(testing::_, testing::_)).WillByDefault([](int, struct stat*) {
+        errno = EIO;
+        return -1;
+    });
+    const auto statFailure = Files(request, context);
+    ASSERT_FALSE(statFailure.HasValue());
+    EXPECT_EQ(EIO, statFailure.Error().code);
+
+    ON_CALL(context, LstatPath(testing::_, testing::_)).WillByDefault([](const char*, struct stat*) {
+        errno = EACCES;
+        return -1;
+    });
+    const auto lstatFailure = Files(request, context);
+    ASSERT_FALSE(lstatFailure.HasValue());
+    EXPECT_EQ(EACCES, lstatFailure.Error().code);
+}
+
+TEST(FilesystemCollectionTest, YieldSelectionDoesNotSuppressDescentOrWorkBudgets)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.Directory("root/nested");
+    tree.File("root/nested/file");
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    request.yieldType = FilesystemYieldType::RegularFiles;
+    MockContext context;
+    const auto selected = ComplianceEngine::CollectFilesystem(request, context);
+    ASSERT_TRUE(selected.HasValue());
+    EXPECT_EQ(std::vector<std::string>{tree.Path("root/nested/file")}, Paths(selected->entries));
+
+    request.yieldType = FilesystemYieldType::Directories;
+    const auto directories = ComplianceEngine::CollectFilesystem(request, context);
+    ASSERT_TRUE(directories.HasValue());
+    EXPECT_EQ((std::vector<std::string>{tree.Path("root"), tree.Path("root/nested")}), Paths(directories->entries));
+
+    request.yieldType = FilesystemYieldType::RegularFiles;
+    request.entryWork = 1;
+    const auto budget = ComplianceEngine::CollectFilesystem(request, context);
+    ASSERT_FALSE(budget.HasValue());
+    EXPECT_EQ(E2BIG, budget.Error().code);
+
+    request.entryWork.Reset();
+    ON_CALL(context, OpenDirectory(testing::_)).WillByDefault([&tree](const char* path) -> DIR* {
+        if (tree.Path("root/nested") == path)
+        {
+            errno = EACCES;
+            return nullptr;
+        }
+        return opendir(path);
+    });
+    auto opened = Files(request, context);
+    ASSERT_TRUE(opened.HasValue());
+    const auto error = opened->Next();
+    ASSERT_FALSE(error.HasValue());
+    EXPECT_EQ(EACCES, error.Error().code);
+    EXPECT_EQ(EACCES, opened->Close().Error().code);
+}
+
+TEST(FilesystemCollectionTest, LinkSelectionUsesEffectiveMetadataWithoutLosingLstat)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.File("root/target");
+    tree.Link("target", "root/link");
+    MockContext context;
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    request.yieldType = FilesystemYieldType::RegularFiles;
+    auto recorded = ComplianceEngine::CollectFilesystem(request, context);
+    ASSERT_TRUE(recorded.HasValue());
+    EXPECT_EQ(std::vector<std::string>{tree.Path("root/target")}, Paths(recorded->entries));
+
+    request.childFileLinkAction = FilesystemLinkAction::Follow;
+    auto followed = ComplianceEngine::CollectFilesystem(request, context);
+    ASSERT_TRUE(followed.HasValue());
+    ASSERT_EQ(2u, followed->entries.size());
+    const auto link = std::find_if(followed->entries.begin(), followed->entries.end(),
+        [&tree](const FilesystemCollectionEntry& entry) { return entry.path == tree.Path("root/link"); });
+    ASSERT_NE(followed->entries.end(), link);
+    EXPECT_TRUE(S_ISLNK(link->linkMetadata.st_mode));
+    ASSERT_TRUE(link->targetMetadata.HasValue());
+    EXPECT_TRUE(S_ISREG(link->targetMetadata.Value().st_mode));
+
+    request.yieldType = FilesystemYieldType::SymbolicLinks;
+    request.childFileLinkAction = FilesystemLinkAction::Record;
+    auto links = ComplianceEngine::CollectFilesystem(request, context);
+    ASSERT_TRUE(links.HasValue());
+    EXPECT_EQ(std::vector<std::string>{tree.Path("root/link")}, Paths(links->entries));
+}
+
+TEST(FilesystemCollectionTest, RejectsInvalidYieldAndDepthModes)
+{
+    FilesystemCollectionRequest request = Request();
+    request.yieldType = static_cast<FilesystemYieldType>(99);
+    ExpectInvalid(request, EINVAL);
+    request.yieldType = FilesystemYieldType::All;
+    request.depthAction = static_cast<FilesystemDepthAction>(99);
+    ExpectInvalid(request, EINVAL);
+}
+
+TEST(FilesystemCollectionTest, ExplicitDepthErrorIsNotAQuietStop)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.Directory("root/nested");
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    request.maxDepth = 0;
+    request.depthAction = FilesystemDepthAction::Error;
+    request.yieldType = FilesystemYieldType::RegularFiles;
+    MockContext context;
+    const auto result = ComplianceEngine::CollectFilesystem(request, context);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ("Maximum recursion depth reached", result.Error().message);
+}
+
+TEST(FilesystemCollectionTest, FactoryPolicyFailurePrecedesRootAcquisition)
+{
+    MockContext context;
+    EXPECT_CALL(context, LstatPath(testing::_, testing::_)).Times(0);
+    FilesystemCollectionRequest request("", FilesystemRootKind::Directory);
+    const auto opened = Files(request, context);
+    ASSERT_FALSE(opened.HasValue());
+    EXPECT_EQ(EINVAL, opened.Error().code);
+}
+
+TEST(FilesystemCollectionTest, DescendantOpenFailureIsDeferredUntilAfterItsEntry)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.Directory("root/child");
+    MockContext context;
+    ON_CALL(context, OpenDirectory(testing::_)).WillByDefault([&tree](const char* path) -> DIR* {
+        if (tree.Path("root/child") == path)
+        {
+            errno = EACCES;
+            return nullptr;
+        }
+        return opendir(path);
+    });
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    auto opened = Files(request, context);
+    ASSERT_TRUE(opened.HasValue());
+    auto& files = opened.Value();
+    auto root = files.Next();
+    ASSERT_TRUE(root.HasValue());
+    ASSERT_TRUE(root.Value().HasValue());
+    auto child = files.Next();
+    ASSERT_TRUE(child.HasValue());
+    ASSERT_TRUE(child.Value().HasValue());
+    EXPECT_EQ(tree.Path("root/child"), child.Value()->path);
+    const auto failure = files.Next();
+    ASSERT_FALSE(failure.HasValue());
+    EXPECT_EQ(EACCES, failure.Error().code);
+    EXPECT_EQ(EACCES, files.Close().Error().code);
+    EXPECT_TRUE(files.RootExists());
+}
+
+TEST(FilesystemCollectionTest, LateReadErrorIsYieldedOnceAndNeverCertifiesCompletion)
+{
+    TestTree tree;
+    tree.Directory("root");
+    MockContext context;
+    ON_CALL(context, ReadDirectory(testing::_)).WillByDefault([](DIR*) -> struct dirent* {
+        errno = EIO;
+        return nullptr;
+    });
+    auto opened = Files(FilesystemCollectionRequest(tree.Path("root"), FilesystemRootKind::Directory), context);
+    ASSERT_TRUE(opened.HasValue());
+    auto& files = opened.Value();
+    std::size_t values = 0;
+    std::size_t errors = 0;
+    for (const auto& entry : files)
+    {
+        if (entry.HasValue())
+        {
+            ++values;
+        }
+        else
+        {
+            ++errors;
+            EXPECT_EQ(EIO, entry.Error().code);
+        }
+    }
+    EXPECT_EQ(1u, values);
+    EXPECT_EQ(1u, errors);
+    EXPECT_EQ(EIO, files.Close().Error().code);
+}
+
+TEST(FilesystemCollectionTest, ExhaustionCloseFailureIsDeliveredThroughRange)
+{
+    TestTree tree;
+    tree.Directory("root");
+    MockContext context;
+    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([](DIR* stream) {
+        const int result = closedir(stream);
+        if (0 == result)
+        {
+            errno = EIO;
+            return -1;
+        }
+        return result;
+    });
+    auto opened = Files(FilesystemCollectionRequest(tree.Path("root"), FilesystemRootKind::Directory), context);
+    ASSERT_TRUE(opened.HasValue());
+    auto& files = opened.Value();
+    auto root = files.Next();
+    ASSERT_TRUE(root.HasValue());
+    ASSERT_TRUE(root.Value().HasValue());
+    const auto failure = files.Next();
+    ASSERT_FALSE(failure.HasValue());
+    EXPECT_EQ(EIO, failure.Error().code);
+    EXPECT_EQ(EIO, files.Close().Error().code);
+}
+
+TEST(FilesystemCollectionTest, EarlyCloseIsIdempotentAndDoesNotReadUnseenEntries)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.File("root/item");
+    MockContext context;
+    std::size_t closed = 0;
+    std::size_t reads = 0;
+    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&closed](DIR* stream) {
+        ++closed;
+        return closedir(stream);
+    });
+    ON_CALL(context, ReadDirectory(testing::_)).WillByDefault([&reads](DIR* stream) {
+        ++reads;
+        return readdir(stream);
+    });
+    {
+        FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+        request.direction = FilesystemDirection::Down;
+        auto opened = Files(request, context);
+        ASSERT_TRUE(opened.HasValue());
+        auto& files = opened.Value();
+        std::size_t seen = 0;
+        for (const auto& entry : files)
+        {
+            ASSERT_TRUE(entry.HasValue());
+            if (++seen == 2)
+            {
+                break;
+            }
+        }
+        EXPECT_EQ(2u, seen);
+        const auto beforeClose = reads;
+        const auto closedResult = files.Close();
+        ASSERT_TRUE(closedResult.HasValue());
+        EXPECT_EQ(beforeClose, reads);
+        EXPECT_EQ(1u, closed);
+        EXPECT_TRUE(files.Close().HasValue());
+        EXPECT_EQ(1u, closed);
+        EXPECT_FALSE(files.Next().Value().HasValue());
+    }
+    EXPECT_EQ(1u, closed);
+}
+
+TEST(FilesystemCollectionTest, AbandonedRangeClosesWithoutPullingDescendants)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.File("root/item");
+    MockContext context;
+    std::size_t closed = 0;
+    EXPECT_CALL(context, ReadDirectory(testing::_)).Times(0);
+    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&closed](DIR* stream) {
+        ++closed;
+        const int status = closedir(stream);
+        errno = EIO;
+        return 0 == status ? -1 : status;
+    });
+    {
+        auto opened = Files(FilesystemCollectionRequest(tree.Path("root"), FilesystemRootKind::Directory), context);
+        ASSERT_TRUE(opened.HasValue());
+        EXPECT_TRUE(opened->RootExists());
+    }
+    EXPECT_EQ(1u, closed);
+}
+
+TEST(FilesystemCollectionTest, EarlyClosePropagatesFailure)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.File("root/item");
+    MockContext context;
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    auto opened = Files(request, context);
+    ASSERT_TRUE(opened.HasValue());
+    auto& files = opened.Value();
+    ASSERT_TRUE(files.Next().HasValue());
+    ASSERT_TRUE(files.Next().HasValue());
+    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([](DIR* stream) {
+        const int result = closedir(stream);
+        if (0 == result)
+        {
+            errno = EIO;
+            return -1;
+        }
+        return result;
+    });
+    const auto closed = files.Close();
+    ASSERT_FALSE(closed.HasValue());
+    EXPECT_EQ(EIO, closed.Error().code);
+    EXPECT_EQ(EIO, files.Close().Error().code);
+}
+
+TEST(FilesystemCollectionTest, VisitorStopDoesNotDrainUnvisitedEntries)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.File("root/item");
+    MockContext context;
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    EXPECT_CALL(context, ReadDirectory(testing::_)).Times(0);
+    const auto stopped = StreamFilesystemCollection(
+        request, [](const FilesystemCollectionEntry&) { return ComplianceEngine::Result<FilesystemVisitAction>(FilesystemVisitAction::Stop); }, context);
+    ASSERT_TRUE(stopped.HasValue());
+    EXPECT_TRUE(stopped->entries.empty());
 }

@@ -10,6 +10,7 @@
 #include "Telemetry.h"
 
 #include <cstddef>
+#include <dirent.h>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -38,6 +39,15 @@ public:
     virtual int StatFileDescriptor(int descriptor, struct stat* metadata) const;
     virtual ssize_t ReadFileDescriptor(int descriptor, void* buffer, std::size_t size) const;
     virtual int CloseFileDescriptor(int descriptor) const;
+
+    // POSIX directory and path operations. A null ReadDirectory result is EOF
+    // only when errno is zero; callers clear errno immediately before reading.
+    // Overrides must preserve errno on failure, including stat failures.
+    virtual DIR* OpenDirectory(const char* path) const;
+    virtual struct dirent* ReadDirectory(DIR* directory) const;
+    virtual int CloseDirectory(DIR* directory) const;
+    virtual int StatPath(const char* path, struct stat* metadata) const;
+    virtual int LstatPath(const char* path, struct stat* metadata) const;
 
     virtual Telemetry& GetTelemetry() = 0;
 

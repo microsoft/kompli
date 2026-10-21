@@ -177,7 +177,7 @@ add_library(complianceenginelib STATIC
     FileObjectCollector.cpp
     filesystem/FileReader.cpp
     FileTreeWalk.cpp
-    FilesystemCollection.cpp
+    filesystem/FilesystemCollection.cpp
     GuestConfigurationContext.cpp
     FilesystemScanner.cpp
     GroupsIterator.cpp

@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "FilesystemCollection.h"
+#include "FilesystemCollection.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -76,6 +76,30 @@ Result<bool> ValidateScope(FilesystemScope scope)
     return Error("Invalid filesystem scope", EINVAL);
 }
 
+Result<bool> ValidateYieldType(FilesystemYieldType type)
+{
+    switch (type)
+    {
+        case FilesystemYieldType::All:
+        case FilesystemYieldType::RegularFiles:
+        case FilesystemYieldType::Directories:
+        case FilesystemYieldType::SymbolicLinks:
+            return true;
+    }
+    return Error("Invalid filesystem yield type", EINVAL);
+}
+
+Result<bool> ValidateDepthAction(FilesystemDepthAction action)
+{
+    switch (action)
+    {
+        case FilesystemDepthAction::Stop:
+        case FilesystemDepthAction::Error:
+            return true;
+    }
+    return Error("Invalid filesystem depth action", EINVAL);
+}
+
 Result<std::size_t> ResolveLimit(const Optional<long long>& value, std::size_t defaultValue, const std::string& name)
 {
     if (!value.HasValue())
@@ -137,6 +161,17 @@ Result<bool> ValidateRequest(const ResolvedFilesystemCollectionRequest& request)
         return validation;
     }
 
+    validation = ValidateYieldType(request.yieldType);
+    if (!validation.HasValue())
+    {
+        return validation;
+    }
+    validation = ValidateDepthAction(request.depthAction);
+    if (!validation.HasValue())
+    {
+        return validation;
+    }
+
     if (request.rootPath.size() == std::numeric_limits<std::size_t>::max())
     {
         return Error("Filesystem collection root path size overflows accounting", EOVERFLOW);
@@ -169,6 +204,8 @@ Result<ResolvedFilesystemCollectionRequest> ResolveFilesystemCollectionRequest(c
     resolved.childFileLinkAction = Resolve(request.childFileLinkAction, FilesystemLinkAction::Record);
     resolved.childDirectoryLinkAction = Resolve(request.childDirectoryLinkAction, FilesystemLinkAction::Record);
     resolved.scope = Resolve(request.scope, FilesystemScope::RootDevice);
+    resolved.yieldType = Resolve(request.yieldType, FilesystemYieldType::All);
+    resolved.depthAction = Resolve(request.depthAction, FilesystemDepthAction::Stop);
 
     Result<std::size_t> limit = ResolveLimit(request.operationalDescent, resolved.limits.operationalDescent, "operational descent limit");
     if (!limit.HasValue())
@@ -228,6 +265,22 @@ Error OperationError(const char* operation, const std::string& path, int code)
     return Error(std::string("Failed to ") + operation + " '" + path + "': " + std::strerror(code), code);
 }
 
+Result<FilesystemVisitAction> InvokeVisitor(const FilesystemCollectionVisitor& visitor, const FilesystemCollectionEntry& entry)
+{
+    try
+    {
+        return visitor(entry);
+    }
+    catch (const std::bad_alloc&)
+    {
+        return Error("Filesystem collection allocation failed", ENOMEM);
+    }
+    catch (const std::exception& exception)
+    {
+        return Error(std::string("Filesystem collection failed: ") + exception.what(), EIO);
+    }
+}
+
 struct PrefixEntry
 {
     PrefixEntry(std::string name, ino_t inode, unsigned char type)
@@ -256,13 +309,13 @@ struct DirectoryFrame
 
 struct DirectoryCloser
 {
-    const Detail::FilesystemCollectionOperations* operations;
+    ContextInterface* context;
 
     void operator()(DIR* stream) const
     {
         if (nullptr != stream)
         {
-            (void)operations->closeDirectory(stream);
+            (void)context->CloseDirectory(stream);
         }
     }
 };
@@ -270,33 +323,164 @@ struct DirectoryCloser
 class Traversal
 {
 public:
-    Traversal(ResolvedFilesystemCollectionRequest request, const FilesystemCollectionVisitor& visitor, bool retainEntries, bool legacy,
-        const Detail::FilesystemCollectionOperations& operations, OsConfigLogHandle log)
+    Traversal(ResolvedFilesystemCollectionRequest request, ContextInterface& context, bool retainEntries, bool legacy)
         : mRequest(std::move(request)),
-          mVisitor(visitor),
           mRetainEntries(retainEntries),
           mLegacy(legacy),
-          mOperations(operations),
-          mLog(log)
+          mContext(context),
+          mLog(context.GetLogHandle())
     {
     }
 
-    Result<FilesystemCollectionResult> Run()
+    ~Traversal()
     {
-        Result<FilesystemCollectionResult> result = Error("Filesystem collection did not start", EIO);
+        if (!mFinalized)
+        {
+            const Optional<Error> error = CloseFrames(Optional<Error>());
+            if (error.HasValue())
+            {
+                OsConfigLogError(mLog, "Closing incomplete filesystem traversal failed: %s", error.Value().message.c_str());
+            }
+        }
+    }
+
+    Result<bool> Initialize()
+    {
         try
         {
-            const Result<bool> rootCharge = Charge(mRequest.rootPath.size() + 1, mRequest.rootPath);
-            result = rootCharge.HasValue() ? Walk() : Result<FilesystemCollectionResult>(rootCharge.Error());
+            const auto initialized = InitializeRoot();
+            if (!initialized.HasValue())
+            {
+                const Error error = initialized.Error();
+                (void)Fail(error);
+                return error;
+            }
+            return true;
         }
         catch (const std::bad_alloc&)
         {
-            result = Error("Filesystem collection allocation failed", ENOMEM);
+            const Error error("Filesystem collection allocation failed", ENOMEM);
+            (void)Fail(error);
+            return error;
         }
         catch (const std::exception& exception)
         {
-            result = Error(std::string("Filesystem collection failed: ") + exception.what(), EIO);
+            const Error error(std::string("Filesystem collection failed: ") + exception.what(), EIO);
+            (void)Fail(error);
+            return error;
         }
+    }
+
+    Result<Optional<FilesystemCollectionEntry>> Next()
+    {
+        if (mFinalized)
+        {
+            return Optional<FilesystemCollectionEntry>();
+        }
+        try
+        {
+            const Result<Optional<FilesystemCollectionEntry>> next = Pull();
+            if (!next.HasValue())
+            {
+                return Fail(next.Error());
+            }
+            return next;
+        }
+        catch (const std::bad_alloc&)
+        {
+            return Fail(Error("Filesystem collection allocation failed", ENOMEM));
+        }
+        catch (const std::exception& exception)
+        {
+            return Fail(Error(std::string("Filesystem collection failed: ") + exception.what(), EIO));
+        }
+    }
+
+    Result<FilesystemCollectionResult> Stop()
+    {
+        if (mFailure.HasValue())
+        {
+            return mFailure.Value();
+        }
+        if (mFinalized)
+        {
+            return mResult;
+        }
+        const Optional<Error> closed = CloseFrames(Optional<Error>());
+        return closed.HasValue() ? Result<FilesystemCollectionResult>(closed.Value()) : Result<FilesystemCollectionResult>(mResult);
+    }
+
+    void Abort(const Error& error)
+    {
+        if (!mFinalized)
+        {
+            (void)CloseFrames(Optional<Error>(error));
+        }
+    }
+
+    Result<FilesystemCollectionResult> CloseResult()
+    {
+        if (mFailure.HasValue())
+        {
+            return mFailure.Value();
+        }
+        if (!mFinalized)
+        {
+            const Optional<Error> closed = CloseFrames(Optional<Error>());
+            if (closed.HasValue())
+            {
+                return closed.Value();
+            }
+        }
+        return mResult;
+    }
+
+    bool RootExists() const
+    {
+        return mRootExists;
+    }
+    Result<bool> Close()
+    {
+        const auto result = CloseResult();
+        if (!result.HasValue())
+        {
+            return result.Error();
+        }
+        return true;
+    }
+    Result<bool> RetainEntries()
+    {
+        // Factory initialization may have prepared the root observation before
+        // the collecting adapter opts into retaining entries.
+        try
+        {
+            if (mPendingEntry.HasValue())
+            {
+                const auto& entry = mPendingEntry.Value();
+                const auto charged = Charge(entry.path.size() + 1, entry.path);
+                if (!charged.HasValue())
+                {
+                    return charged.Error();
+                }
+                mResult.entries.push_back(entry);
+            }
+            mRetainEntries = true;
+            return true;
+        }
+        catch (const std::bad_alloc&)
+        {
+            return Error("Filesystem collection allocation failed", ENOMEM);
+        }
+        catch (const std::exception& exception)
+        {
+            return Error(std::string("Filesystem collection failed: ") + exception.what(), EIO);
+        }
+    }
+
+private:
+    Optional<Error> CloseFrames(Optional<Error> primary)
+    {
+        mFinalized = true;
         for (auto frame = mFrames.rbegin(); frame != mFrames.rend(); ++frame)
         {
             if (nullptr == frame->stream)
@@ -305,24 +489,33 @@ public:
             }
             DIR* stream = frame->stream;
             frame->stream = nullptr;
-            if (0 != mOperations.closeDirectory(stream))
+            if (0 != mContext.CloseDirectory(stream))
             {
                 const int code = errno;
-                if (result.HasValue())
+                if (!primary.HasValue())
                 {
-                    result = OperationError("close directory", frame->path, code);
+                    primary = OperationError("close directory", frame->path, code);
                 }
                 else
                 {
                     OsConfigLogError(mLog, "Closing directory '%s' failed (%d) after primary error: %s", frame->path.c_str(), code,
-                        result.Error().message.c_str());
+                        primary.Value().message.c_str());
                 }
             }
         }
-        return result;
+        if (primary.HasValue())
+        {
+            mFailure = primary;
+        }
+        return primary;
     }
 
-private:
+    Result<Optional<FilesystemCollectionEntry>> Fail(Error error)
+    {
+        (void)CloseFrames(Optional<Error>(error));
+        return error;
+    }
+
     Result<bool> Charge(std::size_t bytes, const std::string& path)
     {
         if (mRequest.limits.retainedPathBytes - mRetainedBytes < bytes)
@@ -357,7 +550,7 @@ private:
                 DIR* stream = frame.stream;
                 frame.stream = nullptr;
                 --mOpenDirectories;
-                if (0 != mOperations.closeDirectory(stream))
+                if (0 != mContext.CloseDirectory(stream))
                 {
                     return OperationError("close directory", frame.path, errno);
                 }
@@ -370,21 +563,21 @@ private:
             }
         }
 
-        std::unique_ptr<DIR, DirectoryCloser> ownedStream(mOperations.openDirectory(path.c_str()), DirectoryCloser{&mOperations});
+        std::unique_ptr<DIR, DirectoryCloser> ownedStream(mContext.OpenDirectory(path.c_str()), DirectoryCloser{&mContext});
         if (!ownedStream)
         {
             if (root && (ENOENT == errno))
             {
-                mResult.outcome = FilesystemCollectionOutcome::Absent;
+                mRootExists = false;
                 return true;
             }
             return OperationError("open directory", path, errno);
         }
         struct stat opened = {};
-        if (0 != mOperations.statDescriptor(dirfd(ownedStream.get()), &opened))
+        if (0 != mContext.StatFileDescriptor(dirfd(ownedStream.get()), &opened))
         {
             const int code = errno;
-            if (0 != mOperations.closeDirectory(ownedStream.release()))
+            if (0 != mContext.CloseDirectory(ownedStream.release()))
             {
                 OsConfigLogError(mLog, "Closing directory '%s' after stat failure failed (%d)", path.c_str(), errno);
             }
@@ -392,7 +585,7 @@ private:
         }
         if ((nullptr != expected) && ((expected->st_dev != opened.st_dev) || (expected->st_ino != opened.st_ino)))
         {
-            if (0 != mOperations.closeDirectory(ownedStream.release()))
+            if (0 != mContext.CloseDirectory(ownedStream.release()))
             {
                 OsConfigLogError(mLog, "Closing replaced directory '%s' failed (%d)", path.c_str(), errno);
             }
@@ -402,7 +595,7 @@ private:
         const Result<bool> charge = Charge(bytes, path);
         if (!charge.HasValue())
         {
-            if (0 != mOperations.closeDirectory(ownedStream.release()))
+            if (0 != mContext.CloseDirectory(ownedStream.release()))
             {
                 OsConfigLogError(mLog, "Closing directory '%s' after budget failure failed (%d)", path.c_str(), errno);
             }
@@ -432,7 +625,7 @@ private:
                     DIR* stream = ancestor.stream;
                     ancestor.stream = nullptr;
                     --mOpenDirectories;
-                    if (0 != mOperations.closeDirectory(stream))
+                    if (0 != mContext.CloseDirectory(stream))
                     {
                         return OperationError("close directory", ancestor.path, errno);
                     }
@@ -445,16 +638,16 @@ private:
                 return Error("No directory available for replay within descriptor budget", EMFILE);
             }
         }
-        DIR* stream = mOperations.openDirectory(frame.path.c_str());
+        DIR* stream = mContext.OpenDirectory(frame.path.c_str());
         if (nullptr == stream)
         {
             return OperationError("reopen directory", frame.path, errno);
         }
         struct stat opened = {};
-        if (0 != mOperations.statDescriptor(dirfd(stream), &opened))
+        if (0 != mContext.StatFileDescriptor(dirfd(stream), &opened))
         {
             const int code = errno;
-            if (0 != mOperations.closeDirectory(stream))
+            if (0 != mContext.CloseDirectory(stream))
             {
                 OsConfigLogError(mLog, "Closing reopened directory '%s' failed (%d)", frame.path.c_str(), errno);
             }
@@ -462,7 +655,7 @@ private:
         }
         if ((frame.device != opened.st_dev) || (frame.inode != opened.st_ino))
         {
-            if (0 != mOperations.closeDirectory(stream))
+            if (0 != mContext.CloseDirectory(stream))
             {
                 OsConfigLogError(mLog, "Closing replaced directory '%s' failed (%d)", frame.path.c_str(), errno);
             }
@@ -476,7 +669,7 @@ private:
             do
             {
                 errno = 0;
-                entry = mOperations.readDirectory(stream);
+                entry = mContext.ReadDirectory(stream);
             } while ((nullptr != entry) && Skip(entry));
             if (nullptr == entry)
             {
@@ -514,31 +707,32 @@ private:
         {
             return charge.Error();
         }
-        Result<FilesystemVisitAction> action = mVisitor(entry);
-        if (!action.HasValue())
-        {
-            mRetainedBytes -= bytes;
-            return action.Error();
-        }
-        if (FilesystemVisitAction::Stop == action.Value())
-        {
-            mResult.outcome = FilesystemCollectionOutcome::Stopped;
-            mResult.stopReason = "Visitor requested stop";
-        }
-        else if (FilesystemVisitAction::Continue != action.Value())
-        {
-            mRetainedBytes -= bytes;
-            return Error("Invalid filesystem visitor action", EINVAL);
-        }
         if (mRetainEntries)
         {
-            mResult.entries.push_back(std::move(entry));
+            mResult.entries.push_back(entry);
         }
         else
         {
             mRetainedBytes -= bytes;
         }
+        mPendingEntry = std::move(entry);
         return true;
+    }
+
+    bool ShouldYield(const struct stat& effective) const
+    {
+        switch (mRequest.yieldType)
+        {
+            case FilesystemYieldType::All:
+                return true;
+            case FilesystemYieldType::RegularFiles:
+                return S_ISREG(effective.st_mode);
+            case FilesystemYieldType::Directories:
+                return S_ISDIR(effective.st_mode);
+            case FilesystemYieldType::SymbolicLinks:
+                return S_ISLNK(effective.st_mode);
+        }
+        return false; // The policy is validated before traversal.
     }
 
     Result<bool> Exclude(std::string path, const char* reason)
@@ -552,14 +746,18 @@ private:
         return true;
     }
 
-    Result<bool> Entry(const std::string& path, bool root)
+    Result<bool> Entry(const std::string& path, bool root, const struct stat* known = nullptr)
     {
         if (mRequest.limits.fullPathBytes <= path.size())
         {
             return Error("Filesystem path exceeds full path budget at '" + path + "'", ENAMETOOLONG);
         }
         struct stat metadata = {};
-        if (0 != mOperations.lstatPath(path.c_str(), &metadata))
+        if (nullptr != known)
+        {
+            metadata = *known;
+        }
+        else if (0 != mContext.LstatPath(path.c_str(), &metadata))
         {
             return OperationError("lstat", path, errno);
         }
@@ -575,7 +773,7 @@ private:
             if ((fileAction != directoryAction) || (FilesystemLinkAction::Follow == fileAction))
             {
                 struct stat target = {};
-                if (0 != mOperations.statPath(path.c_str(), &target))
+                if (0 != mContext.StatPath(path.c_str(), &target))
                 {
                     return OperationError("stat link target", path, errno);
                 }
@@ -594,7 +792,7 @@ private:
             }
             if (FilesystemLinkAction::Record == action)
             {
-                return Deliver(std::move(entry));
+                return ShouldYield(entry.linkMetadata) ? Deliver(std::move(entry)) : Result<bool>(true);
             }
             if ((!directory) && (!file))
             {
@@ -618,16 +816,31 @@ private:
         {
             return Exclude(path, "filesystem scope");
         }
-        Result<bool> delivery = Deliver(std::move(entry));
-        if (!delivery.HasValue() || (FilesystemCollectionOutcome::Stopped == mResult.outcome) || !directory)
+        if (ShouldYield(metadata))
         {
-            return delivery;
+            const Result<bool> delivery = Deliver(std::move(entry));
+            if (!delivery.HasValue())
+            {
+                return delivery;
+            }
+        }
+        if (!directory)
+        {
+            return true;
         }
         if (!root)
         {
             const std::size_t descent = mFrames.size();
-            if ((FilesystemDirection::None == mRequest.direction) || ((-1 != mRequest.maxDepth) && (static_cast<std::size_t>(mRequest.maxDepth) < descent)))
+            if (FilesystemDirection::None == mRequest.direction)
             {
+                return true;
+            }
+            if ((-1 != mRequest.maxDepth) && (static_cast<std::size_t>(mRequest.maxDepth) < descent))
+            {
+                if (FilesystemDepthAction::Error == mRequest.depthAction)
+                {
+                    return Error("Maximum recursion depth reached");
+                }
                 return true;
             }
             if (mRequest.limits.operationalDescent < descent)
@@ -642,7 +855,16 @@ private:
                 }
             }
         }
-        return OpenFrame(path, &metadata);
+        // The directory's open/stat (and any error) belongs to the next pull,
+        // after the entry has been observed by the caller.
+        const Result<bool> retained = Charge(path.size() + 1, path);
+        if (!retained.HasValue())
+        {
+            return retained.Error();
+        }
+        mPendingDirectory = path;
+        mPendingMetadata = metadata;
+        return true;
     }
 
     Result<bool> LegacyEntry(const std::string& path)
@@ -652,7 +874,7 @@ private:
             return Error("Filesystem path exceeds full path budget at '" + path + "'", ENAMETOOLONG);
         }
         struct stat metadata = {};
-        if (0 != mOperations.lstatPath(path.c_str(), &metadata))
+        if (0 != mContext.LstatPath(path.c_str(), &metadata))
         {
             return OperationError("lstat", path, errno);
         }
@@ -662,41 +884,93 @@ private:
         return Deliver(std::move(entry));
     }
 
-    Result<FilesystemCollectionResult> Walk()
+    Result<bool> OpenPendingDirectory()
     {
+        const std::string path = std::move(mPendingDirectory).Value();
+        mPendingDirectory.Reset();
+        const struct stat expected = mPendingMetadata.Value();
+        mPendingMetadata.Reset();
+        mRetainedBytes -= path.size() + 1;
+        return OpenFrame(path, &expected);
+    }
+
+    Result<bool> InitializeRoot()
+    {
+        if (mStarted)
+        {
+            return true;
+        }
+        mStarted = true;
+        const Result<bool> rootCharge = Charge(mRequest.rootPath.size() + 1, mRequest.rootPath);
+        if (!rootCharge.HasValue())
+        {
+            return rootCharge.Error();
+        }
         if (mLegacy)
         {
-            const Result<bool> opened = OpenFrame(mRequest.rootPath, nullptr, false, true);
+            return OpenFrame(mRequest.rootPath, nullptr, false, true);
+        }
+        struct stat root = {};
+        if (0 != mContext.LstatPath(mRequest.rootPath.c_str(), &root))
+        {
+            const int code = errno;
+            if (ENOENT == code)
+            {
+                mRootExists = false;
+                return true;
+            }
+            return OperationError("lstat", mRequest.rootPath, code);
+        }
+        const Result<bool> rootResult = Entry(mRequest.rootPath, true, &root);
+        if (!rootResult.HasValue())
+        {
+            return rootResult.Error();
+        }
+        // Acquire the requested directory before returning the range, but do
+        // not read any entries. Its first observation stays pending for Next().
+        if (mPendingDirectory.HasValue())
+        {
+            return OpenPendingDirectory();
+        }
+        return true;
+    }
+
+    Result<Optional<FilesystemCollectionEntry>> Pull()
+    {
+        if (!mStarted)
+        {
+            const Result<bool> initialized = InitializeRoot();
+            if (!initialized.HasValue())
+            {
+                return initialized.Error();
+            }
+        }
+        if (mPendingEntry.HasValue())
+        {
+            FilesystemCollectionEntry entry = std::move(mPendingEntry).Value();
+            mPendingEntry.Reset();
+            return Optional<FilesystemCollectionEntry>(std::move(entry));
+        }
+        if (mPendingDirectory.HasValue())
+        {
+            const Result<bool> opened = OpenPendingDirectory();
             if (!opened.HasValue())
             {
                 return opened.Error();
             }
-            if (FilesystemCollectionOutcome::Absent == mResult.outcome)
-            {
-                return std::move(mResult);
-            }
         }
-        else
+        while (!mFrames.empty())
         {
-            struct stat root = {};
-            if (0 != mOperations.lstatPath(mRequest.rootPath.c_str(), &root))
+            // A filtered directory has no yielded entry to trigger another
+            // pull; open it now so required descent cannot be silently lost.
+            if (mPendingDirectory.HasValue())
             {
-                const int code = errno;
-                if (ENOENT == code)
+                const Result<bool> opened = OpenPendingDirectory();
+                if (!opened.HasValue())
                 {
-                    mResult.outcome = FilesystemCollectionOutcome::Absent;
-                    return std::move(mResult);
+                    return opened.Error();
                 }
-                return OperationError("lstat", mRequest.rootPath, code);
             }
-            const Result<bool> rootResult = Entry(mRequest.rootPath, true);
-            if (!rootResult.HasValue())
-            {
-                return rootResult.Error();
-            }
-        }
-        while ((!mFrames.empty()) && (FilesystemCollectionOutcome::Stopped != mResult.outcome))
-        {
             DirectoryFrame& frame = mFrames.back();
             if (nullptr == frame.stream)
             {
@@ -707,7 +981,7 @@ private:
                 }
             }
             errno = 0;
-            const struct dirent* dirEntry = mOperations.readDirectory(frame.stream);
+            const struct dirent* dirEntry = mContext.ReadDirectory(frame.stream);
             if (nullptr == dirEntry)
             {
                 const int code = errno;
@@ -718,7 +992,7 @@ private:
                 DIR* stream = frame.stream;
                 frame.stream = nullptr;
                 --mOpenDirectories;
-                if (0 != mOperations.closeDirectory(stream))
+                if (0 != mContext.CloseDirectory(stream))
                 {
                     return OperationError("close directory", frame.path, errno);
                 }
@@ -732,6 +1006,12 @@ private:
                 }
                 mRetainedBytes -= frame.chargedBytes;
                 mFrames.pop_back();
+                if (mPendingEntry.HasValue())
+                {
+                    FilesystemCollectionEntry entry = std::move(mPendingEntry).Value();
+                    mPendingEntry.Reset();
+                    return Optional<FilesystemCollectionEntry>(std::move(entry));
+                }
                 continue;
             }
             if (Skip(dirEntry))
@@ -799,15 +1079,25 @@ private:
             {
                 return processed.Error();
             }
+            if (mPendingEntry.HasValue())
+            {
+                FilesystemCollectionEntry entry = std::move(mPendingEntry).Value();
+                mPendingEntry.Reset();
+                return Optional<FilesystemCollectionEntry>(std::move(entry));
+            }
         }
-        return std::move(mResult);
+        const Optional<Error> closed = CloseFrames(Optional<Error>());
+        if (closed.HasValue())
+        {
+            return closed.Value();
+        }
+        return Optional<FilesystemCollectionEntry>();
     }
 
     ResolvedFilesystemCollectionRequest mRequest;
-    const FilesystemCollectionVisitor& mVisitor;
     bool mRetainEntries = false;
     bool mLegacy = false;
-    const Detail::FilesystemCollectionOperations& mOperations;
+    ContextInterface& mContext;
     OsConfigLogHandle mLog = nullptr;
     FilesystemCollectionResult mResult;
     std::vector<DirectoryFrame> mFrames;
@@ -815,72 +1105,204 @@ private:
     std::size_t mRetainedBytes = 0;
     std::size_t mWork = 0;
     dev_t mRootDevice = 0;
+    bool mStarted = false;
+    bool mFinalized = false;
+    bool mRootExists = true;
+    Optional<Error> mFailure;
+    Optional<FilesystemCollectionEntry> mPendingEntry;
+    Optional<std::string> mPendingDirectory;
+    Optional<struct stat> mPendingMetadata;
 };
 } // namespace
 
-Result<FilesystemCollectionResult> StreamFilesystemCollection(const FilesystemCollectionRequest& request, const FilesystemCollectionVisitor& visitor, OsConfigLogHandle log)
+namespace FTW
 {
-    const Detail::FilesystemCollectionOperations operations;
-    return Detail::StreamFilesystemCollectionWithOperations(request, visitor, operations, log);
-}
-
-Result<FilesystemCollectionResult> CollectFilesystem(const FilesystemCollectionRequest& request, OsConfigLogHandle log)
+struct FileRange::State
 {
-    const Detail::FilesystemCollectionOperations operations;
-    return Detail::CollectFilesystemWithOperations(request, operations, log);
-}
-
-namespace Detail
-{
-Result<FilesystemCollectionResult> StreamFilesystemCollectionWithOperations(const FilesystemCollectionRequest& request,
-    const FilesystemCollectionVisitor& visitor, const FilesystemCollectionOperations& operations, OsConfigLogHandle log)
-{
-    const Result<ResolvedFilesystemCollectionRequest> resolved = ResolveFilesystemCollectionRequest(request);
-    if (!resolved.HasValue())
+    State(FilesystemCollectionRequest request, ContextInterface& context, bool legacy)
     {
-        return resolved.Error();
+        const auto resolved = ResolveFilesystemCollectionRequest(request);
+        if (resolved.HasValue())
+        {
+            traversal.reset(new Traversal(resolved.Value(), context, false, legacy));
+        }
+        else
+        {
+            failure = resolved.Error();
+        }
     }
+
+    Optional<Error> failure;
+    std::unique_ptr<Traversal> traversal;
+};
+
+Result<Optional<FilesystemCollectionEntry>> FileRange::Source::Next()
+{
+    return state->traversal->Next();
+}
+
+FileRange::FileRange(std::shared_ptr<State> state)
+    : mState(std::move(state)),
+      mView(Source{mState})
+{
+}
+
+FileRange::~FileRange() = default;
+
+Result<FileRange> Files(const FilesystemCollectionRequest& policy, ContextInterface& context)
+{
+    auto state = std::make_shared<FileRange::State>(policy, context, false);
+    if (state->failure.HasValue())
+    {
+        return state->failure.Value();
+    }
+    const auto initialized = state->traversal->Initialize();
+    if (!initialized.HasValue())
+    {
+        return initialized.Error();
+    }
+    return FileRange(std::move(state));
+}
+
+Result<Optional<FilesystemCollectionEntry>> FileRange::Next()
+{
+    return mView.Next();
+}
+
+Result<FilesystemCollectionResult> FileRange::StopVisitor()
+{
+    return mState->traversal->Stop();
+}
+
+void FileRange::Abort(const Error& error)
+{
+    mState->traversal->Abort(error);
+}
+
+bool FileRange::RootExists() const
+{
+    return mState->traversal->RootExists();
+}
+
+Result<bool> FileRange::Close()
+{
+    return mState->traversal->Close();
+}
+
+Result<bool> FileRange::RetainEntries()
+{
+    return mState->traversal->RetainEntries();
+}
+} // namespace FTW
+
+Result<FilesystemCollectionResult> StreamFilesystemCollection(const FilesystemCollectionRequest& request, const FilesystemCollectionVisitor& visitor,
+    ContextInterface& context)
+{
     if (!visitor)
     {
         return Error("Filesystem collection visitor must not be empty", EINVAL);
     }
-    Traversal traversal(resolved.Value(), visitor, false, false, operations, log);
-    return traversal.Run();
-}
-
-Result<FilesystemCollectionResult> CollectFilesystemWithOperations(const FilesystemCollectionRequest& request,
-    const FilesystemCollectionOperations& operations, OsConfigLogHandle log)
-{
-    const Result<ResolvedFilesystemCollectionRequest> resolved = ResolveFilesystemCollectionRequest(request);
-    if (!resolved.HasValue())
+    auto opened = FTW::Files(request, context);
+    if (!opened.HasValue())
     {
-        return resolved.Error();
+        return opened.Error();
     }
-    const FilesystemCollectionVisitor visitor = [](const FilesystemCollectionEntry&) {
-        return Result<FilesystemVisitAction>(FilesystemVisitAction::Continue);
-    };
-    Traversal traversal(resolved.Value(), visitor, true, false, operations, log);
-    return traversal.Run();
+    auto& files = opened.Value();
+    for (const Result<FilesystemCollectionEntry>& entry : files)
+    {
+        if (!entry.HasValue())
+        {
+            return entry.Error();
+        }
+        const Result<FilesystemVisitAction> action = InvokeVisitor(visitor, entry.Value());
+        if (!action.HasValue())
+        {
+            // Preserve the callback failure as primary; cleanup is best-effort.
+            files.Abort(action.Error());
+            return action.Error();
+        }
+        if (FilesystemVisitAction::Stop == action.Value())
+        {
+            return files.StopVisitor();
+        }
+        if (FilesystemVisitAction::Continue != action.Value())
+        {
+            const Error error("Invalid filesystem visitor action", EINVAL);
+            files.Abort(error);
+            return Error("Invalid filesystem visitor action", EINVAL);
+        }
+    }
+    return files.mState->traversal->CloseResult();
 }
 
-Result<FilesystemCollectionResult> StreamLegacyFileTreeWalk(const std::string& rootPath, const FilesystemCollectionVisitor& visitor,
-    const FilesystemCollectionOperations& operations, OsConfigLogHandle log)
+Result<FilesystemCollectionResult> CollectFilesystem(const FilesystemCollectionRequest& request, ContextInterface& context)
+{
+    auto opened = FTW::Files(request, context);
+    if (!opened.HasValue())
+    {
+        return opened.Error();
+    }
+    auto& files = opened.Value();
+    const auto retained = files.RetainEntries();
+    if (!retained.HasValue())
+    {
+        files.Abort(retained.Error());
+        return retained.Error();
+    }
+    for (const Result<FilesystemCollectionEntry>& entry : files)
+    {
+        if (!entry.HasValue())
+        {
+            return entry.Error();
+        }
+    }
+    return files.mState->traversal->CloseResult();
+}
+
+namespace Detail
+{
+Result<FilesystemCollectionResult> StreamLegacyFileTreeWalk(const std::string& rootPath, const FilesystemCollectionVisitor& visitor, ContextInterface& context)
 {
     FilesystemCollectionRequest request(rootPath, FilesystemRootKind::Directory);
     request.direction = FilesystemDirection::Down;
     request.maxDepth = -1;
     request.scope = FilesystemScope::All;
-    const Result<ResolvedFilesystemCollectionRequest> resolved = ResolveFilesystemCollectionRequest(request);
-    if (!resolved.HasValue())
-    {
-        return resolved.Error();
-    }
     if (!visitor)
     {
         return Error("Filesystem collection visitor must not be empty", EINVAL);
     }
-    Traversal traversal(resolved.Value(), visitor, false, true, operations, log);
-    return traversal.Run();
+    FTW::FileRange::State state(request, context, true);
+    if (state.failure.HasValue())
+    {
+        return state.failure.Value();
+    }
+    for (;;)
+    {
+        const auto next = state.traversal->Next();
+        if (!next.HasValue())
+        {
+            return next.Error();
+        }
+        if (!next.Value().HasValue())
+        {
+            return state.traversal->CloseResult();
+        }
+        const auto action = InvokeVisitor(visitor, next.Value().Value());
+        if (!action.HasValue())
+        {
+            state.traversal->Abort(action.Error());
+            return action.Error();
+        }
+        if (FilesystemVisitAction::Stop == action.Value())
+        {
+            return state.traversal->Stop();
+        }
+        if (FilesystemVisitAction::Continue != action.Value())
+        {
+            state.traversal->Abort(Error("Invalid filesystem visitor action", EINVAL));
+            return Error("Invalid filesystem visitor action", EINVAL);
+        }
+    }
 }
 } // namespace Detail
 } // namespace ComplianceEngine

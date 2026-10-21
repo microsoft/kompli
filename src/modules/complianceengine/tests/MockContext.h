@@ -24,6 +24,11 @@ struct MockContext : public ComplianceEngine::ContextInterface
     MOCK_METHOD(int, StatFileDescriptor, (int descriptor, struct stat* metadata), (const, override));
     MOCK_METHOD(ssize_t, ReadFileDescriptor, (int descriptor, void* buffer, std::size_t size), (const, override));
     MOCK_METHOD(int, CloseFileDescriptor, (int descriptor), (const, override));
+    MOCK_METHOD(DIR*, OpenDirectory, (const char* path), (const, override));
+    MOCK_METHOD(struct dirent*, ReadDirectory, (DIR * directory), (const, override));
+    MOCK_METHOD(int, CloseDirectory, (DIR * directory), (const, override));
+    MOCK_METHOD(int, StatPath, (const char* path, struct stat* metadata), (const, override));
+    MOCK_METHOD(int, LstatPath, (const char* path, struct stat* metadata), (const, override));
     MOCK_METHOD(ComplianceEngine::Result<std::vector<ComplianceEngine::InterfaceInfo>>, GetNetworkInterfaces, (), (const, override));
 
     ComplianceEngine::Result<std::string> GetRunningKernelRelease() const override
@@ -68,6 +73,15 @@ struct MockContext : public ComplianceEngine::ContextInterface
         });
         ON_CALL(*this, CloseFileDescriptor(testing::_)).WillByDefault([this](int descriptor) {
             return ContextInterface::CloseFileDescriptor(descriptor);
+        });
+        ON_CALL(*this, OpenDirectory(testing::_)).WillByDefault([this](const char* path) { return ContextInterface::OpenDirectory(path); });
+        ON_CALL(*this, ReadDirectory(testing::_)).WillByDefault([this](DIR* directory) { return ContextInterface::ReadDirectory(directory); });
+        ON_CALL(*this, CloseDirectory(testing::_)).WillByDefault([this](DIR* directory) { return ContextInterface::CloseDirectory(directory); });
+        ON_CALL(*this, StatPath(testing::_, testing::_)).WillByDefault([this](const char* path, struct stat* metadata) {
+            return ContextInterface::StatPath(path, metadata);
+        });
+        ON_CALL(*this, LstatPath(testing::_, testing::_)).WillByDefault([this](const char* path, struct stat* metadata) {
+            return ContextInterface::LstatPath(path, metadata);
         });
         mTempRootDir = mTempdir + "/rootfs";
         ::mkdir(mTempRootDir.c_str(), 0755);

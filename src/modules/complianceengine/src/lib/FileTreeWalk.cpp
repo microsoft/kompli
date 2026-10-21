@@ -2,15 +2,12 @@
 // Licensed under the MIT License.
 
 #include <FileTreeWalk.h>
-#include <FilesystemCollection.h>
 #include <cerrno>
+#include <filesystem/FilesystemCollection.hpp>
 
 namespace ComplianceEngine
 {
-namespace Detail
-{
-Result<Status> FileTreeWalkWithOperations(const std::string& path, FtwCallback callback, BreakOnNonCompliant breakOnNonCompliant,
-    ContextInterface& context, const FilesystemCollectionOperations& operations)
+Result<Status> FileTreeWalk(const std::string& path, FtwCallback callback, BreakOnNonCompliant breakOnNonCompliant, ContextInterface& context)
 {
     if (!callback)
     {
@@ -35,22 +32,11 @@ Result<Status> FileTreeWalkWithOperations(const std::string& path, FtwCallback c
         }
         return FilesystemVisitAction::Continue;
     };
-    const Result<FilesystemCollectionResult> collected = StreamLegacyFileTreeWalk(path, visitor, operations, context.GetLogHandle());
+    const Result<FilesystemCollectionResult> collected = Detail::StreamLegacyFileTreeWalk(path, visitor, context);
     if (!collected.HasValue())
     {
         return collected.Error();
     }
-    if ((FilesystemCollectionOutcome::Stopped == collected.Value().outcome) && !nonCompliant)
-    {
-        return Error("FileTreeWalk stopped without a decisive callback result", EIO);
-    }
     return nonCompliant ? Status::NonCompliant : Status::Compliant;
-}
-} // namespace Detail
-
-Result<Status> FileTreeWalk(const std::string& path, FtwCallback callback, BreakOnNonCompliant breakOnNonCompliant, ContextInterface& context)
-{
-    const Detail::FilesystemCollectionOperations operations;
-    return Detail::FileTreeWalkWithOperations(path, callback, breakOnNonCompliant, context, operations);
 }
 } // namespace ComplianceEngine
