@@ -4,6 +4,7 @@
 #include <StringTools.h>
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <stdexcept>
 
 namespace ComplianceEngine
@@ -101,16 +102,38 @@ Result<int> TryStringToInt(const std::string& str, int base)
 }
 Result<unsigned int> TryStringToUint(const std::string& str, int base)
 {
-    auto try_int = TryStringToInt(str, base);
-    if (!try_int.HasValue())
+    try
     {
-        return try_int.Error();
-    }
-    if (try_int.Value() < 0)
-    {
-        return Error("Invalid integer value (should be positive): " + std::to_string(try_int.Value()));
-    }
+        const auto first = str.find_first_not_of(" \t\n\r\v\f");
+        if ((first != std::string::npos) && ('-' == str[first]))
+        {
+            const auto signedValue = TryStringToInt(str, base);
+            if (!signedValue.HasValue())
+            {
+                return signedValue.Error();
+            }
+            return Error("Invalid integer value (should be positive): " + std::to_string(signedValue.Value()), EINVAL);
+        }
 
-    return Result<unsigned int>(try_int.Value());
+        std::size_t consumed = 0;
+        const auto value = std::stoull(str, &consumed, base);
+        if (str.size() != consumed)
+        {
+            return Error("Invalid integer value: " + str, EINVAL);
+        }
+        if (std::numeric_limits<unsigned int>::max() < value)
+        {
+            return Error("Integer value out of range: " + str, ERANGE);
+        }
+        return static_cast<unsigned int>(value);
+    }
+    catch (const std::invalid_argument&)
+    {
+        return Error("Invalid integer value: " + str, EINVAL);
+    }
+    catch (const std::out_of_range&)
+    {
+        return Error("Integer value out of range: " + str, ERANGE);
+    }
 }
 } // namespace ComplianceEngine
