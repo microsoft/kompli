@@ -296,11 +296,12 @@ TEST(LoginDefsTest, ByteBudgetRejectsOversizeInsteadOfReturningPartialDocument)
     {
         input += "#\n";
     }
-    EXPECT_TRUE(ld::Parse(input.substr(0, ld::MaxBytes - 1), "source", nullptr).HasValue());
-    EXPECT_TRUE(ld::Parse(input.substr(0, ld::MaxBytes), "source", nullptr).HasValue());
-    const auto excess = ld::Parse(input + "x", "source", nullptr);
+    EXPECT_TRUE(ld::Parse(input.substr(0, ld::MaxBytes - 1), "/etc/login.defs", nullptr).HasValue());
+    EXPECT_TRUE(ld::Parse(input.substr(0, ld::MaxBytes), "/etc/login.defs", nullptr).HasValue());
+    const auto excess = ld::Parse(input + "x", "/etc/login.defs", nullptr);
     ASSERT_FALSE(excess.HasValue());
     EXPECT_EQ(E2BIG, excess.Error().code);
+    EXPECT_EQ("/etc/login.defs: login.defs byte limit exceeded: 1048577 bytes (maximum 1048576 bytes)", excess.Error().message);
 }
 
 TEST(LoginDefsTest, LineBudgetChecksBothSidesOfBoundary)
@@ -308,9 +309,10 @@ TEST(LoginDefsTest, LineBudgetChecksBothSidesOfBoundary)
     const std::string line(ld::MaxLineBytes, '#');
     EXPECT_TRUE(ld::Parse(line.substr(0, ld::MaxLineBytes - 1), "source", nullptr).HasValue());
     EXPECT_TRUE(ld::Parse(line, "source", nullptr).HasValue());
-    const auto excess = ld::Parse(line + "#", "source", nullptr);
+    const auto excess = ld::Parse("#\n" + line + "#", "/etc/login.defs", nullptr);
     ASSERT_FALSE(excess.HasValue());
     EXPECT_EQ(E2BIG, excess.Error().code);
+    EXPECT_EQ("/etc/login.defs:2: login.defs line limit exceeded: 16385 bytes (maximum 16384 bytes)", excess.Error().message);
 
     std::string attached = "UID_MIN 1#";
     attached.append(ld::MaxLineBytes - attached.size(), 'x');
@@ -318,6 +320,7 @@ TEST(LoginDefsTest, LineBudgetChecksBothSidesOfBoundary)
     const auto attachedExcess = ld::Parse(attached + "x", "source", nullptr);
     ASSERT_FALSE(attachedExcess.HasValue());
     EXPECT_EQ(E2BIG, attachedExcess.Error().code);
+    EXPECT_EQ("source:1: login.defs line limit exceeded: 16385 bytes (maximum 16384 bytes)", attachedExcess.Error().message);
 }
 
 TEST(LoginDefsTest, RecordBudgetChecksBothSidesOfBoundary)
@@ -327,11 +330,12 @@ TEST(LoginDefsTest, RecordBudgetChecksBothSidesOfBoundary)
     {
         records += "K 1\n";
     }
-    EXPECT_TRUE(ld::Parse(records.substr(0, 4 * (ld::MaxRecords - 1)), "source", nullptr).HasValue());
-    EXPECT_TRUE(ld::Parse(records.substr(0, 4 * ld::MaxRecords), "source", nullptr).HasValue());
-    const auto excess = ld::Parse(records, "source", nullptr);
+    EXPECT_TRUE(ld::Parse(records.substr(0, 4 * (ld::MaxRecords - 1)), "/etc/login.defs", nullptr).HasValue());
+    EXPECT_TRUE(ld::Parse(records.substr(0, 4 * ld::MaxRecords), "/etc/login.defs", nullptr).HasValue());
+    const auto excess = ld::Parse(records, "/etc/login.defs", nullptr);
     ASSERT_FALSE(excess.HasValue());
     EXPECT_EQ(E2BIG, excess.Error().code);
+    EXPECT_EQ("/etc/login.defs:8193: login.defs record limit exceeded: 8193 records (maximum 8192 records)", excess.Error().message);
 }
 
 } // anonymous namespace

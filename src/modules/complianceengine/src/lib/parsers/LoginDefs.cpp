@@ -21,9 +21,11 @@ bool IsSeparator(char value)
     return (' ' == value) || ('\t' == value) || ('\r' == value) || ('\v' == value) || ('\f' == value);
 }
 
-Result<Document> LimitError(const char* limit)
+Result<Document> LimitError(const std::string& location, const char* limit, std::size_t observed, std::size_t maximum, const char* unit)
 {
-    return Error(std::string("login.defs ") + limit + " limit exceeded", E2BIG);
+    return Error(location + ": login.defs " + limit + " limit exceeded: " + std::to_string(observed) + " " + unit + " (maximum " +
+                     std::to_string(maximum) + " " + unit + ")",
+        E2BIG);
 }
 
 Result<Document> SyntaxError(const std::string& source, std::size_t line, std::size_t column, const char* problem)
@@ -84,7 +86,7 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
 {
     if (MaxBytes < bytes.size())
     {
-        return LimitError("byte");
+        return LimitError(source, "byte", bytes.size(), MaxBytes, "bytes");
     }
 
     Document document;
@@ -101,7 +103,7 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
         const auto end = std::string::npos == newline ? input.size() : newline;
         if (MaxLineBytes < end - start)
         {
-            return LimitError("line");
+            return LimitError(document.source + ":" + std::to_string(lineNumber), "line", end - start, MaxLineBytes, "bytes");
         }
 
         if (firstNul < end)
@@ -118,7 +120,7 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
         {
             if (MaxRecords <= recordCount)
             {
-                return LimitError("record");
+                return LimitError(document.source + ":" + std::to_string(lineNumber), "record", recordCount + 1, MaxRecords, "records");
             }
             ++recordCount;
             std::size_t keyEnd = keyStart;
