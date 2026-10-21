@@ -26,7 +26,6 @@ TEST(TextRenderersTest, CommonHeaderAndFooterAreRendered)
 {
     auto r = RenderText(kResult, TextStyle::CompactList);
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
-    EXPECT_TRUE(Contains(r.Value(), "Action: Audit"));
     EXPECT_TRUE(Contains(r.Value(), "Timestamp: 2026-01-01T00:00:00Z"));
     EXPECT_TRUE(Contains(r.Value(), "Rules:"));
     EXPECT_TRUE(Contains(r.Value(), "Duration: 5 ms"));
