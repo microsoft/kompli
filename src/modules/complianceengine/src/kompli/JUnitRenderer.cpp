@@ -367,16 +367,22 @@ Result<string> TestcaseClassname(const JSON_Object* rule, const string& id)
     {
         return Error("Canonical result JSON rule has invalid 'benchmark' value", EINVAL);
     }
-    const string framework = StringOrEmpty(json_object_get_string(benchmark, "framework"));
-    const string distribution = StringOrEmpty(json_object_get_string(benchmark, "distribution"));
-    const string distributionVersion = StringOrEmpty(json_object_get_string(benchmark, "distributionVersion"));
-    const string benchmarkVersion = StringOrEmpty(json_object_get_string(benchmark, "benchmarkVersion"));
-    if (framework.empty() || distribution.empty() || distributionVersion.empty() || benchmarkVersion.empty())
+    string classname;
+    for (const char* key : {"framework", "distribution", "distributionVersion", "benchmarkVersion"})
     {
-        return Error("Canonical result JSON rule has incomplete benchmark provenance", EINVAL);
+        const JSON_Value* value = json_object_get_value(benchmark, key);
+        if (nullptr == value || JSONString != json_value_get_type(value))
+        {
+            return Error("Canonical result JSON rule has invalid benchmark field '" + string(key) + "'", EINVAL);
+        }
+        const string component(json_value_get_string(value), json_value_get_string_len(value));
+        if (component.empty() || string::npos != component.find('\0'))
+        {
+            return Error("Canonical result JSON rule has empty or NUL-containing benchmark field '" + string(key) + "'", EINVAL);
+        }
+        classname += std::to_string(component.size()) + ":" + component;
     }
-    const auto encode = [](const string& component) { return std::to_string(component.size()) + ":" + component; };
-    return encode(framework) + encode(distribution) + encode(distributionVersion) + encode(benchmarkVersion) + encode(id);
+    return classname + std::to_string(id.size()) + ":" + id;
 }
 } // anonymous namespace
 
