@@ -21,7 +21,8 @@
               "properties": {
                 "option": {
                   "type": "string",
-                  "description": "The login.defs option name to check (e.g., PASS_MAX_DAYS, PASS_MIN_DAYS, PASS_WARN_AGE, ENCRYPT_METHOD)"
+                  "description": "The login.defs option name to check (e.g., PASS_MAX_DAYS, PASS_MIN_DAYS, PASS_WARN_AGE, ENCRYPT_METHOD)",
+                  "pattern": "(^\\$[a-zA-Z0-9_]+:((PASS_MAX_DAYS|PASS_MIN_DAYS|PASS_WARN_AGE|ENCRYPT_METHOD))$|(^(PASS_MAX_DAYS|PASS_MIN_DAYS|PASS_WARN_AGE|ENCRYPT_METHOD)$))"
                 },
                 "value": {
                   "type": "string",
@@ -58,7 +59,8 @@
               "properties": {
                 "option": {
                   "type": "string",
-                  "description": "The login.defs option name to check (e.g., PASS_MAX_DAYS, PASS_MIN_DAYS, PASS_WARN_AGE, ENCRYPT_METHOD)"
+                  "description": "The login.defs option name to check (e.g., PASS_MAX_DAYS, PASS_MIN_DAYS, PASS_WARN_AGE, ENCRYPT_METHOD)",
+                  "pattern": "(^\\$[a-zA-Z0-9_]+:((PASS_MAX_DAYS|PASS_MIN_DAYS|PASS_WARN_AGE|ENCRYPT_METHOD))$|(^(PASS_MAX_DAYS|PASS_MIN_DAYS|PASS_WARN_AGE|ENCRYPT_METHOD)$))"
                 },
                 "value": {
                   "type": "string",
