@@ -4,11 +4,11 @@
 #include <Bindings.h>
 #include <Evaluator.h>
 #include <FilePermissions.h>
-#include <FileTreeWalk.h>
 #include <ListValidShells.h>
 #include <LogFilePermissions.h>
 #include <Result.h>
 #include <UsersIterator.h>
+#include <filesystem/FilesystemCollection.hpp>
 #include <fnmatch.h>
 #include <map>
 #include <pwd.h>
@@ -172,6 +172,53 @@ Result<Status> ProcessLogfile(const std::string& path, const std::string& filena
     return result.Value();
 }
 
+Result<Status> WalkLogfiles(const std::string& path, const DaemonUidSet& daemonUids, IndicatorsTree& indicators, ContextInterface& context, bool remediate)
+{
+    FilesystemCollectionRequest policy(path, FilesystemRootKind::Directory);
+    policy.direction = FilesystemDirection::Down;
+    policy.maxDepth = 32;
+    policy.depthAction = FilesystemDepthAction::Error;
+    policy.scope = FilesystemScope::All;
+    policy.rootFileLinkAction = FilesystemLinkAction::Follow;
+    policy.rootDirectoryLinkAction = FilesystemLinkAction::Follow;
+    policy.childFileLinkAction = FilesystemLinkAction::Record;
+    policy.childDirectoryLinkAction = FilesystemLinkAction::Record;
+    policy.yieldType = FilesystemYieldType::RegularFiles;
+
+    auto opened = FTW::Files(policy, context);
+    if (!opened.HasValue())
+    {
+        return opened.Error();
+    }
+    auto& files = opened.Value();
+    Status verdict = Status::Compliant;
+    for (const auto& entry : files)
+    {
+        if (!entry.HasValue())
+        {
+            return entry.Error();
+        }
+        const std::string& fullPath = entry.Value().path;
+        const std::size_t separator = fullPath.find_last_of('/');
+        const auto result = ProcessLogfile(fullPath.substr(0, separator), fullPath.substr(separator + 1), entry.Value().linkMetadata, daemonUids,
+            indicators, context, remediate);
+        if (!result.HasValue())
+        {
+            return result.Error();
+        }
+        if (Status::Compliant != result.Value())
+        {
+            verdict = Status::NonCompliant;
+        }
+    }
+    const auto closed = files.Close();
+    if (!closed.HasValue())
+    {
+        return closed.Error();
+    }
+    return verdict;
+}
+
 } // anonymous namespace
 
 Result<Status> AuditLogFilePermissions(const LogFilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
@@ -185,11 +232,7 @@ Result<Status> AuditLogFilePermissions(const LogFilePermissionsParams& params, I
         return daemonUids.Error();
     }
 
-    auto callback = [&daemonUids, &indicators, &context](const std::string& dirPath, const std::string& filename, const struct stat& statInfo) -> Result<Status> {
-        return ProcessLogfile(dirPath, filename, statInfo, daemonUids.Value(), indicators, context, false);
-    };
-
-    auto result = FileTreeWalk(params.path.Value(), callback, BreakOnNonCompliant::False, context);
+    auto result = WalkLogfiles(params.path.Value(), daemonUids.Value(), indicators, context, false);
 
     if (!result.HasValue())
     {
@@ -218,11 +261,7 @@ Result<Status> RemediateLogFilePermissions(const LogFilePermissionsParams& param
         return daemonUids.Error();
     }
 
-    auto callback = [&daemonUids, &indicators, &context](const std::string& dirPath, const std::string& filename, const struct stat& statInfo) -> Result<Status> {
-        return ProcessLogfile(dirPath, filename, statInfo, daemonUids.Value(), indicators, context, true);
-    };
-
-    auto result = FileTreeWalk(params.path.Value(), callback, BreakOnNonCompliant::False, context);
+    auto result = WalkLogfiles(params.path.Value(), daemonUids.Value(), indicators, context, true);
 
     if (!result.HasValue())
     {

@@ -25,6 +25,211 @@ using ComplianceEngine::RemediateLogFilePermissions;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 
+// These range/error tests do not require privileged user and group setup.
+class LogFileRangeTest : public ::testing::Test
+{
+protected:
+    MockContext context;
+    IndicatorsTree indicators;
+    std::string testDir = context.GetTempdirPath() + "/logfile-range";
+
+    void SetUp() override
+    {
+        ASSERT_EQ(0, mkdir(testDir.c_str(), 0700));
+        context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/bash\n"));
+        context.SetSpecialFilePath("/etc/passwd", context.MakeTempfile("root:x:0:0:root:/root:/bin/bash\n"));
+        indicators.Push("LogFilePermissions");
+    }
+
+    Result<Status> Run(bool remediate, const std::string& path = "")
+    {
+        LogFilePermissionsParams params;
+        params.path = path.empty() ? testDir : path;
+        return remediate ? RemediateLogFilePermissions(params, indicators, context) : AuditLogFilePermissions(params, indicators, context);
+    }
+};
+
+TEST_F(LogFileRangeTest, AuditContinuesPastViolationsAndSelectsOnlyRegularFiles)
+{
+    ASSERT_EQ(0, mkdir((testDir + "/nested").c_str(), 0700));
+    const std::string first = testDir + "/bad.log";
+    const std::string second = testDir + "/nested/.hidden.log";
+    std::ofstream(first) << "first";
+    std::ofstream(second) << "second";
+    ASSERT_EQ(0, chmod(first.c_str(), 0777));
+    ASSERT_EQ(0, chmod(second.c_str(), 0777));
+    ASSERT_EQ(0, symlink(first.c_str(), (testDir + "/link.log").c_str()));
+    ASSERT_EQ(0, mkfifo((testDir + "/pipe.log").c_str(), 0600));
+
+    const auto result = Run(false);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    ASSERT_NE(nullptr, indicators.GetRootNode());
+    EXPECT_EQ(2u, indicators.GetRootNode()->children.size());
+}
+
+TEST_F(LogFileRangeTest, RemediationContinuesAfterMissingFileVerdicts)
+{
+    // Remove each entry after the range's lstat but before the permission helper opens
+    // it. Remediation reports noncompliance, without requiring root or changing owners.
+    for (const char* name : {"first.log", "second.log"})
+    {
+        std::ofstream(testDir + "/" + name) << "log";
+    }
+    ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([this](const char* path, struct stat* metadata) {
+        const int result = context.ContextInterface::LstatPath(path, metadata);
+        if (result == 0 && (std::string(path) == testDir + "/first.log" || std::string(path) == testDir + "/second.log"))
+        {
+            EXPECT_EQ(0, unlink(path));
+        }
+        return result;
+    });
+
+    const auto result = Run(true);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    ASSERT_NE(nullptr, indicators.GetRootNode());
+    EXPECT_EQ(2u, indicators.GetRootNode()->children.size());
+}
+
+TEST_F(LogFileRangeTest, FactoryFailuresPropagateForAuditAndRemediation)
+{
+    for (bool remediate : {false, true})
+    {
+        const auto absent = Run(remediate, testDir + "/missing");
+        ASSERT_TRUE(absent.HasValue());
+        EXPECT_EQ(Status::Compliant, absent.Value());
+    }
+    ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([](const char*, struct stat*) {
+        errno = EACCES;
+        return -1;
+    });
+    for (bool remediate : {false, true})
+    {
+        const auto result = Run(remediate);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EACCES, result.Error().code);
+    }
+    ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([this](const char* path, struct stat* metadata) {
+        return context.ContextInterface::LstatPath(path, metadata);
+    });
+    ON_CALL(context, OpenDirectory(::testing::_)).WillByDefault([](const char*) -> DIR* {
+        errno = EACCES;
+        return nullptr;
+    });
+    for (bool remediate : {false, true})
+    {
+        const auto result = Run(remediate);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EACCES, result.Error().code);
+    }
+}
+
+TEST_F(LogFileRangeTest, ReachedItemErrorAfterNoncomplianceOutranksCleanupFailure)
+{
+    const std::string file = testDir + "/bad.log";
+    std::ofstream(file) << "log";
+    ASSERT_EQ(0, chmod(file.c_str(), 0777));
+    std::size_t entries = 0;
+    ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([&entries](DIR * stream) -> struct dirent* {
+        if (entries == 1)
+        {
+            errno = EACCES;
+            return nullptr;
+        }
+        struct dirent* entry = readdir(stream);
+        if (entry && std::string(entry->d_name) != "." && std::string(entry->d_name) != "..")
+        {
+            ++entries;
+        }
+        return entry;
+    });
+    ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([](DIR* stream) {
+        const int result = closedir(stream);
+        errno = EIO;
+        return result == 0 ? -1 : result;
+    });
+
+    const auto result = Run(false);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EACCES, result.Error().code);
+    EXPECT_EQ(1u, entries);
+    ASSERT_NE(nullptr, indicators.GetRootNode());
+    EXPECT_EQ(1u, indicators.GetRootNode()->children.size());
+}
+
+TEST_F(LogFileRangeTest, CheckedCloseErrorOverridesVerdictForBothPaths)
+{
+    const std::string file = testDir + "/bad.log";
+    ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([](DIR* stream) {
+        const int result = closedir(stream);
+        errno = EIO;
+        return result == 0 ? -1 : result;
+    });
+    for (bool remediate : {false, true})
+    {
+        std::ofstream(file) << "log";
+        ASSERT_EQ(0, chmod(file.c_str(), 0777));
+        if (remediate)
+        {
+            ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([this, &file](const char* path, struct stat* metadata) {
+                const int result = context.ContextInterface::LstatPath(path, metadata);
+                if (result == 0 && file == path)
+                {
+                    EXPECT_EQ(0, unlink(path));
+                }
+                return result;
+            });
+        }
+        const auto result = Run(remediate);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EIO, result.Error().code);
+    }
+    EXPECT_EQ(2u, indicators.GetRootNode()->children.size());
+}
+
+TEST_F(LogFileRangeTest, DescendantErrorIsReachedDespiteDirectoryFiltering)
+{
+    const std::string nested = testDir + "/nested";
+    ASSERT_EQ(0, mkdir(nested.c_str(), 0700));
+    ON_CALL(context, OpenDirectory(::testing::_)).WillByDefault([&nested](const char* path) -> DIR* {
+        if (nested == path)
+        {
+            errno = EACCES;
+            return nullptr;
+        }
+        return opendir(path);
+    });
+    for (bool remediate : {false, true})
+    {
+        const auto result = Run(remediate);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EACCES, result.Error().code);
+    }
+}
+
+TEST_F(LogFileRangeTest, RootDirectoryLinkIsFollowedAndDepthThirtyThreeErrors)
+{
+    const std::string linkedRoot = context.GetTempdirPath() + "/linked-log-root";
+    ASSERT_EQ(0, symlink(testDir.c_str(), linkedRoot.c_str()));
+    const std::string file = testDir + "/bad.log";
+    std::ofstream(file) << "log";
+    ASSERT_EQ(0, chmod(file.c_str(), 0777));
+    const auto linked = Run(false, linkedRoot);
+    ASSERT_TRUE(linked.HasValue());
+    EXPECT_EQ(Status::NonCompliant, linked.Value());
+
+    std::string directory = testDir;
+    for (int depth = 0; depth < 33; ++depth)
+    {
+        directory += "/d";
+        ASSERT_EQ(0, mkdir(directory.c_str(), 0700));
+    }
+    const auto tooDeep = Run(false);
+    ASSERT_FALSE(tooDeep.HasValue());
+    EXPECT_NE(std::string::npos, tooDeep.Error().message.find("Maximum recursion depth"));
+}
+
 class EnsureLogfileAccessTest : public ::testing::Test
 {
 protected:
