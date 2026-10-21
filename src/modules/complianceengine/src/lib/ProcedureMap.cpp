@@ -62,6 +62,9 @@ const char* Bindings<MountPointExistsParams>::names[] = {"mountPoint"};
 // MtaLocalOnly.h:32
 const char* Bindings<MtaLocalOnlyParams>::names[] = {"configurationVersion"};
 
+// NameserverCount.h:16
+const char* Bindings<NameserverCountParams>::names[] = {"path"};
+
 // NetworkInterfaceFlag.h:73
 const char* Bindings<NetworkInterfaceFlagParams>::names[] = {"flag", "interfaceName"};
 
@@ -140,6 +143,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"LoginDefsOption", {MakeHandler(AuditLoginDefsOption), MakeHandler(RemediateLoginDefsOption)}},
     {"MountPointExists", {MakeHandler(AuditMountPointExists), nullptr}},
     {"MtaLocalOnly", {MakeHandler(AuditMtaLocalOnly), nullptr}},
+    {"NameserverCount", {MakeHandler(AuditNameserverCount), nullptr}},
     {"NetworkInterfaceFlag", {MakeHandler(AuditNetworkInterfaceFlag), nullptr}},
     {"NoDuplicateEntries", {MakeHandler(AuditNoDuplicateEntries), nullptr}},
     {"NoShadowPrimaryGroup", {MakeHandler(AuditNoShadowPrimaryGroup), nullptr}},

@@ -791,6 +791,25 @@ TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInRuleName)
     EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
 }
 
+TEST(BenchmarkDefinitionParserTest, RejectsTagExceeding256Utf8Bytes)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("tags": ["level:l1"])", R"("tags": ["x:)" + std::string(254, 'a') + R"("])");
+    EXPECT_TRUE(ParseString(doc, nullptr).HasValue());
+
+    ReplaceOnce(doc, R"("x:)" + std::string(254, 'a') + R"(")", R"("x:)" + std::string(255, 'a') + R"(")");
+    auto tooLong = ParseString(doc, nullptr);
+    EXPECT_FALSE(tooLong.HasValue());
+    if (!tooLong.HasValue())
+    {
+        EXPECT_NE(tooLong.Error().message.find("256 bytes"), std::string::npos);
+    }
+
+    std::string utf8 = OneRuleDoc();
+    ReplaceOnce(utf8, R"("tags": ["level:l1"])", R"("tags": ["x:)" + std::string(253, 'a') + "\xC3\xA9" + R"("])");
+    EXPECT_FALSE(ParseString(utf8, nullptr).HasValue());
+}
+
 TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInLegacyPayloadKey)
 {
     const std::string rule = R"({"section":"1.1.1.1","payloadKey":"/cis/ubuntu/22.04/v2.0.0/1/1/1/1",)"
