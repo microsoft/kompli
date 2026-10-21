@@ -76,6 +76,7 @@ add_executable(complianceenginetests
     EvaluatorTest.cpp
     FileObjectCollectorTest.cpp
     FilesystemScannerTest.cpp
+    JsonWrapperTest.cpp
     LuaEvaluatorTest.cpp
     LuaProceduresTest.cpp
     NetworkToolsTest.cpp

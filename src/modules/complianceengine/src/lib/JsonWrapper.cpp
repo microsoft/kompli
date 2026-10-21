@@ -8,8 +8,52 @@
 
 namespace ComplianceEngine
 {
+namespace
+{
+bool ContainsNul(const std::string& input)
+{
+    if (input.find('\0') != std::string::npos)
+    {
+        return true;
+    }
+
+    bool inString = false;
+    for (std::size_t index = 0; index < input.size(); ++index)
+    {
+        const char value = input[index];
+        if (!inString)
+        {
+            inString = value == '"';
+            continue;
+        }
+        if (value == '"')
+        {
+            inString = false;
+            continue;
+        }
+        if (value != '\\' || ++index >= input.size())
+        {
+            continue;
+        }
+        if ((input[index] == 'u') && (index + 4 < input.size()) && (input.compare(index + 1, 4, "0000") == 0))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+} // namespace
+
 Result<JsonWrapper> JsonWrapper::FromString(const char* input)
 {
+    if (nullptr == input)
+    {
+        return Error("Failed to parse JSON", EINVAL);
+    }
+    if (ContainsNul(input))
+    {
+        return Error("JSON input contains embedded NUL", EINVAL);
+    }
     auto result = JsonWrapperPointerType(json_parse_string(input), &json_value_free);
     if (nullptr == result)
     {
@@ -21,7 +65,17 @@ Result<JsonWrapper> JsonWrapper::FromString(const char* input)
 
 Result<JsonWrapper> JsonWrapper::FromString(const std::string& input)
 {
-    return FromString(input.c_str());
+    if (ContainsNul(input))
+    {
+        return Error("JSON input contains embedded NUL", EINVAL);
+    }
+    auto result = JsonWrapperPointerType(json_parse_string(input.c_str()), &json_value_free);
+    if (nullptr == result)
+    {
+        return Error("Failed to parse JSON", EINVAL);
+    }
+
+    return JsonWrapper(std::move(result));
 }
 
 Result<JsonWrapper> JsonWrapper::FromBase64(const std::string& input)
@@ -37,7 +91,11 @@ Result<JsonWrapper> JsonWrapper::FromBase64(const std::string& input)
 
 Result<JsonWrapper> JsonWrapper::FromJsonString(const std::string& input)
 {
-    auto result = JsonWrapperPointerType(json_value_init_string(input.c_str()), &json_value_free);
+    if (input.find('\0') != std::string::npos)
+    {
+        return Error("JSON string contains embedded NUL", EINVAL);
+    }
+    auto result = JsonWrapperPointerType(json_value_init_string_with_len(input.data(), input.size()), &json_value_free);
     if (nullptr == result)
     {
         return Error("Failed to parse JSON-encoded string", EINVAL);
