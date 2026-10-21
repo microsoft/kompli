@@ -71,7 +71,7 @@ const Optional<int>* NumericOption(const LoginDefs::Document& document, const st
     return nullptr;
 }
 
-bool IsNumericLoginDefsOption(const string& option)
+bool IsPasswordAgingOption(const string& option)
 {
     return (option == "PASS_MAX_DAYS") || (option == "PASS_MIN_DAYS") || (option == "PASS_WARN_AGE");
 }
@@ -182,7 +182,7 @@ string ReplaceEffectiveLoginDefsValue(const string& contents, const string& opti
 
 Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
-    if (!IsNumericLoginDefsOption(params.option) && params.option != "ENCRYPT_METHOD")
+    if (!IsPasswordAgingOption(params.option) && params.option != "ENCRYPT_METHOD")
     {
         OsConfigLogError(context.GetLogHandle(), "LoginDefsOption: unsupported option '%s'", params.option.c_str());
         return Error("Unsupported login.defs option: " + params.option, EINVAL);
@@ -198,7 +198,7 @@ Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, Indicat
         return fileContents.Error();
     }
 
-    const bool numericOption = IsNumericLoginDefsOption(params.option);
+    const bool numericOption = IsPasswordAgingOption(params.option);
     Optional<int> numericTarget;
     Optional<LoginDefs::EncryptionMethod> methodTarget;
     if (numericOption)
