@@ -251,7 +251,7 @@ TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, LoginDefsFileOverByteLimitRe
     const auto result = AuditSystemAccountShell(mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);
-    EXPECT_EQ("login.defs byte limit exceeded", result.Error().message);
+    EXPECT_EQ(filename + ": login.defs byte limit exceeded: 1048577 bytes (maximum 1048576 bytes)", result.Error().message);
     const auto* root = mIndicators.GetRootNode();
     ASSERT_NE(nullptr, root);
     EXPECT_TRUE(root->indicators.empty());
