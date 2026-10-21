@@ -196,7 +196,7 @@ TEST_F(AuditdRulesCheckTest, OversizedLoginDefsDoesNotUseDefaultUidMin)
     const auto result = AuditAuditdRules(params, indicators, mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);
-    EXPECT_EQ("login.defs byte limit exceeded", result.Error().message);
+    EXPECT_EQ("/etc/login.defs: login.defs byte limit exceeded: 1048577 bytes (maximum 1048576 bytes)", result.Error().message);
     const auto* root = indicators.GetRootNode();
     ASSERT_NE(nullptr, root);
     EXPECT_TRUE(root->indicators.empty());
