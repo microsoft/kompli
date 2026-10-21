@@ -11,6 +11,7 @@
 #include <UserHomeDirectoryPermissions.h>
 #include <UserPermissionsTestSeams.h>
 #include <cerrno>
+#include <dirent.h>
 #include <fstream>
 #include <grp.h>
 #include <gtest/gtest.h>
@@ -911,6 +912,238 @@ TEST(UserDotFilePermissionsErrorsTest, RemediationLaterWalkErrorOverridesNoncomp
     EXPECT_EQ(ENOTDIR, result.Error().code);
     ASSERT_EQ(1u, indicators.Back().indicators.size());
     EXPECT_EQ(Status::NonCompliant, indicators.Back().indicators[0].status);
+}
+
+class UserDotFileRangeTest : public ::testing::Test
+{
+protected:
+    MockContext context;
+    ComplianceEngine::IndicatorsTree indicators;
+
+    void SetUp() override
+    {
+        context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+        indicators.Push("UserDotFilePermissions");
+        ASSERT_NE(nullptr, getgrgid(getgid()));
+    }
+
+    std::string User(const std::string& name, const std::string& home) const
+    {
+        return name + ":x:" + std::to_string(getuid()) + ":" + std::to_string(getgid()) + "::" + home + ":/bin/sh\n";
+    }
+
+    Result<Status> Run(bool remediate, const std::string& passwd)
+    {
+        const auto path = context.MakeTempfile(passwd);
+        return remediate ? ComplianceEngine::RemediateUserDotFilePermissionsWithPasswdFile(indicators, context, path) :
+                           ComplianceEngine::AuditUserDotFilePermissionsWithPasswdFile(indicators, context, path);
+    }
+};
+
+TEST_F(UserDotFileRangeTest, AuditStopsAtFirstViolationPerUserAndContinuesToNextUser)
+{
+    const auto first = context.GetTempdirPath() + "/first-home";
+    const auto second = context.GetTempdirPath() + "/second-home";
+    ASSERT_EQ(0, mkdir(first.c_str(), 0700));
+    ASSERT_EQ(0, mkdir(second.c_str(), 0700));
+    std::ofstream(first + "/.rhosts") << "host\n";
+    std::ofstream(first + "/.forward") << "mail\n";
+    std::ofstream(second + "/.forward") << "mail\n";
+    const auto result = Run(false, User("first", first) + User("second", second));
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    EXPECT_EQ(2u, indicators.Back().indicators.size());
+}
+
+TEST_F(UserDotFileRangeTest, RemediationScansAllViolationsAcrossUsers)
+{
+    const auto first = context.GetTempdirPath() + "/first-home";
+    const auto second = context.GetTempdirPath() + "/second-home";
+    ASSERT_EQ(0, mkdir(first.c_str(), 0700));
+    ASSERT_EQ(0, mkdir(second.c_str(), 0700));
+    std::ofstream(first + "/.rhosts") << "host\n";
+    std::ofstream(first + "/.forward") << "mail\n";
+    std::ofstream(second + "/.forward") << "mail\n";
+    const auto result = Run(true, User("first", first) + User("second", second));
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    EXPECT_EQ(3u, indicators.Back().indicators.size());
+}
+
+TEST_F(UserDotFileRangeTest, RemediationRefusesHardLinksWithoutChangingTheSharedInode)
+{
+    const auto home = context.GetTempdirPath() + "/home";
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    const auto original = context.GetTempdirPath() + "/original";
+    std::ofstream(original) << "unchanged\n";
+    ASSERT_EQ(0, chmod(original.c_str(), 0666));
+    ASSERT_EQ(0, link(original.c_str(), (home + "/.config").c_str()));
+    std::ofstream(home + "/.forward") << "mail\n";
+    const auto result = Run(true, User("fixture", home));
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    ASSERT_EQ(2u, indicators.Back().indicators.size());
+    struct stat metadata = {};
+    ASSERT_EQ(0, stat(original.c_str(), &metadata));
+    EXPECT_EQ(0666, metadata.st_mode & 0777);
+    EXPECT_EQ(2, metadata.st_nlink);
+}
+
+TEST_F(UserDotFileRangeTest, MetadataDescentIncludesHiddenFilesButNotLinksOrSpecialFiles)
+{
+    const auto home = context.GetTempdirPath() + "/home";
+    const auto hidden = home + "/.nested";
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    ASSERT_EQ(0, mkdir(hidden.c_str(), 0700));
+    std::ofstream(hidden + "/.forward") << "mail\n";
+    std::ofstream(home + "/plain") << "ignored\n";
+    ASSERT_EQ(0, symlink((hidden + "/.forward").c_str(), (home + "/.forward").c_str()));
+    ASSERT_EQ(0, mkfifo((home + "/.rhosts").c_str(), 0600));
+    bool unknownDirectoryType = false;
+    ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([&unknownDirectoryType](DIR * stream) -> struct dirent* {
+        struct dirent* entry = readdir(stream);
+        if (entry && std::string(entry->d_name) == ".nested")
+        {
+            entry->d_type = DT_UNKNOWN;
+            unknownDirectoryType = true;
+        }
+        return entry;
+    });
+    const auto result = Run(false, User("fixture", home));
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    EXPECT_TRUE(unknownDirectoryType);
+    EXPECT_EQ(1u, indicators.Back().indicators.size());
+}
+
+TEST_F(UserDotFileRangeTest, MissingRootsAreCompliantAndFactoryFailuresPropagate)
+{
+    const auto home = context.GetTempdirPath() + "/absent";
+    for (bool remediate : {false, true})
+    {
+        const auto absent = Run(remediate, User("fixture", home));
+        ASSERT_TRUE(absent.HasValue());
+        EXPECT_EQ(Status::Compliant, absent.Value());
+    }
+    ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([](const char*, struct stat*) {
+        errno = EACCES;
+        return -1;
+    });
+    for (bool remediate : {false, true})
+    {
+        const auto result = Run(remediate, User("fixture", home));
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EACCES, result.Error().code);
+    }
+    ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([this](const char* path, struct stat* metadata) {
+        return context.ContextInterface::LstatPath(path, metadata);
+    });
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    ON_CALL(context, OpenDirectory(::testing::_)).WillByDefault([](const char*) -> DIR* {
+        errno = EACCES;
+        return nullptr;
+    });
+    for (bool remediate : {false, true})
+    {
+        const auto result = Run(remediate, User("fixture", home));
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EACCES, result.Error().code);
+    }
+}
+
+TEST_F(UserDotFileRangeTest, CheckedCloseFailureOverridesEarlyAuditVerdictAndRemediationVerdict)
+{
+    const auto home = context.GetTempdirPath() + "/home";
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    std::ofstream(home + "/.rhosts") << "host\n";
+    ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([](DIR* stream) {
+        const int result = closedir(stream);
+        errno = EIO;
+        return result == 0 ? -1 : result;
+    });
+    for (bool remediate : {false, true})
+    {
+        const auto result = Run(remediate, User("fixture", home));
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EIO, result.Error().code);
+    }
+    EXPECT_EQ(2u, indicators.Back().indicators.size());
+}
+
+TEST_F(UserDotFileRangeTest, RemediationReachedItemErrorAfterViolationOutranksCleanupError)
+{
+    const auto home = context.GetTempdirPath() + "/home";
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    std::ofstream(home + "/.rhosts") << "host\n";
+    std::size_t entries = 0;
+    ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([&entries](DIR * stream) -> struct dirent* {
+        if (entries == 1)
+        {
+            errno = EACCES;
+            return nullptr;
+        }
+        struct dirent* entry = readdir(stream);
+        if (entry && std::string(entry->d_name) != "." && std::string(entry->d_name) != "..")
+        {
+            ++entries;
+        }
+        return entry;
+    });
+    ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([](DIR* stream) {
+        const int result = closedir(stream);
+        errno = EIO;
+        return result == 0 ? -1 : result;
+    });
+    const auto result = Run(true, User("fixture", home));
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EACCES, result.Error().code);
+    EXPECT_EQ(1u, indicators.Back().indicators.size());
+}
+
+TEST_F(UserDotFileRangeTest, AuditReachedErrorInNextUserOverridesEarlierNoncompliance)
+{
+    const auto first = context.GetTempdirPath() + "/first-home";
+    const auto second = context.GetTempdirPath() + "/second-home";
+    ASSERT_EQ(0, mkdir(first.c_str(), 0700));
+    ASSERT_EQ(0, mkdir(second.c_str(), 0700));
+    std::ofstream(first + "/.rhosts") << "host\n";
+    ASSERT_EQ(0, mkdir((second + "/nested").c_str(), 0700));
+    ON_CALL(context, OpenDirectory(::testing::_)).WillByDefault([&second](const char* path) -> DIR* {
+        if (second + "/nested" == path)
+        {
+            errno = EACCES;
+            return nullptr;
+        }
+        return opendir(path);
+    });
+    const auto result = Run(false, User("first", first) + User("second", second));
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EACCES, result.Error().code);
+    EXPECT_EQ(1u, indicators.Back().indicators.size());
+}
+
+TEST_F(UserDotFileRangeTest, FollowsRootDirectoryLinkAndReportsDepthOverflow)
+{
+    const auto home = context.GetTempdirPath() + "/home";
+    const auto linkedRoot = context.GetTempdirPath() + "/linked-home";
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    ASSERT_EQ(0, symlink(home.c_str(), linkedRoot.c_str()));
+    std::ofstream(home + "/.rhosts") << "host\n";
+    const auto linked = Run(false, User("fixture", linkedRoot));
+    ASSERT_TRUE(linked.HasValue());
+    EXPECT_EQ(Status::NonCompliant, linked.Value());
+
+    std::string directory = home;
+    for (int depth = 0; depth < 33; ++depth)
+    {
+        directory += "/d";
+        ASSERT_EQ(0, mkdir(directory.c_str(), 0700));
+    }
+    // Remediation must descend after seeing the forbidden file rather than
+    // returning its verdict before encountering the depth error.
+    const auto tooDeep = Run(true, User("fixture", home));
+    ASSERT_FALSE(tooDeep.HasValue());
+    EXPECT_NE(std::string::npos, tooDeep.Error().message.find("Maximum recursion depth"));
 }
 
 TEST(UserHomeDirectoryPermissionsErrorsTest, FailedChildRemediationPropagatesWithoutMutatingHome)

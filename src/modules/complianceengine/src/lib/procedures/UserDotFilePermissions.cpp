@@ -2,13 +2,13 @@
 // Licensed under the MIT License.
 #include <Evaluator.h>
 #include <FilePermissions.h>
-#include <FileTreeWalk.h>
 #include <ListValidShells.h>
 #include <Result.h>
 #include <UserDotFilePermissions.h>
 #include <UserPermissionsTestSeams.h>
 #include <UsersIterator.h>
 #include <fcntl.h>
+#include <filesystem/FilesystemCollection.hpp>
 #include <fstream>
 #include <grp.h>
 #include <pwd.h>
@@ -59,13 +59,10 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
             return Error(string("Failed to get group for user: ") + strerror(errno), errno);
         }
 
-        auto ftwCallback = [pwd, group, &indicators, &context](const string& directory, const std::string& filename, const struct stat& st) -> Result<Status> {
-            if (!S_ISREG(st.st_mode))
-            {
-                OsConfigLogDebug(context.GetLogHandle(), "Skipping non-regular file '%s'", filename.c_str());
-                return Status::Compliant;
-            }
-
+        auto processFile = [pwd, group, &indicators, &context](const FilesystemCollectionEntry& entry) -> Result<Status> {
+            const auto& path = entry.path;
+            const std::size_t separator = path.find_last_of('/');
+            const string filename = path.substr(separator + 1);
             if (filename.find(".") != 0)
             {
                 OsConfigLogDebug(context.GetLogHandle(), "Skipping entry '%s' as its name doesn't start with '.'", filename.c_str());
@@ -78,8 +75,6 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
             }
 
             Result<Status> result = Status::Compliant;
-            const auto path = directory + "/" + filename;
-
             // Performs a file permissions check and updates the result in case of error or non-compliance
             auto checkFile = [pwd, group, &path, &indicators, &context, &result](const mode_t mask) {
                 auto groupPattern = Pattern::Make(group->gr_name);
@@ -136,13 +131,47 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
             return result;
         };
 
-        auto result = FileTreeWalk(pwd.pw_dir, ftwCallback, BreakOnNonCompliant::True, context);
-        if (!result.HasValue())
+        FilesystemCollectionRequest policy(pwd.pw_dir, FilesystemRootKind::Directory);
+        policy.direction = FilesystemDirection::Down;
+        policy.maxDepth = 32;
+        policy.depthAction = FilesystemDepthAction::Error;
+        policy.scope = FilesystemScope::All;
+        policy.rootFileLinkAction = FilesystemLinkAction::Follow;
+        policy.rootDirectoryLinkAction = FilesystemLinkAction::Follow;
+        policy.childFileLinkAction = FilesystemLinkAction::Record;
+        policy.childDirectoryLinkAction = FilesystemLinkAction::Record;
+        policy.yieldType = FilesystemYieldType::RegularFiles;
+        auto opened = FTW::Files(policy, context);
+        if (!opened.HasValue())
         {
-            OsConfigLogError(context.GetLogHandle(), "Directory validation for user '%s' failed: %s", pwd.pw_name, result.Error().message.c_str());
-            return result.Error();
+            OsConfigLogError(context.GetLogHandle(), "Directory validation for user '%s' failed: %s", pwd.pw_name, opened.Error().message.c_str());
+            return opened.Error();
         }
-        if (result.Value() == Status::NonCompliant)
+        auto& files = opened.Value();
+        Status verdict = Status::Compliant;
+        for (const auto& entry : files)
+        {
+            if (!entry.HasValue())
+            {
+                return entry.Error();
+            }
+            const auto result = processFile(entry.Value());
+            if (!result.HasValue())
+            {
+                return result.Error();
+            }
+            if (result.Value() == Status::NonCompliant)
+            {
+                verdict = Status::NonCompliant;
+                break;
+            }
+        }
+        const auto closed = files.Close();
+        if (!closed.HasValue())
+        {
+            return closed.Error();
+        }
+        if (verdict == Status::NonCompliant)
         {
             OsConfigLogDebug(context.GetLogHandle(), "Directory validation for user %s id %d returned NonCompliant, but continuing", pwd.pw_name, pwd.pw_uid);
             status = Status::NonCompliant;
@@ -190,13 +219,11 @@ Result<Status> RemediateUserDotFilePermissionsWithPasswdFile(IndicatorsTree& ind
             status = Status::NonCompliant;
         }
 
-        auto ftwCallback = [user, group, &indicators, &context](const string& directory, const std::string& filename, const struct stat& st) -> Result<Status> {
-            if (!S_ISREG(st.st_mode))
-            {
-                OsConfigLogDebug(context.GetLogHandle(), "Skipping non-regular file '%s'", filename.c_str());
-                return Status::Compliant;
-            }
-
+        auto processFile = [user, group, &indicators, &context](const FilesystemCollectionEntry& entry) -> Result<Status> {
+            const auto& path = entry.path;
+            const std::size_t separator = path.find_last_of('/');
+            const string directory = path.substr(0, separator);
+            const string filename = path.substr(separator + 1);
             if (filename.find(".") != 0)
             {
                 OsConfigLogDebug(context.GetLogHandle(), "Skipping entry '%s' as its name doesn't start with '.'", filename.c_str());
@@ -206,13 +233,13 @@ Result<Status> RemediateUserDotFilePermissionsWithPasswdFile(IndicatorsTree& ind
             // Refuse to remediate a dot-file that has more than one hard link. This directory is
             // owned and writable by the (unprivileged) user, so a multiply-linked entry here may
             // share its inode with a sensitive root-owned file (e.g. a hard link to /etc/shadow).
-            // Since a hard link is an ordinary regular file, it passes the S_ISREG check above and
-            // is not caught by symlink protection; remediating it would change the linked file's
+            // Since a hard link is an ordinary regular file, it passes the range's regular-file
+            // selection and is not caught by symlink protection; remediating it would change the linked file's
             // ownership and mode too, which is a privilege-escalation vector when this runs as root.
-            if (st.st_nlink > 1)
+            if (entry.linkMetadata.st_nlink > 1)
             {
                 OsConfigLogError(context.GetLogHandle(), "Refusing to remediate '%s/%s': file has %lu hard links", directory.c_str(), filename.c_str(),
-                    static_cast<unsigned long>(st.st_nlink));
+                    static_cast<unsigned long>(entry.linkMetadata.st_nlink));
                 return indicators.NonCompliant("Refusing to remediate hard-linked file '" + filename + "' in home directory '" + user.pw_dir + "'");
             }
 
@@ -223,8 +250,6 @@ Result<Status> RemediateUserDotFilePermissionsWithPasswdFile(IndicatorsTree& ind
             }
 
             Result<Status> result = Status::Compliant;
-            const auto path = directory + "/" + filename;
-
             // Performs a file permissions check and updates the result in case of error or non-compliance
             auto remediateFile = [user, group, &path, &indicators, &context, &result](const mode_t mask) {
                 auto pwdPattern = Pattern::Make(user.pw_name);
@@ -276,13 +301,46 @@ Result<Status> RemediateUserDotFilePermissionsWithPasswdFile(IndicatorsTree& ind
             return result;
         };
 
-        auto result = FileTreeWalk(user.pw_dir, ftwCallback, BreakOnNonCompliant::False, context);
-        if (!result.HasValue())
+        FilesystemCollectionRequest policy(user.pw_dir, FilesystemRootKind::Directory);
+        policy.direction = FilesystemDirection::Down;
+        policy.maxDepth = 32;
+        policy.depthAction = FilesystemDepthAction::Error;
+        policy.scope = FilesystemScope::All;
+        policy.rootFileLinkAction = FilesystemLinkAction::Follow;
+        policy.rootDirectoryLinkAction = FilesystemLinkAction::Follow;
+        policy.childFileLinkAction = FilesystemLinkAction::Record;
+        policy.childDirectoryLinkAction = FilesystemLinkAction::Record;
+        policy.yieldType = FilesystemYieldType::RegularFiles;
+        auto opened = FTW::Files(policy, context);
+        if (!opened.HasValue())
         {
-            OsConfigLogError(context.GetLogHandle(), "Directory validation for user '%s' failed: %s", user.pw_name, result.Error().message.c_str());
-            return result.Error();
+            OsConfigLogError(context.GetLogHandle(), "Directory validation for user '%s' failed: %s", user.pw_name, opened.Error().message.c_str());
+            return opened.Error();
         }
-        if (Status::NonCompliant == result.Value())
+        auto& files = opened.Value();
+        Status verdict = Status::Compliant;
+        for (const auto& entry : files)
+        {
+            if (!entry.HasValue())
+            {
+                return entry.Error();
+            }
+            const auto result = processFile(entry.Value());
+            if (!result.HasValue())
+            {
+                return result.Error();
+            }
+            if (result.Value() == Status::NonCompliant)
+            {
+                verdict = Status::NonCompliant;
+            }
+        }
+        const auto closed = files.Close();
+        if (!closed.HasValue())
+        {
+            return closed.Error();
+        }
+        if (Status::NonCompliant == verdict)
         {
             OsConfigLogError(context.GetLogHandle(), "Directory validation for user %s id %d returned NonCompliant, but continuing", user.pw_name, user.pw_uid);
             status = Status::NonCompliant;
