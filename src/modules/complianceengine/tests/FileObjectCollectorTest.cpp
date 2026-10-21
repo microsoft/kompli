@@ -179,6 +179,64 @@ TEST(FileObjectCollectorTest, ContentAndCaptureLimitsFailWithoutPartialPublicati
     EXPECT_EQ(E2BIG, result.Error().code);
 }
 
+TEST(FileObjectCollectorTest, SelectionFailureDefersToLaterReadError)
+{
+    NiceMock<MockContext> context;
+    int opens = 0;
+    int reads = 0;
+    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&](const char*, int) { return ++opens == 1 ? 10 : 11; });
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int, struct stat* metadata) {
+        *metadata = {};
+        metadata->st_mode = S_IFREG | 0600;
+        metadata->st_dev = 1;
+        metadata->st_ino = 2;
+        return 0;
+    });
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int, void* buffer, std::size_t size) -> ssize_t {
+        if (reads++ == 0)
+        {
+            const std::string content = "nameserver too-long\n";
+            const auto count = std::min(size, content.size());
+            std::memcpy(buffer, content.data(), count);
+            return static_cast<ssize_t>(count);
+        }
+        errno = EIO;
+        return -1;
+    });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int) { return 0; });
+    FileCollectionPolicy policy;
+    policy.captureBytes = 1;
+
+    const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", policy);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EIO, result.Error().code);
+    EXPECT_EQ(2, reads);
+}
+
+TEST(FileObjectCollectorTest, SelectionFailureDefersToExplicitCloseError)
+{
+    NiceMock<MockContext> context;
+    const auto path = context.MakeTempfile("nameserver too-long\n");
+    int closes = 0;
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int descriptor) {
+        ++closes;
+        context.ContextInterface::CloseFileDescriptor(descriptor);
+        if (closes == 1)
+        {
+            errno = EACCES;
+            return -1;
+        }
+        return 0;
+    });
+    FileCollectionPolicy policy;
+    policy.captureBytes = 1;
+
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path, policy);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EACCES, result.Error().code);
+    EXPECT_EQ(2, closes);
+}
+
 TEST(FileObjectCollectorTest, RejectPolicyRefusesFinalSymlink)
 {
     NiceMock<MockContext> context;

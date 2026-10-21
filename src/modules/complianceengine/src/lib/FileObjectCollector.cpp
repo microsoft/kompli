@@ -15,17 +15,17 @@ namespace ComplianceEngine
 {
 namespace
 {
-Result<VariableResolution::ObjectCollection> ProjectNameservers(const NameserverSelection::Document& selection, std::size_t maxValues)
+Result<VariableResolution::ObjectCollection> ProjectNameservers(const NameserverSelection::Stream& selection, std::size_t maxValues)
 {
     VariableResolution::ObjectCollection collection;
-    for (const auto& capture : selection.captures)
+    for (const auto& value : selection.Values())
     {
         if (collection.items.size() >= maxValues)
             return Error("Exact file value limit exceeded", E2BIG);
         if (collection.items.size() >= collection.items.max_size())
             return Error("Exact file capture collection is not representable", EOVERFLOW);
         VariableResolution::ObjectItem item;
-        item.fields["subexpression"] = {selection.bytes.substr(capture.offset, capture.length)};
+        item.fields["subexpression"] = {value};
         collection.items.push_back(std::move(item));
     }
     collection.complete = true;
@@ -48,13 +48,19 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
         readerPolicy.symlinks = policy.rootSymlinks == RootSymlinkPolicy::Reject ? FileReader::SymlinksPolicy::RejectFinal : FileReader::SymlinksPolicy::FollowFinal;
         readerPolicy.limits.maxBytes = policy.contentBytes;
         readerPolicy.limits.maxInterruptedReads = policy.readRetries;
-        std::string bytes;
+        NameserverSelection::Limits selectionLimits;
+        selectionLimits.occurrences = policy.occurrences;
+        selectionLimits.captureBytes = policy.captureBytes;
+        selectionLimits.capturedBytes = policy.capturedBytes;
+        NameserverSelection::Stream selection(path, selectionLimits, true);
+        Result<bool> selected(true);
         auto opened = FileReader::Lines(context, path, readerPolicy);
         if (!opened.HasValue())
             return std::move(opened).Error();
         auto& range = opened.Value();
-        // Retain the length-bearing document for offsets/captures. Selection
-        // requires both verified EOF and successful explicit finalization.
+        // Continue reading after a selection limit fails: reached reader errors
+        // (including the tail and EOF verification) and Close take precedence.
+        // No selection is published before verified EOF and explicit Close.
         for (const auto& item : range)
         {
             if (!item.HasValue())
@@ -76,20 +82,19 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
                 }
                 return primary;
             }
-            bytes.append(item.Value());
+            if (selected.HasValue())
+                selected = selection.Feed(item.Value());
         }
         auto closed = range.Close();
         if (!closed.HasValue())
             return std::move(closed).Error();
 
-        NameserverSelection::Limits selectionLimits;
-        selectionLimits.occurrences = policy.occurrences;
-        selectionLimits.captureBytes = policy.captureBytes;
-        selectionLimits.capturedBytes = policy.capturedBytes;
-        auto selection = NameserverSelection::FindNameserverCaptures(std::move(bytes), path, selectionLimits);
-        if (!selection.HasValue())
-            return selection.Error();
-        return ProjectNameservers(selection.Value(), policy.values);
+        if (!selected.HasValue())
+            return selected.Error();
+        selected = selection.Finish();
+        if (!selected.HasValue())
+            return selected.Error();
+        return ProjectNameservers(selection, policy.values);
     }
     catch (const std::bad_alloc&)
     {

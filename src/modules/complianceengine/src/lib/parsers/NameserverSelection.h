@@ -7,6 +7,7 @@
 #include <Result.h>
 #include <cstddef>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ComplianceEngine
@@ -32,6 +33,56 @@ struct Document
     std::string bytes;
     std::string source;
     std::vector<Capture> captures;
+};
+
+// Incremental form of the same selection. Feed accepts arbitrary byte ranges,
+// including ranges that split the keyword, whitespace run, or capture.
+// Values are retained only when requested; offsets remain available to
+// document consumers without changing their owned-input contract.
+class Stream
+{
+public:
+    Stream(std::string source, Limits limits, bool retainValues);
+    Result<bool> Feed(const std::string& bytes);
+    Result<bool> Finish();
+    const std::vector<Capture>& Captures() const
+    {
+        return mCaptures;
+    }
+    std::vector<Capture> TakeCaptures()
+    {
+        return std::move(mCaptures);
+    }
+    const std::vector<std::string>& Values() const
+    {
+        return mValues;
+    }
+
+private:
+    enum class State
+    {
+        Prefix,
+        AfterKeyword,
+        Whitespace,
+        Value,
+        Skip
+    };
+    Result<bool> CompleteCapture(std::size_t end);
+    Result<bool> ValidateLimits() const;
+
+    std::string mSource;
+    Limits mLimits;
+    bool mRetainValues;
+    State mState = State::Prefix;
+    std::size_t mPosition = 0;
+    std::size_t mPrefixLength = 0;
+    std::size_t mAnchor = 0;
+    std::size_t mCursor = 0;
+    std::size_t mCapturedBytes = 0;
+    bool mTooLong = false;
+    std::string mValue;
+    std::vector<Capture> mCaptures;
+    std::vector<std::string> mValues;
 };
 
 // Select the source expression ^nameserver\s+(.*)$, not resolv.conf grammar.

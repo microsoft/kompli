@@ -166,3 +166,43 @@ TEST(NameserverSelectionTest, RejectsZeroLimitsEvenForUnmatchedInput)
         EXPECT_NE(std::string::npos, result.Error().message.find("fixture"));
     }
 }
+
+TEST(NameserverSelectionTest, IncrementalSelectionAgreesWithDocumentAcrossEverySplit)
+{
+    const std::string bytes =
+        "nameserver\nnameserver \t\n\r\v\fvalue\r\n"
+        "nameserver same\nnameserver same\n"
+        " nameserver ignored\nnameserver \n"
+        "nameserver last";
+    const auto document = Selection::FindNameserverCaptures(bytes, "fixture");
+    ASSERT_TRUE(document.HasValue());
+    for (std::size_t split = 0; split <= bytes.size(); ++split)
+    {
+        Selection::Stream stream("fixture", {}, true);
+        ASSERT_TRUE(stream.Feed(bytes.substr(0, split)).HasValue()) << split;
+        ASSERT_TRUE(stream.Feed(bytes.substr(split)).HasValue()) << split;
+        ASSERT_TRUE(stream.Finish().HasValue()) << split;
+        EXPECT_EQ(Captures(document.Value()), stream.Values()) << split;
+        ASSERT_EQ(document.Value().captures.size(), stream.Captures().size()) << split;
+        for (std::size_t index = 0; index < stream.Captures().size(); ++index)
+        {
+            EXPECT_EQ(document.Value().captures[index].anchor, stream.Captures()[index].anchor) << split;
+            EXPECT_EQ(document.Value().captures[index].offset, stream.Captures()[index].offset) << split;
+            EXPECT_EQ(document.Value().captures[index].length, stream.Captures()[index].length) << split;
+        }
+    }
+}
+
+TEST(NameserverSelectionTest, IncrementalOccurrenceLimitPrecedesOversizedCapture)
+{
+    Selection::Limits limits;
+    limits.occurrences = 1;
+    limits.captureBytes = 1;
+    Selection::Stream stream("fixture", limits, true);
+    ASSERT_TRUE(stream.Feed("nameserver a\nnameserver ").HasValue());
+    ASSERT_TRUE(stream.Feed(std::string(100, 'x')).HasValue());
+    const auto result = stream.Finish();
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(E2BIG, result.Error().code);
+    EXPECT_NE(std::string::npos, result.Error().message.find("occurrence"));
+}
