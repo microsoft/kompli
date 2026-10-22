@@ -129,8 +129,12 @@ TEST(ResolvConfTest, MalformedUnknownAndUnverifiedInputNeverDisappears)
     EXPECT_TRUE(sawIPv6Sort);
     // A NUL-suffixed address must not pass through inet_pton as a valid prefix.
     for (const auto& projection : doc.projections)
+    {
         if (projection.token.line == 11)
+        {
             EXPECT_EQ(rc::Status::Invalid, projection.status);
+        }
+    }
 }
 
 TEST(ResolvConfTest, ExactBudgetBoundariesAndFatalVersusEmpty)
