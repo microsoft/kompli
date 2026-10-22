@@ -1,20 +1,21 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include <CommonUtils.h>
 #include <Evaluator.h>
 #include <NoDuplicateEntries.h>
 #include <Optional.h>
 #include <Result.h>
-#include <fstream>
+#include <ScopeGuard.h>
+#include <filesystem/FileReader.hpp>
 #include <set>
+#include <sstream>
 #include <string>
+#include <utility>
 
 namespace ComplianceEngine
 {
 Result<Status> AuditNoDuplicateEntries(const NoDuplicateEntriesParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
-    UNUSED(context);
     if (params.delimiter.size() != 1)
     {
         return Error("Delimiter must be a single character", EINVAL);
@@ -37,16 +38,30 @@ Result<Status> AuditNoDuplicateEntries(const NoDuplicateEntriesParams& params, I
 
     std::set<std::string> uniqueEntries;
     std::set<std::string> duplicateEntries;
-    std::string line;
-    std::ifstream file(params.filename);
-    if (!file.is_open())
+    auto opened = FileReader::Lines(context, params.filename);
+    if (!opened.HasValue())
     {
+        OsConfigLogError(context.GetLogHandle(), "Failed to open %s: %s", params.filename.c_str(), opened.Error().message.c_str());
         return Error("Failed to open file: " + params.filename, ENOENT);
     }
 
-    while (std::getline(file, line))
+    auto& range = opened.Value();
+    ScopeGuard closeOnExit([&] {
+        auto closed = range.Close();
+        if (!closed.HasValue())
+        {
+            OsConfigLogError(context.GetLogHandle(), "Failed to close %s: %s", params.filename.c_str(), closed.Error().message.c_str());
+        }
+    });
+    for (const auto& item : range)
     {
-        std::istringstream iss(std::move(line));
+        if (!item.HasValue())
+        {
+            OsConfigLogError(context.GetLogHandle(), "Failed to read %s: %s", params.filename.c_str(), item.Error().message.c_str());
+            return item.Error();
+        }
+
+        std::istringstream iss(item.Value());
         std::string token;
         for (int i = 0; i <= params.column; i++)
         {
@@ -64,6 +79,14 @@ Result<Status> AuditNoDuplicateEntries(const NoDuplicateEntriesParams& params, I
         {
             uniqueEntries.insert(std::move(token));
         }
+    }
+
+    closeOnExit.Dismiss();
+    auto closed = range.Close();
+    if (!closed.HasValue())
+    {
+        OsConfigLogError(context.GetLogHandle(), "Failed to close %s: %s", params.filename.c_str(), closed.Error().message.c_str());
+        return std::move(closed).Error();
     }
 
     if (!duplicateEntries.empty())

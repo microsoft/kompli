@@ -9,6 +9,7 @@
 #include <cerrno>
 #include <fstream>
 #include <iterator>
+#include <unistd.h>
 
 using ComplianceEngine::AuditShellTimeout;
 using ComplianceEngine::Error;
@@ -140,6 +141,116 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, MultipleEntries)
     ASSERT_GE(root->indicators.size(), 1u);
     EXPECT_EQ(root->indicators.back().status, Status::NonCompliant);
     EXPECT_EQ(root->indicators.back().message, string("TMOUT is set multiple times in ") + path);
+}
+
+TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, ReachedReadFailureIsNotMissingSetting)
+{
+    const auto path = mContext.MakeTempfile("TMOUT=900\nreadonly TMOUT\nexport TMOUT\n");
+    mContext.SetSpecialFilePath("/etc/bashrc", path);
+    ON_CALL(mContext, ReadFileDescriptor(testing::_, testing::_, testing::_)).WillByDefault([](int, void*, std::size_t) -> ssize_t {
+        errno = EIO;
+        return -1;
+    });
+
+    const auto result = AuditShellTimeout(mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EIO, result.Error().code);
+    EXPECT_EQ("Failed to read file bytes", result.Error().message);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, OpenFailurePreservesErrno)
+{
+    const auto path = mContext.MakeTempfile("TMOUT=900\n");
+    mContext.SetSpecialFilePath("/etc/bashrc", path);
+    ON_CALL(mContext, OpenExistingFile(testing::_, testing::_)).WillByDefault([](const char*, int) {
+        errno = EACCES;
+        return -1;
+    });
+
+    const auto result = AuditShellTimeout(mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EACCES, result.Error().code);
+    EXPECT_EQ("Failed to open file path", result.Error().message);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, NulAndDefaultByteLimitAreErrors)
+{
+    const auto path = mContext.MakeTempfile(string("TMOUT=900\0\n", 11));
+    mContext.SetSpecialFilePath("/etc/bashrc", path);
+    auto result = AuditShellTimeout(mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+
+    // A physical byte past the reader's default 1 MiB budget is not "not set".
+    const auto oversized = mContext.MakeTempfile(string(1024 * 1024 + 1, '#'));
+    mContext.SetSpecialFilePath("/etc/bashrc", oversized);
+    result = AuditShellTimeout(mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(E2BIG, result.Error().code);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, ExistingNonRegularSourceIsAnError)
+{
+    mContext.SetSpecialFilePath("/etc/bashrc", mContext.GetTempdirPath());
+    const auto result = AuditShellTimeout(mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+    EXPECT_EQ("File target is not regular", result.Error().message);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateStopsWithoutReadingTail)
+{
+    const auto path = mContext.MakeTempfile("TMOUT=100\nTMOUT=200\nunread tail\n");
+    mContext.SetSpecialFilePath("/etc/bashrc", path);
+    int reads = 0;
+    int closes = 0;
+    ON_CALL(mContext, ReadFileDescriptor(testing::_, testing::_, testing::_)).WillByDefault([&](int descriptor, void* buffer, std::size_t size) -> ssize_t {
+        ++reads;
+        if (reads == 1)
+        {
+            return mContext.ContextInterface::ReadFileDescriptor(descriptor, buffer, size);
+        }
+        errno = EIO;
+        return -1;
+    });
+    ON_CALL(mContext, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
+        ++closes;
+        return mContext.ContextInterface::CloseFileDescriptor(descriptor);
+    });
+
+    const auto result = AuditShellTimeout(mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    EXPECT_EQ("TMOUT is set multiple times in " + path, mIndicators.Back().indicators.back().message);
+    EXPECT_EQ(1, reads);
+    EXPECT_EQ(2, closes);
+}
+
+TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateCloseFailurePrecedesEarlyVerdict)
+{
+    const auto path = mContext.MakeTempfile("TMOUT=100\nTMOUT=200\n");
+    mContext.SetSpecialFilePath("/etc/bashrc", path);
+    int closes = 0;
+    ON_CALL(mContext, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
+        ++closes;
+        mContext.ContextInterface::CloseFileDescriptor(descriptor);
+        if (closes == 1)
+        {
+            errno = EIO;
+            return -1;
+        }
+        return 0;
+    });
+
+    const auto result = AuditShellTimeout(mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EIO, result.Error().code);
+    EXPECT_EQ(2, closes);
+    EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }
 
 TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, MultipleEntriesInDifferentFiles)

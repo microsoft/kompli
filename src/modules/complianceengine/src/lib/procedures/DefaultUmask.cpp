@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <dirent.h>
+#include <filesystem/FileReader.hpp>
 #include <fstream>
 #include <iterator>
 #include <pwd.h>
@@ -94,16 +95,33 @@ mode_t ParseSymbolicValue(const std::string& user, const std::string& group, con
 
 Result<MatchResult> MultilineMatch(const std::string& filename, const regex& valuePattern, const regex& pamPattern, ContextInterface& context)
 {
-    ifstream input(filename);
-    if (!input.is_open())
+    auto opened = FileReader::Lines(context, filename);
+    if (!opened.HasValue())
     {
-        return Error("Failed to open file: " + filename, errno);
+        OsConfigLogError(context.GetLogHandle(), "Failed to open %s: %s", filename.c_str(), opened.Error().message.c_str());
+        return std::move(opened).Error();
     }
 
+    auto& range = opened.Value();
+    ScopeGuard closeOnExit([&] {
+        auto closed = range.Close();
+        if (!closed.HasValue())
+        {
+            OsConfigLogError(context.GetLogHandle(), "Failed to close %s: %s", filename.c_str(), closed.Error().message.c_str());
+        }
+    });
     int lineNumber = 0;
-    string line;
-    while (getline(input, line))
+    MatchResult result = MatchResult::NotFound;
+    // The first matching assignment decides this file; Close still precedes publication.
+    for (const auto& item : range)
     {
+        if (!item.HasValue())
+        {
+            OsConfigLogError(context.GetLogHandle(), "Failed to read %s: %s", filename.c_str(), item.Error().message.c_str());
+            return item.Error();
+        }
+
+        const string& line = item.Value();
         const mode_t expected = 027;
         lineNumber++;
         smatch match;
@@ -130,19 +148,26 @@ Result<MatchResult> MultilineMatch(const std::string& filename, const regex& val
 
                 if ((expected & octal.Value()) != expected)
                 {
-                    return MatchResult::Incorrect;
+                    result = MatchResult::Incorrect;
                 }
-
-                return MatchResult::Correct;
+                else
+                {
+                    result = MatchResult::Correct;
+                }
+                break;
             }
 
             // We have a match, but not on the numeric result - we need to parse the symbolic mask
             auto symbolic = ParseSymbolicValue(match[3].str(), match[4].str(), match[5].str());
             if ((expected & symbolic) != expected)
             {
-                return MatchResult::Incorrect;
+                result = MatchResult::Incorrect;
             }
-            return MatchResult::Correct;
+            else
+            {
+                result = MatchResult::Correct;
+            }
+            break;
         }
 
         if (regex_search(line, match, pamPattern))
@@ -163,13 +188,24 @@ Result<MatchResult> MultilineMatch(const std::string& filename, const regex& val
 
             if ((expected & octal.Value()) != expected)
             {
-                return MatchResult::Incorrect;
+                result = MatchResult::Incorrect;
             }
-            return MatchResult::Correct;
+            else
+            {
+                result = MatchResult::Correct;
+            }
+            break;
         }
     }
 
-    return MatchResult::NotFound;
+    closeOnExit.Dismiss();
+    auto closed = range.Close();
+    if (!closed.HasValue())
+    {
+        OsConfigLogError(context.GetLogHandle(), "Failed to close %s: %s", filename.c_str(), closed.Error().message.c_str());
+        return std::move(closed).Error();
+    }
+    return result;
 }
 
 Result<vector<string>> GetUmaskLocations(ContextInterface& context)
