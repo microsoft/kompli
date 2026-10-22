@@ -93,6 +93,7 @@ add_executable(complianceenginetests
     VariableResolverTest.cpp
     parsers/LoginDefsTest.cpp
     parsers/NameserverSelectionTest.cpp
+    parsers/ResolvConfTest.cpp
     RegexFallbackTest.cpp
     RegexTest.cpp
     ResultTest.cpp
