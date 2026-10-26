@@ -40,12 +40,13 @@ silently truncate the document and hide everything after it. Because
 `RejectsLeadingNulByte`) and attested crash-free by the libFuzzer target.
 
 ### 5. `apiVersion` value is now validated
-`ParseString` now rejects any `apiVersion` outside a small allowlist
-(`kSupportedApiVersions`, currently just `"v1"`) with an error naming the
-supported set, closing the version-skew gap: an incompatible future format is
-no longer parsed best-effort. The supplied value is not echoed into logs,
-because it could contain control characters or be unreasonably long. Covered
-by `RejectsUnsupportedApiVersion` and
+`ParseString` rejects versions outside the supported set (currently `"v1"`)
+before parsing metadata or rules, rather than best-effort parsing an unknown
+format. The error names the supported set but does not echo the supplied value
+into logs, where control characters or an unreasonably long value could be
+misleading. The existing required-string and NUL checks still reject malformed
+versions. Both legacy and new rule identities remain supported for `v1`.
+Covered by `RejectsUnsupportedApiVersion` and
 `DoesNotEchoUnsupportedApiVersionInError`. Retention and removal criteria for
 future formats are not yet decided; they must account for deployed versions
 and customers still using older definitions when a format change is proposed.
@@ -82,12 +83,12 @@ in THREAT_MODEL.md.
 
 ### 3. Schema is not a complete runtime control
 `benchmark.schema.json` gates *generation*, not *execution*. The parser
-now requires and validates `ruleId`, `tags`, `metadata`, and either `id` or
-complete legacy `section` + `payloadKey` identity, but does not implement
-every schema constraint (including the content-version contract). `id` is the
-opaque framework identifier; `ruleId` remains stable for external
-correlation. Do not assume a file rejected by the schema is necessarily
-rejected at runtime.
+requires and validates file-level identity, `ruleId`, `tags`, `metadata`,
+and either `id` or the complete legacy `section` + `payloadKey` identity,
+as well as the required `spec.version` content version, but does not implement
+every schema constraint. `id` is the opaque framework identifier; `ruleId`
+remains stable for external correlation. A file rejected by the schema is
+not necessarily rejected at runtime.
 
 **Planned:** Decide whether to enforce the remaining schema constraints at
 runtime or retain the schema purely as a generation-time gate.

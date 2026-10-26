@@ -87,6 +87,23 @@ participates in identity, but it does not select parsing or execution behavior;
 all frameworks use the same definition shape. The Machine Configuration path
 continues to carry the same tuple plus its rule section in each payload key.
 
+### 2.2.1. Ephemeral CLI state
+
+Short-lived CLI consumers create a private, per-invocation state directory
+beneath a non-empty `TMPDIR`. If `TMPDIR` is unset or empty, they use `/tmp` as
+the compatibility parent. A configured parent must be absolute, contain no
+whitespace, `.`/`..` components, or symlinked components, have a trusted owner,
+and not be group- or world-writable without the sticky bit. The parent descriptor remains
+open through the context lifetime. A cryptographically random directory name
+is created atomically beneath that descriptor with `mkdirat` (mode `0700`),
+then the directory itself is held open for descriptor-relative, no-follow
+cleanup. The root name is checked against the held directory before removal;
+the parent ownership and sticky-bit rules prevent replacement by a different
+unprivileged user. A caller with the same UID can still modify its own paths,
+so this does not make every later pathname-based consumer operation race-free.
+Failure to validate or create a directory beneath the selected parent is
+fatal; the process does not retry under a different parent.
+
 # 3. kompli Agent
 
 kompli will be able to run as a standalone daemon that can evaluate policy given requests from external sources.
@@ -302,14 +319,13 @@ testcase name (`ruleName` for older results without `title`). Non-empty tags
 are rendered as XML-escaped `<tag value="..."/>` entries. Attribute tabs,
 newlines, and carriage returns use character references so XML parsers
 preserve title, identity, tag, and suite-name values. A present malformed
-`tags` field, a non-string `title`, a missing or non-string `id`, an embedded
-NUL in a testcase identity, or invalid XML 1.0 characters in an attribute
-cause `render` to fail
+`tags` field, a non-string `title`, a missing, non-string, empty, or NUL-containing
+`id`, or invalid XML 1.0 characters in an attribute cause `render` to fail
 rather than publish a misleading report. Legacy body text normalizes illegal
 ASCII control characters to spaces; other invalid XML 1.0 characters and
 invalid UTF-8 cause rendering to fail. Tags longer than 256 UTF-8 bytes and
-JUnit documents over 16 MiB are rejected rather than
-allowing unbounded expansion during XML escaping.
+JUnit documents over 16 MiB are rejected rather than allowing unbounded
+expansion during XML escaping.
 
 `run` always emits the canonical result JSON; `render` is what turns that JSON into one of the formats above.
 

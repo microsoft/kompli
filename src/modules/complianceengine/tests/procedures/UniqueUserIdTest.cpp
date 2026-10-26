@@ -30,22 +30,8 @@ protected:
     void SetUp() override
     {
         mIndicators.Push("UfwStatus");
-        char tempDirTemplate[] = "/tmp/EnsureUserIsOnlyAccountWithTestXXXXXX";
-        char* tempDir = mkdtemp(tempDirTemplate);
-        ASSERT_NE(tempDir, nullptr);
-        mTempDir = tempDir;
-    }
-
-    void TearDown() override
-    {
-        if (!mTempDir.empty())
-        {
-            if (0 != remove(mTempDir.c_str()))
-            {
-                OsConfigLogError(mContext.GetLogHandle(), "Failed to remove temporary directory %s: %s", mTempDir.c_str(), strerror(errno));
-            }
-            mTempDir.clear();
-        }
+        mTempDir = mContext.GetTempdirPath() + "/unique-user-id";
+        ASSERT_EQ(0, mkdir(mTempDir.c_str(), 0700));
     }
 
     string CreateTestPasswdFile(string username, Optional<string> password, Optional<int> uid = Optional<int>(), Optional<int> gid = Optional<int>(),

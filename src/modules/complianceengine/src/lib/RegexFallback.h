@@ -85,6 +85,74 @@ public:
 
 class Regex
 {
+    static bool HasStackedRepetitionOperators(const std::string& pattern)
+    {
+        bool escaped = false;
+        bool inBracketExpression = false;
+        bool bracketExpressionAtStart = false;
+        bool bracketExpressionCanClose = false;
+        bool previousWasRepetitionOperator = false;
+
+        for (const char c : pattern)
+        {
+            if (escaped)
+            {
+                escaped = false;
+                if (inBracketExpression)
+                {
+                    bracketExpressionCanClose = true;
+                }
+                previousWasRepetitionOperator = false;
+                continue;
+            }
+            if (c == '\\')
+            {
+                escaped = true;
+                previousWasRepetitionOperator = false;
+                continue;
+            }
+            if (c == '[' && !inBracketExpression)
+            {
+                inBracketExpression = true;
+                bracketExpressionAtStart = true;
+                bracketExpressionCanClose = false;
+                previousWasRepetitionOperator = false;
+                continue;
+            }
+            if (inBracketExpression)
+            {
+                if (bracketExpressionAtStart && c == '^')
+                {
+                    bracketExpressionAtStart = false;
+                    previousWasRepetitionOperator = false;
+                    continue;
+                }
+                bracketExpressionAtStart = false;
+                if (c == ']' && bracketExpressionCanClose)
+                {
+                    inBracketExpression = false;
+                }
+                else
+                {
+                    bracketExpressionCanClose = true;
+                }
+                previousWasRepetitionOperator = false;
+                continue;
+            }
+            if (c == '*' || c == '+' || c == '?')
+            {
+                if (previousWasRepetitionOperator)
+                {
+                    return true;
+                }
+                previousWasRepetitionOperator = true;
+                continue;
+            }
+            previousWasRepetitionOperator = false;
+        }
+        return false;
+    }
+
     int ConvertFlags(std::regex_constants::syntax_option_type options)
     {
         int flags = 0;
@@ -133,6 +201,10 @@ public:
         : pattern(r),
           options(options)
     {
+        if (HasStackedRepetitionOperators(pattern))
+        {
+            throw RegexException("Invalid preceding regular expression", REG_BADRPT);
+        }
         preg = std::unique_ptr<regex_t>(new regex_t);
         std::string newR;
         newR.reserve(pattern.size() + 1);

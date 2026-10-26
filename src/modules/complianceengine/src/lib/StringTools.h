@@ -55,6 +55,9 @@ std::string EscapeForShell(const std::string& str);
  */
 std::string StringOrEmpty(const char* s);
 
+/// Return true for ASCII space, tab, LF, CR, vertical tab, or form feed.
+bool IsAsciiWhitespace(unsigned char value);
+
 /**
  * @brief Removes leading and trailing whitespace from a string.
  *
@@ -62,6 +65,9 @@ std::string StringOrEmpty(const char* s);
  * @return The trimmed string
  */
 std::string TrimWhiteSpaces(const std::string& str);
+
+/// Remove the first # and everything following it from a plain-text line.
+std::string StripComment(const std::string& str);
 
 /// Convert to lowercase using the current C locale, safely handling unsigned byte values.
 std::string ToLower(std::string value);

@@ -9,7 +9,10 @@
 #include "Result.h"
 #include "Telemetry.h"
 
+#include <cstddef>
 #include <string>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <vector>
 
 namespace ComplianceEngine
@@ -28,6 +31,14 @@ public:
     virtual ~ContextInterface() = 0;
     virtual Result<std::string> ExecuteCommand(const std::string& cmd) const = 0;
     virtual Result<std::string> GetFileContents(const std::string& filePath) const = 0;
+
+    // Syscall results and errno are preserved. Open supports only O_RDONLY (zero),
+    // O_PATH, O_CLOEXEC and O_NOFOLLOW; creation and write flags return EINVAL.
+    virtual int OpenExistingFile(const char* path, int flags) const;
+    virtual int StatFileDescriptor(int descriptor, struct stat* metadata) const;
+    virtual ssize_t ReadFileDescriptor(int descriptor, void* buffer, std::size_t size) const;
+    virtual int CloseFileDescriptor(int descriptor) const;
+
     virtual Telemetry& GetTelemetry() = 0;
 
     // Enumerates the host's network interfaces with their IFF_* flags. On success returns

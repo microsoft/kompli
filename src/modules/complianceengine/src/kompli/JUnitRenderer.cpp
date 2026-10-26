@@ -107,7 +107,8 @@ private:
 };
 
 // Attribute whitespace needs character references to survive XML parsing.
-// Legacy body text replaces control characters; attributes fail validation.
+// Illegal ASCII controls are normalized only in legacy element text; attributes
+// retain them so the completed document validation can reject them.
 void EscapeXml(const string& in, std::ostream& out, bool attribute = false)
 {
     for (const char ch : in)
@@ -323,7 +324,7 @@ Result<bool> BuildTags(const JSON_Object* rule, std::ostream& out)
         const size_t length = json_array_get_string_len(tags, i);
         if (BenchmarkIO::kMaxTagBytes < length)
         {
-            return Error("Canonical result JSON rule has a tag exceeding 256 bytes", E2BIG);
+            return Error("Canonical result JSON rule has a tag exceeding " + std::to_string(BenchmarkIO::kMaxTagBytes) + " bytes", E2BIG);
         }
         const string value(tag, length);
         if (string::npos != value.find('\0'))

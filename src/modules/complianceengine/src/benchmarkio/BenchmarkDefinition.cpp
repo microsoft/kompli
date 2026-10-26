@@ -54,10 +54,8 @@ string JoinSet(const std::set<string>& values)
         {
             joined += ", ";
         }
-
         joined += value;
     }
-
     return joined;
 }
 
@@ -609,6 +607,10 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
     if (!apiVersion.HasValue())
     {
         return apiVersion.Error();
+    }
+    if (0 == kSupportedApiVersions.count(apiVersion.Value()))
+    {
+        return Error("Benchmark definition has an unsupported 'apiVersion'; supported: " + JoinSet(kSupportedApiVersions), EINVAL);
     }
 
     if (0 == kSupportedApiVersions.count(apiVersion.Value()))

@@ -1,0 +1,2 @@
+UID_MIN 1000 # supported trailing comment
+PASS_MIN_DAYS 1  # Updated by CIS Build Kit

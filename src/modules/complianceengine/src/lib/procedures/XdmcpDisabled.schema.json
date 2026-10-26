@@ -21,7 +21,23 @@
       ]
     },
     "remediation": {
-      "anyOf": []
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "XdmcpDisabled"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "XdmcpDisabled": {
+              "type": "object",
+              "required": [],
+              "additionalProperties": false,
+              "properties": {}
+            }
+          }
+        }
+      ]
     }
   }
 }

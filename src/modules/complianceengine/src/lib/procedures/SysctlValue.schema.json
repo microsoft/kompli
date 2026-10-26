@@ -38,7 +38,40 @@
       ]
     },
     "remediation": {
-      "anyOf": []
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "SysctlValue"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "SysctlValue": {
+              "type": "object",
+              "required": [
+                "sysctlName",
+                "value"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "sysctlName": {
+                  "type": "string",
+                  "description": "Name of the sysctl",
+                  "pattern": "(^\\$[a-zA-Z0-9_]+:(([a-zA-Z0-9_]+[\\.a-zA-Z0-9_-]+))$|(^([a-zA-Z0-9_]+[\\.a-zA-Z0-9_-]+)$))"
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Regex that the value of sysctl has to match"
+                },
+                "runtimeOnly": {
+                  "type": "string",
+                  "description": "When false (default), also validates stored sysctl configuration files"
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

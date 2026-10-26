@@ -16,19 +16,14 @@ using ComplianceEngine::Status;
 class EnsureFileExistsTest : public ::testing::Test
 {
 protected:
-    char mFilename[PATH_MAX] = "/tmp/EnsureFileExistsTest.XXXXXX";
+    std::string mFilename;
     MockContext mContext;
     IndicatorsTree mIndicators;
 
     void SetUp() override
     {
         mIndicators.Push("EnsureFileExistsTest");
-        ASSERT_NE(-1, mkstemp(mFilename));
-    }
-
-    void TearDown() override
-    {
-        ASSERT_EQ(unlink(mFilename), 0);
+        mFilename = mContext.MakeTempfile("");
     }
 };
 

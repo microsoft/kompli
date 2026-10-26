@@ -8,6 +8,7 @@ repos:
       exclude: |
          (?x)^(
             .*/fuzzer/seed_corpus/.*|
+            .*/fuzzer/parsers/corpus/login-defs/15-no-final-newline|
             devops/docker/.*/Dockerfile
             )$
     - id: trailing-whitespace

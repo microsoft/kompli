@@ -13,6 +13,7 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <utility>
 #include <version.h>
 
 using ComplianceEngine::Action;
@@ -157,7 +158,13 @@ int main(int argc, char* argv[])
         OsConfigLogInfo(logHandle.get(), "Debug logging enabled");
     }
 
-    auto context = std::unique_ptr<Context>(new Context(logHandle.get()));
+    auto contextResult = Context::Make(logHandle.get());
+    if (!contextResult.HasValue())
+    {
+        OsConfigLogError(logHandle.get(), "Failed to create CLI context: %s", contextResult.Error().message.c_str());
+        return 1;
+    }
+    auto context = std::move(contextResult).Value();
     LuaEvaluator evaluator;
 
     ifstream file;

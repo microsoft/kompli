@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <string.h>
 #include <string>
 #include <unistd.h>
@@ -19,6 +20,7 @@ using ComplianceEngine::CompactListFormatter;
 using ComplianceEngine::Error;
 using ComplianceEngine::IndicatorsTree;
 using ComplianceEngine::Pattern;
+using ComplianceEngine::RemediateSysctlValue;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 using ComplianceEngine::SysctlValueParams;
@@ -114,6 +116,19 @@ static const char sysctlIpForward1Then0Than1Than0WithFilenames[] =
     "# /etc/sysctl.d/fwd_0_v2.conf\n"
     "   net.ipv4.ip_forward = 0\n";
 
+namespace
+{
+Result<std::string> ReadTestFile(const std::string& path)
+{
+    std::ifstream input(path);
+    if (!input.is_open())
+    {
+        return Error("Failed to read test file", errno);
+    }
+    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+} // anonymous namespace
+
 class SysctlValueTest : public ::testing::Test
 {
     struct LengthComparator
@@ -177,6 +192,70 @@ TEST_F(SysctlValueTest, RuntimeOnlySkipsConfigFileCheck)
     auto result = AuditSysctlValue(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(SysctlValueTest, RemediateRuntimeOnlyLiteral)
+{
+    const auto runtimePath = mContext.MakeTempfile("1\n");
+    mContext.SetSpecialFilePath("/proc/sys/net/ipv4/ip_forward", runtimePath);
+    EXPECT_CALL(mContext, GetFileContents(runtimePath)).WillRepeatedly(::testing::Invoke([runtimePath](const std::string&) {
+        return ReadTestFile(runtimePath);
+    }));
+
+    SysctlValueParams params;
+    params.sysctlName = "net.ipv4.ip_forward";
+    params.value = Pattern::Make("0").Value();
+    params.runtimeOnly = true;
+
+    auto result = RemediateSysctlValue(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+
+    auto contents = ReadTestFile(runtimePath);
+    ASSERT_TRUE(contents.HasValue());
+    EXPECT_EQ(contents.Value(), "0");
+}
+
+TEST_F(SysctlValueTest, RemediateRuntimeOnlyAnchoredLiteral)
+{
+    const auto runtimePath = mContext.MakeTempfile("1\n");
+    mContext.SetSpecialFilePath("/proc/sys/net/ipv4/ip_forward", runtimePath);
+    EXPECT_CALL(mContext, GetFileContents(runtimePath)).WillRepeatedly(::testing::Invoke([runtimePath](const std::string&) {
+        return ReadTestFile(runtimePath);
+    }));
+
+    SysctlValueParams params;
+    params.sysctlName = "net.ipv4.ip_forward";
+    params.value = Pattern::Make("^0$").Value();
+    params.runtimeOnly = true;
+
+    auto result = RemediateSysctlValue(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(SysctlValueTest, RemediateRejectsRegexValue)
+{
+    SysctlValueParams params;
+    params.sysctlName = "net.ipv4.ip_forward";
+    params.value = Pattern::Make("[01]").Value();
+    params.runtimeOnly = true;
+
+    auto result = RemediateSysctlValue(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, ENOTSUP);
+}
+
+TEST_F(SysctlValueTest, RemediateRejectsPersistentPolicy)
+{
+    SysctlValueParams params;
+    params.sysctlName = "net.ipv4.ip_forward";
+    params.value = Pattern::Make("0").Value();
+    params.runtimeOnly = false;
+
+    auto result = RemediateSysctlValue(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, ENOTSUP);
 }
 
 TEST_F(SysctlValueTest, RuntimeOnlyStillEnforcesRuntimeValue)

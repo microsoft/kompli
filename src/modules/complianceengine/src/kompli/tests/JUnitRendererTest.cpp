@@ -248,13 +248,12 @@ TEST(JUnitRendererTest, NotApplicableRuleIsSkipped)
 
 TEST(JUnitRendererTest, SkippedStatusRendersAsSkipped)
 {
-    // Forward-compat: kompli-cli-completion's still-pending `Skipped` status
-    // (see internal/kompli-cli-completion.md item 5) must not hard-error here.
-    const std::string json = R"({"rules":[{"id":"4.2","ruleName":"R","status":"Skipped","indicators":[]}]})";
+    const std::string json = R"({"rules":[{"id":"4.2","title":"Rule title","ruleName":"RuleName","status":"Skipped","indicators":[]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
-    EXPECT_TRUE(Contains(r.Value(), "<skipped message=\"Rule was skipped\">"));
-    EXPECT_TRUE(Contains(r.Value(), "skipped=\"1\""));
+    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"4.2\" name=\"Rule title\">"));
+    EXPECT_TRUE(Contains(r.Value(), "<skipped message=\"Rule was skipped\">Rule: RuleName"));
+    EXPECT_TRUE(Contains(r.Value(), "tests=\"1\" failures=\"0\" skipped=\"1\""));
     EXPECT_FALSE(Contains(r.Value(), "<failure"));
 }
 
@@ -268,8 +267,25 @@ TEST(JUnitRendererTest, TagsAreRenderedAsTagsBlock)
     EXPECT_TRUE(Contains(r.Value(), "<tag value=\"level:l1\"/>"));
     EXPECT_TRUE(Contains(r.Value(), "<tag value=\"severity:critical\"/>"));
     EXPECT_TRUE(Contains(r.Value(), "</tags>"));
-    // A Compliant rule with tags can no longer self-close its testcase.
     EXPECT_TRUE(Contains(r.Value(), "</testcase>"));
+}
+
+TEST(JUnitRendererTest, TagsAreRenderedAndEscapedForEachStatus)
+{
+    const std::string json = R"({"rules":[)"
+                             R"({"id":"1","title":"Pass","status":"Compliant","tags":["level:l1","axis:a&<\""],"indicators":[]},)"
+                             R"({"id":"2","title":"Fail","ruleName":"FailRule","status":"NonCompliant","tags":["severity:critical"],"indicators":[]},)"
+                             R"({"id":"3","title":"Skip","ruleName":"SkipRule","status":"NotApplicable","tags":["level:l2"],"indicators":[]}]})";
+    auto r = RenderJUnit(json, "s");
+    ASSERT_TRUE(r.HasValue()) << r.Error().message;
+    EXPECT_TRUE(Contains(r.Value(), "<tag value=\"level:l1\"/>"));
+    EXPECT_TRUE(Contains(r.Value(), "<tag value=\"axis:a&amp;&lt;&quot;\"/>"));
+    EXPECT_TRUE(Contains(r.Value(), "<tag value=\"severity:critical\"/>"));
+    EXPECT_TRUE(Contains(r.Value(), "<tag value=\"level:l2\"/>"));
+    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"1\" name=\"Pass\">\n    <tags>"));
+    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"2\" name=\"Fail\">\n    <tags>"));
+    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"3\" name=\"Skip\">\n    <tags>"));
+    EXPECT_TRUE(Contains(r.Value(), "tests=\"3\" failures=\"1\" skipped=\"1\""));
 }
 
 TEST(JUnitRendererTest, AbsentTagsOmitTagsBlock)
@@ -278,6 +294,16 @@ TEST(JUnitRendererTest, AbsentTagsOmitTagsBlock)
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
     EXPECT_FALSE(Contains(r.Value(), "<tags>"));
+    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"1.1\" name=\"R\"/>"));
+}
+
+TEST(JUnitRendererTest, AbsentTagsOmitTagsBlockWithTitle)
+{
+    const std::string json = R"({"rules":[{"id":"1.1","title":"R","status":"Compliant","indicators":[]}]})";
+    auto r = RenderJUnit(json, "s");
+    ASSERT_TRUE(r.HasValue()) << r.Error().message;
+    EXPECT_FALSE(Contains(r.Value(), "<tags>"));
+    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"1.1\" name=\"R\"/>"));
 }
 
 TEST(JUnitRendererTest, RejectsMalformedTagsWithoutMisreportingThem)

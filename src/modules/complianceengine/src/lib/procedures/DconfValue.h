@@ -31,5 +31,6 @@ struct DconfValueParams
 };
 
 Result<Status> AuditDconfValue(const DconfValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
+Result<Status> RemediateDconfValue(const DconfValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace ComplianceEngine
 #endif // COMPLIANCEENGINE_PROCEDURES_DCONF_VALUE_H

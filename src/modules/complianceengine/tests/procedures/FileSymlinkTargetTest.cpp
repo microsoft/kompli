@@ -9,26 +9,16 @@ using namespace ComplianceEngine;
 class FileSymlinkTargetTest : public ::testing::Test
 {
 protected:
-    char directoryTemplate[64] = "/tmp/symlink-target.XXXXXX";
     std::string directory;
     MockContext context;
     IndicatorsTree indicators;
 
     void SetUp() override
     {
-        auto created = mkdtemp(directoryTemplate);
-        ASSERT_NE(created, nullptr);
-        directory = created;
+        directory = context.GetTempdirPath() + "/symlink-target";
+        ASSERT_EQ(0, mkdir(directory.c_str(), 0700));
         std::ofstream(directory + "/expected").close();
         indicators.Push("FileSymlinkTarget");
-    }
-
-    void TearDown() override
-    {
-        unlink((directory + "/link").c_str());
-        unlink((directory + "/chain").c_str());
-        unlink((directory + "/expected").c_str());
-        rmdir(directory.c_str());
     }
 
     Status Audit(const std::string& name, const std::string& pattern)

@@ -3,7 +3,8 @@
 
 #include "DirTools.h"
 
-#include <cstdlib>
+#include "MockContext.h"
+
 #include <fcntl.h>
 #include <gtest/gtest.h>
 #include <sys/stat.h>
@@ -19,63 +20,51 @@ mode_t GetMode(const std::string& path)
 }
 } // namespace
 
-TEST(MkdirRecursiveTest, AppliesModeToNewFinalDirectory)
+class MkdirRecursiveTest : public ::testing::Test
 {
-    char temporaryDirectory[] = "/tmp/dir_tools_test_XXXXXX";
-    ASSERT_NE(nullptr, ::mkdtemp(temporaryDirectory));
-    const std::string finalDirectory = std::string(temporaryDirectory) + "/parent/final";
+protected:
+    MockContext mContext;
+};
+
+TEST_F(MkdirRecursiveTest, AppliesModeToNewFinalDirectory)
+{
+    const std::string finalDirectory = mContext.GetTempdirPath() + "/parent/final";
 
     ASSERT_TRUE(ComplianceEngine::MkdirRecursive(finalDirectory, 0700));
     EXPECT_EQ(0700, GetMode(finalDirectory));
-
-    EXPECT_EQ(0, ::system(("rm -rf " + std::string(temporaryDirectory)).c_str()));
 }
 
-TEST(MkdirRecursiveTest, CorrectsModeOfExistingFinalDirectory)
+TEST_F(MkdirRecursiveTest, CorrectsModeOfExistingFinalDirectory)
 {
-    char temporaryDirectory[] = "/tmp/dir_tools_test_XXXXXX";
-    ASSERT_NE(nullptr, ::mkdtemp(temporaryDirectory));
-    const std::string finalDirectory = std::string(temporaryDirectory) + "/final";
+    const std::string finalDirectory = mContext.GetTempdirPath() + "/final";
     ASSERT_EQ(0, ::mkdir(finalDirectory.c_str(), 0755));
     ASSERT_EQ(0, ::chmod(finalDirectory.c_str(), 0755));
 
     ASSERT_TRUE(ComplianceEngine::MkdirRecursive(finalDirectory, 0700));
     EXPECT_EQ(0700, GetMode(finalDirectory));
-
-    EXPECT_EQ(0, ::system(("rm -rf " + std::string(temporaryDirectory)).c_str()));
 }
 
-TEST(MkdirRecursiveTest, HandlesRepeatedAndTrailingSlashes)
+TEST_F(MkdirRecursiveTest, HandlesRepeatedAndTrailingSlashes)
 {
-    char temporaryDirectory[] = "/tmp/dir_tools_test_XXXXXX";
-    ASSERT_NE(nullptr, ::mkdtemp(temporaryDirectory));
-    const std::string finalDirectory = std::string(temporaryDirectory) + "//parent///final/";
+    const std::string finalDirectory = mContext.GetTempdirPath() + "//parent///final/";
 
     ASSERT_TRUE(ComplianceEngine::MkdirRecursive(finalDirectory, 0700));
     EXPECT_EQ(0700, GetMode(finalDirectory));
-
-    EXPECT_EQ(0, ::system(("rm -rf " + std::string(temporaryDirectory)).c_str()));
 }
 
-TEST(MkdirRecursiveTest, RejectsDotAndDotDotComponents)
+TEST_F(MkdirRecursiveTest, RejectsDotAndDotDotComponents)
 {
-    char temporaryDirectory[] = "/tmp/dir_tools_test_XXXXXX";
-    ASSERT_NE(nullptr, ::mkdtemp(temporaryDirectory));
-    const std::string baseDirectory = temporaryDirectory;
+    const std::string baseDirectory = mContext.GetTempdirPath();
 
     EXPECT_FALSE(ComplianceEngine::MkdirRecursive(baseDirectory + "/./dot", 0700));
     EXPECT_FALSE(ComplianceEngine::MkdirRecursive(baseDirectory + "/parent/../dotdot", 0700));
     EXPECT_NE(0, ::access((baseDirectory + "/dot").c_str(), F_OK));
     EXPECT_NE(0, ::access((baseDirectory + "/dotdot").c_str(), F_OK));
-
-    EXPECT_EQ(0, ::system(("rm -rf " + baseDirectory).c_str()));
 }
 
-TEST(MkdirRecursiveTest, RejectsSymlinkComponents)
+TEST_F(MkdirRecursiveTest, RejectsSymlinkComponents)
 {
-    char temporaryDirectory[] = "/tmp/dir_tools_test_XXXXXX";
-    ASSERT_NE(nullptr, ::mkdtemp(temporaryDirectory));
-    const std::string baseDirectory = temporaryDirectory;
+    const std::string baseDirectory = mContext.GetTempdirPath();
     const std::string targetDirectory = baseDirectory + "/target";
     const std::string linkPath = baseDirectory + "/link";
     ASSERT_EQ(0, ::mkdir(targetDirectory.c_str(), 0700));
@@ -83,21 +72,15 @@ TEST(MkdirRecursiveTest, RejectsSymlinkComponents)
 
     EXPECT_FALSE(ComplianceEngine::MkdirRecursive(linkPath + "/created", 0700));
     EXPECT_NE(0, ::access((targetDirectory + "/created").c_str(), F_OK));
-
-    EXPECT_EQ(0, ::system(("rm -rf " + baseDirectory).c_str()));
 }
 
-TEST(MkdirRecursiveTest, RejectsExistingFile)
+TEST_F(MkdirRecursiveTest, RejectsExistingFile)
 {
-    char temporaryDirectory[] = "/tmp/dir_tools_test_XXXXXX";
-    ASSERT_NE(nullptr, ::mkdtemp(temporaryDirectory));
-    const std::string baseDirectory = temporaryDirectory;
+    const std::string baseDirectory = mContext.GetTempdirPath();
     const std::string filePath = baseDirectory + "/file";
     const int fileDescriptor = ::open(filePath.c_str(), O_CREAT | O_WRONLY, 0600);
     ASSERT_GE(fileDescriptor, 0);
     ASSERT_EQ(0, ::close(fileDescriptor));
 
     EXPECT_FALSE(ComplianceEngine::MkdirRecursive(filePath, 0700));
-
-    EXPECT_EQ(0, ::system(("rm -rf " + baseDirectory).c_str()));
 }

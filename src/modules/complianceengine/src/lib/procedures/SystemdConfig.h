@@ -55,5 +55,6 @@ struct SystemdConfigValueParams
 };
 
 Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
+Result<Status> RemediateSystemdConfigValue(const SystemdConfigValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace ComplianceEngine
 #endif // COMPLIANCEENGINE_PROCEDURES_SYSTEMD_CONFIG_H

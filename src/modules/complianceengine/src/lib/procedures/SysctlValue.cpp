@@ -5,9 +5,12 @@
 #include <StringTools.h>
 #include <SysctlValue.h>
 #include <algorithm>
+#include <fcntl.h>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace ComplianceEngine
 {
@@ -55,6 +58,72 @@ static bool IsValidFilePath(const std::string& path)
     return true;
 }
 
+static Result<std::string> GetLiteralRemediationValue(const Pattern& value)
+{
+    std::string literal = value.GetPattern();
+    if (literal.size() >= 2 && literal.front() == '^' && literal.back() == '$')
+    {
+        literal = literal.substr(1, literal.size() - 2);
+    }
+    if (literal.empty() || literal.find_first_of(R"(\.^$|()[]{}*+?)") != std::string::npos || literal.find('\0') != std::string::npos ||
+        literal.find_first_of("\r\n") != std::string::npos)
+    {
+        return Error("Sysctl remediation requires an exact literal value", ENOTSUP);
+    }
+    return literal;
+}
+
+static Optional<Error> WriteRuntimeSysctl(const std::string& path, const std::string& value)
+{
+    const int fd = open(path.c_str(), O_WRONLY | O_TRUNC | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0)
+    {
+        const int status = errno;
+        return Error("Failed to open runtime sysctl '" + path + "': " + strerror(status), status);
+    }
+
+    struct stat metadata;
+    if (fstat(fd, &metadata) != 0)
+    {
+        const int status = errno;
+        close(fd);
+        return Error("Failed to inspect runtime sysctl '" + path + "': " + strerror(status), status);
+    }
+    if (!S_ISREG(metadata.st_mode))
+    {
+        close(fd);
+        return Error("Runtime sysctl is not a regular file: " + path, EINVAL);
+    }
+
+    size_t written = 0;
+    while (written < value.size())
+    {
+        const ssize_t count = write(fd, value.data() + written, value.size() - written);
+        if (count < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            const int status = errno;
+            close(fd);
+            return Error("Failed to write runtime sysctl '" + path + "': " + strerror(status), status);
+        }
+        if (count == 0)
+        {
+            close(fd);
+            return Error("Failed to write runtime sysctl '" + path + "'", EIO);
+        }
+        written += static_cast<size_t>(count);
+    }
+    if (close(fd) != 0)
+    {
+        const int status = errno;
+        return Error("Failed to close runtime sysctl '" + path + "': " + strerror(status), status);
+    }
+    return {};
+}
+
 Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
     assert(params.runtimeOnly.HasValue());
@@ -72,7 +141,7 @@ Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree&
     std::replace(sysctlPath.begin(), sysctlPath.end(), '.', '/');
     std::string procSysPath = procfsLocation + std::string("/") + sysctlPath;
 
-    auto output = context.GetFileContents(procSysPath);
+    auto output = context.GetFileContents(context.GetSpecialFilePath(procSysPath));
     if (!output.HasValue())
     {
         if (output.Error().code == ENOENT)
@@ -286,5 +355,56 @@ Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree&
     }
 
     return indicators.NonCompliant("Value not found in UFW configuration for '" + params.sysctlName + "'");
+}
+
+Result<Status> RemediateSysctlValue(const SysctlValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
+{
+    if (!params.runtimeOnly.HasValue() || !params.runtimeOnly.Value())
+    {
+        return Error("Sysctl remediation currently supports runtime-only policies", ENOTSUP);
+    }
+    if (!IsValidSysctlName(params.sysctlName))
+    {
+        return Error("Invalid sysctl name: " + params.sysctlName, EINVAL);
+    }
+    auto desired = GetLiteralRemediationValue(params.value);
+    if (!desired.HasValue())
+    {
+        return desired.Error();
+    }
+
+    auto audit = AuditSysctlValue(params, indicators, context);
+    if (!audit.HasValue() || audit.Value() == Status::Compliant || audit.Value() == Status::NotApplicable)
+    {
+        return audit;
+    }
+
+    auto sysctlPath = params.sysctlName;
+    std::replace(sysctlPath.begin(), sysctlPath.end(), '.', '/');
+    const auto runtimePath = context.GetSpecialFilePath("/proc/sys/" + sysctlPath);
+    auto original = context.GetFileContents(runtimePath);
+    if (!original.HasValue())
+    {
+        return original.Error();
+    }
+
+    auto writeError = WriteRuntimeSysctl(runtimePath, desired.Value());
+    if (writeError.HasValue())
+    {
+        return writeError.Value();
+    }
+    auto postAudit = AuditSysctlValue(params, indicators, context);
+    if (postAudit.HasValue() && postAudit.Value() == Status::Compliant)
+    {
+        return postAudit;
+    }
+
+    auto rollbackError = WriteRuntimeSysctl(runtimePath, original.Value());
+    if (rollbackError.HasValue())
+    {
+        const std::string reason = postAudit.HasValue() ? "Runtime sysctl remained noncompliant" : postAudit.Error().message;
+        return Error(reason + "; rollback failed: " + rollbackError->message, rollbackError->code);
+    }
+    return postAudit;
 }
 } // namespace ComplianceEngine

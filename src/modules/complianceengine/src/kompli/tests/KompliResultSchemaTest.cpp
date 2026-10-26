@@ -108,6 +108,38 @@ TEST(KompliResultSchemaTest, SchemaFileIsValidDraft202012)
     json_value_free(schema);
 }
 
+TEST(KompliResultSchemaTest, SkippedIsAllowedOnlyAsAPerRuleStatus)
+{
+    JSON_Value* schema = json_parse_string(ReadFile(KOMPLI_RESULT_SCHEMA_PATH).c_str());
+    ASSERT_NE(schema, nullptr);
+    const JSON_Object* object = json_value_get_object(schema);
+    const JSON_Array* ruleStatuses = json_object_dotget_array(object, "$defs.rule.properties.status.enum");
+    const JSON_Array* overallStatuses = json_object_dotget_array(object, "properties.status.enum");
+    bool ruleAllowsSkipped = false;
+    bool overallAllowsSkipped = false;
+    for (size_t i = 0; i < json_array_get_count(ruleStatuses); ++i)
+    {
+        const char* status = json_array_get_string(ruleStatuses, i);
+        if (status != nullptr && std::string(status) == "Skipped")
+        {
+            ruleAllowsSkipped = true;
+        }
+    }
+    for (size_t i = 0; i < json_array_get_count(overallStatuses); ++i)
+    {
+        const char* status = json_array_get_string(overallStatuses, i);
+        if (status != nullptr && std::string(status) == "Skipped")
+        {
+            overallAllowsSkipped = true;
+        }
+    }
+    EXPECT_TRUE(ruleAllowsSkipped);
+    EXPECT_FALSE(overallAllowsSkipped);
+    EXPECT_EQ(json_array_get_count(ruleStatuses), 4u);
+    EXPECT_EQ(json_array_get_count(overallStatuses), 3u);
+    json_value_free(schema);
+}
+
 TEST(KompliResultSchemaTest, GeneratedResultSatisfiesSchemaRequiredFields)
 {
     JSON_Value* schema = json_parse_string(ReadFile(KOMPLI_RESULT_SCHEMA_PATH).c_str());

@@ -20,10 +20,10 @@ namespace ComplianceEngine
 class CommonContext : public ContextInterface
 {
 public:
-    CommonContext(OsConfigLogHandle log, const std::string& statePath, const int fd = -1)
+    CommonContext(OsConfigLogHandle log, const std::string& statePath, const int telemetryFileDescriptor = -1)
         : mLog(log),
           mStatePath(statePath),
-          mTelemetry(fd),
+          mTelemetry(telemetryFileDescriptor),
           mFsScanner("/", mStatePath + "/" + sFsCachePath, sLockPath, sSoftTimeout, sHardTimeout, sScanWaitTime)
     {
     }

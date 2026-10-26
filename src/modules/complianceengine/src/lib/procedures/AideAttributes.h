@@ -18,6 +18,7 @@ struct AideAttributesParams
 };
 
 Result<Status> AuditAideAttributes(const AideAttributesParams& params, IndicatorsTree& indicators, ContextInterface& context);
+Result<Status> RemediateAideAttributes(const AideAttributesParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace ComplianceEngine
 
 #endif

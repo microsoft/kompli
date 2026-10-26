@@ -4,10 +4,11 @@
 #include "MockContext.h"
 
 #include <AuditdRules.h>
-#include <cstdio>
+#include <cerrno>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <map>
+#include <parsers/LoginDefs.h>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -33,11 +34,10 @@ protected:
         EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillRepeatedly(Return(Result<std::string>(std::string("UID_MIN 1000\n"))));
     }
 
-    static std::string MakeTempDir()
+    std::string MakeTempDir()
     {
-        char tmpl[] = "/tmp/auditrulesXXXXXX";
-        char* d = mkdtemp(tmpl);
-        return d ? std::string(d) : std::string();
+        const std::string directory = mContext.GetTempdirPath() + "/audit-rules-" + std::to_string(++mTempdirCount);
+        return (mkdir(directory.c_str(), 0700) == 0) ? directory : std::string();
     }
 
     static void WriteFile(const std::string& path, const std::string& content)
@@ -47,15 +47,7 @@ protected:
         ofs.close();
     }
 
-    static void RemoveFile(const std::string& path)
-    {
-        std::remove(path.c_str());
-    }
-
-    static void RemoveDir(const std::string& path)
-    {
-        rmdir(path.c_str());
-    }
+    std::size_t mTempdirCount{0};
 };
 
 // Test invalid requiredOptions regex
@@ -113,10 +105,6 @@ TEST_F(AuditdRulesCheckTest, OverridePathWithMatchingFileRuleIsCompliant)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    // cleanup
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
@@ -154,8 +142,6 @@ TEST_F(AuditdRulesCheckTest, TimeChangeSyscallsAcceptAnyNonemptyKey)
             EXPECT_EQ(entry.second, result.Value());
         }
     }
-    RemoveFile(filename);
-    RemoveDir(directory);
 }
 
 TEST_F(AuditdRulesCheckTest, SyscallFieldLayoutUsesRuntimeUidMin)
@@ -164,7 +150,8 @@ TEST_F(AuditdRulesCheckTest, SyscallFieldLayoutUsesRuntimeUidMin)
     ASSERT_FALSE(directory.empty());
     const std::string filename = directory + "/sys.rules";
     mContext.SetSpecialFilePath("/etc/audit/rules.d", directory);
-    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillRepeatedly(Return(Result<std::string>("UID_MIN 500\n")));
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs"))
+        .WillRepeatedly(Return(Result<std::string>("UID_MIN 500 # runtime UID\nPASS_MIN_DAYS 1  # Updated by CIS Build Kit\n")));
     AuditdRulesParams params;
     params.searchItem = "-S init_module";
     params.requiredOptions.items = {"-F arch=b64",
@@ -188,8 +175,151 @@ TEST_F(AuditdRulesCheckTest, SyscallFieldLayoutUsesRuntimeUidMin)
         ASSERT_TRUE(result.HasValue());
         EXPECT_EQ(entry.second, result.Value());
     }
-    RemoveFile(filename);
-    RemoveDir(directory);
+}
+
+TEST_F(AuditdRulesCheckTest, OversizedLoginDefsDoesNotUseDefaultUidMin)
+{
+    std::string loginDefs = "UID_MIN 500\n";
+    loginDefs.resize(ComplianceEngine::LoginDefs::MaxBytes + 1, '#');
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(Return(Result<std::string>(loginDefs)));
+
+    const std::string directory = MakeTempDir();
+    ASSERT_FALSE(directory.empty());
+    const std::string rule = "-a always,exit -F arch=b64 -S init_module -F auid>=1000 -k audit-key\n";
+    WriteFile(directory + "/audit.rules", rule);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", directory);
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).Times(testing::AnyNumber()).WillRepeatedly(Return(Result<std::string>(rule)));
+
+    AuditdRulesParams params;
+    params.searchItem = "-S init_module";
+    params.requiredOptions.items = {"-F auid>=1000"};
+    const auto result = AuditAuditdRules(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(E2BIG, result.Error().code);
+    EXPECT_EQ("/etc/login.defs: login.defs byte limit exceeded: 1048577 bytes (maximum 1048576 bytes)", result.Error().message);
+    const auto* root = indicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    EXPECT_TRUE(root->indicators.empty());
+}
+
+TEST_F(AuditdRulesCheckTest, CorruptedUidMinKeyDoesNotUseDefaultUidMin)
+{
+    const char contents[] = "UID_MIN\0 500\nUID_MIN 1000\n";
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(Return(Result<std::string>(std::string(contents, sizeof(contents) - 1))));
+
+    const std::string directory = MakeTempDir();
+    ASSERT_FALSE(directory.empty());
+    const std::string rule = "-a always,exit -F arch=b64 -S init_module -F auid>=1000 -k audit-key\n";
+    WriteFile(directory + "/audit.rules", rule);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", directory);
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).Times(testing::AnyNumber()).WillRepeatedly(Return(Result<std::string>(rule)));
+
+    AuditdRulesParams params;
+    params.searchItem = "-S init_module";
+    params.requiredOptions.items = {"-F auid>=1000"};
+    const auto result = AuditAuditdRules(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_EQ("/etc/login.defs:1:8: login.defs embedded NUL", result.Error().message);
+    const auto* root = indicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    EXPECT_TRUE(root->indicators.empty());
+}
+
+TEST_F(AuditdRulesCheckTest, InvalidUidMinCannotUseDefault)
+{
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(Return(Result<std::string>("UID_MIN junk\n")));
+
+    AuditdRulesParams params;
+    params.searchItem = "-S init_module";
+    params.requiredOptions.items = {"-F auid>=1000"};
+    const auto result = AuditAuditdRules(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_EQ("/etc/login.defs:1:9: invalid UID_MIN value: Invalid integer value: junk", result.Error().message);
+    EXPECT_TRUE(indicators.GetRootNode()->indicators.empty());
+}
+
+TEST_F(AuditdRulesCheckTest, InvalidUnselectedNumericKeyCannotUseValidUidMin)
+{
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(Return(Result<std::string>("UID_MIN 1000\nPASS_WARN_AGE junk\n")));
+
+    AuditdRulesParams params;
+    params.searchItem = "-S init_module";
+    params.requiredOptions.items = {"-F auid>=1000"};
+    const auto result = AuditAuditdRules(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_EQ("/etc/login.defs:2:15: invalid PASS_WARN_AGE value: Invalid integer value: junk", result.Error().message);
+    EXPECT_TRUE(indicators.GetRootNode()->indicators.empty());
+}
+
+TEST_F(AuditdRulesCheckTest, InvalidLoginDefsSyntaxDoesNotUseDefaultUidMin)
+{
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(Return(Result<std::string>("UID_MIN 1000\nOTHER\n")));
+
+    const std::string directory = MakeTempDir();
+    ASSERT_FALSE(directory.empty());
+    const std::string rule = "-a always,exit -F arch=b64 -S init_module -F auid>=1000 -k audit-key\n";
+    WriteFile(directory + "/audit.rules", rule);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", directory);
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).Times(testing::AnyNumber()).WillRepeatedly(Return(Result<std::string>(rule)));
+
+    AuditdRulesParams params;
+    params.searchItem = "-S init_module";
+    params.requiredOptions.items = {"-F auid>=1000"};
+    const auto result = AuditAuditdRules(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_EQ("/etc/login.defs:2:6: login.defs missing value", result.Error().message);
+    const auto* root = indicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    EXPECT_TRUE(root->indicators.empty());
+}
+
+TEST_F(AuditdRulesCheckTest, RequiredLoginDefsReadFailureDoesNotUseDefaultUidMin)
+{
+    const std::string directory = MakeTempDir();
+    ASSERT_FALSE(directory.empty());
+    const std::string rule = "-a always,exit -F arch=b64 -S init_module -F auid>=1000 -k audit-key\n";
+    WriteFile(directory + "/audit.rules", rule);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", directory);
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).Times(testing::AnyNumber()).WillRepeatedly(Return(Result<std::string>(rule)));
+
+    AuditdRulesParams params;
+    params.searchItem = "-S init_module";
+    params.requiredOptions.items = {"-F auid>=1000"};
+    const auto* root = indicators.GetRootNode();
+    ASSERT_NE(nullptr, root);
+    for (int code : {EIO, EACCES, -1})
+    {
+        SCOPED_TRACE(code);
+        EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(Return(Result<std::string>(Error("Read failed", code))));
+        const auto result = AuditAuditdRules(params, indicators, mContext);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(code, result.Error().code);
+        EXPECT_EQ("Read failed", result.Error().message);
+        EXPECT_TRUE(root->indicators.empty());
+    }
+}
+
+TEST_F(AuditdRulesCheckTest, MissingLoginDefsStillUsesExistingDefault)
+{
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(Return(Result<std::string>(Error("File not found: /etc/login.defs", ENOENT))));
+
+    const std::string directory = MakeTempDir();
+    ASSERT_FALSE(directory.empty());
+    const std::string rule = "-a always,exit -F arch=b64 -S init_module -F auid>=1000 -k audit-key\n";
+    WriteFile(directory + "/audit.rules", rule);
+    mContext.SetSpecialFilePath("/etc/audit/rules.d", directory);
+    EXPECT_CALL(mContext, ExecuteCommand("auditctl -l")).WillOnce(Return(Result<std::string>(rule)));
+
+    AuditdRulesParams params;
+    params.searchItem = "-S init_module";
+    params.requiredOptions.items = {"-F auid>=1000"};
+    const auto result = AuditAuditdRules(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
 }
 
 // Test: override path where running has rule but files do not -> NonCompliant
@@ -208,10 +338,6 @@ TEST_F(AuditdRulesCheckTest, OverridePathMissingFileRuleIsNonCompliant)
     params.requiredOptions.items = {"-p wa"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    // cleanup
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
@@ -250,9 +376,6 @@ TEST_F(AuditdRulesCheckTest, SyscallSearchCompliantWithOverridePath)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
@@ -282,8 +405,6 @@ TEST_F(AuditdRulesCheckTest, SyscallSuppressionRespectsFirstMatchingRule)
             EXPECT_EQ(result.Value(), runningSuppressed || filesSuppressed ? Status::NonCompliant : Status::Compliant);
         }
     }
-    RemoveFile(file);
-    RemoveDir(dir);
 }
 
 TEST_F(AuditdRulesCheckTest, AdditionalAuditingRuleDoesNotInvalidateCompliantRule)
@@ -304,9 +425,6 @@ TEST_F(AuditdRulesCheckTest, AdditionalAuditingRuleDoesNotInvalidateCompliantRul
     params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-F auid>=123", "-F auid!=(unset|-1|4294967295)"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
@@ -338,9 +456,6 @@ TEST_F(AuditdRulesCheckTest, PersistentRulesUseNaturalOrderAndPrependActions)
         ASSERT_TRUE(result.HasValue());
         EXPECT_EQ(result.Value(), prepend ? Status::NonCompliant : Status::Compliant);
     }
-    RemoveFile(earlyFile);
-    RemoveFile(lateFile);
-    RemoveDir(dir);
 }
 
 TEST_F(AuditdRulesCheckTest, EarlierDisjointSuppressionDoesNotInvalidateRule)
@@ -359,8 +474,6 @@ TEST_F(AuditdRulesCheckTest, EarlierDisjointSuppressionDoesNotInvalidateRule)
     params.searchItem = "-S open";
     params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-F exit=-EACCES"};
     auto result = AuditAuditdRules(params, indicators, mContext);
-    RemoveFile(file);
-    RemoveDir(dir);
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(result.Value(), Status::Compliant);
 }
@@ -384,9 +497,6 @@ TEST_F(AuditdRulesCheckTest, SyscallPrefixDoesNotMatchLongerSyscall)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
@@ -407,9 +517,6 @@ TEST_F(AuditdRulesCheckTest, HighBitSyscallSuffixDoesNotSatisfyExactToken)
     params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(result.Value(), Status::NonCompliant);
@@ -433,9 +540,6 @@ TEST_F(AuditdRulesCheckTest, SyscallMatchesTabAndEndOfLineBoundaries)
         params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)"};
 
         auto result = AuditAuditdRules(params, indicators, mContext);
-
-        RemoveFile(file);
-        RemoveDir(dir);
 
         ASSERT_TRUE(result.HasValue());
         EXPECT_EQ(result.Value(), Status::Compliant) << rules;
@@ -461,9 +565,6 @@ TEST_F(AuditdRulesCheckTest, ParallelArchAndExitVariantsDoNotInvalidateRule)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
@@ -484,9 +585,6 @@ TEST_F(AuditdRulesCheckTest, SyscallListWithLongerSuffixStillMatchesExactToken)
     params.requiredOptions.items = {"-F arch=b64", "-a (always,exit|exit,always)", "-F auid>=123", "-F auid!=(unset|-1|4294967295)"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
@@ -509,9 +607,6 @@ TEST_F(AuditdRulesCheckTest, LongerSyscallAloneDoesNotSatisfyExactToken)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
@@ -533,9 +628,6 @@ TEST_F(AuditdRulesCheckTest, SyscallSearchFilesMissingIsNonCompliant)
     params.requiredOptions.items = {"-F arch=b64:-a (always,exit|exit,always):-F auid>=123:-F auid!=(unset|-1|4294967295)"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
@@ -561,9 +653,6 @@ TEST_F(AuditdRulesCheckTest, MultiSyscallOneMissingInFilesIsNonCompliant)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
@@ -585,9 +674,6 @@ TEST_F(AuditdRulesCheckTest, ExcludeOptionsSkipsMatchingRules)
     params.excludeOption = "-k badkey";
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
@@ -613,9 +699,6 @@ TEST_F(AuditdRulesCheckTest, SudoLogfileCompliantWithOverridePath)
     params.requiredOptions.items = {"-p wa"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
@@ -643,9 +726,6 @@ TEST_F(AuditdRulesCheckTest, SudoLogfileFilesMissingIsNonCompliant)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
@@ -666,9 +746,6 @@ TEST_F(AuditdRulesCheckTest, ImmutableRuleCompliant)
     params.requiredOptions.items = {".*"}; // allow any content for this simple line
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
@@ -691,9 +768,6 @@ TEST_F(AuditdRulesCheckTest, ImmutableRuleMissingIsNonCompliant)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
@@ -715,9 +789,6 @@ TEST_F(AuditdRulesCheckTest, RunningRuleMissingRequiredOptionsIsNonCompliant)
 
     auto result = AuditAuditdRules(params, indicators, mContext);
 
-    RemoveFile(file);
-    RemoveDir(dir);
-
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
 }
@@ -738,9 +809,6 @@ TEST_F(AuditdRulesCheckTest, RunningRulesEmptyButFileMatchesIsNonCompliant)
     params.requiredOptions.items = {"-p wa"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveFile(file);
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
@@ -764,8 +832,6 @@ TEST_F(AuditdRulesCheckTest, SudoLogfileNotFoundReturnsFailure)
     params.requiredOptions.items = {"-p wa"};
 
     auto result = AuditAuditdRules(params, indicators, mContext);
-
-    RemoveDir(dir);
 
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);

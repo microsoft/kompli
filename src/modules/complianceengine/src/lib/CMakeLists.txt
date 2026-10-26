@@ -43,6 +43,7 @@ set(PROCEDURES
     procedures/MountPointExists.cpp
     procedures/NetworkInterfaceFlag.cpp
     procedures/MtaLocalOnly.cpp
+    procedures/NameserverCount.cpp
     procedures/NoDuplicateEntries.cpp
     procedures/NoShadowPrimaryGroup.cpp
     procedures/NoUnownedFiles.cpp
@@ -92,6 +93,7 @@ set(SCHEMAS
     procedures/MountPointExists.schema.json
     procedures/NetworkInterfaceFlag.schema.json
     procedures/MtaLocalOnly.schema.json
+    procedures/NameserverCount.schema.json
     procedures/NoDuplicateEntries.schema.json
     procedures/NoShadowPrimaryGroup.schema.json
     procedures/NoUnownedFiles.schema.json
@@ -167,6 +169,7 @@ add_custom_target(complianceengineschema
 set_property(TARGET complianceengineschema PROPERTY OUTPUT ComplianceEngineSchema.zip)
 
 add_library(complianceenginelib STATIC
+    AtomicFile.cpp
     Base64.cpp
     BenchmarkInfo.cpp
     BindingParsers.cpp
@@ -179,6 +182,7 @@ add_library(complianceenginelib STATIC
     Engine.cpp
     Evaluator.cpp
     FileLock.cpp
+    FileObjectCollector.cpp
     FileTreeWalk.cpp
     GuestConfigurationContext.cpp
     FilesystemScanner.cpp
@@ -191,13 +195,18 @@ add_library(complianceenginelib STATIC
     LuaProcedures.cpp
     NetworkTools.cpp
     PasswordEntriesIterator.cpp
+    parsers/LoginDefs.cpp
+    PasswordCreditUnionEvidence.cpp
+    parsers/NameserverSelection.cpp
     Pattern.cpp
     Procedure.cpp
     ProcedureMap.cpp
     Result.cpp
+    ResultEvidence.cpp
     StringTools.cpp
     SystemdCatConfig.cpp
     Telemetry.cpp
+    TemporaryDirectory.cpp
     Users.cpp
     UsersIterator.cpp
     ${PROCEDURES}

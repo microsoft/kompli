@@ -18,7 +18,7 @@ using std::string;
 
 Result<Status> AuditNoShellAccountsLocked(const NoShellAccountsLockedParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
-    Result<unsigned int> uidMin = Error("Uninitialised UID_MIN");
+    Result<uid_t> uidMin = Error("Uninitialised UID_MIN");
     if (params.skipBelowUidMin.HasValue() && params.skipBelowUidMin.Value())
     {
         uidMin = GetUidMin(context);
@@ -102,7 +102,7 @@ Result<Status> AuditNoShellAccountsLocked(const NoShellAccountsLockedParams& par
         {
             if (user.pw_uid < uidMin.Value())
             {
-                OsConfigLogDebug(context.GetLogHandle(), "Skip User '%s' as it's id %d is lower than UID_MIN %d", user.pw_name, user.pw_uid, uidMin.Value());
+                OsConfigLogDebug(context.GetLogHandle(), "Skip User '%s' as it's id %u is lower than UID_MIN %u", user.pw_name, user.pw_uid, uidMin.Value());
                 continue;
             }
         }

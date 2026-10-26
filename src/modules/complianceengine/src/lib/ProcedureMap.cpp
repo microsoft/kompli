@@ -29,11 +29,11 @@ const char* Bindings<DconfValueParams>::names[] = {"key", "value", "operation"};
 // FileExists.h:15
 const char* Bindings<FileExistsParams>::names[] = {"filename"};
 
-// FilePermissions.h:36
-const char* Bindings<FilePermissionsParams>::names[] = {"path", "owner", "group", "permissions", "mask", "behavior"};
+// FilePermissions.h:39
+const char* Bindings<FilePermissionsParams>::names[] = {"path", "owner", "group", "groupId", "permissions", "mask", "behavior"};
 
-// FilePermissions.h:82
-const char* Bindings<FilePermissionsCollectionParams>::names[] = {"directory", "recurse", "directoriesOnly", "allFileTypes", "excludeSymlinks", "excludeDirectories", "maximumUid", "maximumGid", "filePattern", "filePatternIsRegex", "owner", "group", "permissions", "mask", "behavior"};
+// FilePermissions.h:88
+const char* Bindings<FilePermissionsCollectionParams>::names[] = {"directory", "recurse", "directoriesOnly", "allFileTypes", "excludeSymlinks", "excludeDirectories", "maximumUid", "maximumGid", "filePattern", "filePatternIsRegex", "owner", "group", "groupId", "permissions", "mask", "behavior"};
 
 // FileRegexMatch.h:82
 const char* Bindings<FileRegexMatchParams>::names[] = {"path", "filenamePattern", "filenameSearch", "matchOperation", "matchPattern", "stateOperation", "statePattern", "minimumValue", "maximumValue", "allMatches", "wholeFile", "noneMatches", "ignoreCase", "behavior"};
@@ -53,7 +53,7 @@ const char* Bindings<KernelModuleUnavailableParams>::names[] = {"moduleName"};
 // LogFilePermissions.h:15
 const char* Bindings<LogFilePermissionsParams>::names[] = {"path"};
 
-// LoginDefsOption.h:23
+// LoginDefsOption.h:24
 const char* Bindings<LoginDefsOptionParams>::names[] = {"option", "value", "comparison"};
 
 // MountPointExists.h:15
@@ -61,6 +61,9 @@ const char* Bindings<MountPointExistsParams>::names[] = {"mountPoint"};
 
 // MtaLocalOnly.h:32
 const char* Bindings<MtaLocalOnlyParams>::names[] = {"configurationVersion"};
+
+// NameserverCount.h:16
+const char* Bindings<NameserverCountParams>::names[] = {"path"};
 
 // NetworkInterfaceFlag.h:73
 const char* Bindings<NetworkInterfaceFlagParams>::names[] = {"flag", "interfaceName"};
@@ -92,8 +95,8 @@ const char* Bindings<SysctlValueParams>::names[] = {"sysctlName", "value", "runt
 // SystemdConfig.h:55
 const char* Bindings<SystemdConfigValueParams>::names[] = {"parameter", "valueRegex", "op", "value", "file", "block", "dir", "passOnNotFound"};
 
-// SystemdUnitState.h:28
-const char* Bindings<SystemdUnitStateParams>::names[] = {"unitName", "activeState", "loadState", "unitFileState", "unit"};
+// SystemdUnitState.h:31
+const char* Bindings<SystemdUnitStateParams>::names[] = {"unitName", "activeState", "subState", "loadState", "unitFileState", "unit"};
 
 // TestingProcedures.h:15
 const char* Bindings<TestingProcedureParams>::names[] = {"message"};
@@ -114,7 +117,7 @@ const char* Bindings<UniqueGroupIdParams>::names[] = {"groupName", "gid"};
 const char* Bindings<UniqueUserIdParams>::names[] = {"username", "uid", "gid"};
 
 const ProcedureMap Evaluator::mProcedureMap = {
-    {"AideAttributes", {MakeHandler(AuditAideAttributes), nullptr}},
+    {"AideAttributes", {MakeHandler(AuditAideAttributes), MakeHandler(RemediateAideAttributes)}},
     {"AksCommand", {MakeHandler(AuditAksCommand), nullptr}},
     {"ApparmorProfileState", {MakeHandler(AuditApparmorProfileState), nullptr}},
     {"AuditFailure", {MakeHandler(AuditAuditFailure), nullptr}},
@@ -123,8 +126,8 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"AuditSuccess", {MakeHandler(AuditAuditSuccess), nullptr}},
     {"AuditdRules", {MakeHandler(AuditAuditdRules), nullptr}},
     {"CommandOutputMatch", {MakeHandler(AuditCommandOutputMatch), nullptr}},
-    {"DconfValue", {MakeHandler(AuditDconfValue), nullptr}},
-    {"DefaultUmask", {MakeHandler(AuditDefaultUmask), nullptr}},
+    {"DconfValue", {MakeHandler(AuditDconfValue), MakeHandler(RemediateDconfValue)}},
+    {"DefaultUmask", {MakeHandler(AuditDefaultUmask), MakeHandler(RemediateDefaultUmask)}},
     {"FileExists", {MakeHandler(AuditFileExists), nullptr}},
     {"FilePermissions", {MakeHandler(AuditFilePermissions), MakeHandler(RemediateFilePermissions)}},
     {"FilePermissionsCollection", {MakeHandler(AuditFilePermissionsCollection), MakeHandler(RemediateFilePermissionsCollection)}},
@@ -132,14 +135,15 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"FileSymlinkTarget", {MakeHandler(AuditFileSymlinkTarget), nullptr}},
     {"FilesystemMountOption", {MakeHandler(AuditFilesystemMountOption), MakeHandler(RemediateFilesystemMountOption)}},
     {"FirewalldZoneTargets", {MakeHandler(AuditFirewalldZoneTargets), nullptr}},
-    {"GsettingsValue", {MakeHandler(AuditGsettingsValue), nullptr}},
+    {"GsettingsValue", {MakeHandler(AuditGsettingsValue), MakeHandler(RemediateGsettingsValue)}},
     {"Ip6tablesOpenPorts", {MakeHandler(AuditIp6tablesOpenPorts), nullptr}},
     {"IptablesOpenPorts", {MakeHandler(AuditIptablesOpenPorts), nullptr}},
-    {"KernelModuleUnavailable", {MakeHandler(AuditKernelModuleUnavailable), nullptr}},
+    {"KernelModuleUnavailable", {MakeHandler(AuditKernelModuleUnavailable), MakeHandler(RemediateKernelModuleUnavailable)}},
     {"LogFilePermissions", {MakeHandler(AuditLogFilePermissions), MakeHandler(RemediateLogFilePermissions)}},
-    {"LoginDefsOption", {MakeHandler(AuditLoginDefsOption), nullptr}},
+    {"LoginDefsOption", {MakeHandler(AuditLoginDefsOption), MakeHandler(RemediateLoginDefsOption)}},
     {"MountPointExists", {MakeHandler(AuditMountPointExists), nullptr}},
     {"MtaLocalOnly", {MakeHandler(AuditMtaLocalOnly), nullptr}},
+    {"NameserverCount", {MakeHandler(AuditNameserverCount), nullptr}},
     {"NetworkInterfaceFlag", {MakeHandler(AuditNetworkInterfaceFlag), nullptr}},
     {"NoDuplicateEntries", {MakeHandler(AuditNoDuplicateEntries), nullptr}},
     {"NoShadowPrimaryGroup", {MakeHandler(AuditNoShadowPrimaryGroup), nullptr}},
@@ -156,12 +160,12 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"RootPathSecurity", {MakeHandler(AuditRootPathSecurity), nullptr}},
     {"SCE", {MakeHandler(AuditSCE), MakeHandler(RemediateSCE)}},
     {"ShadowField", {MakeHandler(AuditShadowField), nullptr}},
-    {"ShellTimeout", {MakeHandler(AuditShellTimeout), nullptr}},
+    {"ShellTimeout", {MakeHandler(AuditShellTimeout), MakeHandler(RemediateShellTimeout)}},
     {"SshKeyPermissions", {MakeHandler(AuditSshKeyPermissions), MakeHandler(RemediateSshKeyPermissions)}},
     {"SshdOption", {MakeHandler(AuditSshdOption), nullptr}},
-    {"SysctlValue", {MakeHandler(AuditSysctlValue), nullptr}},
+    {"SysctlValue", {MakeHandler(AuditSysctlValue), MakeHandler(RemediateSysctlValue)}},
     {"SystemAccountShell", {MakeHandler(AuditSystemAccountShell), nullptr}},
-    {"SystemdConfigValue", {MakeHandler(AuditSystemdConfigValue), nullptr}},
+    {"SystemdConfigValue", {MakeHandler(AuditSystemdConfigValue), MakeHandler(RemediateSystemdConfigValue)}},
     {"SystemdUnitState", {MakeHandler(AuditSystemdUnitState), nullptr}},
     {"UfwOpenPorts", {MakeHandler(AuditUfwOpenPorts), nullptr}},
     {"UfwStatus", {MakeHandler(AuditUfwStatus), nullptr}},
@@ -170,7 +174,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"UserDotFilePermissions", {MakeHandler(AuditUserDotFilePermissions), MakeHandler(RemediateUserDotFilePermissions)}},
     {"UserHomeDirectoryPermissions", {MakeHandler(AuditUserHomeDirectoryPermissions), MakeHandler(RemediateUserHomeDirectoryPermissions)}},
     {"WirelessDisabled", {MakeHandler(AuditWirelessDisabled), nullptr}},
-    {"XdmcpDisabled", {MakeHandler(AuditXdmcpDisabled), nullptr}},
+    {"XdmcpDisabled", {MakeHandler(AuditXdmcpDisabled), MakeHandler(RemediateXdmcpDisabled)}},
 };
 } // namespace ComplianceEngine
 

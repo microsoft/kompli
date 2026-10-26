@@ -7,6 +7,8 @@
 #include <Regex.h>
 #include <ScopeGuard.h>
 #include <ShadowField.h>
+#include <StringTools.h>
+#include <TypedComparison.h>
 #include <shadow.h>
 #include <vector>
 
@@ -82,77 +84,59 @@ const string& PrettyFieldName(Field field)
     return fieldNamesMap.at(field);
 }
 
-Result<int> AsInt(const string& value)
+Result<TypedComparisonOperation> MapComparison(ComparisonOperation operation)
 {
-    try
+    switch (operation)
     {
-        return std::stoi(value);
+        case ComparisonOperation::Equal:
+            return TypedComparisonOperation::Equal;
+        case ComparisonOperation::NotEqual:
+            return TypedComparisonOperation::NotEqual;
+        case ComparisonOperation::LessThan:
+            return TypedComparisonOperation::LessThan;
+        case ComparisonOperation::LessOrEqual:
+            return TypedComparisonOperation::LessOrEqual;
+        case ComparisonOperation::GreaterThan:
+            return TypedComparisonOperation::GreaterThan;
+        case ComparisonOperation::GreaterOrEqual:
+            return TypedComparisonOperation::GreaterOrEqual;
+        default:
+            break;
     }
-    catch (const std::invalid_argument&)
-    {
-        return Error("Invalid integer value: " + value, EINVAL);
-    }
-    catch (const std::out_of_range&)
-    {
-        return Error("Integer value out of range: " + value, ERANGE);
-    }
+    return Error("Unsupported comparison operation " + std::to_string(static_cast<int>(operation)), EINVAL);
 }
 
 Result<bool> StringComparison(const string& lhs, const string& rhs, ComparisonOperation operation)
 {
-    switch (operation)
+    if (operation == ComparisonOperation::PatternMatch)
     {
-        case ComparisonOperation::PatternMatch:
-            try
-            {
-                OsConfigLogDebug(nullptr, "Performing regex match: '%s' against '%s'", lhs.c_str(), rhs.c_str());
-                return regex_search(rhs, regex(lhs));
-            }
-            catch (const std::exception& e)
-            {
-                return Error("Pattern match failed: " + string(e.what()), EINVAL);
-            }
-            break;
-        case ComparisonOperation::Equal:
-            return lhs == rhs;
-        case ComparisonOperation::NotEqual:
-            return lhs != rhs;
-        case ComparisonOperation::LessThan:
-            return lhs < rhs;
-        case ComparisonOperation::LessOrEqual:
-            return lhs <= rhs;
-        case ComparisonOperation::GreaterThan:
-            return lhs > rhs;
-        case ComparisonOperation::GreaterOrEqual:
-            return lhs >= rhs;
-        default:
-            break;
+        try
+        {
+            OsConfigLogDebug(nullptr, "Performing regex match: '%s' against '%s'", lhs.c_str(), rhs.c_str());
+            return regex_search(rhs, regex(lhs));
+        }
+        catch (const std::exception& e)
+        {
+            return Error("Pattern match failed: " + string(e.what()), EINVAL);
+        }
     }
 
-    return ComplianceEngine::Error("Unsupported comparison operation for a string type", EINVAL);
+    auto mapped = MapComparison(operation);
+    if (!mapped.HasValue())
+    {
+        return Error("Unsupported comparison operation for a string type: " + mapped.Error().message, mapped.Error().code);
+    }
+    return CompareTyped(lhs, rhs, mapped.Value());
 }
 
 Result<bool> IntegerComparison(const int lhs, const int rhs, ComparisonOperation operation)
 {
-    switch (operation)
+    auto mapped = MapComparison(operation);
+    if (!mapped.HasValue())
     {
-        case ComparisonOperation::Equal:
-            return lhs == rhs;
-        case ComparisonOperation::NotEqual:
-            return lhs != rhs;
-        case ComparisonOperation::LessThan:
-            return lhs < rhs;
-        case ComparisonOperation::LessOrEqual:
-            return lhs <= rhs;
-        case ComparisonOperation::GreaterThan:
-            return lhs > rhs;
-        case ComparisonOperation::GreaterOrEqual:
-            return lhs >= rhs;
-        default:
-            break;
+        return Error("Unsupported comparison operation for an integer type: " + mapped.Error().message, mapped.Error().code);
     }
-
-    return ComplianceEngine::Error("Unsupported comparison operation for an integer type", EINVAL);
+    return CompareTyped(lhs, rhs, mapped.Value());
 }
 
 Result<PasswordEncryptionMethod> ParseEncryptionMethod(const string& method)
@@ -240,19 +224,14 @@ Result<bool> CompareUserEntry(const spwd& entry, Field field, const string& valu
                 return entryMethod.Error();
             }
 
-            if (operation == ComparisonOperation::Equal)
-            {
-                return entryMethod.Value() == suppliedMethod.Value();
-            }
-
-            // NotEqual
-            return entryMethod.Value() != suppliedMethod.Value();
+            return CompareTyped(entryMethod.Value(), suppliedMethod.Value(),
+                operation == ComparisonOperation::Equal ? TypedComparisonOperation::Equal : TypedComparisonOperation::NotEqual);
         }
         default:
             break;
     }
 
-    auto intValue = AsInt(value);
+    auto intValue = TryStringToInt(value);
     if (!intValue.HasValue())
     {
         return Error("invalid " + PrettyFieldName(field) + " parameter value", EINVAL);
