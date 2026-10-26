@@ -496,6 +496,12 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
         }
         const auto& ref = refResult.Value();
         auto ruleIt = ref.file->rules.find(ref.id);
+        if (ruleIt == ref.file->rules.end())
+        {
+            return Error("Unknown rule '" + ref.id + "' in benchmark definition '" + ref.file->file + "' for parameter selector '" +
+                             paramOverride.selector + "'",
+                EINVAL);
+        }
         ruleIt->second.parameters[ref.name] = paramOverride.value;
     }
     for (const auto& parsed : parsedFiles)
