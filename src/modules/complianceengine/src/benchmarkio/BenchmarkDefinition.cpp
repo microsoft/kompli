@@ -634,6 +634,17 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
         return Error("Benchmark definition is missing the 'spec' object", EINVAL);
     }
 
+    auto versionText = RequiredString(spec, "version", "spec");
+    if (!versionText.HasValue())
+    {
+        return versionText.Error();
+    }
+    auto version = ParseContentVersion(versionText.Value());
+    if (!version.HasValue())
+    {
+        return version.Error();
+    }
+
     auto* rules = json_object_get_array(spec, "rules");
     if (nullptr == rules)
     {
@@ -741,6 +752,7 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
 
     BenchmarkDocument doc;
     doc.name = std::move(name.Value());
+    doc.version = std::move(version.Value());
     doc.benchmarkInfo = std::move(documentInfo);
     doc.resources.reserve(ruleCount);
     // Rules already seen, keyed by id - the identifier guaranteed unique

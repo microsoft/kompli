@@ -4,6 +4,7 @@
 #ifndef COMPLIANCE_ENGINE_BENCHMARKIO_BENCHMARK_DEFINITION_HPP
 #define COMPLIANCE_ENGINE_BENCHMARKIO_BENCHMARK_DEFINITION_HPP
 
+#include "ContentVersion.hpp"
 #include "Resource.hpp"
 
 #include <BenchmarkInfo.h>
@@ -37,6 +38,10 @@ struct BenchmarkDocument
     // metadata.name - the benchmark's stable identifier, e.g. "cis_ubuntu24.04".
     std::string name;
 
+    // spec.version - the definition's content SemVer, independent of apiVersion.
+    // Required and parsed for every input (including legacy identity shape).
+    ContentVersion version;
+
     // The file-level prefix (framework/distribution/distributionVersion/
     // benchmarkVersion), built from metadata.labels/annotations for sole-id
     // definitions or derived from consistent payload keys for a legacy
@@ -67,7 +72,7 @@ struct BenchmarkDocument
 // migration, each rule must carry either `id` or the complete legacy `section`
 // plus `payloadKey` identity; legacy sections are normalized into `id`. Rejects
 // a document with a duplicate `id` across its rules (id must be unique within
-// one file) and rejects malformed input. Consistent with the definition schema
+// one file), requires a valid spec.version, and rejects malformed input. Consistent with the definition schema
 // (additionalProperties: true), unknown fields are ignored rather than rejected.
 Result<BenchmarkDocument> ParseString(const std::string& json, OsConfigLogHandle logHandle);
 
