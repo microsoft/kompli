@@ -45,6 +45,7 @@ const char* const kBenchmarkJson = R"({
     "annotations": {"benchmarkVersion": "v1.0.0"}
   },
   "spec": {
+    "version": "1.0.0",
     "rules": [
       {
         "ruleName": "TestingProceduresPass",
@@ -80,6 +81,7 @@ const char* const kParameterizedBenchmarkJson = R"({
     "annotations": {"benchmarkVersion": "v1.0.0"}
   },
   "spec": {
+    "version": "1.0.0",
     "rules": [
       {
         "ruleName": "TestingProceduresPass",
@@ -178,9 +180,33 @@ TEST_F(GeneratePlanTest, SeedsEveryRuleAtAudit)
     const auto& benchmark = plan.benchmarks[0];
     EXPECT_EQ(benchmark.file, path);
     EXPECT_EQ(benchmark.name, "test_benchmark");
+    EXPECT_EQ(benchmark.version.major, "1");
+    EXPECT_EQ(benchmark.version.minor, "0");
+    EXPECT_EQ(benchmark.version.patch, "0");
+    EXPECT_EQ(benchmark.versionConstraint, "^1.0.0");
+    EXPECT_NE(result.Value().find("\"version\": \"1.0.0\""), std::string::npos);
+    EXPECT_NE(result.Value().find("\"versionConstraint\": \"^1.0.0\""), std::string::npos);
     ASSERT_EQ(benchmark.rules.size(), 2u);
     EXPECT_EQ(benchmark.rules.at("1.1.1.1").mode, ToggleMode::Audit);
     EXPECT_EQ(benchmark.rules.at("1.1.1.2").mode, ToggleMode::Audit);
+}
+
+TEST_F(GeneratePlanTest, RejectsDefinitionWithoutContentVersion)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    std::string json = kBenchmarkJson;
+    const std::string version = "\"version\": \"1.0.0\",\n    ";
+    const auto position = json.find(version);
+    ASSERT_NE(position, std::string::npos);
+    json.erase(position, version.size());
+    const std::string path = MakeVerifiedFile("plan_legacy_dir", "bench.benchmark.json", json);
+
+    auto result = GeneratePlan({path}, {}, {}, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("version"), std::string::npos);
 }
 
 TEST_F(GeneratePlanTest, TogglesOverrideDefaultAndLastWriteWins)
@@ -250,7 +276,7 @@ TEST_F(ParsePlanFileTest, ParsesValidPlan)
         GTEST_SKIP() << "chown requires root";
     }
     const char* const planJson = R"({
-      "benchmarks": [{"file": "/etc/kompli/definitions/x.benchmark.json", "name": "x", "rules": {
+      "benchmarks": [{"file": "/etc/kompli/definitions/x.benchmark.json", "name": "x", "version": "1.0.0", "versionConstraint": "^1.0.0", "rules": {
         "1/1/1/1": {"mode": "audit", "parameters": {}},
         "1/1/1/2": {"mode": "remediate", "parameters": {}}
       }}]
@@ -263,9 +289,49 @@ TEST_F(ParsePlanFileTest, ParsesValidPlan)
     const auto& benchmark = result.Value().benchmarks[0];
     EXPECT_EQ(benchmark.file, "/etc/kompli/definitions/x.benchmark.json");
     EXPECT_EQ(benchmark.name, "x");
+    EXPECT_EQ(benchmark.version.major, "1");
     ASSERT_EQ(benchmark.rules.size(), 2u);
     EXPECT_EQ(benchmark.rules.at("1/1/1/1").mode, ToggleMode::Audit);
     EXPECT_EQ(benchmark.rules.at("1/1/1/2").mode, ToggleMode::Remediate);
+}
+
+TEST_F(ParsePlanFileTest, RejectsInvalidVersionPins)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const std::string path = MakeVerifiedFile("parse_plan_version_dir", "plan.json", R"({"benchmarks":[{"file":"bench.json","version":"1.0.0","rules":{}}]})");
+    EXPECT_FALSE(ParsePlanFile(path, nullptr).HasValue());
+
+    ASSERT_TRUE(WriteFile(path, R"({"benchmarks":[{"file":"bench.json","rules":{}}]})"));
+    auto missing = ParsePlanFile(path, nullptr);
+    ASSERT_FALSE(missing.HasValue());
+    EXPECT_NE(missing.Error().message.find("version"), std::string::npos);
+
+    ASSERT_TRUE(WriteFile(path, R"({"benchmarks":[{"file":"bench.json","versionConstraint":"^1.0.0","rules":{}}]})"));
+    EXPECT_FALSE(ParsePlanFile(path, nullptr).HasValue());
+    ASSERT_TRUE(WriteFile(path, R"({"benchmarks":[{"file":"bench.json","version":null,"versionConstraint":"^1.0.0","rules":{}}]})"));
+    EXPECT_FALSE(ParsePlanFile(path, nullptr).HasValue());
+
+    for (const std::string& version : {"1.0", "01.0.0", "1.0.0-beta", "1.0.0.0", R"(1.0.0\u0000)"})
+    {
+        const std::string json = R"({"benchmarks":[{"file":"bench.json","version":")" + version + R"(","versionConstraint":"^1.0.0","rules":{}}]})";
+        ASSERT_TRUE(WriteFile(path, json));
+        EXPECT_FALSE(ParsePlanFile(path, nullptr).HasValue()) << version;
+    }
+
+    ASSERT_TRUE(WriteFile(path, R"({"benchmarks":[{"file":"bench.json","version":"1.0.0","versionConstraint":"^2.0.0","rules":{}}]})"));
+    EXPECT_FALSE(ParsePlanFile(path, nullptr).HasValue());
+
+    ASSERT_TRUE(WriteFile(path, R"({"benchmarks":[{"file":"bench.json","version":"1.0.0","versionConstraint":"^1.0.0 || 2.0.0","rules":{}}]})"));
+    EXPECT_FALSE(ParsePlanFile(path, nullptr).HasValue());
+
+    ASSERT_TRUE(WriteFile(path,
+        R"({"benchmarks":[{"file":"bench.json","version":"184467440737095516160.999999999999999999999.0","versionConstraint":"^184467440737095516160.999999999999999999999.0","rules":{}}]})"));
+    auto large = ParsePlanFile(path, nullptr);
+    ASSERT_TRUE(large.HasValue()) << large.Error().message;
+    EXPECT_EQ(large.Value().benchmarks[0].version.major, "184467440737095516160");
 }
 
 TEST_F(ParsePlanFileTest, ParsesRuleParameters)
@@ -275,7 +341,7 @@ TEST_F(ParsePlanFileTest, ParsesRuleParameters)
         GTEST_SKIP() << "chown requires root";
     }
     const char* const planJson = R"({
-      "benchmarks": [{"file": "/etc/kompli/definitions/x.benchmark.json", "name": "x", "rules": {
+      "benchmarks": [{"file": "/etc/kompli/definitions/x.benchmark.json", "name": "x", "version": "1.0.0", "versionConstraint": "^1.0.0", "rules": {
         "1.1.1.1": {"mode": "audit", "parameters": {"mountPoint": "/tmp"}}
       }}]
     })";
@@ -325,6 +391,44 @@ TEST_F(GeneratePlanTest, ParamOverrideReplacesDefault)
     ASSERT_TRUE(planResult.HasValue()) << planResult.Error().message;
     const auto& rule = planResult.Value().benchmarks[0].rules.at("1.1.1.1");
     EXPECT_EQ(rule.parameters.at("mountPoint"), "/var/tmp");
+}
+
+TEST_F(GeneratePlanTest, ParamOverrideEmptyValueReplacesDefault)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    std::string json = kParameterizedBenchmarkJson;
+    const std::string originalRegex = R"("validationRegex": "^/[a-zA-Z0-9/_.-]+$")";
+    const auto position = json.find(originalRegex);
+    ASSERT_NE(position, std::string::npos);
+    json.replace(position, originalRegex.size(), R"("validationRegex": "^(/[a-zA-Z0-9/_.-]+)?$")");
+    const std::string path = MakeVerifiedFile("plan_param_empty_dir", "bench.benchmark.json", json);
+
+    auto result = GeneratePlan({path}, {}, {ParamOverride{"1.1.1.1.mountPoint", ""}}, nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+
+    const std::string planPath = MakeVerifiedFile("plan_param_empty_out_dir", "plan.json", result.Value());
+    auto planResult = ParsePlanFile(planPath, nullptr);
+    ASSERT_TRUE(planResult.HasValue()) << planResult.Error().message;
+    const auto& parameters = planResult.Value().benchmarks[0].rules.at("1.1.1.1").parameters;
+    ASSERT_EQ(parameters.count("mountPoint"), 1u);
+    EXPECT_TRUE(parameters.at("mountPoint").empty());
+}
+
+TEST_F(GeneratePlanTest, ParamOverrideEmptyValueRejectsValidationRegex)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const std::string path = MakeVerifiedFile("plan_param_empty_regex_dir", "bench.benchmark.json", kParameterizedBenchmarkJson);
+
+    auto result = GeneratePlan({path}, {}, {ParamOverride{"1.1.1.1.mountPoint", ""}}, nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    EXPECT_NE(result.Error().message.find("does not match its required pattern"), std::string::npos);
 }
 
 TEST_F(GeneratePlanTest, ParamOverrideRejectsValueNotMatchingValidationRegex)
@@ -532,8 +636,8 @@ TEST_F(ParsePlanFileTest, ParsesMultipleBenchmarkEntries)
     }
     const char* const planJson = R"({
       "benchmarks": [
-        {"file": "/etc/kompli/definitions/cis.benchmark.json", "name": "cis", "rules": {"1/1/1/1": {"mode": "audit", "parameters": {}}}},
-        {"file": "/etc/kompli/definitions/stig.benchmark.json", "name": "stig", "rules": {"SV-1": {"mode": "remediate", "parameters": {}}}}
+        {"file": "/etc/kompli/definitions/cis.benchmark.json", "name": "cis", "version": "1.0.0", "versionConstraint": "^1.0.0", "rules": {"1/1/1/1": {"mode": "audit", "parameters": {}}}},
+        {"file": "/etc/kompli/definitions/stig.benchmark.json", "name": "stig", "version": "1.0.0", "versionConstraint": "^1.0.0", "rules": {"SV-1": {"mode": "remediate", "parameters": {}}}}
       ]
     })";
     const std::string path = MakeVerifiedFile("parse_plan_dir_multi", "plan.json", planJson);
@@ -553,7 +657,7 @@ TEST_F(ParsePlanFileTest, RejectsInvalidMode)
         GTEST_SKIP() << "chown requires root";
     }
     const char* const planJson = R"({
-      "benchmarks": [{"file": "x.json", "name": "x", "rules": {"1/1/1/1": {"mode": "bogus", "parameters": {}}}}]
+      "benchmarks": [{"file": "x.json", "name": "x", "version": "1.0.0", "versionConstraint": "^1.0.0", "rules": {"1/1/1/1": {"mode": "bogus", "parameters": {}}}}]
     })";
     const std::string path = MakeVerifiedFile("parse_plan_dir3", "plan.json", planJson);
 
@@ -583,7 +687,7 @@ TEST_F(ParsePlanFileTest, RejectsEscapedNulInDecodedString)
         GTEST_SKIP() << "chown requires root";
     }
     const char* const planJson = R"({
-      "benchmarks": [{"file": "x\u0000.json", "rules": {}}]
+      "benchmarks": [{"file": "x\u0000.json", "version": "1.0.0", "versionConstraint": "^1.0.0", "rules": {}}]
     })";
     const std::string path = MakeVerifiedFile("parse_plan_escaped_nul", "plan.json", planJson);
 
@@ -598,7 +702,7 @@ TEST_F(ParsePlanFileTest, RejectsTrailingData)
     {
         GTEST_SKIP() << "chown requires root";
     }
-    const std::string valid = R"({"benchmarks":[{"file":"x","rules":{}}]})";
+    const std::string valid = R"({"benchmarks":[{"file":"x","version":"1.0.0","versionConstraint":"^1.0.0","rules":{}}]})";
     const std::string garbagePath = MakeVerifiedFile("parse_plan_trailing_garbage", "plan.json", valid + " garbage");
     auto result = ParsePlanFile(garbagePath, nullptr);
     ASSERT_FALSE(result.HasValue());
@@ -617,7 +721,7 @@ TEST_F(ParsePlanFileTest, RejectsPresentNonObjectParameters)
         GTEST_SKIP() << "chown requires root";
     }
     const char* const planJson = R"({
-      "benchmarks": [{"file": "x.json", "rules": {"1.1": {"mode": "audit", "parameters": []}}}]
+      "benchmarks": [{"file": "x.json", "version": "1.0.0", "versionConstraint": "^1.0.0", "rules": {"1.1": {"mode": "audit", "parameters": []}}}]
     })";
     const std::string path = MakeVerifiedFile("parse_plan_parameters_type", "plan.json", planJson);
 
@@ -673,6 +777,8 @@ TEST(ValidatePlanForRunTest, AcceptsKnownRuleAndValidParameters)
     ComplianceEngine::Kompli::Plan plan;
     ComplianceEngine::Kompli::PlanBenchmark benchmark;
     benchmark.file = "bench.json";
+    benchmark.version = {"1", "0", "0"};
+    benchmark.versionConstraint = "^1.0.0";
     ComplianceEngine::Kompli::PlanRuleMode rule(ToggleMode::Audit);
     rule.parameters["mountPoint"] = "/var/tmp";
     benchmark.rules["1.1.1.1"] = rule;
@@ -687,6 +793,8 @@ TEST(ValidatePlanForRunTest, RejectsInapplicableBlock)
     ComplianceEngine::Kompli::Plan plan;
     ComplianceEngine::Kompli::PlanBenchmark benchmark;
     benchmark.file = "bench.json";
+    benchmark.version = {"1", "0", "0"};
+    benchmark.versionConstraint = "^1.0.0";
     plan.benchmarks.push_back(benchmark);
 
     EXPECT_TRUE(ValidatePlanForRun(plan, {document}, MakeDistribution("24.04")).HasValue());
@@ -698,6 +806,8 @@ TEST(ValidatePlanForRunTest, RejectsUnknownRule)
     ComplianceEngine::Kompli::Plan plan;
     ComplianceEngine::Kompli::PlanBenchmark benchmark;
     benchmark.file = "bench.json";
+    benchmark.version = {"1", "0", "0"};
+    benchmark.versionConstraint = "^1.0.0";
     benchmark.rules["unknown"] = ComplianceEngine::Kompli::PlanRuleMode(ToggleMode::Audit);
     plan.benchmarks.push_back(benchmark);
 
@@ -710,6 +820,8 @@ TEST(ValidatePlanForRunTest, RejectsUnknownOrInvalidParameter)
     ComplianceEngine::Kompli::Plan plan;
     ComplianceEngine::Kompli::PlanBenchmark benchmark;
     benchmark.file = "bench.json";
+    benchmark.version = {"1", "0", "0"};
+    benchmark.versionConstraint = "^1.0.0";
     ComplianceEngine::Kompli::PlanRuleMode rule(ToggleMode::Audit);
     rule.parameters["unknown"] = "value";
     benchmark.rules["1.1.1.1"] = rule;
@@ -728,12 +840,63 @@ TEST(ValidatePlanForRunTest, RejectsMissingMandatoryParameter)
     ComplianceEngine::Kompli::Plan plan;
     ComplianceEngine::Kompli::PlanBenchmark benchmark;
     benchmark.file = "bench.json";
+    benchmark.version = {"1", "0", "0"};
+    benchmark.versionConstraint = "^1.0.0";
     benchmark.rules["1.1.1.1"] = ComplianceEngine::Kompli::PlanRuleMode(ToggleMode::Audit);
     plan.benchmarks.push_back(benchmark);
 
     auto error = ValidatePlanForRun(plan, {document}, MakeDistribution());
     ASSERT_TRUE(error.HasValue());
     EXPECT_NE(error.Value().message.find("Missing mandatory parameter 'mountPoint'"), std::string::npos);
+}
+
+TEST(ValidatePlanForRunTest, GatesContentVersionBeforeEvaluatingRules)
+{
+    ComplianceEngine::Kompli::Plan plan;
+    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    benchmark.file = "bench.json";
+    benchmark.version = {"1", "0", "0"};
+    benchmark.versionConstraint = "^1.0.0";
+    benchmark.rules["1.1.1.1"] = ComplianceEngine::Kompli::PlanRuleMode(ToggleMode::Audit);
+    plan.benchmarks.push_back(benchmark);
+
+    auto checkVersion = [&](const std::string& version) {
+        std::string json = kBenchmarkJson;
+        const std::string oldVersion = "\"version\": \"1.0.0\"";
+        const auto position = json.find(oldVersion);
+        EXPECT_NE(position, std::string::npos);
+        json.replace(position, oldVersion.size(), "\"version\": \"" + version + "\"");
+        if (version == "1.1.0")
+        {
+            const auto endOfRules = json.find("\n    ]", json.find("\"rules\""));
+            EXPECT_NE(endOfRules, std::string::npos);
+            json.insert(endOfRules, R"(,
+      {"ruleName":"TestingProceduresPass","title":"New optional rule","id":"1.1.1.3",
+       "ruleId":"rule-3","tags":[],"metadata":{"description":"","rationale":"","fixtext":"","references":"","severity":"Low"},
+       "payload":{"audit":{},"remediate":{},"parameters":{}}})");
+        }
+        return ValidatePlanForRun(plan, {ParseDocument(json)}, MakeDistribution()).HasValue();
+    };
+
+    EXPECT_FALSE(checkVersion("1.0.0"));
+    EXPECT_FALSE(checkVersion("1.0.1"));
+    EXPECT_FALSE(checkVersion("1.1.0"));
+    EXPECT_TRUE(checkVersion("2.0.0"));
+    EXPECT_TRUE(checkVersion("0.9.0"));
+    EXPECT_FALSE(checkVersion("1.0.184467440737095516160"));
+    EXPECT_FALSE(checkVersion("1.184467440737095516160.0"));
+
+    plan.benchmarks[0].versionConstraint = "~1.0.0";
+    EXPECT_FALSE(checkVersion("1.0.1"));
+    EXPECT_TRUE(checkVersion("1.1.0"));
+
+    plan.benchmarks[0].versionConstraint = "1.0.0";
+    EXPECT_FALSE(checkVersion("1.0.0"));
+    EXPECT_TRUE(checkVersion("1.0.1"));
+
+    plan.benchmarks[0].version = {};
+    plan.benchmarks[0].versionConstraint.clear();
+    EXPECT_TRUE(checkVersion("1.0.0"));
 }
 
 TEST(CheckUniqueBenchmarkIdentitiesTest, AcceptsDistinctIdentities)

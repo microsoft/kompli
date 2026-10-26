@@ -4,6 +4,7 @@
 #ifndef COMPLIANCE_ENGINE_BENCHMARKIO_BENCHMARK_DEFINITION_HPP
 #define COMPLIANCE_ENGINE_BENCHMARKIO_BENCHMARK_DEFINITION_HPP
 
+#include "ContentVersion.hpp"
 #include "Resource.hpp"
 
 #include <BenchmarkInfo.h>
@@ -29,19 +30,33 @@ using BenchmarkIO::Resource;
 struct BenchmarkDocument
 {
     std::string name;
-    // Built from hoisted metadata for sole-id definitions or derived from
-    // consistent payload keys for a legacy definition that predates it.
+    // spec.version - the definition's content SemVer, independent of apiVersion.
+    // Required and parsed for every input (including legacy identity shape).
+    ContentVersion version;
+
+    // The file-level prefix (framework/distribution/distributionVersion/
+    // benchmarkVersion), built from metadata.labels/annotations for sole-id
+    // definitions or derived from consistent payload keys for a legacy
+    // definition that predates hoisted identity - shared by every rule.
+    // `.section` is left empty here; it's a legacy field of BenchmarkInfo
+    // used only by the MOF/NRP path's `Parse()` (see BenchmarkInfo.h) - the
+    // unified-definition path never populates it.
     BenchmarkInfo benchmarkInfo;
     std::vector<Resource> resources;
 };
 
-// Parses the resource envelope and rules carrying the stable
-// external-correlation `ruleId`. `spec.rules` must be non-empty. Sole-id definitions require hoisted benchmark
-// identity. A non-empty, all-legacy document may omit it; the prefix is derived
-// from the first payload key and every rule must agree. During the producer
-// migration, a rule may carry either its framework-defined `id` or the complete
-// legacy `section` + `payloadKey` identity; the legacy section is normalized
-// into Resource::id. Unknown fields are ignored consistently with the schema.
+// Parses a benchmark-definition JSON document. Strict about structure: it
+// requires the resource envelope (apiVersion / kind == "BenchmarkDefinition" /
+// metadata / valid spec.version / non-empty spec.rules) and the fixed per-rule fields.
+// Rules carry the stable external-correlation `ruleId`. Sole-id definitions
+// require the file-level prefix in metadata.labels and metadata.annotations.
+// A non-empty, all-legacy document may omit those objects; its prefix is
+// derived from the first payload key and every rule must agree. During producer
+// migration, each rule must carry either `id` or the complete legacy `section`
+// plus `payloadKey` identity; legacy sections are normalized into `id`. Rejects
+// a document with a duplicate `id` across its rules (id must be unique within
+// one file) and rejects malformed input. Consistent with the definition schema
+// (additionalProperties: true), unknown fields are ignored rather than rejected.
 Result<BenchmarkDocument> ParseString(const std::string& json, OsConfigLogHandle logHandle);
 
 // Reads the whole document from a stream (stdin / tests), bounding the total

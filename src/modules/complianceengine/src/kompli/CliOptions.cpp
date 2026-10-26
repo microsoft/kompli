@@ -183,7 +183,7 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
                 // so only loaded rule metadata can resolve the boundary.
                 const std::string arg(optarg);
                 const auto eq = arg.find('=');
-                if (std::string::npos == eq || 0 == eq || eq + 1 == arg.size())
+                if (std::string::npos == eq || 0 == eq)
                 {
                     return Error("--param must be of the form <ref>.<name>=<value>.");
                 }

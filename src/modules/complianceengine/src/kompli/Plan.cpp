@@ -33,6 +33,17 @@ namespace
 // rule); generous but bounds memory for a hostile input while running as root.
 constexpr std::size_t kMaxPlanInputBytes = static_cast<std::size_t>(8) * 1024 * 1024;
 
+Optional<Error> ValidateVersionConstraint(const ContentVersion& version, const string& constraint)
+{
+    const string minimum = (!constraint.empty() && (constraint[0] == '^' || constraint[0] == '~')) ? constraint.substr(1) : constraint;
+    auto parsedMinimum = ParseContentVersion(minimum);
+    if (!parsedMinimum.HasValue() || CompareContentVersion(version, parsedMinimum.Value()) != 0)
+    {
+        return Error("Invalid versionConstraint '" + constraint + "': expected the plan's version with optional ^ or ~ prefix", EINVAL);
+    }
+    return {};
+}
+
 const char* ToModeString(ToggleMode mode)
 {
     switch (mode)
@@ -231,88 +242,71 @@ string BaseName(const string& path)
 // success the caller owns the returned value and must free it if it isn't
 // subsequently handed to a parent JSON container (matching parson's
 // ownership-transfer convention, e.g. json_array_append_value).
-Result<JSON_Value*> BuildBenchmarkEntry(const string& benchmarkFile, const string& name, const std::map<string, PlanRuleMode>& rules)
+Result<JSON_Value*> BuildBenchmarkEntry(const string& benchmarkFile, const string& name, const ContentVersion& version, const std::map<string, PlanRuleMode>& rules)
 {
-    auto* benchmarkValue = json_value_init_object();
+    JsonWrapperPointerType benchmarkValue(json_value_init_object(), &json_value_free);
     if (nullptr == benchmarkValue)
     {
         return Error("Failed to initialize plan benchmark JSON object", ENOMEM);
     }
-    auto* benchmarkObject = json_value_get_object(benchmarkValue);
+    auto* benchmarkObject = json_value_get_object(benchmarkValue.get());
+    const string versionText = ContentVersionToString(version);
     if (nullptr == benchmarkObject || JSONSuccess != json_object_set_string(benchmarkObject, "file", benchmarkFile.c_str()) ||
-        JSONSuccess != json_object_set_string(benchmarkObject, "name", name.c_str()))
+        JSONSuccess != json_object_set_string(benchmarkObject, "name", name.c_str()) ||
+        JSONSuccess != json_object_set_string(benchmarkObject, "version", versionText.c_str()) ||
+        JSONSuccess != json_object_set_string(benchmarkObject, "versionConstraint", ("^" + versionText).c_str()))
     {
-        json_value_free(benchmarkValue);
         return Error("Failed to set plan benchmark fields", ENOMEM);
     }
 
-    auto* rulesValue = json_value_init_object();
+    JsonWrapperPointerType rulesValue(json_value_init_object(), &json_value_free);
     if (nullptr == rulesValue)
     {
-        json_value_free(benchmarkValue);
         return Error("Failed to initialize plan rules JSON object", ENOMEM);
     }
-    auto* rulesObject = json_value_get_object(rulesValue);
+    auto* rulesObject = json_value_get_object(rulesValue.get());
     if (nullptr == rulesObject)
     {
-        json_value_free(rulesValue);
-        json_value_free(benchmarkValue);
         return Error("Failed to get plan rules JSON object", ENOMEM);
     }
     for (const auto& entry : rules)
     {
-        auto* ruleValue = json_value_init_object();
+        JsonWrapperPointerType ruleValue(json_value_init_object(), &json_value_free);
         if (nullptr == ruleValue)
         {
-            json_value_free(rulesValue);
-            json_value_free(benchmarkValue);
             return Error("Failed to initialize plan rule JSON object", ENOMEM);
         }
-        auto* ruleObject = json_value_get_object(ruleValue);
-        auto* parametersValue = json_value_init_object();
-        auto* parametersObject = (nullptr != parametersValue) ? json_value_get_object(parametersValue) : nullptr;
+        auto* ruleObject = json_value_get_object(ruleValue.get());
+        JsonWrapperPointerType parametersValue(json_value_init_object(), &json_value_free);
+        auto* parametersObject = (nullptr != parametersValue) ? json_value_get_object(parametersValue.get()) : nullptr;
         if (nullptr == ruleObject || nullptr == parametersObject || JSONSuccess != json_object_set_string(ruleObject, "mode", ToModeString(entry.second.mode)))
         {
-            json_value_free(parametersValue);
-            json_value_free(ruleValue);
-            json_value_free(rulesValue);
-            json_value_free(benchmarkValue);
             return Error("Failed to build plan rule '" + entry.first + "'", ENOMEM);
         }
         for (const auto& param : entry.second.parameters)
         {
             if (JSONSuccess != json_object_set_string(parametersObject, param.first.c_str(), param.second.c_str()))
             {
-                json_value_free(parametersValue);
-                json_value_free(ruleValue);
-                json_value_free(rulesValue);
-                json_value_free(benchmarkValue);
                 return Error("Failed to build plan rule '" + entry.first + "' parameter '" + param.first + "'", ENOMEM);
             }
         }
-        if (JSONSuccess != json_object_set_value(ruleObject, "parameters", parametersValue))
+        if (JSONSuccess != json_object_set_value(ruleObject, "parameters", parametersValue.get()))
         {
-            json_value_free(parametersValue);
-            json_value_free(ruleValue);
-            json_value_free(rulesValue);
-            json_value_free(benchmarkValue);
             return Error("Failed to build plan rule '" + entry.first + "'", ENOMEM);
         }
-        if (JSONSuccess != json_object_set_value(rulesObject, entry.first.c_str(), ruleValue))
+        parametersValue.release();
+        if (JSONSuccess != json_object_set_value(rulesObject, entry.first.c_str(), ruleValue.get()))
         {
-            json_value_free(ruleValue);
-            json_value_free(rulesValue);
-            json_value_free(benchmarkValue);
             return Error("Failed to set plan rule '" + entry.first + "'", ENOMEM);
         }
+        ruleValue.release();
     }
-    if (JSONSuccess != json_object_set_value(benchmarkObject, "rules", rulesValue))
+    if (JSONSuccess != json_object_set_value(benchmarkObject, "rules", rulesValue.get()))
     {
-        json_value_free(rulesValue);
-        json_value_free(benchmarkValue);
         return Error("Failed to set plan benchmark rules object", ENOMEM);
     }
-    return benchmarkValue;
+    rulesValue.release();
+    return benchmarkValue.release();
 }
 
 // One input file's already-parsed state, kept around long enough to apply
@@ -321,6 +315,7 @@ struct ParsedBenchmarkFile
 {
     string file;
     string name;
+    ContentVersion version;
     std::map<string, PlanRuleMode> rules;
     // Every rules[] key's parameterMetadata, kept alongside for `--param=`
     // validation (name exists, value matches validationRegex) - see
@@ -434,10 +429,10 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
             return docResult.Error();
         }
         const auto& doc = docResult.Value();
-
         ParsedBenchmarkFile parsed;
         parsed.file = file;
         parsed.name = doc.name;
+        parsed.version = doc.version;
         // Seed every rule at `audit` (never a mutating default) with its
         // parameters pre-filled from parameterMetadata's defaults (docs/CLI.md
         // "Parametrization"), keyed by id (the identifier guaranteed unique
@@ -537,7 +532,7 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
 
     for (const auto& parsed : parsedFiles)
     {
-        auto entryResult = BuildBenchmarkEntry(parsed.file, parsed.name, parsed.rules);
+        auto entryResult = BuildBenchmarkEntry(parsed.file, parsed.name, parsed.version, parsed.rules);
         if (!entryResult.HasValue())
         {
             json_value_free(benchmarksValue);
@@ -661,6 +656,35 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
             benchmark.name = std::move(name.Value());
         }
 
+        const JSON_Value* versionValue = json_object_get_value(benchmarkObject, "version");
+        const JSON_Value* constraintValue = json_object_get_value(benchmarkObject, "versionConstraint");
+        if (nullptr == versionValue || nullptr == constraintValue)
+        {
+            return Error("Plan file's '" + context + "' must include both version and versionConstraint", EINVAL);
+        }
+        auto versionText = ReadPlanString(versionValue, context + ".version");
+        if (!versionText.HasValue())
+        {
+            return versionText.Error();
+        }
+        auto version = ParseContentVersion(versionText.Value());
+        if (!version.HasValue())
+        {
+            return version.Error();
+        }
+        auto constraint = ReadPlanString(constraintValue, context + ".versionConstraint");
+        if (!constraint.HasValue())
+        {
+            return constraint.Error();
+        }
+        auto error = ValidateVersionConstraint(version.Value(), constraint.Value());
+        if (error.HasValue())
+        {
+            return error.Value();
+        }
+        benchmark.version = std::move(version.Value());
+        benchmark.versionConstraint = std::move(constraint.Value());
+
         auto* rulesObject = json_object_get_object(benchmarkObject, "rules");
         if (nullptr == rulesObject)
         {
@@ -728,6 +752,32 @@ Result<Plan> ParsePlanFile(const string& path, OsConfigLogHandle logHandle)
 
 Optional<Error> WritePlanFile(const string& path, const string& content)
 {
+    struct FdGuard
+    {
+        int fd;
+        ~FdGuard()
+        {
+            if (fd >= 0)
+            {
+                ::close(fd);
+            }
+        }
+        void Reset(int nextFd)
+        {
+            if (fd >= 0)
+            {
+                ::close(fd);
+            }
+            fd = nextFd;
+        }
+        int Release()
+        {
+            const int releasedFd = fd;
+            fd = -1;
+            return releasedFd;
+        }
+    };
+
     const std::size_t slash = path.rfind('/');
     const string parentPath = (slash == string::npos) ? "." : (slash == 0 ? "/" : path.substr(0, slash));
     const string filename = (slash == string::npos) ? path : path.substr(slash + 1);
@@ -736,10 +786,11 @@ Optional<Error> WritePlanFile(const string& path, const string& content)
         return Error("Invalid output file path '" + path + "'", EINVAL);
     }
 
-    int parentFd = ::open(parentPath[0] == '/' ? "/" : ".", O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (parentFd < 0)
+    FdGuard parentFd{::open(parentPath[0] == '/' ? "/" : ".", O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)};
+    if (parentFd.fd < 0)
     {
-        return Error("Failed to open output parent for '" + path + "': " + std::strerror(errno), errno);
+        const int error = errno;
+        return Error("Failed to open output parent for '" + path + "': " + std::strerror(error), error);
     }
     std::size_t position = parentPath[0] == '/' ? 1 : 0;
     while (position < parentPath.size())
@@ -753,39 +804,34 @@ Optional<Error> WritePlanFile(const string& path, const string& content)
         }
         if (component == "..")
         {
-            ::close(parentFd);
             return Error("Refusing output path '" + path + "': contains path traversal component '..'", EINVAL);
         }
-        const int nextFd = ::openat(parentFd, component.c_str(), O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        const int nextFd = ::openat(parentFd.fd, component.c_str(), O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
         if (nextFd < 0)
         {
             const int error = errno;
-            ::close(parentFd);
             return Error("Failed to resolve output parent for '" + path + "': " + std::strerror(error), error);
         }
-        ::close(parentFd);
-        parentFd = nextFd;
+        parentFd.Reset(nextFd);
     }
 
     struct stat parentInfo
     {
     };
-    if (::fstat(parentFd, &parentInfo) != 0)
+    if (::fstat(parentFd.fd, &parentInfo) != 0)
     {
         const int error = errno;
-        ::close(parentFd);
         return Error("Failed to inspect output parent for '" + path + "': " + std::strerror(error), error);
     }
     if (!S_ISDIR(parentInfo.st_mode) || parentInfo.st_uid != ::geteuid() || (parentInfo.st_mode & (S_IWGRP | S_IWOTH)) != 0)
     {
-        ::close(parentFd);
         return Error("Refusing output path '" + path + "': parent directory is not trusted", EPERM);
     }
 
-    const int fd = ::openat(parentFd, filename.c_str(), O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0600);
+    FdGuard outputFd{::openat(parentFd.fd, filename.c_str(), O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0600)};
     const int openError = errno;
-    ::close(parentFd);
-    if (fd < 0)
+    parentFd.Reset(-1);
+    if (outputFd.fd < 0)
     {
         return Error("Failed to open output file '" + path + "': " + std::strerror(openError), openError);
     }
@@ -793,28 +839,25 @@ Optional<Error> WritePlanFile(const string& path, const string& content)
     struct stat info
     {
     };
-    if (::fstat(fd, &info) != 0)
+    if (::fstat(outputFd.fd, &info) != 0)
     {
         const int error = errno;
-        ::close(fd);
         return Error("Failed to inspect output file '" + path + "': " + std::strerror(error), error);
     }
     if (!S_ISREG(info.st_mode) || info.st_nlink != 1)
     {
-        ::close(fd);
         return Error("Refusing to write output file '" + path + "': destination is not a singly-linked regular file", EINVAL);
     }
-    if (::ftruncate(fd, 0) != 0)
+    if (::ftruncate(outputFd.fd, 0) != 0)
     {
         const int error = errno;
-        ::close(fd);
         return Error("Failed to truncate output file '" + path + "': " + std::strerror(error), error);
     }
 
     std::size_t written = 0;
     while (written < content.size())
     {
-        const ssize_t result = ::write(fd, content.data() + written, content.size() - written);
+        const ssize_t result = ::write(outputFd.fd, content.data() + written, content.size() - written);
         if (result < 0)
         {
             if (EINTR == errno)
@@ -822,14 +865,15 @@ Optional<Error> WritePlanFile(const string& path, const string& content)
                 continue;
             }
             const int error = errno;
-            ::close(fd);
             return Error("Failed to write output file '" + path + "': " + std::strerror(error), error);
         }
         written += static_cast<std::size_t>(result);
     }
-    if (::close(fd) != 0)
+    // Linux closes the descriptor even when close reports EINTR; do not retry or let the guard close it twice.
+    if (::close(outputFd.Release()) != 0)
     {
-        return Error("Failed to close output file '" + path + "': " + std::strerror(errno), errno);
+        const int error = errno;
+        return Error("Failed to close output file '" + path + "': " + std::strerror(error), error);
     }
     return {};
 }
@@ -865,6 +909,22 @@ Optional<Error> ValidatePlanForRun(const Plan& plan, const std::vector<Benchmark
         if (!document.benchmarkInfo.Match(distributionInfo))
         {
             return Error("Benchmark '" + benchmark.file + "' is not applicable for the current distribution", EINVAL);
+        }
+
+        auto constraintError = ValidateVersionConstraint(benchmark.version, benchmark.versionConstraint);
+        if (constraintError.HasValue())
+        {
+            return constraintError.Value();
+        }
+        if (CompareContentVersion(document.version, benchmark.version) < 0 ||
+            (benchmark.versionConstraint[0] == '^' && document.version.major != benchmark.version.major) ||
+            (benchmark.versionConstraint[0] == '~' && (document.version.major != benchmark.version.major || document.version.minor != benchmark.version.minor)) ||
+            (benchmark.versionConstraint[0] != '^' && benchmark.versionConstraint[0] != '~' && CompareContentVersion(document.version, benchmark.version) != 0))
+        {
+            return Error("Benchmark definition '" + benchmark.file + "' version '" + ContentVersionToString(document.version) +
+                             "' does not satisfy plan constraint '" + benchmark.versionConstraint +
+                             "'; definition upgraded incompatibly or changed: review and regenerate your plan",
+                EINVAL);
         }
 
         std::map<string, const BenchmarkIO::Resource*> resources;

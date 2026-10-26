@@ -127,10 +127,11 @@ Optional<Error> BenchmarkFormatter::AppendRuleJson(JsonWrapper rule) &
         return Error("Failed to get JSON array", ENOMEM);
     }
 
-    if (JSONSuccess != json_array_append_value(array, rule.release()))
+    if (JSONSuccess != json_array_append_value(array, rule.get()))
     {
         return Error("Failed to append JSON value", ENOMEM);
     }
+    rule.release();
 
     return Optional<Error>();
 }

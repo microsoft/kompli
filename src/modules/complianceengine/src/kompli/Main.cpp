@@ -418,6 +418,14 @@ int main(int argc, char* argv[])
         OsConfigLogError(logHandle.get(), "Refusing to run plan: %s", validationError.Value().message.c_str());
         return 1;
     }
+    for (std::size_t index = 0; index < plan.benchmarks.size(); ++index)
+    {
+        if (CompareContentVersion(plan.benchmarks[index].version, documents[index].version) != 0)
+        {
+            OsConfigLogInfo(logHandle.get(), "Using compatible benchmark definition '%s' version %s (planned at %s)", plan.benchmarks[index].file.c_str(),
+                ContentVersionToString(documents[index].version).c_str(), ContentVersionToString(plan.benchmarks[index].version).c_str());
+        }
+    }
 
     auto formatterResult = BenchmarkFormatter::Begin(distributionInfo);
     if (!formatterResult.HasValue())

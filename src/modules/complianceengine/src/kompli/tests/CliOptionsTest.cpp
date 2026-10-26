@@ -305,10 +305,14 @@ TEST(CliOptionsSmokeTest, ParamOverrideMissingDotIsRejected)
     EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
 }
 
-TEST(CliOptionsSmokeTest, ParamOverrideEmptyValueIsRejected)
+TEST(CliOptionsSmokeTest, ParamOverrideEmptyValueIsAccepted)
 {
     ArgvHelper a{"prog", "--param=1.1.mountPoint=", "plan", "bench.json"};
-    EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+    auto result = ParseCommandLine(a.Argc(), a.Argv());
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value().paramOverrides.size(), 1u);
+    EXPECT_EQ(result.Value().paramOverrides[0].selector, "1.1.mountPoint");
+    EXPECT_EQ(result.Value().paramOverrides[0].value, "");
 }
 
 TEST(CliOptionsSmokeTest, ParamOverrideEmptyNameIsRejected)

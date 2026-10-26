@@ -49,6 +49,8 @@ struct PlanBenchmark
 {
     std::string file;
     std::string name;
+    ContentVersion version;
+    std::string versionConstraint;
     std::map<std::string, PlanRuleMode> rules;
 };
 
