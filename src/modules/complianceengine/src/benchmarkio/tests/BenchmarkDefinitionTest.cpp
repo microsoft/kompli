@@ -203,6 +203,29 @@ TEST(BenchmarkDefinitionParserTest, ComparesDecimalComponentsWithoutIntegerConve
     EXPECT_EQ(ComplianceEngine::ContentVersionToString(later.Value()), "1.100000000000000000000.0");
 }
 
+TEST(BenchmarkDefinitionParserTest, PreservesEqualAndNaturallyPrefixedTitlesWithoutMergingRules)
+{
+    std::string first = kValidRule;
+    std::string second = kValidRule2;
+    ReplaceOnce(first, "1.1.1.1 Ensure cramfs kernel module is not available", "Same title");
+    ReplaceOnce(second, "1.1.1.2 Ensure freevxfs kernel module is not available", "Same title");
+    ReplaceOnce(second, "EnsureFreevxfsKernelModuleIsNotAvailable", "EnsureCramfsKernelModuleIsNotAvailable");
+    auto result = ParseString(MakeDoc("[" + first + "," + second + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    ASSERT_EQ(result.Value().resources.size(), 2u);
+    EXPECT_EQ(result.Value().resources[0].resourceID, "Same title");
+    EXPECT_EQ(result.Value().resources[1].resourceID, "Same title");
+    EXPECT_EQ(result.Value().resources[0].ruleName, result.Value().resources[1].ruleName);
+    EXPECT_EQ(result.Value().resources[0].id, "1.1.1.1");
+    EXPECT_EQ(result.Value().resources[1].id, "1.1.1.2");
+    EXPECT_NE(result.Value().resources[0].procedure, result.Value().resources[1].procedure);
+
+    ReplaceOnce(first, "Same title", "1.1.1.1 Naturally prefixed");
+    result = ParseString(MakeDoc("[" + first + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().resources[0].resourceID, "1.1.1.1 Naturally prefixed");
+}
+
 TEST(BenchmarkDefinitionParserTest, RejectsEmptyRulesArrayWithHoistedIdentity)
 {
     auto result = ParseString(MakeDoc("[]"), nullptr);
