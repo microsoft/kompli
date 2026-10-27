@@ -7,8 +7,10 @@
 #include <Optional.h>
 #include <ShellTimeout.h>
 #include <cerrno>
+#include <fcntl.h>
 #include <fstream>
 #include <iterator>
+#include <sys/stat.h>
 #include <unistd.h>
 
 using ComplianceEngine::AuditShellTimeout;
@@ -24,6 +26,13 @@ using std::string;
 class EnsureDefaultShellTimeoutIsConfiguredTest : public ::testing::Test
 {
 protected:
+    bool IsData(int fd, const string& path) const
+    {
+        struct stat held = {}, fixture = {};
+        const int flags = ::fcntl(fd, F_GETFL);
+        return flags >= 0 && !(flags & O_PATH) && (flags & O_ACCMODE) == O_RDONLY && ::fstat(fd, &held) == 0 && ::stat(path.c_str(), &fixture) == 0 &&
+               held.st_dev == fixture.st_dev && held.st_ino == fixture.st_ino;
+    }
     MockContext mContext;
     IndicatorsTree mIndicators;
 
@@ -147,7 +156,9 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, ReachedReadFailureIsNotMissing
 {
     const auto path = mContext.MakeTempfile("TMOUT=900\nreadonly TMOUT\nexport TMOUT\n");
     mContext.SetSpecialFilePath("/etc/bashrc", path);
-    ON_CALL(mContext, ReadFileDescriptor(testing::_, testing::_, testing::_)).WillByDefault([](int, void*, std::size_t) -> ssize_t {
+    ON_CALL(mContext, ReadFileDescriptor(testing::_, testing::_, testing::_)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsData(fd, path))
+            return mContext.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         errno = EIO;
         return -1;
     });
@@ -163,15 +174,23 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, OpenFailurePreservesErrno)
 {
     const auto path = mContext.MakeTempfile("TMOUT=900\n");
     mContext.SetSpecialFilePath("/etc/bashrc", path);
-    ON_CALL(mContext, OpenExistingFile(testing::_, testing::_)).WillByDefault([](const char*, int) {
-        errno = EACCES;
-        return -1;
+    const auto name = path.substr(path.find_last_of('/') + 1);
+    ON_CALL(mContext, OpenNativeAt(testing::_, testing::_, testing::_)).WillByDefault([&](int directory, const char* component, int flags) {
+        struct stat held = {}, parent = {};
+        const bool fixtureParent = ::fstat(directory, &held) == 0 && ::stat(path.substr(0, path.find_last_of('/')).c_str(), &parent) == 0 &&
+                                   held.st_dev == parent.st_dev && held.st_ino == parent.st_ino;
+        if (fixtureParent && name == component && (flags & O_PATH))
+        {
+            errno = EACCES;
+            return -1;
+        }
+        return mContext.ContextInterface::OpenNativeAt(directory, component, flags);
     });
 
     const auto result = AuditShellTimeout(mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
-    EXPECT_EQ("Failed to open file path", result.Error().message);
+    EXPECT_EQ("Cannot pin confined component", result.Error().message);
     EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }
 
@@ -209,6 +228,8 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateStopsWithoutReadingTa
     int reads = 0;
     int closes = 0;
     ON_CALL(mContext, ReadFileDescriptor(testing::_, testing::_, testing::_)).WillByDefault([&](int descriptor, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsData(descriptor, path))
+            return mContext.ContextInterface::ReadFileDescriptor(descriptor, buffer, size);
         ++reads;
         if (reads == 1)
         {
@@ -218,7 +239,7 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateStopsWithoutReadingTa
         return -1;
     });
     ON_CALL(mContext, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
-        ++closes;
+        closes += IsData(descriptor, path);
         return mContext.ContextInterface::CloseFileDescriptor(descriptor);
     });
 
@@ -227,7 +248,7 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateStopsWithoutReadingTa
     EXPECT_EQ(Status::NonCompliant, result.Value());
     EXPECT_EQ("TMOUT is set multiple times in " + path, mIndicators.Back().indicators.back().message);
     EXPECT_EQ(1, reads);
-    EXPECT_EQ(2, closes);
+    EXPECT_EQ(1, closes);
 }
 
 TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateCloseFailurePrecedesEarlyVerdict)
@@ -236,10 +257,11 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateCloseFailurePrecedesE
     mContext.SetSpecialFilePath("/etc/bashrc", path);
     int closes = 0;
     ON_CALL(mContext, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
-        ++closes;
+        const bool data = IsData(descriptor, path);
         mContext.ContextInterface::CloseFileDescriptor(descriptor);
-        if (closes == 1)
+        if (data)
         {
+            ++closes;
             errno = EIO;
             return -1;
         }
@@ -249,7 +271,8 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateCloseFailurePrecedesE
     const auto result = AuditShellTimeout(mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
-    EXPECT_EQ(2, closes);
+    EXPECT_EQ("Failed to close data descriptor", result.Error().message);
+    EXPECT_EQ(1, closes);
     EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }
 

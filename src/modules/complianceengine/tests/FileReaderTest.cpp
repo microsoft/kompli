@@ -56,12 +56,16 @@ protected:
     }
     // The foundation also opens/closes temporary procfs and resolver pins.
     // Target only operational data or O_PATH file pins in fault injection.
+    bool IsFileDescriptor(int fd, bool readable, const std::string& fixturePath) const
+    {
+        struct stat held = {}, fixture = {};
+        const int flags = ::fcntl(fd, F_GETFL);
+        return flags >= 0 && ::fstat(fd, &held) == 0 && ::stat(fixturePath.c_str(), &fixture) == 0 && S_ISREG(held.st_mode) && held.st_dev == fixture.st_dev &&
+               held.st_ino == fixture.st_ino && (readable ? (flags & O_ACCMODE) == O_RDONLY && !(flags & O_PATH) : (flags & O_PATH) != 0);
+    }
     bool IsFileDescriptor(int fd, bool readable) const
     {
-        struct stat held = {}, directory = {};
-        const int flags = ::fcntl(fd, F_GETFL);
-        return flags >= 0 && ::fstat(fd, &held) == 0 && ::stat(context.GetTempdirPath().c_str(), &directory) == 0 && S_ISREG(held.st_mode) &&
-               held.st_dev == directory.st_dev && (readable ? (flags & O_ACCMODE) == O_RDONLY && !(flags & O_PATH) : (flags & O_PATH) != 0);
+        return IsFileDescriptor(fd, readable, path);
     }
     bool MakeAncestorTargets(const std::string& ancestor, const std::string& alternate)
     {
@@ -169,7 +173,9 @@ TEST_F(PathFile, DefaultLimitsBoundBytesAndInterruptedReads)
     const std::size_t cap = Policy{}.limits.maxBytes;
     std::size_t requested = 0;
     int probes = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFileDescriptor(fd, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         requested += size;
         if (size == 1)
             ++probes;
@@ -183,7 +189,9 @@ TEST_F(PathFile, DefaultLimitsBoundBytesAndInterruptedReads)
     EXPECT_EQ(1, probes);
 
     int attempts = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int, void*, std::size_t) -> ssize_t {
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFileDescriptor(fd, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         ++attempts;
         errno = EINTR;
         return -1;
@@ -349,6 +357,8 @@ TEST_F(PathFile, BoundedChunksAndLazyEarlyBreakCloseExactlyOnce)
     int reads = 0, closes = 0;
     std::size_t largest = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+        if (!IsFileDescriptor(fd, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         ++reads;
         largest = std::max(largest, size);
         return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
@@ -387,6 +397,8 @@ TEST_F(PathFile, RangeMoveAndEarlyCloseNeverReadTail)
     Write("one\nsecond\n");
     int reads = 0, closes = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+        if (!IsFileDescriptor(fd, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         ++reads;
         return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
     });
@@ -608,6 +620,8 @@ TEST_F(PathFile, CloseBeforeBeginDoesNotReadOrReopen)
 {
     int reads = 0, closes = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+        if (!IsFileDescriptor(fd, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         ++reads;
         return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
     });
@@ -635,7 +649,7 @@ TEST_F(PathFile, FactoryFailureClosesAcquiredPinAndReportsPrimary)
     context.SetLogHandle(logHandle);
     int dataStats = 0, pinCloses = 0, dataCloses = 0;
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-        if (IsFileDescriptor(fd, true) && ++dataStats == 2)
+        if (IsFileDescriptor(fd, true) && ++dataStats == 1)
         {
             errno = EACCES;
             return -1;
@@ -658,7 +672,7 @@ TEST_F(PathFile, FactoryFailureClosesAcquiredPinAndReportsPrimary)
     auto opened = Lines(context, path);
     ASSERT_FALSE(opened.HasValue());
     EXPECT_EQ(EACCES, opened.Error().code);
-    EXPECT_EQ(2, dataStats);
+    EXPECT_EQ(1, dataStats);
     EXPECT_GE(pinCloses, 1);
     EXPECT_EQ(1, dataCloses);
     CloseLog(&logHandle);
@@ -690,6 +704,8 @@ TEST_F(PathFile, FactoryClosesPinAfterIdentityCheckBeforeReturnOrRead)
         return context.ContextInterface::CloseFileDescriptor(fd);
     });
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+        if (!IsFileDescriptor(fd, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         ++reads;
         return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
     });
@@ -754,7 +770,7 @@ TEST_F(PathFile, FailedPinCloseIsPrimaryAndStillLogsDataCleanupFailure)
         return context.ContextInterface::StatFileDescriptor(fd, metadata);
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
-        const bool pin = dataStats >= 2 && IsFileDescriptor(fd, false);
+        const bool pin = IsFileDescriptor(fd, false);
         const bool data = IsFileDescriptor(fd, true);
         pinCloses += pin;
         dataCloses += data;
@@ -771,7 +787,9 @@ TEST_F(PathFile, FailedPinCloseIsPrimaryAndStillLogsDataCleanupFailure)
         }
         return 0;
     });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int, void*, std::size_t) -> ssize_t {
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFileDescriptor(fd, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         ++reads;
         return 0;
     });
@@ -805,14 +823,15 @@ TEST_F(PathFile, CheckedAcquisitionReleaseAttemptsAllPinsAndLogsSecondaryFailure
     ASSERT_NE(nullptr, logHandle);
     context.SetLogHandle(logHandle);
     int dataStats = 0, failedPins = 0, dataCloses = 0;
+    bool releasingPins = false;
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-        if (IsFileDescriptor(fd, true))
-            ++dataStats;
+        if (IsFileDescriptor(fd, true) && ++dataStats == 2)
+            releasingPins = true;
         return context.ContextInterface::StatFileDescriptor(fd, metadata);
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsFileDescriptor(fd, true);
-        const bool fail = dataStats >= 2 && !data;
+        const bool fail = releasingPins && !data;
         dataCloses += data;
         context.ContextInterface::CloseFileDescriptor(fd);
         if (fail)
@@ -842,12 +861,12 @@ TEST_F(PathFile, ThrowingAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
     Write("a");
     int dataStats = 0, pinCloses = 0, dataCloses = 0;
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) -> int {
-        if (IsFileDescriptor(fd, true) && ++dataStats == 2)
+        if (IsFileDescriptor(fd, true) && ++dataStats == 1)
             throw std::runtime_error("inspect data");
         return context.ContextInterface::StatFileDescriptor(fd, metadata);
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
-        const bool pin = dataStats >= 2 && IsFileDescriptor(fd, false);
+        const bool pin = IsFileDescriptor(fd, false);
         const bool data = IsFileDescriptor(fd, true);
         pinCloses += pin;
         dataCloses += data;
@@ -865,7 +884,7 @@ TEST_F(PathFile, ThrowingAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
     {
         EXPECT_STREQ("inspect data", error.what());
     }
-    EXPECT_EQ(2, dataStats);
+    EXPECT_EQ(1, dataStats);
     EXPECT_GE(pinCloses, 1);
     EXPECT_EQ(1, dataCloses);
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
@@ -974,7 +993,7 @@ TEST_F(PathFile, AncestorReplacementAfterAcquisitionKeepsPinnedFile)
     bool swapped = false;
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
         const int status = context.ContextInterface::StatFileDescriptor(fd, metadata);
-        if (!swapped && status == 0 && IsFileDescriptor(fd, false))
+        if (!swapped && status == 0 && IsFileDescriptor(fd, false, requested))
         {
             swapped = true;
             EXPECT_EQ(0, ::rename(ancestor.c_str(), parked.c_str()));
@@ -1002,10 +1021,14 @@ TEST_F(PathFile, VerificationAndFinalAdvanceReportErrors)
         return status;
     });
     EXPECT_EQ(EAGAIN, Collect(path, Limited(4)).Error().code);
-    stats = 0;
+    int reads = 0;
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+        reads += IsFileDescriptor(fd, true);
+        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+    });
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
         const int status = context.ContextInterface::StatFileDescriptor(fd, metadata);
-        if (status == 0 && IsFileDescriptor(fd, true) && ++stats == 3)
+        if (status == 0 && IsFileDescriptor(fd, true) && reads > 0)
             ++metadata->st_mtim.tv_nsec;
         return status;
     });
@@ -1019,13 +1042,18 @@ TEST_F(PathFile, VerificationAndFinalAdvanceReportErrors)
     ASSERT_TRUE(cursor != range.end());
     EXPECT_FALSE(cursor->HasValue());
     EXPECT_EQ(EAGAIN, cursor->Error().code);
+    EXPECT_GT(reads, 0);
     ++cursor;
     EXPECT_FALSE(cursor != range.end());
     EXPECT_TRUE(range.Close().HasValue());
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
         return context.ContextInterface::StatFileDescriptor(fd, metadata);
     });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t { return 0; });
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFileDescriptor(fd, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        return 0;
+    });
     EXPECT_EQ(EIO, Collect(path, Limited(4)).Error().code);
 }
 
@@ -1033,7 +1061,9 @@ TEST_F(PathFile, ErrorsOnIntermediateReadsAndRetryLimit)
 {
     Write("a\nb\n");
     int reads = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int, void* buffer, std::size_t) -> ssize_t {
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFileDescriptor(fd, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         if (++reads == 1)
         {
             std::memcpy(buffer, "a\n", 2);
@@ -1053,12 +1083,18 @@ TEST_F(PathFile, ErrorsOnIntermediateReadsAndRetryLimit)
     ++it;
     EXPECT_FALSE(it != range.end());
     EXPECT_TRUE(range.Close().HasValue());
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t {
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFileDescriptor(fd, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         errno = EINTR;
         return -1;
     });
     EXPECT_EQ(E2BIG, Collect(path, Limited(4, 1)).Error().code);
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t size) -> ssize_t { return static_cast<ssize_t>(size + 1); });
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFileDescriptor(fd, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        return static_cast<ssize_t>(size + 1);
+    });
     EXPECT_EQ(EIO, Collect(path, Limited(4)).Error().code);
 }
 
@@ -1082,7 +1118,9 @@ TEST_F(PathFile, DataCloseErrorIsPrimaryAfterSuccessButNotAfterReadFailure)
     EXPECT_EQ(EBADF, result.Error().code);
     EXPECT_EQ("Failed to close data descriptor", result.Error().message);
     EXPECT_EQ(1, dataCloses);
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t {
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFileDescriptor(fd, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         errno = EIO;
         return -1;
     });
@@ -1096,10 +1134,14 @@ TEST_F(PathFile, DataCloseErrorIsPrimaryAfterSuccessButNotAfterReadFailure)
 TEST_F(PathFile, LastUnterminatedLineIsNotPublishedWhenVerificationOrCloseFails)
 {
     Write("tail");
-    int stats = 0;
+    int reads = 0;
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+        reads += IsFileDescriptor(fd, true);
+        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+    });
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
         const int status = context.ContextInterface::StatFileDescriptor(fd, metadata);
-        if (status == 0 && IsFileDescriptor(fd, true) && ++stats == 3)
+        if (status == 0 && IsFileDescriptor(fd, true) && reads > 0)
             ++metadata->st_ctim.tv_nsec;
         return status;
     });
@@ -1114,6 +1156,7 @@ TEST_F(PathFile, LastUnterminatedLineIsNotPublishedWhenVerificationOrCloseFails)
         EXPECT_EQ(EAGAIN, item.Error().code);
     }
     EXPECT_EQ(1, lines);
+    EXPECT_GT(reads, 0);
     EXPECT_TRUE(range.Close().HasValue());
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
         return context.ContextInterface::StatFileDescriptor(fd, metadata);
@@ -1160,12 +1203,20 @@ TEST_F(PathFile, ThrowingOpenAndEofStatPropagateAndCloseOwnedDescriptors)
     EXPECT_EQ(1, closes);
     closes = 0;
     stats = 0;
+    int reads = 0;
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+        reads += IsFileDescriptor(fd, true);
+        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+    });
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) -> int {
-        if (IsFileDescriptor(fd, true) && ++stats == 3)
+        if (IsFileDescriptor(fd, true) && reads > 0)
             throw std::runtime_error("stat");
+        if (IsFileDescriptor(fd, true))
+            ++stats;
         return context.ContextInterface::StatFileDescriptor(fd, metadata);
     });
     EXPECT_THROW(Collect(path, Limited(1)), std::runtime_error);
+    EXPECT_GT(reads, 0);
     EXPECT_EQ(1, closes);
 }
 
@@ -1173,7 +1224,9 @@ TEST_F(PathFile, ThrowingReadDuringIterationPropagatesAndClosesData)
 {
     Write("first\nsecond\n");
     int reads = 0, closes = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFileDescriptor(fd, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         if (++reads == 1)
         {
             const std::string line = "first\n";

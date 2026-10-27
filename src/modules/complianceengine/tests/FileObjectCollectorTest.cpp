@@ -9,16 +9,18 @@
 #include <fcntl.h>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <new>
 #include <ranges/Count.hpp>
 #include <ranges/Unique.hpp>
 #include <stdexcept>
 #include <string>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 
 using ComplianceEngine::FileCollectionPolicy;
-using ComplianceEngine::RootSymlinkPolicy;
+using ComplianceEngine::SymlinkFollowing;
 using testing::_;
 using testing::NiceMock;
 namespace VariableResolution = ComplianceEngine::VariableResolution;
@@ -37,6 +39,44 @@ std::vector<std::string> Captures(const VariableResolution::ObjectCollection& co
         }
     }
     return captures;
+}
+
+std::string ReadLog(const std::string& path)
+{
+    std::ifstream log(path);
+    EXPECT_TRUE(log.is_open());
+    return {std::istreambuf_iterator<char>(log), std::istreambuf_iterator<char>()};
+}
+
+void ExpectLoggedOnce(const std::string& text, const std::string& entry)
+{
+    const auto first = text.find(entry);
+    ASSERT_NE(std::string::npos, first);
+    EXPECT_EQ(std::string::npos, text.find(entry, first + entry.size()));
+}
+
+// Inspect live descriptors before closing them: the resolver also owns
+// ancestor/procfs helpers, whose descriptor numbers and close order vary.
+bool IsFixture(int fd, const std::string& path, bool data)
+{
+    struct stat held = {}, fixture = {};
+    const int flags = ::fcntl(fd, F_GETFL);
+    return flags >= 0 && ::fstat(fd, &held) == 0 && ::stat(path.c_str(), &fixture) == 0 && S_ISREG(held.st_mode) && held.st_dev == fixture.st_dev &&
+           held.st_ino == fixture.st_ino && (data ? !(flags & O_PATH) && (flags & O_ACCMODE) == O_RDONLY : (flags & O_PATH) != 0);
+}
+
+bool IsAliasDirectory(int fd)
+{
+    struct stat held = {}, procfs = {};
+    return ::fstat(fd, &held) == 0 && ::stat("/proc/self/fd", &procfs) == 0 && held.st_dev == procfs.st_dev && held.st_ino == procfs.st_ino;
+}
+
+bool IsFixtureParent(int fd, const std::string& path)
+{
+    struct stat held = {}, parent = {};
+    const auto slash = path.find_last_of('/');
+    return slash != std::string::npos && ::fstat(fd, &held) == 0 && ::stat(path.substr(0, slash).c_str(), &parent) == 0 &&
+           held.st_dev == parent.st_dev && held.st_ino == parent.st_ino;
 }
 } // namespace
 
@@ -94,13 +134,13 @@ TEST(FileObjectCollectorTest, NulAfterValidCapturePreventsSelectionAndClosesBoth
         const auto path = context.MakeTempfile("nameserver valid\n" + suffix);
         int closes = 0;
         ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
-            ++closes;
+            closes += IsFixture(fd, path, true);
             return context.ContextInterface::CloseFileDescriptor(fd);
         });
         const auto result = ComplianceEngine::CollectNameserverObject(context, path);
         ASSERT_FALSE(result.HasValue());
         EXPECT_EQ(EBADMSG, result.Error().code);
-        EXPECT_EQ(2, closes);
+        EXPECT_EQ(1, closes);
     }
 }
 
@@ -110,10 +150,11 @@ TEST(FileObjectCollectorTest, NulErrorRemainsPrimaryWhenClosingFails)
     const auto path = context.MakeTempfile(std::string("nameserver valid\n") + std::string("nameserver a\0b\n", 15));
     int closes = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
-        ++closes;
+        const bool data = IsFixture(fd, path, true);
         context.ContextInterface::CloseFileDescriptor(fd);
-        if (closes == 1)
+        if (data)
         {
+            ++closes;
             errno = EACCES;
             return -1;
         }
@@ -122,8 +163,8 @@ TEST(FileObjectCollectorTest, NulErrorRemainsPrimaryWhenClosingFails)
     const auto result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EBADMSG, result.Error().code);
-    EXPECT_NE(std::string::npos, result.Error().message.find("close:"));
-    EXPECT_EQ(2, closes);
+    EXPECT_EQ("Embedded NUL in text file", result.Error().message);
+    EXPECT_EQ(1, closes);
 }
 
 TEST(FileObjectCollectorTest, ZeroMatchesRemainACompleteEmptyCollection)
@@ -228,32 +269,20 @@ TEST(FileObjectCollectorTest, ContentAndCaptureLimitsFailWithoutPartialPublicati
 TEST(FileObjectCollectorTest, SelectionFailureDefersToLaterReadError)
 {
     NiceMock<MockContext> context;
-    int opens = 0;
+    const auto path = context.MakeTempfile("nameserver too-long\n");
     int reads = 0;
-    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&](const char*, int) { return ++opens == 1 ? 10 : 11; });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int, struct stat* metadata) {
-        *metadata = {};
-        metadata->st_mode = S_IFREG | 0600;
-        metadata->st_dev = 1;
-        metadata->st_ino = 2;
-        return 0;
-    });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFixture(fd, path, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         if (reads++ == 0)
-        {
-            const std::string content = "nameserver too-long\n";
-            const auto count = std::min(size, content.size());
-            std::memcpy(buffer, content.data(), count);
-            return static_cast<ssize_t>(count);
-        }
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 20));
         errno = EIO;
         return -1;
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int) { return 0; });
     FileCollectionPolicy policy;
     policy.captureBytes = 1;
 
-    const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", policy);
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path, policy);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
     EXPECT_EQ(2, reads);
@@ -265,10 +294,11 @@ TEST(FileObjectCollectorTest, SelectionFailureDefersToExplicitCloseError)
     const auto path = context.MakeTempfile("nameserver too-long\n");
     int closes = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int descriptor) {
-        ++closes;
+        const bool data = IsFixture(descriptor, path, true);
         context.ContextInterface::CloseFileDescriptor(descriptor);
-        if (closes == 1)
+        if (data)
         {
+            ++closes;
             errno = EACCES;
             return -1;
         }
@@ -280,7 +310,8 @@ TEST(FileObjectCollectorTest, SelectionFailureDefersToExplicitCloseError)
     const auto result = ComplianceEngine::CollectNameserverObject(context, path, policy);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
-    EXPECT_EQ(2, closes);
+    EXPECT_EQ("Failed to close data descriptor", result.Error().message);
+    EXPECT_EQ(1, closes);
 }
 
 TEST(FileObjectCollectorTest, RejectPolicyRefusesFinalSymlink)
@@ -295,7 +326,7 @@ TEST(FileObjectCollectorTest, RejectPolicyRefusesFinalSymlink)
     EXPECT_EQ((std::vector<std::string>{"192.0.2.1"}), Captures(followed.Value()));
 
     FileCollectionPolicy policy;
-    policy.rootSymlinks = RootSymlinkPolicy::Reject;
+    policy.rootSymlinks = SymlinkFollowing::DoNotFollow;
     const auto rejected = ComplianceEngine::CollectNameserverObject(context, link, policy);
     ASSERT_FALSE(rejected.HasValue());
     EXPECT_EQ(ELOOP, rejected.Error().code);
@@ -314,47 +345,37 @@ TEST(FileObjectCollectorTest, PinnedDescriptorSurvivesPathReplacement)
     NiceMock<MockContext> context;
     const auto path = context.MakeTempfile("nameserver original\n");
     const auto pinnedPath = path + ".pinned";
-    int opens = 0;
-    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&](const char* requested, int flags) {
-        const int descriptor = context.ContextInterface::OpenExistingFile(requested, flags);
-        if (opens++ == 0 && descriptor >= 0)
+    int replaced = 0;
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        const bool pin = IsFixture(fd, path, false);
+        const int status = context.ContextInterface::StatFileDescriptor(fd, metadata);
+        if (pin && status == 0 && !replaced++)
         {
-            EXPECT_EQ(path, requested);
             EXPECT_EQ(0, ::rename(path.c_str(), pinnedPath.c_str()));
             std::ofstream replacement(path);
             replacement << "nameserver replacement\n";
         }
-        else if (descriptor >= 0)
-        {
-            EXPECT_EQ(0U, std::string(requested).find("/proc/self/fd/"));
-        }
-        return descriptor;
+        return status;
     });
 
     const auto result = ComplianceEngine::CollectNameserverObject(context, path);
 
     ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(1, replaced);
     EXPECT_EQ((std::vector<std::string>{"original"}), Captures(result.Value()));
 }
 
 TEST(FileObjectCollectorTest, ReadFailureIsAnError)
 {
     NiceMock<MockContext> context;
-    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([](const char*, int) { return 10; });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int, struct stat* metadata) {
-        *metadata = {};
-        metadata->st_mode = S_IFREG | 0600;
-        metadata->st_dev = 1;
-        metadata->st_ino = 2;
-        return 0;
-    });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t {
+    const auto path = context.MakeTempfile("nameserver one\n");
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFixture(fd, path, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         errno = EIO;
         return -1;
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int) { return 0; });
-
-    const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf");
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path);
 
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
@@ -363,29 +384,25 @@ TEST(FileObjectCollectorTest, ReadFailureIsAnError)
 TEST(FileObjectCollectorTest, RetryExhaustionAndOverreportedReadsAreErrors)
 {
     NiceMock<MockContext> context;
-    int opens = 0;
-    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&opens](const char*, int) { return ++opens == 1 ? 10 : 11; });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int, struct stat* metadata) {
-        *metadata = {};
-        metadata->st_mode = S_IFREG | 0600;
-        metadata->st_dev = 1;
-        metadata->st_ino = 2;
-        return 0;
-    });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int) { return 0; });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t {
+    const auto path = context.MakeTempfile("nameserver one\n");
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFixture(fd, path, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         errno = EINTR;
         return -1;
     });
     FileCollectionPolicy limits;
     limits.readRetries = 1;
-    auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", limits);
+    auto result = ComplianceEngine::CollectNameserverObject(context, path, limits);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);
 
-    opens = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t size) -> ssize_t { return static_cast<ssize_t>(size + 1); });
-    result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf");
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFixture(fd, path, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        return static_cast<ssize_t>(size + 1);
+    });
+    result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
 }
@@ -394,18 +411,11 @@ TEST(FileObjectCollectorTest, InterruptedReadCanRecoverWithinTheRetryLimit)
 {
     NiceMock<MockContext> context;
     const std::string content = "nameserver recovered\n";
-    int opens = 0;
+    const auto path = context.MakeTempfile(content);
     int reads = 0;
-    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&opens](const char*, int) { return ++opens == 1 ? 10 : 11; });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&content](int, struct stat* metadata) {
-        *metadata = {};
-        metadata->st_mode = S_IFREG | 0600;
-        metadata->st_dev = 1;
-        metadata->st_ino = 2;
-        metadata->st_size = static_cast<off_t>(content.size());
-        return 0;
-    });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&content, &reads](int, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFixture(fd, path, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         if (reads++ == 0)
         {
             errno = EINTR;
@@ -413,17 +423,14 @@ TEST(FileObjectCollectorTest, InterruptedReadCanRecoverWithinTheRetryLimit)
         }
         if (reads == 2)
         {
-            const std::size_t copied = std::min(size, content.size());
-            std::memcpy(buffer, content.data(), copied);
-            return static_cast<ssize_t>(copied);
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         }
         return 0;
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int) { return 0; });
     FileCollectionPolicy limits;
     limits.readRetries = 1;
 
-    const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", limits);
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path, limits);
 
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ((std::vector<std::string>{"recovered"}), Captures(result.Value()));
@@ -433,29 +440,26 @@ TEST(FileObjectCollectorTest, InterruptedReadCanRecoverWithinTheRetryLimit)
 TEST(FileObjectCollectorTest, MetadataMutationIsAnErrorAndThrowingOpenPropagates)
 {
     NiceMock<MockContext> context;
-    int opens = 0;
+    const auto path = context.MakeTempfile("nameserver one\n");
     int stats = 0;
-    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&opens](const char*, int) { return ++opens == 1 ? 10 : 11; });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&stats](int, struct stat* metadata) {
-        *metadata = {};
-        metadata->st_mode = S_IFREG | 0600;
-        metadata->st_dev = 1;
-        metadata->st_ino = 2;
-        if (stats++ == 2)
-        {
-            metadata->st_mtim.tv_nsec = 1;
-        }
-        return 0;
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        const int status = context.ContextInterface::StatFileDescriptor(fd, metadata);
+        if (status == 0 && IsFixture(fd, path, true) && ++stats == 2)
+            ++metadata->st_mtim.tv_nsec;
+        return status;
     });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t { return 0; });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int) { return 0; });
-    auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf");
+    auto result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EAGAIN, result.Error().code);
 
     NiceMock<MockContext> throwing;
-    ON_CALL(throwing, OpenExistingFile(_, _)).WillByDefault([](const char*, int) -> int { throw std::runtime_error("open failed"); });
-    EXPECT_THROW(ComplianceEngine::CollectNameserverObject(throwing, "/etc/resolv.conf"), std::runtime_error);
+    const auto throwingPath = throwing.MakeTempfile("nameserver one\n");
+    ON_CALL(throwing, OpenNativeAt(_, _, _)).WillByDefault([&](int fd, const char* name, int flags) -> int {
+        if (IsFixtureParent(fd, throwingPath) && std::string(name) == throwingPath.substr(throwingPath.find_last_of('/') + 1) && (flags & O_PATH))
+            throw std::runtime_error("open failed");
+        return throwing.ContextInterface::OpenNativeAt(fd, name, flags);
+    });
+    EXPECT_THROW(ComplianceEngine::CollectNameserverObject(throwing, throwingPath), std::runtime_error);
 }
 
 TEST(FileObjectCollectorTest, ThrowingReadPropagatesEvenWhenCloseThrowsDuringUnwinding)
@@ -463,60 +467,53 @@ TEST(FileObjectCollectorTest, ThrowingReadPropagatesEvenWhenCloseThrowsDuringUnw
     NiceMock<MockContext> context;
     const auto path = context.MakeTempfile("nameserver one\n");
     int closes = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t { throw std::runtime_error("read failed"); });
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFixture(fd, path, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        throw std::runtime_error("read failed");
+    });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
-        ++closes;
+        const bool data = IsFixture(fd, path, true);
         const int status = context.ContextInterface::CloseFileDescriptor(fd);
-        if (closes == 1)
+        if (data)
+        {
+            ++closes;
             throw std::bad_alloc();
+        }
         return status;
     });
 
     EXPECT_THROW(ComplianceEngine::CollectNameserverObject(context, path), std::runtime_error);
-    EXPECT_EQ(2, closes);
+    EXPECT_EQ(1, closes);
 }
 
 TEST(FileObjectCollectorTest, TailReadAndIdentityFailuresAreErrors)
 {
     NiceMock<MockContext> context;
-    int opens = 0;
-    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&opens](const char*, int) { return ++opens == 1 ? 10 : 11; });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int descriptor, struct stat* metadata) {
-        *metadata = {};
-        metadata->st_mode = S_IFREG | 0600;
-        metadata->st_dev = 1;
-        metadata->st_ino = descriptor == 10 ? 2 : 3;
-        return 0;
+    const auto path = context.MakeTempfile("nameserver one\n");
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        const int status = context.ContextInterface::StatFileDescriptor(fd, metadata);
+        if (status == 0 && IsFixture(fd, path, true))
+            ++metadata->st_ino;
+        return status;
     });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t { return 0; });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int) { return 0; });
-
-    auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf");
+    auto result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EAGAIN, result.Error().code);
 
-    opens = 0;
-    const std::string content = "nameserver one\n";
-    int reads = 0;
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&content](int, struct stat* metadata) {
-        *metadata = {};
-        metadata->st_mode = S_IFREG | 0600;
-        metadata->st_dev = 1;
-        metadata->st_ino = 2;
-        metadata->st_size = static_cast<off_t>(content.size());
-        return 0;
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        return context.ContextInterface::StatFileDescriptor(fd, metadata);
     });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&content, &reads](int, void* buffer, std::size_t size) -> ssize_t {
+    int reads = 0;
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFixture(fd, path, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         if (reads++ == 0)
-        {
-            const std::size_t copied = std::min(size, content.size());
-            std::memcpy(buffer, content.data(), copied);
-            return static_cast<ssize_t>(copied);
-        }
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         errno = EIO;
         return -1;
     });
-    result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf");
+    result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
 }
@@ -524,29 +521,25 @@ TEST(FileObjectCollectorTest, TailReadAndIdentityFailuresAreErrors)
 TEST(FileObjectCollectorTest, CloseFailureIsAnError)
 {
     NiceMock<MockContext> context;
-    int opens = 0;
-    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&opens](const char*, int) { return ++opens == 1 ? 10 : 11; });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int, struct stat* metadata) {
-        *metadata = {};
-        metadata->st_mode = S_IFREG | 0600;
-        metadata->st_dev = 1;
-        metadata->st_ino = 2;
-        return 0;
-    });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t { return 0; });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int descriptor) {
-        if (descriptor == 11)
+    const auto path = context.MakeTempfile("nameserver one\n");
+    int dataCloses = 0;
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int descriptor) {
+        const bool data = IsFixture(descriptor, path, true);
+        context.ContextInterface::CloseFileDescriptor(descriptor);
+        if (data)
         {
+            ++dataCloses;
             errno = EIO;
             return -1;
         }
         return 0;
     });
 
-    const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf");
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path);
 
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
+    EXPECT_EQ(1, dataCloses);
 }
 
 TEST(FileObjectCollectorTest, ValidCapturesAreNotPublishedWhenFinalCloseFails)
@@ -555,10 +548,11 @@ TEST(FileObjectCollectorTest, ValidCapturesAreNotPublishedWhenFinalCloseFails)
     const auto path = context.MakeTempfile("nameserver retained\n");
     int closes = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
-        ++closes;
+        const bool data = IsFixture(fd, path, true);
         context.ContextInterface::CloseFileDescriptor(fd);
-        if (closes == 2)
+        if (data)
         {
+            ++closes;
             errno = EACCES;
             return -1;
         }
@@ -567,25 +561,25 @@ TEST(FileObjectCollectorTest, ValidCapturesAreNotPublishedWhenFinalCloseFails)
     auto result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
-    EXPECT_EQ(2, closes);
+    EXPECT_EQ(1, closes);
 }
 
-TEST(FileObjectCollectorTest, PinCloseFailureAndReadFailureFinalizeBothDescriptorsOnce)
+TEST(FileObjectCollectorTest, PinCloseFailureStopsBeforeReadAndLaterReadFailureFinalizesBothDescriptorsOnce)
 {
     NiceMock<MockContext> context;
-    int opens = 0;
+    const auto logPath = context.GetTempdirPath() + "/pin-and-read-cleanup.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    context.SetLogHandle(logHandle);
+    const auto path = context.MakeTempfile("nameserver one\n");
     int pinCloses = 0;
     int dataCloses = 0;
     bool failRead = false;
-    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&](const char*, int) { return ++opens % 2 ? 10 : 11; });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int, struct stat* metadata) {
-        *metadata = {};
-        metadata->st_mode = S_IFREG | 0600;
-        metadata->st_dev = 1;
-        metadata->st_ino = 2;
-        return 0;
-    });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int, void*, std::size_t) -> ssize_t {
+    int reads = 0;
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFixture(fd, path, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        ++reads;
         if (failRead)
         {
             errno = EACCES;
@@ -594,59 +588,77 @@ TEST(FileObjectCollectorTest, PinCloseFailureAndReadFailureFinalizeBothDescripto
         return 0;
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int descriptor) {
-        if (descriptor == 11)
+        const bool pin = IsFixture(descriptor, path, false);
+        const bool data = IsFixture(descriptor, path, true);
+        context.ContextInterface::CloseFileDescriptor(descriptor);
+        if (data)
         {
             ++dataCloses;
             errno = EBADF;
             return -1;
         }
-        ++pinCloses;
-        errno = EIO;
-        return -1;
+        if (pin)
+        {
+            ++pinCloses;
+            if (!failRead)
+            {
+                errno = EIO;
+                return -1;
+            }
+        }
+        return 0;
     });
-    auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf");
+    auto result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EBADF, result.Error().code);
+    EXPECT_EQ(EIO, result.Error().code);
+    EXPECT_EQ("Failed to close pinned descriptor", result.Error().message);
+    EXPECT_EQ(0, reads);
     EXPECT_EQ(1, pinCloses);
     EXPECT_EQ(1, dataCloses);
 
     failRead = true;
-    result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf");
+    result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
+    EXPECT_EQ("Failed to read file bytes", result.Error().message);
+    EXPECT_EQ(1, reads);
     EXPECT_EQ(2, pinCloses);
     EXPECT_EQ(2, dataCloses);
+    CloseLog(&logHandle);
+    context.SetLogHandle(nullptr);
+    const auto text = ReadLog(logPath);
+    ExpectLoggedOnce(text, "Failed to close pinned descriptors for " + path + ": " + std::to_string(EIO));
+    const auto dataEntry = "Failed to close data descriptor for " + path + ": " + std::to_string(EBADF);
+    const auto first = text.find(dataEntry);
+    ASSERT_NE(std::string::npos, first);
+    const auto second = text.find(dataEntry, first + dataEntry.size());
+    ASSERT_NE(std::string::npos, second);
+    EXPECT_EQ(std::string::npos, text.find(dataEntry, second + dataEntry.size()));
 }
 
 TEST(FileObjectCollectorTest, FailedDataOpenFinalizesPinWithoutReopeningPath)
 {
     NiceMock<MockContext> context;
-    int opens = 0;
+    const auto path = context.MakeTempfile("nameserver one\n");
+    int aliasOpens = 0;
     int pinCloses = 0;
-    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&](const char* path, int) {
-        if (++opens == 1)
+    ON_CALL(context, OpenNativeAt(_, _, _)).WillByDefault([&](int directory, const char* name, int flags) {
+        if (IsAliasDirectory(directory) && (flags & O_ACCMODE) == O_RDONLY && !(flags & O_PATH) && !(flags & O_NOFOLLOW))
         {
-            EXPECT_STREQ("/etc/resolv.conf", path);
-            return 10;
+            ++aliasOpens;
+            errno = EACCES;
+            return -1;
         }
-        EXPECT_EQ(0U, std::string(path).find("/proc/self/fd/"));
-        errno = EACCES;
-        return -1;
-    });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int, struct stat* metadata) {
-        *metadata = {};
-        metadata->st_mode = S_IFREG | 0600;
-        return 0;
+        return context.ContextInterface::OpenNativeAt(directory, name, flags);
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int descriptor) {
-        EXPECT_EQ(10, descriptor);
-        ++pinCloses;
-        return 0;
+        pinCloses += IsFixture(descriptor, path, false);
+        return context.ContextInterface::CloseFileDescriptor(descriptor);
     });
-    const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf");
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
-    EXPECT_EQ(2, opens);
+    EXPECT_EQ(1, aliasOpens);
     EXPECT_EQ(1, pinCloses);
 }
 
@@ -665,174 +677,230 @@ TEST(FileObjectCollectorTest, ReportsCleanupFailuresOnEveryAcquiredFailureExit)
         {FailurePoint::PinStat, FailurePoint::Nonregular, FailurePoint::DataOpen, FailurePoint::DataStat, FailurePoint::Identity, FailurePoint::Read})
     {
         NiceMock<MockContext> context;
+        const auto path = context.MakeTempfile("nameserver one\n");
+        const auto logPath = context.GetTempdirPath() + "/acquired-failure-cleanup.log";
+        OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+        ASSERT_NE(nullptr, logHandle);
+        context.SetLogHandle(logHandle);
         int pinCloses = 0;
         int dataCloses = 0;
-        int opens = 0;
-        ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&](const char*, int) {
-            if (++opens == 1)
-                return 10;
-            if (failure == FailurePoint::DataOpen)
+        int aliasOpens = 0;
+        ON_CALL(context, OpenNativeAt(_, _, _)).WillByDefault([&](int directory, const char* name, int flags) {
+            if (failure == FailurePoint::DataOpen && IsAliasDirectory(directory) && (flags & O_ACCMODE) == O_RDONLY && !(flags & O_PATH) && !(flags & O_NOFOLLOW))
+            {
+                ++aliasOpens;
+                errno = EACCES;
+                return -1;
+            }
+            return context.ContextInterface::OpenNativeAt(directory, name, flags);
+        });
+        ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+            const bool pin = IsFixture(fd, path, false), data = IsFixture(fd, path, true);
+            if ((failure == FailurePoint::PinStat && pin) || (failure == FailurePoint::DataStat && data))
             {
                 errno = EACCES;
                 return -1;
             }
-            return 11;
+            const int status = context.ContextInterface::StatFileDescriptor(fd, metadata);
+            if (status == 0 && failure == FailurePoint::Nonregular && pin)
+                metadata->st_mode = S_IFDIR | 0700;
+            if (status == 0 && failure == FailurePoint::Identity && data)
+                ++metadata->st_ino;
+            return status;
         });
-        ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int descriptor, struct stat* metadata) {
-            if ((failure == FailurePoint::PinStat && descriptor == 10) || (failure == FailurePoint::DataStat && descriptor == 11))
-            {
-                errno = EACCES;
-                return -1;
-            }
-            *metadata = {};
-            metadata->st_mode = failure == FailurePoint::Nonregular ? S_IFDIR : S_IFREG;
-            metadata->st_dev = 1;
-            metadata->st_ino = failure == FailurePoint::Identity && descriptor == 11 ? 3 : 2;
-            return 0;
-        });
-        ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t {
+        ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+            if (!IsFixture(fd, path, true))
+                return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
             errno = EACCES;
             return -1;
         });
         ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int descriptor) {
-            if (descriptor == 11)
+            const bool pin = IsFixture(descriptor, path, false), data = IsFixture(descriptor, path, true);
+            context.ContextInterface::CloseFileDescriptor(descriptor);
+            if (data)
             {
                 ++dataCloses;
                 errno = EBADF;
+                return -1;
             }
-            else
+            if (pin)
             {
                 ++pinCloses;
-                errno = EIO;
+                if (failure != FailurePoint::Read)
+                {
+                    errno = EIO;
+                    return -1;
+                }
+                return 0;
             }
-            return -1;
+            return 0;
         });
-        const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf");
+        const auto result = ComplianceEngine::CollectNameserverObject(context, path);
+        CloseLog(&logHandle);
+        context.SetLogHandle(nullptr);
         ASSERT_FALSE(result.HasValue());
         const int primary = failure == FailurePoint::Identity ? EAGAIN : failure == FailurePoint::Nonregular ? EINVAL : EACCES;
         EXPECT_EQ(primary, result.Error().code);
         EXPECT_EQ(1, pinCloses);
-        EXPECT_EQ(opens == 2 && failure != FailurePoint::DataOpen ? 1 : 0, dataCloses);
-        if (dataCloses)
+        EXPECT_EQ(failure == FailurePoint::PinStat || failure == FailurePoint::Nonregular || failure == FailurePoint::DataOpen ? 0 : 1, dataCloses);
+        if (failure == FailurePoint::DataOpen)
+            EXPECT_EQ(1, aliasOpens);
+        EXPECT_EQ(failure == FailurePoint::Identity   ? "Activated object does not match live pin" :
+                  failure == FailurePoint::Nonregular ? "File target is not regular" :
+                  failure == FailurePoint::PinStat    ? "Cannot inspect confined component" :
+                  failure == FailurePoint::DataStat   ? "Cannot inspect activated object and pin" :
+                  failure == FailurePoint::Read       ? "Failed to read file bytes" :
+                                                        "Cannot open pinned descriptor alias for reading",
+            result.Error().message);
+        const auto text = ReadLog(logPath);
+        const auto pinError = "Failed to close pinned descriptors for " + path + ": " + std::to_string(EIO);
+        if (failure == FailurePoint::Read)
+            EXPECT_EQ(std::string::npos, text.find(pinError));
+        else if (failure == FailurePoint::PinStat)
         {
-            EXPECT_NE(std::string::npos, result.Error().message.find("data close: " + std::to_string(EBADF)));
+            EXPECT_EQ(std::string::npos, text.find(pinError));
+            ExpectLoggedOnce(text, "Secondary filesystem helper close failure: " + std::to_string(EIO));
         }
-        EXPECT_NE(std::string::npos, result.Error().message.find("pin close: " + std::to_string(EIO)));
+        else
+            ExpectLoggedOnce(text, pinError);
+        if (dataCloses)
+            ExpectLoggedOnce(text, failure == FailurePoint::DataStat || failure == FailurePoint::Identity ?
+                                       "Secondary filesystem helper close failure: " + std::to_string(EBADF) :
+                                       "Failed to close data descriptor for " + path + ": " + std::to_string(EBADF));
     }
 }
 
-TEST(FileObjectCollectorTest, DataClosePrimaryStillReportsPinCloseSecondary)
+TEST(FileObjectCollectorTest, DataCloseFailureAfterSuccessfulPinCloseIsAnError)
 {
     NiceMock<MockContext> context;
-    int opens = 0;
+    const auto logPath = context.GetTempdirPath() + "/data-close-cleanup.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    context.SetLogHandle(logHandle);
+    const auto path = context.MakeTempfile("nameserver one\n");
     int pinCloses = 0;
     int dataCloses = 0;
-    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&](const char*, int) { return ++opens == 1 ? 10 : 11; });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int, struct stat* metadata) {
-        *metadata = {};
-        metadata->st_mode = S_IFREG;
-        metadata->st_dev = 1;
-        metadata->st_ino = 2;
-        return 0;
-    });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t { return 0; });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
-        if (fd == 11)
+        const bool pin = IsFixture(fd, path, false), data = IsFixture(fd, path, true);
+        context.ContextInterface::CloseFileDescriptor(fd);
+        if (data)
         {
             ++dataCloses;
             errno = EBADF;
+            return -1;
         }
-        else
-        {
+        if (pin)
             ++pinCloses;
-            errno = EIO;
-        }
-        return -1;
+        return 0;
     });
-    const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf");
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path);
+    CloseLog(&logHandle);
+    context.SetLogHandle(nullptr);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EBADF, result.Error().code);
-    EXPECT_NE(std::string::npos, result.Error().message.find("pin close: " + std::to_string(EIO)));
+    EXPECT_EQ("Failed to close data descriptor", result.Error().message);
     EXPECT_EQ(1, pinCloses);
     EXPECT_EQ(1, dataCloses);
+    const auto text = ReadLog(logPath);
+    ExpectLoggedOnce(text, "Failed to close data descriptor for " + path + ": " + std::to_string(EBADF));
+    EXPECT_EQ(std::string::npos, text.find("Failed to close pinned descriptor"));
 }
 
-TEST(FileObjectCollectorTest, ReadFailureReportsEachDescriptorCleanupIndependently)
+TEST(FileObjectCollectorTest, PinAndDataCloseFailuresAreIndependentOfReadErrors)
 {
-    for (const int failingDescriptor : {10, 11})
+    for (const bool failingPin : {true, false})
     {
         NiceMock<MockContext> context;
-        int opens = 0;
+        const auto path = context.MakeTempfile("nameserver one\n");
+        const auto logPath = context.GetTempdirPath() + "/independent-close-cleanup.log";
+        OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+        ASSERT_NE(nullptr, logHandle);
+        context.SetLogHandle(logHandle);
         int pinCloses = 0;
         int dataCloses = 0;
-        ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&](const char*, int) { return ++opens == 1 ? 10 : 11; });
-        ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int, struct stat* metadata) {
-            *metadata = {};
-            metadata->st_mode = S_IFREG;
-            metadata->st_dev = 1;
-            metadata->st_ino = 2;
-            return 0;
-        });
-        ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t {
+        int reads = 0;
+        ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+            if (!IsFixture(fd, path, true))
+                return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            ++reads;
             errno = EACCES;
             return -1;
         });
         ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
-            ++(fd == 10 ? pinCloses : dataCloses);
-            if (fd == failingDescriptor)
+            const bool pin = IsFixture(fd, path, false), data = IsFixture(fd, path, true);
+            pinCloses += pin;
+            dataCloses += data;
+            context.ContextInterface::CloseFileDescriptor(fd);
+            if ((failingPin && pin) || (!failingPin && data))
             {
-                errno = fd == 10 ? EIO : EBADF;
+                errno = pin ? EIO : EBADF;
                 return -1;
             }
 
             return 0;
         });
-        const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf");
+        const auto result = ComplianceEngine::CollectNameserverObject(context, path);
+        CloseLog(&logHandle);
+        context.SetLogHandle(nullptr);
         ASSERT_FALSE(result.HasValue());
-        EXPECT_EQ(EACCES, result.Error().code);
+        EXPECT_EQ(failingPin ? EIO : EACCES, result.Error().code);
         EXPECT_EQ(1, pinCloses);
         EXPECT_EQ(1, dataCloses);
-        EXPECT_NE(std::string::npos,
-            result.Error().message.find(failingDescriptor == 10 ? "pin close: " + std::to_string(EIO) : "data close: " + std::to_string(EBADF)));
+        EXPECT_EQ(failingPin ? 0 : 1, reads);
+        EXPECT_EQ(failingPin ? "Failed to close pinned descriptor" : "Failed to read file bytes", result.Error().message);
+        const auto text = ReadLog(logPath);
+        ExpectLoggedOnce(text, failingPin ? "Failed to close pinned descriptors for " + path + ": " + std::to_string(EIO) :
+                                            "Failed to close data descriptor for " + path + ": " + std::to_string(EBADF));
     }
 }
 
-TEST(FileObjectCollectorTest, ReadFailureSurvivesThrowingCloseOnBothDescriptors)
+TEST(FileObjectCollectorTest, ReadFailureSurvivesThrowingDataClose)
 {
     NiceMock<MockContext> context;
-    int opens = 0;
+    const auto logPath = context.GetTempdirPath() + "/throwing-data-close.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    context.SetLogHandle(logHandle);
+    const auto path = context.MakeTempfile("nameserver one\n");
     int dataCloses = 0;
     int pinCloses = 0;
-    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&](const char*, int) { return ++opens == 1 ? 10 : 11; });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int, struct stat* metadata) {
-        *metadata = {};
-        metadata->st_mode = S_IFREG;
-        metadata->st_dev = 1;
-        metadata->st_ino = 2;
-        return 0;
-    });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t {
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFixture(fd, path, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         errno = EACCES;
         return -1;
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
-        ++(fd == 10 ? pinCloses : dataCloses);
-        throw std::bad_alloc();
+        const bool pin = IsFixture(fd, path, false), data = IsFixture(fd, path, true);
+        pinCloses += pin;
+        dataCloses += data;
+        context.ContextInterface::CloseFileDescriptor(fd);
+        if (data)
+            throw std::bad_alloc();
+        return 0;
     });
-    const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf");
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path);
+    CloseLog(&logHandle);
+    context.SetLogHandle(nullptr);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
-    EXPECT_NE(std::string::npos, result.Error().message.find("data close: " + std::to_string(EIO)));
-    EXPECT_NE(std::string::npos, result.Error().message.find("pin close: " + std::to_string(EIO)));
+    EXPECT_EQ("Failed to read file bytes", result.Error().message);
     EXPECT_EQ(1, dataCloses);
     EXPECT_EQ(1, pinCloses);
+    const auto text = ReadLog(logPath);
+    ExpectLoggedOnce(text, "Failed to close data descriptor for " + path + ": " + std::to_string(EIO));
+    EXPECT_EQ(std::string::npos, text.find("Failed to close pinned descriptor"));
 }
 
 TEST(FileObjectCollectorTest, RejectsEmbeddedNulAndInvalidInputsBeforeOpening)
 {
     NiceMock<MockContext> context;
     int opens = 0;
-    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&opens](const char*, int) {
+    ON_CALL(context, OpenNativePath(_, _)).WillByDefault([&opens](const char*, int) {
+        ++opens;
+        return -1;
+    });
+    ON_CALL(context, OpenNativeAt(_, _, _)).WillByDefault([&opens](int, const char*, int) {
         ++opens;
         return -1;
     });
@@ -843,7 +911,7 @@ TEST(FileObjectCollectorTest, RejectsEmbeddedNulAndInvalidInputsBeforeOpening)
     EXPECT_EQ(EINVAL, result.Error().code);
 
     FileCollectionPolicy invalidPolicy;
-    invalidPolicy.rootSymlinks = static_cast<RootSymlinkPolicy>(2);
+    invalidPolicy.rootSymlinks = static_cast<SymlinkFollowing>(2);
     result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", invalidPolicy);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);
@@ -856,36 +924,48 @@ TEST(FileObjectCollectorTest, RejectsEmbeddedNulAndInvalidInputsBeforeOpening)
     EXPECT_EQ(0, opens);
 
     NiceMock<MockContext> failedOpen;
-    ON_CALL(failedOpen, OpenExistingFile(_, _)).WillByDefault([](const char*, int) {
-        errno = EACCES;
-        return -1;
+    const auto path = failedOpen.MakeTempfile("nameserver one\n");
+    int denied = 0;
+    ON_CALL(failedOpen, OpenNativeAt(_, _, _)).WillByDefault([&](int directory, const char* component, int flags) {
+        if (IsFixtureParent(directory, path) && std::string(component) == path.substr(path.find_last_of('/') + 1) && (flags & O_PATH))
+        {
+            ++denied;
+            errno = EACCES;
+            return -1;
+        }
+        return failedOpen.ContextInterface::OpenNativeAt(directory, component, flags);
     });
-    result = ComplianceEngine::CollectNameserverObject(failedOpen, "/etc/resolv.conf");
+    result = ComplianceEngine::CollectNameserverObject(failedOpen, path);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
+    EXPECT_EQ(1, denied);
 }
 
 TEST(FileObjectCollectorTest, PrematureEofWithStableMetadataIsAnError)
 {
     NiceMock<MockContext> context;
-    int opens = 0;
-    ON_CALL(context, OpenExistingFile(_, _)).WillByDefault([&opens](const char*, int) { return ++opens == 1 ? 10 : 11; });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([](int descriptor, struct stat* metadata) {
-        *metadata = {};
-        metadata->st_mode = S_IFREG | 0600;
-        metadata->st_dev = 1;
-        metadata->st_ino = 2;
-        metadata->st_size = 20;
-        return descriptor == 10 || descriptor == 11 ? 0 : -1;
+    const auto path = context.MakeTempfile("nameserver one\n");
+    int dataStats = 0;
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        const int status = context.ContextInterface::StatFileDescriptor(fd, metadata);
+        if (status == 0 && IsFixture(fd, path, true))
+        {
+            ++dataStats;
+            metadata->st_size = 20;
+        }
+        return status;
     });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([](int, void*, std::size_t) -> ssize_t { return 0; });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([](int) { return 0; });
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFixture(fd, path, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        return 0;
+    });
 
-    const auto result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf");
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path);
 
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
-    EXPECT_EQ(2, opens);
+    EXPECT_EQ(2, dataStats); // Baseline inspection and EOF verification both use the readable fixture.
 }
 
 TEST(FileObjectCollectorTest, ResolverPipelineCountsDistinctNameservers)

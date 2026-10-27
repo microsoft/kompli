@@ -5,8 +5,10 @@
 #include <MockContext.h>
 #include <algorithm>
 #include <cerrno>
+#include <fcntl.h>
 #include <set>
 #include <string>
+#include <sys/stat.h>
 #include <utility>
 
 using ComplianceEngine::ListValidShells;
@@ -17,6 +19,14 @@ namespace
 class ValidShellsTest : public testing::Test
 {
 protected:
+    bool IsData(int fd) const
+    {
+        struct stat held = {}, fixture = {};
+        const auto path = context.GetSpecialFilePath("/etc/shells");
+        const int flags = ::fcntl(fd, F_GETFL);
+        return flags >= 0 && !(flags & O_PATH) && (flags & O_ACCMODE) == O_RDONLY && ::fstat(fd, &held) == 0 && ::stat(path.c_str(), &fixture) == 0 &&
+               held.st_dev == fixture.st_dev && held.st_ino == fixture.st_ino;
+    }
     void SetShells(std::string contents)
     {
         context.SetSpecialFilePath("/etc/shells", context.MakeTempfile(std::move(contents)));
@@ -90,16 +100,19 @@ TEST_F(ValidShellsTest, ReachedReadErrorTakesPrecedenceOverCloseError)
     SetShells("/bin/bash\n/bin/zsh\n");
     int reads = 0, closes = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsData(fd))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         if (++reads == 1)
             return context.ContextInterface::ReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 10));
         errno = EIO;
         return -1;
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
-        ++closes;
+        const bool data = IsData(fd);
         context.ContextInterface::CloseFileDescriptor(fd);
-        if (closes == 1)
+        if (data)
         {
+            ++closes;
             errno = EBADF;
             return -1;
         }
@@ -108,9 +121,9 @@ TEST_F(ValidShellsTest, ReachedReadErrorTakesPrecedenceOverCloseError)
     auto failed = ListValidShells(context);
     ASSERT_FALSE(failed.HasValue());
     EXPECT_EQ(EIO, failed.Error().code);
-    EXPECT_EQ(std::string::npos, failed.Error().message.find("[close:"));
+    EXPECT_EQ("Failed to read file bytes", failed.Error().message);
     EXPECT_EQ(2, reads);
-    EXPECT_EQ(2, closes);
+    EXPECT_EQ(1, closes);
 }
 
 TEST_F(ValidShellsTest, CloseFailureAfterEofIsAnError)
@@ -118,10 +131,11 @@ TEST_F(ValidShellsTest, CloseFailureAfterEofIsAnError)
     SetShells("/bin/bash\n");
     int closes = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
-        ++closes;
+        const bool data = IsData(fd);
         context.ContextInterface::CloseFileDescriptor(fd);
-        if (closes == 1)
+        if (data)
         {
+            ++closes;
             errno = EIO;
             return -1;
         }
@@ -130,5 +144,6 @@ TEST_F(ValidShellsTest, CloseFailureAfterEofIsAnError)
     auto failed = ListValidShells(context);
     ASSERT_FALSE(failed.HasValue());
     EXPECT_EQ(EIO, failed.Error().code);
-    EXPECT_EQ(2, closes);
+    EXPECT_EQ("Failed to close data descriptor", failed.Error().message);
+    EXPECT_EQ(1, closes);
 }
