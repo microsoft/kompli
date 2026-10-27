@@ -613,11 +613,6 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
         return Error("Benchmark definition has an unsupported 'apiVersion'; supported: " + JoinSet(kSupportedApiVersions), EINVAL);
     }
 
-    if (0 == kSupportedApiVersions.count(apiVersion.Value()))
-    {
-        return Error("Benchmark definition has an unsupported 'apiVersion'; supported: " + JoinSet(kSupportedApiVersions), EINVAL);
-    }
-
     auto* metadata = json_object_get_object(root, "metadata");
     if (nullptr == metadata)
     {
