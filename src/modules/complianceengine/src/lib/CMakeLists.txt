@@ -8,6 +8,13 @@ endif()
 
 # Find Lua via vcpkg
 find_package(Lua REQUIRED)
+if(TARGET lua-cpp)
+    set(LUA_CPP_TARGET lua-cpp)
+elseif(TARGET unofficial::lua::lua-cpp)
+    set(LUA_CPP_TARGET unofficial::lua::lua-cpp)
+else()
+    message(FATAL_ERROR "Lua C++ runtime is required")
+endif()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(PROCEDURES
@@ -210,7 +217,7 @@ target_link_libraries(complianceenginelib PRIVATE
     logging
     commonutils
     parsonlib
-    ${LUA_LIBRARIES}
+    ${LUA_CPP_TARGET}
     )
 
 target_include_directories(complianceenginelib PUBLIC
