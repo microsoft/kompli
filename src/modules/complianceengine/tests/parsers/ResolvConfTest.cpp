@@ -21,7 +21,6 @@ struct Snapshot
     std::vector<std::string> entries;
     std::vector<rc::Record> records;
     std::vector<rc::Projection> projections;
-    std::vector<rc::Diagnostic> diagnostics;
 };
 
 ComplianceEngine::Result<Snapshot> ParseFixture(const std::vector<std::string>& lines, std::string source, rc::Limits limits = {})
@@ -38,8 +37,6 @@ ComplianceEngine::Result<Snapshot> ParseFixture(const std::vector<std::string>& 
         snapshot.records.push_back(std::move(entry.Value().record));
         for (auto& projection : entry.Value().projections)
             snapshot.projections.push_back(std::move(projection));
-        for (auto& diagnostic : entry.Value().diagnostics)
-            snapshot.diagnostics.push_back(std::move(diagnostic));
     }
     auto finished = parser.Finish(rc::Acquisition::EofAndClosed);
     if (!finished.HasValue())
@@ -112,7 +109,6 @@ TEST(ResolvConfTest, AllDirectivesDuplicatesAndNoEffectiveMerge)
     EXPECT_EQ(rc::ValueKind::FlagOption, doc.projections[11].kind);
     EXPECT_EQ(2U, doc.projections[12].number);
     // Caps are documented metadata, not an effective resolver state.
-    EXPECT_TRUE(doc.diagnostics.empty());
 }
 
 TEST(ResolvConfTest, AllDocumentedFlagsRemainIndividualOrderedEvidence)
@@ -133,85 +129,43 @@ TEST(ResolvConfTest, AllDocumentedFlagsRemainIndividualOrderedEvidence)
     }
 }
 
-TEST(ResolvConfTest, MalformedUnknownAndUnverifiedInputNeverDisappears)
+TEST(ResolvConfTest, UnknownAndUnverifiedInputRemainOwnedEvidence)
 {
-    const std::vector<std::string> lines = {" nameserver 192.0.2.1", "nameserver", "nameserver invalid trailing", "search a#literal b;literal",
-        "domain a b", "sortlist bad/255.0.0.0", "options ndots: no-aaaa:extra attempts:42949672960 mystery", "NAMEserver 192.0.2.2", "options",
-        "nameserver 192.0.2.1\r", "nameserver 192.0.2.1" + std::string("\0tail", 5), "sortlist 2001:db8::1", "# comment with \xFF",
-        "options \"rotate\""};
+    const std::vector<std::string> lines = {"search a#literal b;literal", "options mystery", "NAMEserver 192.0.2.2", "sortlist 2001:db8::1",
+        "# comment with \xFF", "options \"rotate\"", "search a\r"};
     const auto parsed = ParseFixture(lines, "resolv");
     ASSERT_TRUE(parsed.HasValue());
     const auto& doc = parsed.Value();
     EXPECT_EQ(lines, doc.entries);
-    EXPECT_EQ(rc::Directive::Malformed, doc.records[0].directive);
-    EXPECT_EQ(rc::Directive::Malformed, doc.records[1].directive);
-    EXPECT_EQ(rc::Directive::Malformed, doc.records[2].directive);
-    EXPECT_EQ("trailing", Text(doc, doc.records[2].tokens[2]));
-    ASSERT_FALSE(doc.projections.empty());
-    EXPECT_EQ(3U, doc.projections[0].token.line);
-    EXPECT_EQ(12U, doc.projections[0].token.column);
-    EXPECT_EQ(rc::Status::Invalid, doc.projections[0].status);
-    ASSERT_GE(doc.diagnostics.size(), 4U);
-    EXPECT_EQ(3U, doc.diagnostics[2].span.line);
-    EXPECT_EQ(20U, doc.diagnostics[2].span.column);
-    EXPECT_EQ("extra directive operand", doc.diagnostics[2].message);
-    EXPECT_EQ(rc::Directive::Malformed, doc.records[4].directive);
-    EXPECT_EQ(rc::Directive::Unknown, doc.records[7].directive);
-    EXPECT_EQ(rc::Directive::Malformed, doc.records[8].directive);
-    bool sawUnknown = false, sawInvalid = false, sawUnverified = false, sawNul = false;
-    for (const auto& diagnostic : doc.diagnostics)
-    {
-        EXPECT_GE(diagnostic.span.line, 1U);
-        EXPECT_LE(diagnostic.span.line, lines.size());
-        sawUnknown |= diagnostic.kind == rc::DiagnosticKind::Unknown;
-        sawInvalid |= diagnostic.kind == rc::DiagnosticKind::Malformed;
-        sawUnverified |= diagnostic.kind == rc::DiagnosticKind::Unverified;
-        sawNul |= diagnostic.message == "embedded NUL";
-    }
-
-    EXPECT_TRUE(sawUnknown);
-    EXPECT_TRUE(sawInvalid);
-    EXPECT_TRUE(sawUnverified);
-    EXPECT_TRUE(sawNul);
-    bool sawIPv6Sort = false;
-    for (const auto& projection : doc.projections)
-        if (projection.kind == rc::ValueKind::SortPair && projection.status == rc::Status::Unverified)
-            sawIPv6Sort = true;
-    EXPECT_TRUE(sawIPv6Sort);
-    // A NUL-suffixed address must not pass through inet_pton as a valid prefix.
-    for (const auto& projection : doc.projections)
-    {
-        if (projection.token.line == 11)
-        {
-            EXPECT_EQ(rc::Status::Invalid, projection.status);
-        }
-    }
+    EXPECT_EQ(rc::Directive::Unknown, doc.records[2].directive);
+    ASSERT_EQ(6U, doc.projections.size());
+    EXPECT_EQ(rc::ValueKind::UnknownOption, doc.projections[2].kind);
+    EXPECT_EQ(rc::Status::Unknown, doc.projections[2].status);
+    EXPECT_EQ(rc::Status::Unverified, doc.projections[3].status);
+    EXPECT_EQ("a\r", Text(doc, doc.projections.back().token));
+    EXPECT_EQ(rc::Status::Unverified, doc.projections.back().status);
 }
 
-TEST(ResolvConfTest, ParsedTokenDoesNotValidateMalformedEntry)
+TEST(ResolvConfTest, MalformedKnownInputFailsNextAndIsSticky)
 {
-    rc::Parser parser("src");
-    const auto entry = parser.Next("nameserver 192.0.2.1 junk");
-    ASSERT_TRUE(entry.HasValue());
-    EXPECT_EQ("nameserver 192.0.2.1 junk", entry.Value().text);
-    EXPECT_EQ(rc::Directive::Malformed, entry.Value().record.directive);
-    EXPECT_TRUE(entry.Value().hasMalformedEvidence);
-    ASSERT_EQ(3U, entry.Value().record.tokens.size());
-    EXPECT_EQ(1U, entry.Value().record.line);
-    EXPECT_EQ(22U, entry.Value().record.tokens[2].column);
-    ASSERT_EQ(1U, entry.Value().diagnostics.size());
-    EXPECT_EQ(rc::DiagnosticKind::Malformed, entry.Value().diagnostics[0].kind);
-    EXPECT_EQ("extra directive operand", entry.Value().diagnostics[0].message);
-    EXPECT_EQ(1U, entry.Value().diagnostics[0].span.line);
-    EXPECT_EQ(22U, entry.Value().diagnostics[0].span.column);
-    ASSERT_EQ(1U, entry.Value().projections.size());
-    EXPECT_EQ(rc::Status::Parsed, entry.Value().projections[0].status);
-    EXPECT_EQ(rc::ValueKind::Nameserver, entry.Value().projections[0].kind);
-    EXPECT_EQ(12U, entry.Value().projections[0].token.column);
-    EXPECT_EQ(1U, entry.Value().projections[0].token.line);
-    EXPECT_EQ((std::array<unsigned char, 16>{{192, 0, 2, 1}}), entry.Value().projections[0].address);
-    EXPECT_TRUE(parser.Finish(rc::Acquisition::EofAndClosed).HasValue());
-    // Completion of acquisition is not validation of a malformed record.
+    for (const auto& text : {" nameserver 192.0.2.1", "nameserver", "nameserver invalid", "nameserver 192.0.2.1 junk", "nameserver 192.0.2.1 # inline",
+             "nameserver 192.0.2.1\r", "domain a b", "options", "options ndots:", "options ndots:1x", "options attempts:42949672960",
+             "options rotate:extra", "sortlist bad/255.0.0.0", "sortlist 192.0.2.0/", "sortlist 192.0.2.0/255.0.0.0/255.0.0.0"})
+    {
+        rc::Parser parser("src");
+        ASSERT_TRUE(parser.Next("search example.org").HasValue());
+        const auto failed = parser.Next(text);
+        ASSERT_FALSE(failed.HasValue()) << text;
+        EXPECT_EQ(EBADMSG, failed.Error().code);
+        EXPECT_NE(std::string::npos, failed.Error().message.find("src: resolv.conf"));
+        EXPECT_EQ(failed.Error().message, parser.Next("").Error().message);
+        EXPECT_EQ(failed.Error().message, parser.Finish(rc::Acquisition::EofAndClosed).Error().message);
+    }
+    rc::Parser nul("src");
+    const auto embedded = nul.Next(std::string("nameserver 192.0.2.1") + std::string("\0tail", 5));
+    ASSERT_FALSE(embedded.HasValue());
+    EXPECT_EQ(EBADMSG, embedded.Error().code);
+    EXPECT_NE(std::string::npos, embedded.Error().message.find("embedded NUL"));
     rc::Parser later("src");
     ASSERT_TRUE(later.Next("nameserver 192.0.2.1").HasValue());
     EXPECT_EQ(EIO, later.Finish(ComplianceEngine::Error("late Close failure", EIO)).Error().code);
@@ -224,10 +178,8 @@ TEST(ResolvConfTest, ExactBudgetBoundariesAndFatalVersusEmpty)
     limits.lineBytes = 2;
     limits.entries = 2;
     limits.tokens = 2;
-    limits.diagnostics = 2;
     const auto within = ParseFixture({"xx", "x"}, "src", limits);
-    ASSERT_TRUE(within.HasValue()); // 3 bytes, 2 entries, 2 tokens, 2 diagnostics.
-    EXPECT_EQ(2U, within.Value().diagnostics.size());
+    ASSERT_TRUE(within.HasValue()); // 3 bytes, 2 entries, 2 tokens.
 
     const auto bytes = ParseFixture({"xx", "xx"}, "src", limits);
     ASSERT_FALSE(bytes.HasValue());
@@ -248,12 +200,6 @@ TEST(ResolvConfTest, ExactBudgetBoundariesAndFatalVersusEmpty)
     ASSERT_FALSE(tokens.HasValue());
     EXPECT_NE(std::string::npos, tokens.Error().message.find("token limit"));
 
-    limits.entries = 3;
-    limits.tokens = 3; // Reach the third unknown directive before exhausting diagnostics.
-    const auto diagnostics = ParseFixture({"x", "y", "z"}, "src", limits);
-    ASSERT_FALSE(diagnostics.HasValue());
-    EXPECT_NE(std::string::npos, diagnostics.Error().message.find("diagnostic limit"));
-
     limits.bytes = 0;
     const auto badLimits = ParseFixture({}, "src", limits);
     ASSERT_FALSE(badLimits.HasValue());
@@ -271,7 +217,6 @@ TEST(ResolvConfTest, IncrementalEvidenceOwnsBytesAndDoesNotAccumulateInParser)
     EXPECT_EQ("192.0.2.1", first.Value().text.substr(first.Value().projections[0].token.column - 1, first.Value().projections[0].token.length));
     auto unknown = parser.Next("mystery \xFF");
     ASSERT_TRUE(unknown.HasValue());
-    ASSERT_EQ(2U, unknown.Value().diagnostics.size());
     EXPECT_EQ(rc::Directive::Unknown, unknown.Value().record.directive);
     EXPECT_EQ(2U, unknown.Value().record.line);
     EXPECT_EQ(1U, unknown.Value().record.tokens.front().column);
@@ -296,15 +241,13 @@ TEST(ResolvConfTest, IncrementalEvidenceOwnsBytesAndDoesNotAccumulateInParser)
     rc::Limits limits;
     limits.entries = 5000;
     limits.tokens = 5000;
-    limits.diagnostics = 5000;
     rc::Parser discard("src", limits);
     for (std::size_t i = 0; i < limits.entries; ++i)
     {
         auto entry = discard.Next("x");
         ASSERT_TRUE(entry.HasValue()) << i;
         EXPECT_EQ(i + 1, entry.Value().record.line);
-        ASSERT_EQ(1U, entry.Value().diagnostics.size());
-        EXPECT_EQ(i + 1, entry.Value().diagnostics[0].span.line);
+        EXPECT_EQ("x", entry.Value().text);
     }
     EXPECT_TRUE(discard.Finish(rc::Acquisition::EofAndClosed).HasValue());
 }
@@ -482,7 +425,7 @@ TEST(ResolvConfTest, EveryDefaultBudgetAtMinusOneExactAndPlusOne)
         else
             EXPECT_TRUE(line.Finish(rc::Acquisition::EofAndClosed).HasValue());
     }
-    // Comments avoid tokens/diagnostics while consuming the entire byte budget.
+    // Comments avoid tokens while consuming the entire byte budget.
     for (const auto delta : {-1, 0, 1})
     {
         SCOPED_TRACE(delta);
@@ -547,28 +490,6 @@ TEST(ResolvConfTest, EveryDefaultBudgetAtMinusOneExactAndPlusOne)
         else
             EXPECT_TRUE(tokens.Finish(rc::Acquisition::EofAndClosed).HasValue());
     }
-    // A single large physical line exhausts diagnostics without hitting
-    // the byte, token or line limits; N+1 is never published.
-    for (const auto delta : {-1, 0, 1})
-    {
-        SCOPED_TRACE(delta);
-        rc::Parser diagnostics("src");
-        const auto count = static_cast<std::size_t>(static_cast<int>(limits.diagnostics) + delta);
-        const auto next = diagnostics.Next("#" + std::string(count, '\r'));
-        if (delta == 1)
-        {
-            ASSERT_FALSE(next.HasValue());
-            EXPECT_NE(std::string::npos, next.Error().message.find("diagnostic limit"));
-            EXPECT_EQ(next.Error().message, diagnostics.Next("").Error().message);
-            EXPECT_EQ(next.Error().message, diagnostics.Finish(rc::Acquisition::EofAndClosed).Error().message);
-        }
-        else
-        {
-            ASSERT_TRUE(next.HasValue());
-            EXPECT_EQ(count, next.Value().diagnostics.size());
-            EXPECT_TRUE(diagnostics.Finish(rc::Acquisition::EofAndClosed).HasValue());
-        }
-    }
 }
 
 TEST(ResolvConfTest, EmptyCompletionAndErrorPrecedence)
@@ -582,8 +503,8 @@ TEST(ResolvConfTest, EmptyCompletionAndErrorPrecedence)
     EXPECT_EQ(EBADF, complete.Finish(ComplianceEngine::Error("late Close failure", EBADF)).Error().code);
     EXPECT_EQ(EBADF, complete.Next("").Error().code);
     rc::Parser malformed("src");
-    ASSERT_TRUE(malformed.Next("nameserver invalid").HasValue());
-    EXPECT_TRUE(malformed.Finish(rc::Acquisition::EofAndClosed).HasValue()); // Invalid record is evidence, not fatal.
+    ASSERT_FALSE(malformed.Next("nameserver invalid").HasValue());
+    EXPECT_EQ(EBADMSG, malformed.Finish(rc::Acquisition::EofAndClosed).Error().code);
 }
 
 TEST(ResolvConfTest, CumulativeLimitsAndFailureAreStickyAfterEarlierEvidence)
@@ -593,23 +514,24 @@ TEST(ResolvConfTest, CumulativeLimitsAndFailureAreStickyAfterEarlierEvidence)
     limits.lineBytes = 2;
     limits.entries = 3;
     limits.tokens = 3;
-    limits.diagnostics = 2;
     rc::Parser parser("src", limits);
     auto first = parser.Next("x");
     ASSERT_TRUE(first.HasValue());
     auto second = parser.Next("y");
     ASSERT_TRUE(second.HasValue());
-    EXPECT_EQ(1U, first.Value().diagnostics.size());
-    EXPECT_EQ(1U, second.Value().diagnostics.size());
+    EXPECT_EQ(rc::Directive::Unknown, first.Value().record.directive);
+    EXPECT_EQ(rc::Directive::Unknown, second.Value().record.directive);
     const auto failure = parser.Next("z");
-    ASSERT_FALSE(failure.HasValue());
-    EXPECT_EQ(E2BIG, failure.Error().code);
-    EXPECT_NE(std::string::npos, failure.Error().message.find("diagnostic limit"));
-    EXPECT_EQ(failure.Error().message, parser.Next("").Error().message);
-    EXPECT_EQ(failure.Error().message, parser.Finish(rc::Acquisition::EofAndClosed).Error().message);
-    EXPECT_EQ(failure.Error().message, parser.Finish(ComplianceEngine::Error("read failed", EIO)).Error().message);
+    ASSERT_TRUE(failure.HasValue());
+    EXPECT_EQ(rc::Directive::Unknown, failure.Value().record.directive);
+    const auto overflow = parser.Next("x");
+    ASSERT_FALSE(overflow.HasValue());
+    EXPECT_EQ(E2BIG, overflow.Error().code);
+    EXPECT_NE(std::string::npos, overflow.Error().message.find("byte limit"));
+    EXPECT_EQ(overflow.Error().message, parser.Next("").Error().message);
+    EXPECT_EQ(overflow.Error().message, parser.Finish(rc::Acquisition::EofAndClosed).Error().message);
+    EXPECT_EQ(overflow.Error().message, parser.Finish(ComplianceEngine::Error("read failed", EIO)).Error().message);
 
-    limits.diagnostics = 3;
     rc::Parser bytes("src", limits);
     ASSERT_TRUE(bytes.Next("xx").HasValue());
     ASSERT_TRUE(bytes.Next("x").HasValue());

@@ -73,6 +73,19 @@ TEST(NameserverCountTest, MalformedNameserverEvidenceCannotBecomeACompliantPrefi
     }
 }
 
+TEST(NameserverCountTest, MalformedUnrelatedRecordsFailButUnknownRecordsDoNot)
+{
+    for (const auto& unrelated : {"search\n", "options ndots:bad\n", "sortlist invalid\n", " domain indented\n"})
+    {
+        const auto result = Evaluate(std::string("nameserver 192.0.2.1\n") + unrelated + "nameserver 2001:db8::1\n");
+        ASSERT_FALSE(result.HasValue()) << unrelated;
+        EXPECT_EQ(EBADMSG, result.Error().code);
+    }
+    const auto unknown = Evaluate("mystery anything\noptions vendor-option\nnameserver 192.0.2.1\nnameserver 2001:db8::1\n");
+    ASSERT_TRUE(unknown.HasValue());
+    EXPECT_EQ(Status::Compliant, unknown.Value());
+}
+
 TEST(NameserverCountTest, RejectsInvalidPathsAndUnknownArguments)
 {
     MockContext context;

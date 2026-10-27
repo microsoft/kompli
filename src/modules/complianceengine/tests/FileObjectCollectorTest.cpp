@@ -192,7 +192,7 @@ TEST(FileObjectCollectorTest, MissingNameserverOperandFailsWithOrWithoutFinalLf)
         const auto result = ComplianceEngine::CollectNameserverObject(context, path);
         ASSERT_FALSE(result.HasValue()) << content;
         EXPECT_EQ(EBADMSG, result.Error().code);
-        EXPECT_NE(std::string::npos, result.Error().message.find(path + ":1:"));
+        EXPECT_NE(std::string::npos, result.Error().message.find(path + ": resolv.conf"));
     }
 }
 
@@ -209,7 +209,7 @@ TEST(FileObjectCollectorTest, MissingOperandDoesNotCaptureAcrossLines)
     const auto result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EBADMSG, result.Error().code);
-    EXPECT_NE(std::string::npos, result.Error().message.find(path + ":2:"));
+    EXPECT_NE(std::string::npos, result.Error().message.find(path + ": resolv.conf"));
 
     FileCollectionPolicy limit;
     limit.contentBytes = content.size();
@@ -218,17 +218,19 @@ TEST(FileObjectCollectorTest, MissingOperandDoesNotCaptureAcrossLines)
     EXPECT_EQ(E2BIG, ComplianceEngine::CollectNameserverObject(context, path, limit).Error().code);
 }
 
-TEST(FileObjectCollectorTest, RejectsRelevantMalformedEvidenceButNotUnrelatedMalformedLines)
+TEST(FileObjectCollectorTest, MalformedUnrelatedKnownRecordsAlsoFail)
 {
     NiceMock<MockContext> context;
-    const auto unrelated = context.MakeTempfile(
-        " search indented\n"
-        "search\n"
-        "options ndots:bad\r\n"
-        "unknown \x80\n"
-        "nameserver 192.0.2.1\n"
-        "nameserver 2001:db8::1\n");
-    const auto accepted = ComplianceEngine::CollectNameserverObject(context, unrelated);
+    for (const auto& unrelated :
+        {" search indented\n", "search\n", "options ndots:bad\r\n", "domain a b\n", "sortlist bad/255.0.0.0\n", "options rotate:extra\n"})
+    {
+        const auto path = context.MakeTempfile(std::string("nameserver 192.0.2.1\n") + unrelated + "nameserver 2001:db8::1\n");
+        const auto rejected = ComplianceEngine::CollectNameserverObject(context, path);
+        ASSERT_FALSE(rejected.HasValue()) << unrelated;
+        EXPECT_EQ(EBADMSG, rejected.Error().code);
+    }
+    const auto unknown = context.MakeTempfile("unknown \x80\noptions mystery\nnameserver 192.0.2.1\nnameserver 2001:db8::1\n");
+    const auto accepted = ComplianceEngine::CollectNameserverObject(context, unknown);
     ASSERT_TRUE(accepted.HasValue());
     EXPECT_EQ((std::vector<std::string>{"192.0.2.1", "2001:db8::1"}), Captures(accepted.Value()));
 
@@ -239,7 +241,7 @@ TEST(FileObjectCollectorTest, RejectsRelevantMalformedEvidenceButNotUnrelatedMal
         const auto result = ComplianceEngine::CollectNameserverObject(context, path);
         ASSERT_FALSE(result.HasValue()) << invalid;
         EXPECT_EQ(EBADMSG, result.Error().code) << invalid;
-        EXPECT_NE(std::string::npos, result.Error().message.find(path + ":2:")) << invalid;
+        EXPECT_NE(std::string::npos, result.Error().message.find(path + ": resolv.conf")) << invalid;
     }
 }
 
@@ -251,7 +253,7 @@ TEST(FileObjectCollectorTest, ParserLineEntryAndTokenBudgetsRejectUnrelatedConte
         tokenHeavy += "unknown a b c\n";
     tokenHeavy += "unknown a b c d\n";
     // Neither a valid prefix nor a large valid address can justify silently
-    // dropping unrelated lines, tokens or their diagnostics.
+    // dropping unrelated lines or tokens.
     for (const auto& content : {std::string("#") + std::string(16384, 'x') + "\nnameserver 192.0.2.1\n", std::string(8193, '\n') + "nameserver 192.0.2.1\n", tokenHeavy})
     {
         const auto path = context.MakeTempfile(content);
@@ -264,7 +266,7 @@ TEST(FileObjectCollectorTest, ParserLineEntryAndTokenBudgetsRejectUnrelatedConte
     }
 }
 
-TEST(FileObjectCollectorTest, ParserByteAndDiagnosticBudgetsFailRatherThanPublishPrefix)
+TEST(FileObjectCollectorTest, ParserByteBudgetFailsRatherThanPublishPrefix)
 {
     NiceMock<MockContext> context;
     std::string bytes;
@@ -277,14 +279,6 @@ TEST(FileObjectCollectorTest, ParserByteAndDiagnosticBudgetsFailRatherThanPublis
     ASSERT_FALSE(exceeded.HasValue());
     EXPECT_EQ(E2BIG, exceeded.Error().code);
     EXPECT_NE(std::string::npos, exceeded.Error().message.find("byte limit"));
-
-    // Unverified CR bytes consume diagnostics even on unrelated input.
-    const auto diagnosticsPath = context.MakeTempfile(std::string(8193, '\r'));
-    policy.contentBytes = 8193;
-    const auto diagnostics = ComplianceEngine::CollectNameserverObject(context, diagnosticsPath, policy);
-    ASSERT_FALSE(diagnostics.HasValue());
-    EXPECT_EQ(E2BIG, diagnostics.Error().code);
-    EXPECT_NE(std::string::npos, diagnostics.Error().message.find("diagnostic limit"));
 }
 
 TEST(FileObjectCollectorTest, ContentAndCaptureLimitsFailWithoutPartialPublication)

@@ -42,13 +42,11 @@ void CheckSpan(rc::Span span, const rc::Entry& entry)
 }
 
 void CheckEntry(const rc::Entry& entry, const std::string& supplied, std::size_t line, const rc::Limits& limits,
-    std::size_t& tokens, std::size_t& diagnostics)
+    std::size_t& tokens)
 {
     Require((entry.source == "resolv-fuzz") && (entry.text == supplied) && (entry.record.line == line));
     Require(entry.record.tokens.size() <= limits.tokens - tokens);
-    Require(entry.diagnostics.size() <= limits.diagnostics - diagnostics);
     tokens += entry.record.tokens.size();
-    diagnostics += entry.diagnostics.size();
     std::size_t end = 0;
     for (const auto& token : entry.record.tokens)
     {
@@ -68,20 +66,13 @@ void CheckEntry(const rc::Entry& entry, const std::string& supplied, std::size_t
         Require(found);
         Require((projection.addressBytes == 0) || (projection.addressBytes == 4) || (projection.addressBytes == 16));
     }
-    for (const auto& diagnostic : entry.diagnostics)
-    {
-        CheckSpan(diagnostic.span, entry);
-        Require(!diagnostic.message.empty());
-    }
-    bool malformed = false;
-    for (const auto& diagnostic : entry.diagnostics)
-        malformed |= diagnostic.kind == rc::DiagnosticKind::Malformed;
-    Require(entry.hasMalformedEvidence == malformed);
+    Require(entry.record.directive != rc::Directive::Nameserver ||
+        ((entry.projections.size() == 1) && (entry.projections.front().status == rc::Status::Parsed)));
 }
 
 void SameEntry(const rc::Entry& left, const rc::Entry& right)
 {
-    Require((left.source == right.source) && (left.text == right.text) && (left.hasMalformedEvidence == right.hasMalformedEvidence));
+    Require((left.source == right.source) && (left.text == right.text));
     Require((left.record.directive == right.record.directive) && (left.record.line == right.record.line));
     Require(left.record.tokens.size() == right.record.tokens.size());
     for (std::size_t i = 0; i < left.record.tokens.size(); ++i)
@@ -94,13 +85,6 @@ void SameEntry(const rc::Entry& left, const rc::Entry& right)
         Require((a.kind == b.kind) && (a.status == b.status) && SameSpan(a.token, b.token));
         Require((a.addressBytes == b.addressBytes) && (a.address == b.address) && (a.hasMask == b.hasMask) && (a.mask == b.mask));
         Require((a.number == b.number) && (a.documentedCap == b.documentedCap));
-    }
-    Require(left.diagnostics.size() == right.diagnostics.size());
-    for (std::size_t i = 0; i < left.diagnostics.size(); ++i)
-    {
-        const auto& a = left.diagnostics[i];
-        const auto& b = right.diagnostics[i];
-        Require((a.kind == b.kind) && SameSpan(a.span, b.span) && (a.message == b.message));
     }
 }
 
@@ -128,7 +112,6 @@ void Run(const std::string& input, const rc::Limits& limits)
         source.clear(); // Both parsers and their outputs must own the identity.
         std::size_t bytes = 0;
         std::size_t tokens = 0;
-        std::size_t diagnostics = 0;
         std::size_t line = 0;
         bool failed = false;
         for (std::size_t start = 0; start < input.size();)
@@ -142,14 +125,17 @@ void Run(const std::string& input, const rc::Limits& limits)
             if (!a.HasValue())
             {
                 Require((a.Error().code == b.Error().code) && (a.Error().message == b.Error().message));
-                Require(a.Error().code == (limits.bytes == 0 ? EINVAL : E2BIG));
+                if (limits.bytes == 0)
+                    Require(a.Error().code == EINVAL);
+                else
+                    Require((a.Error().code == EBADMSG) || (a.Error().code == E2BIG));
                 failed = true;
                 break;
             }
             ++line;
             Require((line <= limits.entries) && (text.size() <= limits.lineBytes) && (text.size() <= limits.bytes - bytes));
             bytes += text.size(); // LF bytes are not supplied to Next.
-            CheckEntry(a.Value(), text, line, limits, tokens, diagnostics);
+            CheckEntry(a.Value(), text, line, limits, tokens);
             SameEntry(a.Value(), b.Value());
             retained = std::move(a.Value());
             haveRetained = true;
@@ -209,8 +195,6 @@ void Run(const std::string& input, const rc::Limits& limits)
             CheckSpan(token, retained); // Evidence survives both parsers.
         for (const auto& projection : retained.projections)
             CheckSpan(projection.token, retained);
-        for (const auto& diagnostic : retained.diagnostics)
-            CheckSpan(diagnostic.span, retained);
     }
 }
 } // namespace
@@ -230,7 +214,6 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     generous.lineBytes = 1024;
     generous.entries = 64;
     generous.tokens = 256;
-    generous.diagnostics = 256;
     Run(bytes, generous);
     if (bytes.empty()) // Exercise line endings without hook-normalized corpus files.
     {
@@ -244,7 +227,6 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     tight.lineBytes = 1 + selector % 32;
     tight.entries = 1 + selector % 5;
     tight.tokens = 1 + selector % 6;
-    tight.diagnostics = 1 + selector % 5;
     Run(bytes, tight);
     if ((selector == 0) && !bytes.empty())
     {

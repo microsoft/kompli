@@ -14,14 +14,13 @@ namespace ComplianceEngine
 {
 namespace ResolvConf
 {
-// Starter budgets, not resolver limits. All counts include unknown/malformed input.
+// Starter budgets, not resolver limits. All counts include unknown input.
 struct Limits
 {
     std::size_t bytes = 1024 * 1024;
     std::size_t lineBytes = 16 * 1024;
     std::size_t entries = 8192;
     std::size_t tokens = 32768;
-    std::size_t diagnostics = 8192;
 };
 
 // 1-based physical entry/byte column; length is a half-open span in that
@@ -50,15 +49,13 @@ enum class Directive
     Domain,
     Sortlist,
     Options,
-    Unknown,
-    Malformed
+    Unknown
 };
 
 enum class Status
 {
-    Parsed,     // Token-only decode; NOT record validity, aggregate completion or glibc effect.
+    Parsed,     // Token-only decode; NOT aggregate completion or glibc effect.
     Unverified, // Manual leaves byte grammar or profile behavior open.
-    Invalid,
     Unknown
 };
 
@@ -97,35 +94,17 @@ struct Projection
     unsigned int documentedCap = 0;
 };
 
-enum class DiagnosticKind
-{
-    Malformed,
-    Unknown,
-    Unverified
-};
-
-struct Diagnostic
-{
-    DiagnosticKind kind;
-    Span span;
-    std::string message;
-};
-
 // One owned physical entry and all of its evidence. Spans use physical entry
 // numbers, so consumers may retain or discard each result independently.
 // A projection's token identifies its entry (1-based line). Parsed projections
-// may coexist with a malformed record or diagnostics: inspect the whole Entry
-// before using any projection, and require successful Finish for completion.
+// are published only for entries without known malformed syntax; require
+// successful Finish for completion.
 struct Entry
 {
     std::string source; // Owned source identity; valid after Parser destruction.
     std::string text;   // Exact LF-stripped supplied bytes, including trivia.
     Record record;
     std::vector<Projection> projections;
-    std::vector<Diagnostic> diagnostics;
-    // True when any malformed diagnostic was emitted, even if a token decoded.
-    // False is NOT a certification of supported grammar or resolver behavior.
-    bool hasMalformedEvidence = false;
 };
 
 // This is the caller's REPORT, not a fact independently verified by Parser.
@@ -144,7 +123,8 @@ enum class Acquisition
 // aggregate result. A fatal error is sticky and the failing entry is not
 // published; previously emitted entries cannot be retroactively revoked.
 // Space/tab are provisional separators. Only first-column # and ; are
-// comments. Other ambiguous syntax is retained and flagged, never dropped.
+// comments. Unknown/unverified evidence is retained; known malformed syntax
+// fails Next with a sticky EBADMSG Error instead of publishing a partial entry.
 class Parser
 {
 public:
@@ -158,7 +138,8 @@ public:
     // Earlier parser/acquisition errors remain sticky.
     // Example: for each read value call Next(value); after EOF check Close;
     // then Finish(Acquisition::EofAndClosed), or Finish(read/Close Error).
-    // EINVAL: zero budget/invalid call; E2BIG: exceeded budget.
+    // EINVAL: zero budget/invalid call; E2BIG: exceeded budget; EBADMSG:
+    // malformed supplied entry.
     Result<bool> Finish(Result<Acquisition> acquisition);
 
 private:
@@ -167,7 +148,6 @@ private:
     std::size_t mBytes = 0;
     std::size_t mEntries = 0;
     std::size_t mTokens = 0;
-    std::size_t mDiagnostics = 0;
     Result<bool> mCompletion = true;
     bool mFinished = false;
 };

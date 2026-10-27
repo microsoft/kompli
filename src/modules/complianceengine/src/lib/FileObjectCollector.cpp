@@ -34,7 +34,7 @@ Result<bool> AppendNameserver(const ResolvConf::Entry& entry, const FileCollecti
     if (!NameserverEvidence(entry))
         return true;
     if (ResolvConf::Directive::Nameserver != entry.record.directive)
-        return Error(entry.source + ": unsupported nameserver syntax", EBADMSG);
+        return Error(entry.source + ": resolv.conf unsupported nameserver syntax", EBADMSG);
     const auto& span = entry.projections.front().token;
     if (collection.items.size() >= policy.occurrences || collection.items.size() >= policy.values)
         return Error("Nameserver value limit exceeded", E2BIG);
