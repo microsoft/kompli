@@ -271,7 +271,7 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateCloseFailurePrecedesE
     const auto result = AuditShellTimeout(mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EIO, result.Error().code);
-    EXPECT_EQ("Failed to close data descriptor", result.Error().message);
+    EXPECT_EQ("Cannot close readable file", result.Error().message);
     EXPECT_EQ(1, closes);
     EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }

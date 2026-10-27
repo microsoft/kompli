@@ -383,7 +383,7 @@ TEST(FileObjectCollectorTest, SelectionFailureDefersToExplicitCloseError)
     const auto result = ComplianceEngine::CollectNameserverObject(context, path, policy);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
-    EXPECT_EQ("Failed to close data descriptor", result.Error().message);
+    EXPECT_EQ("Cannot close readable file", result.Error().message);
     EXPECT_EQ(1, closes);
 }
 
@@ -429,7 +429,7 @@ TEST(FileObjectCollectorTest, MalformedEvidenceDefersToReachedReadAndCloseFailur
     result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
-    EXPECT_EQ("Failed to close data descriptor", result.Error().message);
+    EXPECT_EQ("Cannot close readable file", result.Error().message);
     EXPECT_EQ(2, dataCloses);
 }
 
@@ -941,7 +941,7 @@ TEST(FileObjectCollectorTest, DataCloseFailureAfterSuccessfulPinCloseIsAnError)
     context.SetLogHandle(nullptr);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EBADF, result.Error().code);
-    EXPECT_EQ("Failed to close data descriptor", result.Error().message);
+    EXPECT_EQ("Cannot close readable file", result.Error().message);
     EXPECT_EQ(1, pinCloses);
     EXPECT_EQ(1, dataCloses);
     const auto text = ReadLog(logPath);

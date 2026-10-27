@@ -144,6 +144,6 @@ TEST_F(ValidShellsTest, CloseFailureAfterEofIsAnError)
     auto failed = ListValidShells(context);
     ASSERT_FALSE(failed.HasValue());
     EXPECT_EQ(EIO, failed.Error().code);
-    EXPECT_EQ("Failed to close data descriptor", failed.Error().message);
+    EXPECT_EQ("Cannot close readable file", failed.Error().message);
     EXPECT_EQ(1, closes);
 }
