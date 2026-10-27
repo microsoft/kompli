@@ -56,7 +56,7 @@ enum class Directive
 
 enum class Status
 {
-    Parsed,     // Syntax-only decode; NOT evidence of glibc availability/effect.
+    Parsed,     // Token-only decode; NOT record validity, aggregate completion or glibc effect.
     Unverified, // Manual leaves byte grammar or profile behavior open.
     Invalid,
     Unknown
@@ -85,7 +85,6 @@ struct Projection
     ValueKind kind = ValueKind::SearchName;
     Status status = Status::Unverified;
     Span token;
-    std::size_t record = 0;
     // For parsed address/sort pair: 4 or 16 bytes; 0 otherwise. The optional
     // sort mask has its own presence bit; an omitted mask is not fabricated.
     std::size_t addressBytes = 0;
@@ -114,7 +113,9 @@ struct Diagnostic
 
 // One owned physical entry and all of its evidence. Spans use physical entry
 // numbers, so consumers may retain or discard each result independently.
-// Projection::record is the zero-based physical entry index, as before.
+// A projection's token identifies its entry (1-based line). Parsed projections
+// may coexist with a malformed record or diagnostics: inspect the whole Entry
+// before using any projection, and require successful Finish for completion.
 struct Entry
 {
     std::string source; // Owned source identity; valid after Parser destruction.
@@ -122,6 +123,18 @@ struct Entry
     Record record;
     std::vector<Projection> projections;
     std::vector<Diagnostic> diagnostics;
+    // True when any malformed diagnostic was emitted, even if a token decoded.
+    // False is NOT a certification of supported grammar or resolver behavior.
+    bool hasMalformedEvidence = false;
+};
+
+// This is the caller's REPORT, not a fact independently verified by Parser.
+// EofAndClosed requires a real EOF and a successful checked Close; an early
+// break is Incomplete. Forward read/Close failures as Error instead.
+enum class Acquisition
+{
+    EofAndClosed,
+    Incomplete
 };
 
 // Feed LF-stripped physical entries one at a time (e.g. FileReader::Lines
@@ -137,15 +150,16 @@ class Parser
 public:
     explicit Parser(std::string source, Limits limits = {});
     Result<Entry> Next(std::string text);
-    // Call only after reaching verified EOF and checking Close. Pass true
-    // only if both succeeded; forward any acquisition/read/Close Error here,
-    // or false for incomplete iteration (EIO). The parser cannot observe
-    // unseen input, verify EOF or close an external reader itself. Empty
-    // input succeeds only when the caller confirms completion. Repeated
-    // Finish is idempotent unless Next is illegally called after completion,
-    // in which case that EINVAL becomes sticky.
+    // Call once after EOF and checked Close, or report incomplete iteration
+    // or an acquisition Error. The parser cannot observe unseen input or
+    // independently verify EOF/Close. Empty input requires the same report.
+    // Repeated Finish is misuse (EINVAL); a later reported Error supersedes
+    // an earlier success, but cannot revoke evidence already published.
+    // Earlier parser/acquisition errors remain sticky.
+    // Example: for each read value call Next(value); after EOF check Close;
+    // then Finish(Acquisition::EofAndClosed), or Finish(read/Close Error).
     // EINVAL: zero budget/invalid call; E2BIG: exceeded budget.
-    Result<bool> Finish(Result<bool> acquisition);
+    Result<bool> Finish(Result<Acquisition> acquisition);
 
 private:
     std::string mSource;

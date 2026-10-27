@@ -1,0 +1,4 @@
+nameserver 192.0.2.1
+nameserver 2001:db8::1
+search first.example
+search second.example

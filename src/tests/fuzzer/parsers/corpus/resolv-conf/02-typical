@@ -1,0 +1,4 @@
+# local resolver
+nameserver 2001:db8::1
+search example.org example.net
+options ndots:2 rotate

@@ -29,6 +29,8 @@ Result<bool> Note(Entry& entry, std::size_t& diagnosticCount, const Limits& limi
     if (diagnosticCount >= limits.diagnostics)
         return LimitError(source, "diagnostic");
     entry.diagnostics.push_back({kind, span, message});
+    if (kind == DiagnosticKind::Malformed)
+        entry.hasMalformedEvidence = true;
     ++diagnosticCount;
     return true;
 }
@@ -66,15 +68,13 @@ unsigned int NumericCap(const std::string& name)
     return 0;
 }
 
-Result<bool> Project(Entry& entry, std::size_t& diagnosticCount, const Limits& limits, const std::string& source, Span span)
+Result<bool> Project(Entry& entry, std::size_t& diagnosticCount, const Limits& limits, const std::string& source, Directive directive, Span span)
 {
-    const auto& record = entry.record;
     const auto value = Text(entry, span);
     Projection projection;
-    projection.record = record.line - 1;
     projection.token = span;
 
-    if (record.directive == Directive::Nameserver)
+    if (directive == Directive::Nameserver)
     {
         projection.kind = ValueKind::Nameserver;
         if (Address(value, AF_INET, projection.address))
@@ -95,12 +95,12 @@ Result<bool> Project(Entry& entry, std::size_t& diagnosticCount, const Limits& l
                 return noted.Error();
         }
     }
-    else if (record.directive == Directive::Search || record.directive == Directive::Domain)
+    else if (directive == Directive::Search || directive == Directive::Domain)
     {
-        projection.kind = record.directive == Directive::Search ? ValueKind::SearchName : ValueKind::DomainName;
+        projection.kind = directive == Directive::Search ? ValueKind::SearchName : ValueKind::DomainName;
         projection.status = Status::Unverified; // Domain-name byte grammar is not specified by the manual.
     }
-    else if (record.directive == Directive::Sortlist)
+    else if (directive == Directive::Sortlist)
     {
         projection.kind = ValueKind::SortPair;
         const auto slash = value.find('/');
@@ -242,6 +242,7 @@ Result<bool> Analyze(Entry& entry, const Limits& limits, const std::string& sour
         record.directive = Directive::Malformed;
         return Note(entry, diagnosticCount, limits, source, DiagnosticKind::Malformed, {lineNumber, line.size() + 1, 0}, "missing directive operand");
     }
+    const auto recognized = record.directive;
     if ((record.directive == Directive::Nameserver || record.directive == Directive::Domain) && record.tokens.size() > 2)
     {
         auto noted = Note(entry, diagnosticCount, limits, source, DiagnosticKind::Malformed, record.tokens[2], "extra directive operand");
@@ -250,20 +251,15 @@ Result<bool> Analyze(Entry& entry, const Limits& limits, const std::string& sour
         record.directive = Directive::Malformed;
         // Still project the first value without claiming the entire line is valid.
     }
-    const auto directive = key;
     for (std::size_t i = 1; i < record.tokens.size(); ++i)
     {
         // Extra operands remain tokens and diagnostics, never interpreted as
         // valid nameserver/domain values.
-        if ((directive == "nameserver" || directive == "domain") && i > 1)
+        if ((recognized == Directive::Nameserver || recognized == Directive::Domain) && i > 1)
             continue;
-        if (record.directive == Directive::Malformed)
-            record.directive = directive == "nameserver" ? Directive::Nameserver : Directive::Domain;
-        auto projected = Project(entry, diagnosticCount, limits, source, record.tokens[i]);
+        auto projected = Project(entry, diagnosticCount, limits, source, recognized, record.tokens[i]);
         if (!projected.HasValue())
             return projected.Error();
-        if ((directive == "nameserver" || directive == "domain") && record.tokens.size() > 2)
-            record.directive = Directive::Malformed;
     }
     return true;
 }
@@ -309,14 +305,19 @@ Result<Entry> Parser::Next(std::string text)
     return entry;
 }
 
-Result<bool> Parser::Finish(Result<bool> acquisition)
+Result<bool> Parser::Finish(Result<Acquisition> acquisition)
 {
-    if (!mCompletion.HasValue() || mFinished)
+    if (!mCompletion.HasValue())
         return mCompletion;
+    if (mFinished)
+    {
+        mCompletion = !acquisition.HasValue() ? std::move(acquisition).Error() : Error(mSource + ": resolv.conf repeated finalization", EINVAL);
+        return mCompletion;
+    }
     mFinished = true;
     if (!acquisition.HasValue())
         mCompletion = std::move(acquisition).Error();
-    else if (!acquisition.Value())
+    else if (acquisition.Value() != Acquisition::EofAndClosed)
         mCompletion = Error(mSource + ": resolv.conf input not fully acquired", EIO);
     return mCompletion;
 }

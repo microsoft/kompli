@@ -1,0 +1,4 @@
+nameserver
+ nameserver 192.0.2.1
+domain a b
+options
