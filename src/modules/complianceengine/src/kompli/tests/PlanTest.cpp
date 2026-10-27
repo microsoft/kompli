@@ -833,6 +833,30 @@ TEST(ValidatePlanForRunTest, RejectsUnknownOrInvalidParameter)
     EXPECT_TRUE(ValidatePlanForRun(plan, {document}, MakeDistribution()).HasValue());
 }
 
+TEST(ValidatePlanForRunTest, EmptyParameterValueRespectsDefinitionRegex)
+{
+    auto strictDocument = ParseDocument(kParameterizedBenchmarkJson);
+    auto optionalDocument = ParseDocument(kParameterizedBenchmarkJson);
+    optionalDocument.resources[0].parameterMetadata["mountPoint"].validationRegex = std::string("^(/[a-zA-Z0-9/_.-]+)?$");
+
+    ComplianceEngine::Kompli::Plan plan;
+    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    benchmark.file = "bench.json";
+    benchmark.version = {"1", "0", "0"};
+    benchmark.versionConstraint = "^1.0.0";
+    ComplianceEngine::Kompli::PlanRuleMode rule(ToggleMode::Audit);
+    rule.parameters["mountPoint"] = "";
+    benchmark.rules["1.1.1.1"] = rule;
+    plan.benchmarks.push_back(benchmark);
+
+    EXPECT_EQ(plan.benchmarks[0].rules.at("1.1.1.1").parameters.at("mountPoint"), "");
+    EXPECT_FALSE(ValidatePlanForRun(plan, {optionalDocument}, MakeDistribution()).HasValue());
+    auto error = ValidatePlanForRun(plan, {strictDocument}, MakeDistribution());
+    ASSERT_TRUE(error.HasValue());
+    EXPECT_EQ(error.Value().code, EINVAL);
+    EXPECT_NE(error.Value().message.find("does not match its required pattern"), std::string::npos);
+}
+
 TEST(ValidatePlanForRunTest, RejectsMissingMandatoryParameter)
 {
     auto document = ParseDocument(kParameterizedBenchmarkJson);
@@ -897,6 +921,32 @@ TEST(ValidatePlanForRunTest, GatesContentVersionBeforeEvaluatingRules)
     plan.benchmarks[0].version = {};
     plan.benchmarks[0].versionConstraint.clear();
     EXPECT_TRUE(checkVersion("1.0.0"));
+}
+
+TEST(ValidatePlanForRunTest, RejectsMalformedOrMismatchedVersionConstraintsWithoutFilesystem)
+{
+    auto document = ParseDocument(kBenchmarkJson);
+    ComplianceEngine::Kompli::Plan plan;
+    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    benchmark.file = "bench.json";
+    benchmark.version = {"1", "0", "0"};
+    benchmark.versionConstraint = "^1.0.0";
+    benchmark.rules["unknown"] = ComplianceEngine::Kompli::PlanRuleMode(ToggleMode::Audit);
+    plan.benchmarks.push_back(benchmark);
+
+    for (const std::string constraint : {"", "^", "^2.0.0", "~1.0.1", "1.0", "^1.0.0 || 2.0.0"})
+    {
+        plan.benchmarks[0].versionConstraint = constraint;
+        auto error = ValidatePlanForRun(plan, {document}, MakeDistribution());
+        ASSERT_TRUE(error.HasValue()) << constraint;
+        EXPECT_EQ(error.Value().code, EINVAL) << constraint;
+        EXPECT_NE(error.Value().message.find("Invalid versionConstraint"), std::string::npos) << constraint;
+    }
+
+    plan.benchmarks[0].versionConstraint = "^1.0.0";
+    auto error = ValidatePlanForRun(plan, {document}, MakeDistribution());
+    ASSERT_TRUE(error.HasValue());
+    EXPECT_NE(error.Value().message.find("Unknown rule"), std::string::npos);
 }
 
 TEST(CheckUniqueBenchmarkIdentitiesTest, AcceptsDistinctIdentities)

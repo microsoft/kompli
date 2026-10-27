@@ -121,6 +121,33 @@ TEST(JUnitRendererTest, BenchmarkClassnameEncodingPreventsDelimiterCollisions)
     EXPECT_TRUE(Contains(result.Value(), "classname=\"3:cis6:ubuntu5:22.047:v1:part4:rule\""));
 }
 
+TEST(JUnitRendererTest, RejectsEscapedNulInEveryBenchmarkClassnameComponent)
+{
+    const std::string benchmark = R"("framework":"cis","distribution":"ubuntu","distributionVersion":"22.04","benchmarkVersion":"v1")";
+    const std::string prefix = R"({"rules":[{"benchmark":{)";
+    const std::string suffix = R"(},"id":"1","title":"R","status":"Compliant"}]})";
+    auto baseline = RenderJUnit(prefix + benchmark + suffix, "s");
+    ASSERT_TRUE(baseline.HasValue()) << baseline.Error().message;
+    EXPECT_TRUE(Contains(baseline.Value(), "classname=\"3:cis6:ubuntu5:22.042:v11:1\""));
+
+    // Every distinct decoded provenance must either encode distinctly or fail,
+    // never silently truncate to the baseline classname.
+    for (const char* key : {"framework", "distribution", "distributionVersion", "benchmarkVersion"})
+    {
+        std::string malformed = benchmark;
+        const std::string field = "\"" + std::string(key) + "\":\"";
+        const auto start = malformed.find(field);
+        ASSERT_NE(std::string::npos, start) << key;
+        const auto end = malformed.find('"', start + field.size());
+        ASSERT_NE(std::string::npos, end) << key;
+        malformed.insert(end, R"(\u0000suffix)");
+        auto result = RenderJUnit(prefix + malformed + suffix, "s");
+        ASSERT_FALSE(result.HasValue()) << key;
+        EXPECT_EQ(EINVAL, result.Error().code) << key;
+        EXPECT_TRUE(Contains(result.Error().message, key)) << result.Error().message;
+    }
+}
+
 TEST(JUnitRendererTest, NonCompliantRuleHasFailureWithIndicatorBody)
 {
     const std::string json = R"({"rules":[{"id":"2.3","title":"Rule B title","ruleName":"RuleB","status":"NonCompliant",)"
