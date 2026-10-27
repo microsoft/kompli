@@ -29,26 +29,32 @@ TEST(JUnitRendererTest, EmptyRulesProduceEmptySuite)
 TEST(JUnitRendererTest, FormatterOutputPreservesIdentityTitleTagsAndCounts)
 {
     using namespace ComplianceEngine;
-    auto formatter = BenchmarkFormatters::BenchmarkFormatter::Begin(DistributionInfo{}, Action::Audit);
+    auto formatter = BenchmarkFormatters::BenchmarkFormatter::Begin(DistributionInfo{});
     ASSERT_TRUE(formatter.HasValue());
     BenchmarkIO::Resource entry;
+    entry.benchmarkInfo.framework = "cis";
+    entry.benchmarkInfo.distribution = LinuxDistribution::Ubuntu;
+    entry.benchmarkInfo.version = "22.04";
+    entry.benchmarkInfo.benchmarkVersion = "v2.0.0";
     entry.id = "1.1";
     entry.ruleId = "stable-1";
     entry.ruleName = "RuleName";
     entry.resourceID = "Human <title>";
     entry.tags = {"level:l1", "owner:Ops & Sec"};
-    ASSERT_FALSE(formatter.Value().AddEntry(entry, Status::Compliant, "[]", {}).HasValue());
+    ASSERT_FALSE(formatter.Value().AddEntry(entry, Status::Compliant, "[]", {}, Action::Audit).HasValue());
     entry.id = "1.2";
-    ASSERT_FALSE(formatter.Value().AddEntry(entry, Status::NonCompliant, "[]", {}).HasValue());
+    ASSERT_FALSE(formatter.Value().AddEntry(entry, Status::NonCompliant, "[]", {}, Action::Audit).HasValue());
+    entry.id = "1.3";
+    ASSERT_FALSE(formatter.Value().AddSkippedEntry(entry, {}).HasValue());
     auto json = std::move(formatter.Value()).Finish(Status::NonCompliant);
     ASSERT_TRUE(json.HasValue());
     auto rendered = RenderJUnit(json.Value(), "suite");
     ASSERT_TRUE(rendered.HasValue()) << rendered.Error().message;
-    EXPECT_TRUE(Contains(rendered.Value(), "classname=\"1.1\""));
+    EXPECT_TRUE(Contains(rendered.Value(), "classname=\"3:cis6:ubuntu5:22.046:v2.0.03:1.1\""));
     EXPECT_TRUE(Contains(rendered.Value(), "name=\"Human &lt;title&gt;\""));
     EXPECT_TRUE(Contains(rendered.Value(), "<tag value=\"level:l1\"/>"));
     EXPECT_TRUE(Contains(rendered.Value(), "<tag value=\"owner:Ops &amp; Sec\"/>"));
-    EXPECT_TRUE(Contains(rendered.Value(), "tests=\"2\" failures=\"1\" skipped=\"0\""));
+    EXPECT_TRUE(Contains(rendered.Value(), "tests=\"3\" failures=\"1\" skipped=\"1\""));
 }
 
 TEST(JUnitRendererTest, RejectsNulSuffixedAndNonStringStatuses)
@@ -87,6 +93,59 @@ TEST(JUnitRendererTest, CompliantRuleIsBarePassingTestcase)
     EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"1.1\" name=\"Rule A title\"/>"));
     EXPECT_FALSE(Contains(r.Value(), "<failure"));
     EXPECT_TRUE(Contains(r.Value(), "tests=\"1\" failures=\"0\""));
+}
+
+TEST(JUnitRendererTest, BenchmarkProvenanceDisambiguatesSameRuleId)
+{
+    const std::string json = R"({"rules":[)"
+                             R"({"benchmark":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04","benchmarkVersion":"v2.0.0"},)"
+                             R"("id":"1.1","title":"Same title","ruleName":"SameRule","status":"Compliant","indicators":[]},)"
+                             R"({"benchmark":{"framework":"stig","distribution":"ubuntu","distributionVersion":"22.04","benchmarkVersion":"v1.0.0"},)"
+                             R"("id":"1.1","title":"Same title","ruleName":"SameRule","status":"Compliant","indicators":[]}]})";
+    auto result = RenderJUnit(json, "s");
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_TRUE(Contains(result.Value(), "classname=\"3:cis6:ubuntu5:22.046:v2.0.03:1.1\""));
+    EXPECT_TRUE(Contains(result.Value(), "classname=\"4:stig6:ubuntu5:22.046:v1.0.03:1.1\""));
+}
+
+TEST(JUnitRendererTest, BenchmarkClassnameEncodingPreventsDelimiterCollisions)
+{
+    const std::string json = R"({"rules":[)"
+                             R"({"benchmark":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04","benchmarkVersion":"v1"},)"
+                             R"("id":"part:rule","title":"First","ruleName":"SameRule","status":"Compliant","indicators":[]},)"
+                             R"({"benchmark":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04","benchmarkVersion":"v1:part"},)"
+                             R"("id":"rule","title":"Second","ruleName":"SameRule","status":"Compliant","indicators":[]}]})";
+    auto result = RenderJUnit(json, "s");
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_TRUE(Contains(result.Value(), "classname=\"3:cis6:ubuntu5:22.042:v19:part:rule\""));
+    EXPECT_TRUE(Contains(result.Value(), "classname=\"3:cis6:ubuntu5:22.047:v1:part4:rule\""));
+}
+
+TEST(JUnitRendererTest, RejectsEscapedNulInEveryBenchmarkClassnameComponent)
+{
+    const std::string benchmark = R"("framework":"cis","distribution":"ubuntu","distributionVersion":"22.04","benchmarkVersion":"v1")";
+    const std::string prefix = R"({"rules":[{"benchmark":{)";
+    const std::string suffix = R"(},"id":"1","title":"R","status":"Compliant"}]})";
+    auto baseline = RenderJUnit(prefix + benchmark + suffix, "s");
+    ASSERT_TRUE(baseline.HasValue()) << baseline.Error().message;
+    EXPECT_TRUE(Contains(baseline.Value(), "classname=\"3:cis6:ubuntu5:22.042:v11:1\""));
+
+    // Every distinct decoded provenance must either encode distinctly or fail,
+    // never silently truncate to the baseline classname.
+    for (const char* key : {"framework", "distribution", "distributionVersion", "benchmarkVersion"})
+    {
+        std::string malformed = benchmark;
+        const std::string field = "\"" + std::string(key) + "\":\"";
+        const auto start = malformed.find(field);
+        ASSERT_NE(std::string::npos, start) << key;
+        const auto end = malformed.find('"', start + field.size());
+        ASSERT_NE(std::string::npos, end) << key;
+        malformed.insert(end, R"(\u0000suffix)");
+        auto result = RenderJUnit(prefix + malformed + suffix, "s");
+        ASSERT_FALSE(result.HasValue()) << key;
+        EXPECT_EQ(EINVAL, result.Error().code) << key;
+        EXPECT_TRUE(Contains(result.Error().message, key)) << result.Error().message;
+    }
 }
 
 TEST(JUnitRendererTest, NonCompliantRuleHasFailureWithIndicatorBody)
