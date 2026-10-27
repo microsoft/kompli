@@ -11,6 +11,32 @@
 #include <new>
 #include <utility>
 
+#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
+// Only the isolated allocation-fault test builds this translation unit with
+// instrumentation. The ordinary library never arms an allocator interceptor.
+extern "C" void ArmFilesystemCollectionRootCopy(std::size_t bytes) noexcept;
+extern "C" void DisarmFilesystemCollectionRootCopy() noexcept;
+
+class ScopedRootCopyAllocationFault
+{
+public:
+    explicit ScopedRootCopyAllocationFault(std::size_t bytes) noexcept
+    {
+        ArmFilesystemCollectionRootCopy(bytes);
+    }
+
+    ~ScopedRootCopyAllocationFault() noexcept
+    {
+        DisarmFilesystemCollectionRootCopy();
+    }
+
+    void Disarm() noexcept
+    {
+        DisarmFilesystemCollectionRootCopy();
+    }
+};
+#endif
+
 namespace ComplianceEngine
 {
 namespace
@@ -161,7 +187,13 @@ Result<ResolvedFilesystemCollectionRequest> ResolveFilesystemCollectionRequest(c
     try
     {
         ResolvedFilesystemCollectionRequest resolved;
+#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
+        ScopedRootCopyAllocationFault copyFault(request.rootPath.size() + 1);
+#endif
         resolved.rootPath = request.rootPath;
+#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
+        copyFault.Disarm();
+#endif
         resolved.rootKind = request.rootKind;
         resolved.direction = request.direction;
         resolved.maxDepth = request.maxDepth;

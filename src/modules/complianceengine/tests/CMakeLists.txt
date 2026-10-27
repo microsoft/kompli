@@ -123,6 +123,25 @@ target_link_libraries(complianceenginetests
     parsonlib
 )
 
+# A separate process links a test-instrumented copy of the real resolver.
+# The linker-wrapped allocator cannot affect the normal test executable.
+add_executable(filesystem-collection-allocation-test
+    FilesystemCollectionAllocationTest.cpp
+    ../src/lib/filesystem/FilesystemCollection.cpp
+)
+target_compile_definitions(filesystem-collection-allocation-test PRIVATE KOMPLI_TEST_ROOT_COPY_ALLOCATION=1)
+target_link_options(filesystem-collection-allocation-test PRIVATE "LINKER:--wrap=_Znwm")
+target_link_libraries(filesystem-collection-allocation-test PRIVATE
+    OpenSSL::Crypto
+    GTest::gtest_main
+    GTest::gmock
+    complianceenginelib
+    logging
+    commonutils
+    parsonlib
+)
+gtest_discover_tests(filesystem-collection-allocation-test XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR})
+
 add_library(file_regex_match_fallback_compile OBJECT ../src/lib/procedures/FileRegexMatch.cpp)
 target_compile_definitions(file_regex_match_fallback_compile PRIVATE USE_REGEX_FALLBACK=1)
 target_include_directories(file_regex_match_fallback_compile PRIVATE $<TARGET_PROPERTY:complianceenginelib,INCLUDE_DIRECTORIES>)
