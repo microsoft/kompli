@@ -5,6 +5,7 @@
 #define COMPLIANCEENGINE_FILE_READER_HPP
 
 #include "Result.h"
+#include "filesystem/FilesystemPolicy.hpp"
 
 #include <cstddef>
 #include <iterator>
@@ -18,11 +19,6 @@ class ContextInterface;
 
 namespace FileReader
 {
-enum class SymlinksPolicy
-{
-    FollowFinal,
-    RejectFinal
-};
 
 // The context must outlive the range. Iterators are valid only while their
 // range remains alive and unmoved; Close invalidates them. A range is a
@@ -43,7 +39,8 @@ struct Limits
 
 struct Policy
 {
-    SymlinksPolicy symlinks = SymlinksPolicy::FollowFinal;
+    // Applies to the final component only; DoNotFollow rejects a link with ELOOP.
+    ComplianceEngine::SymlinkFollowing symlinks = ComplianceEngine::SymlinkFollowing::Follow;
     Limits limits;
 };
 
@@ -87,7 +84,10 @@ public:
     {
         return {};
     }
-    // Idempotent, including failures: both descriptors are attempted once.
+    // Idempotent, including failures: the data descriptor is attempted once.
+    // Failed closes log the source path and descriptor error once, even when
+    // Close is called again. Destruction also closes and logs if needed;
+    // the context (and its log handle) must outlive the range.
     // Success means closure succeeded, not that an early-stopped read verified EOF.
     ComplianceEngine::Result<bool> Close();
 
@@ -99,7 +99,12 @@ private:
     friend ComplianceEngine::Result<LinesRange> Lines(const ComplianceEngine::ContextInterface&, std::string, Policy);
 };
 
-// Validates, pins, opens and checks identity before returning; reads no bytes.
+// Acquires an absolute path from the filesystem root with bounded, checked
+// descriptor-backed resolution. Intermediate links can be followed; Policy
+// controls only the final link. Mount crossing remains allowed. Activates a
+// readable file from the final pin, verifies identity, then checks release of
+// all acquisition pins before returning. Reads no content bytes. The range
+// owns only the independently activated readable file.
 ComplianceEngine::Result<LinesRange> Lines(const ComplianceEngine::ContextInterface& context, std::string path, Policy policy = Policy{});
 } // namespace FileReader
 
