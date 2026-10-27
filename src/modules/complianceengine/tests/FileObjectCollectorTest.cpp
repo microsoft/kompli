@@ -186,7 +186,7 @@ TEST(FileObjectCollectorTest, ZeroMatchesRemainACompleteEmptyCollection)
 TEST(FileObjectCollectorTest, MissingNameserverOperandFailsWithOrWithoutFinalLf)
 {
     NiceMock<MockContext> context;
-    for (const auto& content : {"nameserver", "nameserver\n", "nameserver ", "nameserver \n", "nameserver \t\n", "nameserver\r\n"})
+    for (const auto& content : {"nameserver ", "nameserver \n", "nameserver \t\n"})
     {
         const auto path = context.MakeTempfile(content);
         const auto result = ComplianceEngine::CollectNameserverObject(context, path);
@@ -201,7 +201,7 @@ TEST(FileObjectCollectorTest, MissingOperandDoesNotCaptureAcrossLines)
     NiceMock<MockContext> context;
     const std::string content =
         "# nameserver ignored\n"
-        "nameserver\n"
+        "nameserver \n"
         " \t\n"
         " 198.51.100.1\n"
         "nameserver 192.0.2.1\n";
@@ -221,8 +221,7 @@ TEST(FileObjectCollectorTest, MissingOperandDoesNotCaptureAcrossLines)
 TEST(FileObjectCollectorTest, MalformedUnrelatedKnownRecordsAlsoFail)
 {
     NiceMock<MockContext> context;
-    for (const auto& unrelated :
-        {" search indented\n", "search\n", "options ndots:bad\r\n", "domain a b\n", "sortlist bad/255.0.0.0\n", "options rotate:extra\n"})
+    for (const auto& unrelated : {"options ndots:bad\r\n", "sortlist bad/255.0.0.0\n"})
     {
         const auto path = context.MakeTempfile(std::string("nameserver 192.0.2.1\n") + unrelated + "nameserver 2001:db8::1\n");
         const auto rejected = ComplianceEngine::CollectNameserverObject(context, path);
@@ -234,8 +233,7 @@ TEST(FileObjectCollectorTest, MalformedUnrelatedKnownRecordsAlsoFail)
     ASSERT_TRUE(accepted.HasValue());
     EXPECT_EQ((std::vector<std::string>{"192.0.2.1", "2001:db8::1"}), Captures(accepted.Value()));
 
-    for (const auto& invalid : {"nameserver bad", "nameserver 192.0.2.1 extra", "nameserver 192.0.2.1 # inline", "nameserver 192.0.2.1\r",
-             "nameserver 192.0.2.1 # inline\r", " nameserver 192.0.2.1", "\tnameserver 192.0.2.1", "nameserver invalid"})
+    for (const auto& invalid : {"nameserver bad", "nameserver 192.0.2.1\r", "nameserver 192.0.2.1#inline", "nameserver invalid"})
     {
         const auto path = context.MakeTempfile(std::string("nameserver 198.51.100.1\n") + invalid + "\n");
         const auto result = ComplianceEngine::CollectNameserverObject(context, path);
@@ -243,6 +241,23 @@ TEST(FileObjectCollectorTest, MalformedUnrelatedKnownRecordsAlsoFail)
         EXPECT_EQ(EBADMSG, result.Error().code) << invalid;
         EXPECT_NE(std::string::npos, result.Error().message.find(path + ": resolv.conf")) << invalid;
     }
+}
+
+TEST(FileObjectCollectorTest, GlibcLexingIgnoresUnmatchedLinesAndTrailingNameserverText)
+{
+    NiceMock<MockContext> context;
+    const auto path = context.MakeTempfile(
+        " nameserver 192.0.2.99\n"
+        "nameserver\n"
+        "nameserver\r\n"
+        "nameserverx 192.0.2.88\n"
+        "search # no inline comment\n"
+        "nameserver 192.0.2.1 # ignored; still raw evidence\n"
+        "nameserver\t2001:db8::1 ; ignored\n");
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_TRUE(result.Value().complete);
+    EXPECT_EQ((std::vector<std::string>{"192.0.2.1", "2001:db8::1"}), Captures(result.Value()));
 }
 
 TEST(FileObjectCollectorTest, ParserLineEntryAndTokenBudgetsRejectUnrelatedContent)

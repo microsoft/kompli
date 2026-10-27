@@ -13,28 +13,14 @@ namespace ComplianceEngine
 {
 namespace
 {
-// The parser rejects known malformed syntax. Retain the conservative
-// classification for unknown spellings such as "nameserver\r".
-bool NameserverEvidence(const ResolvConf::Entry& entry)
-{
-    if (ResolvConf::Directive::Nameserver == entry.record.directive)
-        return true;
-    if (ResolvConf::Directive::Unknown != entry.record.directive)
-        return false;
-    const auto first = entry.text.find_first_not_of(" \t");
-    if (std::string::npos == first || 0 != entry.text.compare(first, sizeof("nameserver") - 1, "nameserver"))
-        return false;
-    const auto next = first + sizeof("nameserver") - 1;
-    return next == entry.text.size() || ' ' == entry.text[next] || '\t' == entry.text[next] || '\r' == entry.text[next];
-}
-
 Result<bool> AppendNameserver(const ResolvConf::Entry& entry, const FileCollectionPolicy& policy, std::size_t& capturedBytes,
     VariableResolution::ObjectCollection& collection)
 {
-    if (!NameserverEvidence(entry))
-        return true;
+    // Only first-column, space/tab-delimited directives match glibc's lexer.
+    // Unknown spellings (including indentation and bare keywords) are not
+    // nameserver evidence; the parser retains their original bytes.
     if (ResolvConf::Directive::Nameserver != entry.record.directive)
-        return Error(entry.source + ": resolv.conf unsupported nameserver syntax", EBADMSG);
+        return true;
     const auto& span = entry.projections.front().token;
     if (collection.items.size() >= policy.occurrences || collection.items.size() >= policy.values)
         return Error("Nameserver value limit exceeded", E2BIG);

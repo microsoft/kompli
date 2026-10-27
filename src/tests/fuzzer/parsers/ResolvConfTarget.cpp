@@ -68,6 +68,19 @@ void CheckEntry(const rc::Entry& entry, const std::string& supplied, std::size_t
     }
     Require(entry.record.directive != rc::Directive::Nameserver ||
         ((entry.projections.size() == 1) && (entry.projections.front().status == rc::Status::Parsed)));
+    if ((entry.record.directive == rc::Directive::Nameserver) || (entry.record.directive == rc::Directive::Domain))
+        Require(entry.projections.size() <= 1);
+    if ((entry.record.directive == rc::Directive::Unknown) && (supplied.find(" nameserver") == 0))
+        Require(entry.projections.empty());
+    if (entry.record.directive == rc::Directive::Sortlist)
+    {
+        const auto terminator = supplied.find(';');
+        if (terminator != std::string::npos)
+        {
+            for (const auto& projection : entry.projections)
+                Require(projection.token.column - 1 + projection.token.length <= terminator);
+        }
+    }
 }
 
 void SameEntry(const rc::Entry& left, const rc::Entry& right)
@@ -219,6 +232,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     {
         Run("search example.org\r\n", generous);
         Run("nameserver 192.0.2.3", generous);
+        Run("nameserver 192.0.2.3 #ignored\n nameserver ignored\nsortlist 192.0.2.0&255.255.255.0; ignored\n", generous);
     }
 
     rc::Limits tight;

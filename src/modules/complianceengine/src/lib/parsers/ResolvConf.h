@@ -74,7 +74,7 @@ struct Record
 {
     Directive directive = Directive::Blank;
     std::size_t line = 0;
-    std::vector<Span> tokens; // Keyword first; raw trivia remains in the owning entry.
+    std::vector<Span> tokens; // Keyword first; ignored trailing words and trivia remain in the owning entry.
 };
 
 struct Projection
@@ -122,9 +122,13 @@ enum class Acquisition
 // Until Finish succeeds every returned entry is provisional, NOT a completed
 // aggregate result. A fatal error is sticky and the failing entry is not
 // published; previously emitted entries cannot be retroactively revoked.
-// Space/tab are provisional separators. Only first-column # and ; are
-// comments. Unknown/unverified evidence is retained; known malformed syntax
-// fails Next with a sticky EBADMSG Error instead of publishing a partial entry.
+// glibc 2.39 resolv/res_init.c is the lexical reference:
+// https://github.com/bminor/glibc/blob/glibc-2.39/resolv/res_init.c
+// Only first-column
+// space/tab-delimited keywords match; first-column # and ; are comments.
+// Unknown/unverified evidence is retained, including ignored trailing text.
+// Recognized malformed values fail Next with a sticky EBADMSG Error instead
+// of publishing a partial entry (unlike glibc's runtime ignore/fallback).
 class Parser
 {
 public:

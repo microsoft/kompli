@@ -4,6 +4,7 @@
 #include "ResolvConf.h"
 
 #include <StringTools.h>
+#include <algorithm>
 #include <arpa/inet.h>
 #include <cerrno>
 #include <utility>
@@ -43,10 +44,13 @@ bool Address(const std::string& text, int family, std::array<unsigned char, 16>&
 
 bool Flag(const std::string& text)
 {
-    static const char* const flags[] = {"debug", "rotate", "no-aaaa", "no-check-names", "inet6", "ip6-bytestring", "ip6-dotint", "no-ip6-dotint",
-        "edns0", "single-request", "single-request-reopen", "no-tld-query", "use-vc", "no-reload", "trust-ad"};
+    // res_setoptions in glibc 2.39 compares known flag prefixes, with the
+    // longer single-request spelling checked first. Other spellings remain
+    // unknown evidence, even if an older manual mentions them.
+    static const char* const flags[] = {
+        "rotate", "edns0", "single-request-reopen", "single-request", "no_tld_query", "no-tld-query", "no-reload", "use-vc", "trust-ad", "no-aaaa"};
     for (const char* flag : flags)
-        if (text == flag)
+        if (0 == text.compare(0, std::string(flag).size(), flag))
             return true;
     return false;
 }
@@ -92,11 +96,11 @@ Result<bool> Project(Entry& entry, const std::string& source, Directive directiv
     else if (directive == Directive::Sortlist)
     {
         projection.kind = ValueKind::SortPair;
-        const auto slash = value.find('/');
-        const auto host = value.substr(0, slash);
-        const auto mask = slash == std::string::npos ? std::string() : value.substr(slash + 1);
-        projection.hasMask = slash != std::string::npos;
-        if (projection.hasMask && (mask.empty() || mask.find('/') != std::string::npos))
+        const auto separator = value.find_first_of("/&");
+        const auto host = value.substr(0, separator);
+        const auto mask = separator == std::string::npos ? std::string() : value.substr(separator + 1);
+        projection.hasMask = separator != std::string::npos;
+        if (projection.hasMask && (mask.empty() || mask.find_first_of("/&") != std::string::npos))
             return Malformed(source, "invalid sortlist address or netmask");
         if (Address(host, AF_INET, projection.address) && (!projection.hasMask || Address(mask, AF_INET, projection.mask)))
         {
@@ -139,8 +143,6 @@ Result<bool> Project(Entry& entry, const std::string& source, Directive directiv
             projection.kind = ValueKind::FlagOption;
             projection.status = Status::Parsed; // Availability/deprecation NOT resolved.
         }
-        else if (colon != std::string::npos && Flag(name))
-            return Malformed(source, "flag option has an operand");
         else
         {
             projection.kind = ValueKind::UnknownOption;
@@ -167,8 +169,6 @@ Result<bool> Analyze(Entry& entry, const Limits& limits, const std::string& sour
         record.directive = Directive::Comment;
         return true;
     }
-    if (Separator(line[0]))
-        return Malformed(source, "keyword not in first column");
     for (std::size_t i = 0; i < line.size();)
     {
         if (Separator(line[i]))
@@ -184,31 +184,52 @@ Result<bool> Analyze(Entry& entry, const Limits& limits, const std::string& sour
         record.tokens.push_back({record.line, start + 1, i - start});
         ++tokenCount;
     }
+    // glibc 2.39's MATCH requires an exact first-column keyword immediately
+    // followed by a literal space or tab. Indented and bare keywords (and
+    // CR-separated spellings) are unmatched, not malformed directives.
+    if (record.tokens.empty() || Separator(line[0]))
+    {
+        record.directive = Directive::Unknown;
+        return true;
+    }
     const auto key = Text(entry, record.tokens.front());
-    if (key == "nameserver")
+    if (key == "nameserver" && key.size() < line.size() && Separator(line[key.size()]))
         record.directive = Directive::Nameserver;
-    else if (key == "search")
+    else if (key == "search" && key.size() < line.size() && Separator(line[key.size()]))
         record.directive = Directive::Search;
-    else if (key == "domain")
+    else if (key == "domain" && key.size() < line.size() && Separator(line[key.size()]))
         record.directive = Directive::Domain;
-    else if (key == "sortlist")
+    else if (key == "sortlist" && key.size() < line.size() && Separator(line[key.size()]))
         record.directive = Directive::Sortlist;
-    else if (key == "options")
+    else if (key == "options" && key.size() < line.size() && Separator(line[key.size()]))
         record.directive = Directive::Options;
     else
     {
         record.directive = Directive::Unknown;
         return true;
     }
-    if (record.tokens.size() == 1)
+    if (record.directive == Directive::Nameserver && record.tokens.size() == 1)
         return Malformed(source, "missing directive operand");
-    if ((record.directive == Directive::Nameserver || record.directive == Directive::Domain) && record.tokens.size() > 2)
-        return Malformed(source, "extra directive operand");
-    for (std::size_t i = 1; i < record.tokens.size(); ++i)
+    // nameserver and domain read only the first operand; ignored trailing
+    // words remain in record.tokens and entry.text as source evidence.
+    const auto end = (record.directive == Directive::Nameserver || record.directive == Directive::Domain) ? std::min(record.tokens.size(), std::size_t(2)) :
+                                                                                                            record.tokens.size();
+    for (std::size_t i = 1; i < end; ++i)
     {
+        if (record.directive == Directive::Sortlist)
+        {
+            const auto semicolon = Text(entry, record.tokens[i]).find(';');
+            if (semicolon == 0)
+                break;
+            if (semicolon != std::string::npos)
+                record.tokens[i].length = semicolon;
+        }
         auto projected = Project(entry, source, record.directive, record.tokens[i]);
         if (!projected.HasValue())
             return projected.Error();
+        const auto tokenEnd = record.tokens[i].column - 1 + record.tokens[i].length;
+        if (record.directive == Directive::Sortlist && tokenEnd < line.size() && line[tokenEnd] == ';')
+            break;
     }
     return true;
 }

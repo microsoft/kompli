@@ -111,10 +111,10 @@ TEST(ResolvConfTest, AllDirectivesDuplicatesAndNoEffectiveMerge)
     // Caps are documented metadata, not an effective resolver state.
 }
 
-TEST(ResolvConfTest, AllDocumentedFlagsRemainIndividualOrderedEvidence)
+TEST(ResolvConfTest, Glibc239KnownFlagsRemainIndividualOrderedEvidence)
 {
-    const std::vector<std::string> flags = {"debug", "rotate", "no-aaaa", "no-check-names", "inet6", "ip6-bytestring", "ip6-dotint", "no-ip6-dotint",
-        "edns0", "single-request", "single-request-reopen", "no-tld-query", "use-vc", "no-reload", "trust-ad"};
+    const std::vector<std::string> flags = {
+        "rotate", "edns0", "single-request-reopen", "single-request", "no_tld_query", "no-tld-query", "no-reload", "use-vc", "trust-ad", "no-aaaa"};
     std::string line = "options";
     for (const auto& flag : flags)
         line += " " + flag;
@@ -148,9 +148,8 @@ TEST(ResolvConfTest, UnknownAndUnverifiedInputRemainOwnedEvidence)
 
 TEST(ResolvConfTest, MalformedKnownInputFailsNextAndIsSticky)
 {
-    for (const auto& text : {" nameserver 192.0.2.1", "nameserver", "nameserver invalid", "nameserver 192.0.2.1 junk", "nameserver 192.0.2.1 # inline",
-             "nameserver 192.0.2.1\r", "domain a b", "options", "options ndots:", "options ndots:1x", "options attempts:42949672960",
-             "options rotate:extra", "sortlist bad/255.0.0.0", "sortlist 192.0.2.0/", "sortlist 192.0.2.0/255.0.0.0/255.0.0.0"})
+    for (const auto& text : {"nameserver ", "nameserver invalid", "nameserver 192.0.2.1\r", "options ndots:", "options ndots:1x",
+             "options attempts:42949672960", "sortlist bad/255.0.0.0", "sortlist 192.0.2.0/", "sortlist 192.0.2.0/255.0.0.0/255.0.0.0"})
     {
         rc::Parser parser("src");
         ASSERT_TRUE(parser.Next("search example.org").HasValue());
@@ -169,6 +168,95 @@ TEST(ResolvConfTest, MalformedKnownInputFailsNextAndIsSticky)
     rc::Parser later("src");
     ASSERT_TRUE(later.Next("nameserver 192.0.2.1").HasValue());
     EXPECT_EQ(EIO, later.Finish(ComplianceEngine::Error("late Close failure", EIO)).Error().code);
+}
+
+TEST(ResolvConfTest, Glibc239LexerPreservesIgnoredTextAndExactOperands)
+{
+    struct Case
+    {
+        std::string line;
+        rc::Directive directive;
+        std::vector<std::string> operands;
+    };
+    const std::vector<Case> cases = {
+        {"# first-column", rc::Directive::Comment, {}},
+        {"; first-column", rc::Directive::Comment, {}},
+        {" # indented", rc::Directive::Unknown, {}},
+        {"\tnameserver 192.0.2.1", rc::Directive::Unknown, {}},
+        {" nameserver 192.0.2.1", rc::Directive::Unknown, {}},
+        {"nameserver", rc::Directive::Unknown, {}},
+        {"nameserver\r 192.0.2.1", rc::Directive::Unknown, {}},
+        {"nameserverx 192.0.2.1", rc::Directive::Unknown, {}},
+        {"domain", rc::Directive::Unknown, {}},
+        {"search", rc::Directive::Unknown, {}},
+        {"sortlist", rc::Directive::Unknown, {}},
+        {"options", rc::Directive::Unknown, {}},
+        {"nameserver 192.0.2.1 # trailing; unknown", rc::Directive::Nameserver, {"192.0.2.1"}},
+        {"domain example.org # trailing", rc::Directive::Domain, {"example.org"}},
+        {"domain example.org;attached trailing", rc::Directive::Domain, {"example.org;attached"}},
+        {"search one # two; three\r", rc::Directive::Search, {"one", "#", "two;", "three\r"}},
+        {"sortlist 192.0.2.0&255.255.255.0 198.51.100.0/255.255.255.0;end 203.0.113.0", rc::Directive::Sortlist,
+            {"192.0.2.0&255.255.255.0", "198.51.100.0/255.255.255.0"}},
+        {"sortlist 192.0.2.0 ; comment 198.51.100.0", rc::Directive::Sortlist, {"192.0.2.0"}},
+        {"options rotate#x ndots:2 # timeout:3", rc::Directive::Options, {"rotate#x", "ndots:2", "#", "timeout:3"}},
+        {"options rotate;tail no_tld_query:extra", rc::Directive::Options, {"rotate;tail", "no_tld_query:extra"}},
+        {"options debug inet6 mystery", rc::Directive::Options, {"debug", "inet6", "mystery"}},
+        {"options \t", rc::Directive::Options, {}},
+        {"domain \t", rc::Directive::Domain, {}},
+        {"search \t", rc::Directive::Search, {}},
+    };
+    for (const auto& fixture : cases)
+    {
+        SCOPED_TRACE(fixture.line);
+        rc::Parser parser("fixture");
+        auto entry = parser.Next(fixture.line);
+        ASSERT_TRUE(entry.HasValue());
+        EXPECT_EQ("fixture", entry.Value().source);
+        EXPECT_EQ(fixture.line, entry.Value().text);
+        EXPECT_EQ(fixture.directive, entry.Value().record.directive);
+        ASSERT_EQ(fixture.operands.size(), entry.Value().projections.size());
+        for (std::size_t i = 0; i < fixture.operands.size(); ++i)
+        {
+            const auto span = entry.Value().projections[i].token;
+            EXPECT_EQ(1U, span.line);
+            EXPECT_EQ(fixture.operands[i], entry.Value().text.substr(span.column - 1, span.length));
+        }
+        if (fixture.directive == rc::Directive::Nameserver && !fixture.operands.empty())
+        {
+            ASSERT_GT(entry.Value().record.tokens.size(), 2U);
+            const auto trailing = entry.Value().record.tokens[2];
+            EXPECT_EQ("#", entry.Value().text.substr(trailing.column - 1, trailing.length));
+        }
+        if (fixture.line == "options rotate#x ndots:2 # timeout:3")
+        {
+            EXPECT_EQ(rc::ValueKind::FlagOption, entry.Value().projections[0].kind);
+            EXPECT_EQ(rc::ValueKind::NumericOption, entry.Value().projections[1].kind);
+            EXPECT_EQ(2U, entry.Value().projections[1].number);
+            EXPECT_EQ(rc::ValueKind::UnknownOption, entry.Value().projections[2].kind);
+            EXPECT_EQ(rc::ValueKind::NumericOption, entry.Value().projections[3].kind);
+        }
+        if (fixture.line == "options debug inet6 mystery")
+        {
+            for (const auto& projection : entry.Value().projections)
+                EXPECT_EQ(rc::ValueKind::UnknownOption, projection.kind);
+        }
+        if (fixture.directive == rc::Directive::Sortlist && !fixture.operands.empty())
+            EXPECT_EQ(fixture.operands.front().find_first_of("&/") != std::string::npos, entry.Value().projections.front().hasMask);
+        EXPECT_TRUE(parser.Finish(rc::Acquisition::EofAndClosed).HasValue());
+    }
+}
+
+TEST(ResolvConfTest, AttachedBadValuesFailButSeparatedTrailingTextIsIgnored)
+{
+    const std::vector<std::string> bad = {"nameserver 192.0.2.1#tail", "nameserver 192.0.2.1;trailing", "nameserver 192.0.2.1\r",
+        "sortlist 192.0.2.0#attached", "sortlist 192.0.2.0/invalid;tail", "options ndots:2#tail", "options timeout:3;tail"};
+    for (const auto& line : bad)
+    {
+        SCOPED_TRACE(line);
+        rc::Parser parser("fixture");
+        EXPECT_EQ(EBADMSG, parser.Next(line).Error().code);
+        EXPECT_EQ(EBADMSG, parser.Finish(ComplianceEngine::Error("late Close failure", EIO)).Error().code);
+    }
 }
 
 TEST(ResolvConfTest, ExactBudgetBoundariesAndFatalVersusEmpty)
@@ -512,7 +600,7 @@ TEST(ResolvConfTest, CumulativeLimitsAndFailureAreStickyAfterEarlierEvidence)
     rc::Limits limits;
     limits.bytes = 3;
     limits.lineBytes = 2;
-    limits.entries = 3;
+    limits.entries = 4; // Reach the byte limit before the entry limit.
     limits.tokens = 3;
     rc::Parser parser("src", limits);
     auto first = parser.Next("x");
@@ -538,6 +626,7 @@ TEST(ResolvConfTest, CumulativeLimitsAndFailureAreStickyAfterEarlierEvidence)
     EXPECT_NE(std::string::npos, bytes.Next("x").Error().message.find("byte limit"));
     EXPECT_FALSE(bytes.Finish(rc::Acquisition::EofAndClosed).HasValue());
 
+    limits.entries = 3;
     rc::Parser entries("src", limits);
     ASSERT_TRUE(entries.Next("").HasValue());
     ASSERT_TRUE(entries.Next("").HasValue());

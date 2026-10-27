@@ -65,7 +65,7 @@ TEST(NameserverCountTest, ZeroCapturesAndReadFailuresAreErrors)
 TEST(NameserverCountTest, MalformedNameserverEvidenceCannotBecomeACompliantPrefix)
 {
     for (const auto& contents : {"nameserver \n 192.0.2.1\nnameserver 2001:db8::1\n", "nameserver one\nnameserver two\n",
-             "nameserver 192.0.2.1\nnameserver 2001:db8::1\nnameserver invalid\n", "nameserver 192.0.2.1 # inline\nnameserver 2001:db8::1\n"})
+             "nameserver 192.0.2.1\nnameserver 2001:db8::1\nnameserver invalid\n", "nameserver 192.0.2.1#inline\nnameserver 2001:db8::1\n"})
     {
         const auto result = Evaluate(contents);
         ASSERT_FALSE(result.HasValue());
@@ -75,7 +75,7 @@ TEST(NameserverCountTest, MalformedNameserverEvidenceCannotBecomeACompliantPrefi
 
 TEST(NameserverCountTest, MalformedUnrelatedRecordsFailButUnknownRecordsDoNot)
 {
-    for (const auto& unrelated : {"search\n", "options ndots:bad\n", "sortlist invalid\n", " domain indented\n"})
+    for (const auto& unrelated : {"options ndots:bad\n", "sortlist invalid\n"})
     {
         const auto result = Evaluate(std::string("nameserver 192.0.2.1\n") + unrelated + "nameserver 2001:db8::1\n");
         ASSERT_FALSE(result.HasValue()) << unrelated;
@@ -84,6 +84,15 @@ TEST(NameserverCountTest, MalformedUnrelatedRecordsFailButUnknownRecordsDoNot)
     const auto unknown = Evaluate("mystery anything\noptions vendor-option\nnameserver 192.0.2.1\nnameserver 2001:db8::1\n");
     ASSERT_TRUE(unknown.HasValue());
     EXPECT_EQ(Status::Compliant, unknown.Value());
+}
+
+TEST(NameserverCountTest, GlibcLexingIgnoresUnmatchedAndTrailingNameserverText)
+{
+    const auto result = Evaluate(
+        " nameserver invalid\nnameserver\nnameserver 192.0.2.1 #ignored\n"
+        "nameserver 2001:db8::1 ;ignored\n");
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
 }
 
 TEST(NameserverCountTest, RejectsInvalidPathsAndUnknownArguments)
