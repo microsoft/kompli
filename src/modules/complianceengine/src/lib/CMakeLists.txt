@@ -194,6 +194,7 @@ add_library(complianceenginelib STATIC
     LuaProcedures.cpp
     NetworkTools.cpp
     PasswordEntriesIterator.cpp
+    parsers/LoginDefs.cpp
     PasswordCreditUnionEvidence.cpp
     parsers/NameserverSelection.cpp
     Pattern.cpp

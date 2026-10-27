@@ -4,13 +4,13 @@
 #include <Evaluator.h>
 #include <ListValidShells.h>
 #include <Result.h>
-#include <StringTools.h>
 #include <UsersIterator.h>
 #include <fstream>
+#include <parsers/LoginDefs.h>
 #include <set>
 #include <shadow.h>
-#include <sstream>
 #include <sys/stat.h>
+#include <utility>
 
 namespace ComplianceEngine
 {
@@ -50,45 +50,26 @@ Result<uid_t> LoadMinUID(ContextInterface& context)
         return Error(string("Failed to read ") + filename, EINVAL);
     }
 
-    string line;
-    const string keyword = "UID_MIN";
-    while (std::getline(file, line))
+    string contents(LoginDefs::MaxBytes + 1, '\0');
+    file.read(&contents[0], static_cast<std::streamsize>(contents.size()));
+    if (file.bad() || (file.fail() && !file.eof()))
     {
-        auto index = line.find('#');
-        if (string::npos != index)
-        {
-            line = line.substr(0, index);
-        }
-
-        index = line.find(keyword);
-        if (string::npos == index)
-        {
-            continue;
-        }
-
-        string value;
-        line = line.substr(index + keyword.size());
-
-        std::stringstream stream(line);
-        stream >> value;
-
-        auto uid = TryStringToInt(value);
-        if (!uid.HasValue())
-        {
-            OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN value: %s", uid.Error().message.c_str());
-            return uid.Error();
-        }
-
-        if (uid.Value() < 0)
-        {
-            OsConfigLogError(context.GetLogHandle(), "Failed to parse UID_MIN value: must not be negative");
-            return Error("Failed to parse UID_MIN value: must not be negative", EINVAL);
-        }
-
-        return static_cast<uid_t>(uid.Value());
+        OsConfigLogError(context.GetLogHandle(), "Failed to read %s", filename.c_str());
+        return Error(string("Failed to read ") + filename, EIO);
+    }
+    contents.resize(static_cast<size_t>(file.gcount()));
+    const auto parsed = LoginDefs::Parse(std::move(contents), filename, context.GetLogHandle());
+    if (!parsed.HasValue())
+    {
+        OsConfigLogError(context.GetLogHandle(), "Failed to parse %s: %s", filename.c_str(), parsed.Error().message.c_str());
+        return parsed.Error();
+    }
+    if (!parsed.Value().uidMin.HasValue())
+    {
+        return defaultUID;
     }
 
-    return defaultUID;
+    return parsed.Value().uidMin.Value();
 }
 } // anonymous namespace
 
