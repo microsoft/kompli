@@ -17,6 +17,9 @@ class ContextInterface;
 struct FileCollectionPolicy
 {
     SymlinkFollowing rootSymlinks = SymlinkFollowing::Follow;
+    // Acquisition bytes include LF; the parser independently caps entry
+    // length, aggregate entry bytes/count, tokens and diagnostics. The next
+    // four limits bound selected valid address tokens, not raw line captures.
     std::size_t contentBytes = 1024 * 1024;
     std::size_t occurrences = 16384;
     std::size_t captureBytes = 65536;

@@ -82,7 +82,7 @@ bool IsFixtureParent(int fd, const std::string& path)
 TEST(FileObjectCollectorTest, DefaultContextOpenRejectsCreationAndWriteFlags)
 {
     NiceMock<MockContext> context;
-    const auto path = context.MakeTempfile("nameserver unchanged\n");
+    const auto path = context.MakeTempfile("nameserver 192.0.2.1\n");
     const auto missing = context.GetTempdirPath() + "/missing";
     for (const int flags : {O_WRONLY, O_RDWR, O_TRUNC, O_CREAT, O_TMPFILE})
     {
@@ -101,28 +101,27 @@ TEST(FileObjectCollectorTest, DefaultContextOpenRejectsCreationAndWriteFlags)
 
     const auto result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ((std::vector<std::string>{"unchanged"}), Captures(result.Value()));
+    EXPECT_EQ((std::vector<std::string>{"192.0.2.1"}), Captures(result.Value()));
 }
 
-TEST(FileObjectCollectorTest, ProjectsSelectedCapturesWithoutLosingBytesOrDuplicates)
+TEST(FileObjectCollectorTest, ProjectsOrderedAddressTokensWithoutCanonicalDeduplication)
 {
     NiceMock<MockContext> context;
-    std::string content =
-        " nameserver ignored\n"
-        "nameserver 192.0.2.1 # retained\r\n"
-        "nameserver 192.0.2.1 # retained\r\n"
-        "nameserver \n  198.51.100.1\n"
-        "nameserver ";
-    content += std::string("\x80", 1);
-    content += "\nnameserver ";
+    const std::string content =
+        "# first-column comment\r\n"
+        "; another comment\n"
+        "search example.org\r\n"
+        "nameserver\t192.0.2.1  \n"
+        "nameserver 192.0.2.1\n"
+        "nameserver 2001:0db8::1\n"
+        "nameserver 2001:db8::1";
     const auto path = context.MakeTempfile(content);
 
     const auto result = ComplianceEngine::CollectNameserverObject(context, path);
 
     ASSERT_TRUE(result.HasValue());
     EXPECT_TRUE(result.Value().complete);
-    EXPECT_EQ((std::vector<std::string>{"192.0.2.1 # retained\r", "192.0.2.1 # retained\r", "198.51.100.1", std::string("\x80", 1), ""}),
-        Captures(result.Value()));
+    EXPECT_EQ((std::vector<std::string>{"192.0.2.1", "192.0.2.1", "2001:0db8::1", "2001:db8::1"}), Captures(result.Value()));
 }
 
 TEST(FileObjectCollectorTest, NulAfterValidCapturePreventsSelectionAndClosesBothDescriptors)
@@ -178,55 +177,115 @@ TEST(FileObjectCollectorTest, ZeroMatchesRemainACompleteEmptyCollection)
     EXPECT_TRUE(result.Value().items.empty());
 }
 
-TEST(FileObjectCollectorTest, FinalLfDoesNotTurnBareKeywordIntoAnEmptyCapture)
+TEST(FileObjectCollectorTest, MissingNameserverOperandFailsWithOrWithoutFinalLf)
 {
     NiceMock<MockContext> context;
-    for (const auto& content : {"nameserver", "nameserver\n"})
+    for (const auto& content : {"nameserver", "nameserver\n", "nameserver ", "nameserver \n", "nameserver \t\n", "nameserver\r\n"})
     {
         const auto path = context.MakeTempfile(content);
         const auto result = ComplianceEngine::CollectNameserverObject(context, path);
-        ASSERT_TRUE(result.HasValue());
-        EXPECT_TRUE(result.Value().complete);
-        EXPECT_TRUE(result.Value().items.empty());
-    }
-    for (const auto& content : {"nameserver ", "nameserver \n", "nameserver \t\n"})
-    {
-        const auto path = context.MakeTempfile(content);
-        const auto result = ComplianceEngine::CollectNameserverObject(context, path);
-        ASSERT_TRUE(result.HasValue());
-        EXPECT_EQ((std::vector<std::string>{""}), Captures(result.Value()));
+        ASSERT_FALSE(result.HasValue()) << content;
+        EXPECT_EQ(EBADMSG, result.Error().code);
+        EXPECT_NE(std::string::npos, result.Error().message.find(path + ":1:"));
     }
 }
 
-TEST(FileObjectCollectorTest, BlankLinesCrossLineWhitespaceCrLfAndTailRetainRawCaptures)
+TEST(FileObjectCollectorTest, MissingOperandDoesNotCaptureAcrossLines)
 {
     NiceMock<MockContext> context;
     const std::string content =
         "# nameserver ignored\n"
         "nameserver\n"
         " \t\n"
-        "\r\v\fvalue\r\n"
-        "nameserver one\n"
-        "nameserver one\n"
-        "nameserver tail\n"
-        "nameserver \n"
-        "\n";
+        " 198.51.100.1\n"
+        "nameserver 192.0.2.1\n";
     const auto path = context.MakeTempfile(content);
     const auto result = ComplianceEngine::CollectNameserverObject(context, path);
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ((std::vector<std::string>{"value\r", "one", "one", "tail", ""}), Captures(result.Value()));
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBADMSG, result.Error().code);
+    EXPECT_NE(std::string::npos, result.Error().message.find(path + ":2:"));
 
     FileCollectionPolicy limit;
     limit.contentBytes = content.size();
-    EXPECT_TRUE(ComplianceEngine::CollectNameserverObject(context, path, limit).HasValue());
+    EXPECT_EQ(EBADMSG, ComplianceEngine::CollectNameserverObject(context, path, limit).Error().code);
     --limit.contentBytes;
     EXPECT_EQ(E2BIG, ComplianceEngine::CollectNameserverObject(context, path, limit).Error().code);
+}
+
+TEST(FileObjectCollectorTest, RejectsRelevantMalformedEvidenceButNotUnrelatedMalformedLines)
+{
+    NiceMock<MockContext> context;
+    const auto unrelated = context.MakeTempfile(
+        " search indented\n"
+        "search\n"
+        "options ndots:bad\r\n"
+        "unknown \x80\n"
+        "nameserver 192.0.2.1\n"
+        "nameserver 2001:db8::1\n");
+    const auto accepted = ComplianceEngine::CollectNameserverObject(context, unrelated);
+    ASSERT_TRUE(accepted.HasValue());
+    EXPECT_EQ((std::vector<std::string>{"192.0.2.1", "2001:db8::1"}), Captures(accepted.Value()));
+
+    for (const auto& invalid : {"nameserver bad", "nameserver 192.0.2.1 extra", "nameserver 192.0.2.1 # inline", "nameserver 192.0.2.1\r",
+             "nameserver 192.0.2.1 # inline\r", " nameserver 192.0.2.1", "\tnameserver 192.0.2.1", "nameserver invalid"})
+    {
+        const auto path = context.MakeTempfile(std::string("nameserver 198.51.100.1\n") + invalid + "\n");
+        const auto result = ComplianceEngine::CollectNameserverObject(context, path);
+        ASSERT_FALSE(result.HasValue()) << invalid;
+        EXPECT_EQ(EBADMSG, result.Error().code) << invalid;
+        EXPECT_NE(std::string::npos, result.Error().message.find(path + ":2:")) << invalid;
+    }
+}
+
+TEST(FileObjectCollectorTest, ParserLineEntryAndTokenBudgetsRejectUnrelatedContent)
+{
+    NiceMock<MockContext> context;
+    std::string tokenHeavy;
+    for (std::size_t i = 0; i < 8191; ++i)
+        tokenHeavy += "unknown a b c\n";
+    tokenHeavy += "unknown a b c d\n";
+    // Neither a valid prefix nor a large valid address can justify silently
+    // dropping unrelated lines, tokens or their diagnostics.
+    for (const auto& content : {std::string("#") + std::string(16384, 'x') + "\nnameserver 192.0.2.1\n", std::string(8193, '\n') + "nameserver 192.0.2.1\n", tokenHeavy})
+    {
+        const auto path = context.MakeTempfile(content);
+        FileCollectionPolicy policy;
+        policy.contentBytes = content.size();
+        const auto result = ComplianceEngine::CollectNameserverObject(context, path, policy);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(E2BIG, result.Error().code);
+        EXPECT_NE(std::string::npos, result.Error().message.find("resolv.conf"));
+    }
+}
+
+TEST(FileObjectCollectorTest, ParserByteAndDiagnosticBudgetsFailRatherThanPublishPrefix)
+{
+    NiceMock<MockContext> context;
+    std::string bytes;
+    for (std::size_t i = 0; i < 65; ++i)
+        bytes += "#" + std::string(16382, 'x') + "\n";
+    const auto path = context.MakeTempfile(bytes);
+    FileCollectionPolicy policy;
+    policy.contentBytes = bytes.size();
+    const auto exceeded = ComplianceEngine::CollectNameserverObject(context, path, policy);
+    ASSERT_FALSE(exceeded.HasValue());
+    EXPECT_EQ(E2BIG, exceeded.Error().code);
+    EXPECT_NE(std::string::npos, exceeded.Error().message.find("byte limit"));
+
+    // Unverified CR bytes consume diagnostics even on unrelated input.
+    const auto diagnosticsPath = context.MakeTempfile(std::string(8193, '\r'));
+    policy.contentBytes = 8193;
+    const auto diagnostics = ComplianceEngine::CollectNameserverObject(context, diagnosticsPath, policy);
+    ASSERT_FALSE(diagnostics.HasValue());
+    EXPECT_EQ(E2BIG, diagnostics.Error().code);
+    EXPECT_NE(std::string::npos, diagnostics.Error().message.find("diagnostic limit"));
 }
 
 TEST(FileObjectCollectorTest, ContentAndCaptureLimitsFailWithoutPartialPublication)
 {
     NiceMock<MockContext> context;
-    const auto path = context.MakeTempfile("nameserver one\nnameserver two\n");
+    const std::string content = "nameserver 192.0.2.1\nnameserver 198.51.100.1\n";
+    const auto path = context.MakeTempfile(content);
 
     FileCollectionPolicy contentLimit;
     contentLimit.contentBytes = 4;
@@ -235,7 +294,7 @@ TEST(FileObjectCollectorTest, ContentAndCaptureLimitsFailWithoutPartialPublicati
     EXPECT_EQ(E2BIG, result.Error().code);
 
     FileCollectionPolicy aggregateLimit;
-    aggregateLimit.capturedBytes = 5;
+    aggregateLimit.capturedBytes = 15;
     result = ComplianceEngine::CollectNameserverObject(context, path, aggregateLimit);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);
@@ -247,10 +306,10 @@ TEST(FileObjectCollectorTest, ContentAndCaptureLimitsFailWithoutPartialPublicati
     EXPECT_EQ(E2BIG, result.Error().code);
 
     FileCollectionPolicy exactContentLimit;
-    exactContentLimit.contentBytes = std::string("nameserver one\nnameserver two\n").size();
+    exactContentLimit.contentBytes = content.size();
     result = ComplianceEngine::CollectNameserverObject(context, path, exactContentLimit);
     ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ((std::vector<std::string>{"one", "two"}), Captures(result.Value()));
+    EXPECT_EQ((std::vector<std::string>{"192.0.2.1", "198.51.100.1"}), Captures(result.Value()));
 
     FileCollectionPolicy occurrenceLimit;
     occurrenceLimit.occurrences = 1;
@@ -259,7 +318,7 @@ TEST(FileObjectCollectorTest, ContentAndCaptureLimitsFailWithoutPartialPublicati
     EXPECT_EQ(E2BIG, result.Error().code);
 
     FileCollectionPolicy captureLimit;
-    captureLimit.captureBytes = 2;
+    captureLimit.captureBytes = 8;
     result = ComplianceEngine::CollectNameserverObject(context, path, captureLimit);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);
@@ -268,18 +327,18 @@ TEST(FileObjectCollectorTest, ContentAndCaptureLimitsFailWithoutPartialPublicati
 TEST(FileObjectCollectorTest, SelectionFailureDefersToLaterReadError)
 {
     NiceMock<MockContext> context;
-    const auto path = context.MakeTempfile("nameserver too-long\n");
+    const auto path = context.MakeTempfile("nameserver 192.0.2.1\n");
     int reads = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFixture(fd, path, true))
             return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
         if (reads++ == 0)
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 20));
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 21));
         errno = EIO;
         return -1;
     });
     FileCollectionPolicy policy;
-    policy.captureBytes = 1;
+    policy.captureBytes = 8;
 
     const auto result = ComplianceEngine::CollectNameserverObject(context, path, policy);
     ASSERT_FALSE(result.HasValue());
@@ -290,7 +349,7 @@ TEST(FileObjectCollectorTest, SelectionFailureDefersToLaterReadError)
 TEST(FileObjectCollectorTest, SelectionFailureDefersToExplicitCloseError)
 {
     NiceMock<MockContext> context;
-    const auto path = context.MakeTempfile("nameserver too-long\n");
+    const auto path = context.MakeTempfile("nameserver 192.0.2.1\n");
     int closes = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int descriptor) {
         const bool data = IsFixture(descriptor, path, true);
@@ -304,13 +363,59 @@ TEST(FileObjectCollectorTest, SelectionFailureDefersToExplicitCloseError)
         return 0;
     });
     FileCollectionPolicy policy;
-    policy.captureBytes = 1;
+    policy.captureBytes = 8;
 
     const auto result = ComplianceEngine::CollectNameserverObject(context, path, policy);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
     EXPECT_EQ("Failed to close data descriptor", result.Error().message);
     EXPECT_EQ(1, closes);
+}
+
+TEST(FileObjectCollectorTest, MalformedEvidenceDefersToReachedReadAndCloseFailures)
+{
+    NiceMock<MockContext> context;
+    const auto path = context.MakeTempfile("nameserver invalid\nnameserver 192.0.2.1\n");
+    int dataCloses = 0;
+    int reads = 0;
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFixture(fd, path, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        if (reads++ == 0)
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 19));
+        errno = EIO;
+        return -1;
+    });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+        dataCloses += IsFixture(fd, path, true);
+        return context.ContextInterface::CloseFileDescriptor(fd);
+    });
+    auto result = ComplianceEngine::CollectNameserverObject(context, path);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EIO, result.Error().code);
+    EXPECT_EQ("Failed to read file bytes", result.Error().message);
+    EXPECT_EQ(2, reads);
+    EXPECT_EQ(1, dataCloses);
+
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+    });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+        const bool data = IsFixture(fd, path, true);
+        context.ContextInterface::CloseFileDescriptor(fd);
+        if (data)
+        {
+            ++dataCloses;
+            errno = EACCES;
+            return -1;
+        }
+        return 0;
+    });
+    result = ComplianceEngine::CollectNameserverObject(context, path);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EACCES, result.Error().code);
+    EXPECT_EQ("Failed to close data descriptor", result.Error().message);
+    EXPECT_EQ(2, dataCloses);
 }
 
 TEST(FileObjectCollectorTest, RejectPolicyRefusesFinalSymlink)
@@ -342,7 +447,7 @@ TEST(FileObjectCollectorTest, NonregularTargetIsRejected)
 TEST(FileObjectCollectorTest, PinnedDescriptorSurvivesPathReplacement)
 {
     NiceMock<MockContext> context;
-    const auto path = context.MakeTempfile("nameserver original\n");
+    const auto path = context.MakeTempfile("nameserver 192.0.2.1\n");
     const auto pinnedPath = path + ".pinned";
     int replaced = 0;
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
@@ -352,7 +457,7 @@ TEST(FileObjectCollectorTest, PinnedDescriptorSurvivesPathReplacement)
         {
             EXPECT_EQ(0, ::rename(path.c_str(), pinnedPath.c_str()));
             std::ofstream replacement(path);
-            replacement << "nameserver replacement\n";
+            replacement << "nameserver 198.51.100.1\n";
         }
         return status;
     });
@@ -361,7 +466,7 @@ TEST(FileObjectCollectorTest, PinnedDescriptorSurvivesPathReplacement)
 
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(1, replaced);
-    EXPECT_EQ((std::vector<std::string>{"original"}), Captures(result.Value()));
+    EXPECT_EQ((std::vector<std::string>{"192.0.2.1"}), Captures(result.Value()));
 }
 
 TEST(FileObjectCollectorTest, ReadFailureIsAnError)
@@ -409,7 +514,7 @@ TEST(FileObjectCollectorTest, RetryExhaustionAndOverreportedReadsAreErrors)
 TEST(FileObjectCollectorTest, InterruptedReadCanRecoverWithinTheRetryLimit)
 {
     NiceMock<MockContext> context;
-    const std::string content = "nameserver recovered\n";
+    const std::string content = "nameserver 192.0.2.1\n";
     const auto path = context.MakeTempfile(content);
     int reads = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
@@ -432,7 +537,7 @@ TEST(FileObjectCollectorTest, InterruptedReadCanRecoverWithinTheRetryLimit)
     const auto result = ComplianceEngine::CollectNameserverObject(context, path, limits);
 
     ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ((std::vector<std::string>{"recovered"}), Captures(result.Value()));
+    EXPECT_EQ((std::vector<std::string>{"192.0.2.1"}), Captures(result.Value()));
     EXPECT_EQ(3, reads);
 }
 
@@ -544,7 +649,7 @@ TEST(FileObjectCollectorTest, CloseFailureIsAnError)
 TEST(FileObjectCollectorTest, ValidCapturesAreNotPublishedWhenFinalCloseFails)
 {
     NiceMock<MockContext> context;
-    const auto path = context.MakeTempfile("nameserver retained\n");
+    const auto path = context.MakeTempfile("nameserver 192.0.2.1\n");
     int closes = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsFixture(fd, path, true);
@@ -970,7 +1075,7 @@ TEST(FileObjectCollectorTest, PrematureEofWithStableMetadataIsAnError)
 TEST(FileObjectCollectorTest, ResolverPipelineCountsDistinctNameservers)
 {
     NiceMock<MockContext> context;
-    const auto path = context.MakeTempfile("nameserver one\nnameserver one\nnameserver two\n");
+    const auto path = context.MakeTempfile("nameserver 192.0.2.1\nnameserver 192.0.2.1\nnameserver 2001:db8::1\n");
     auto collection = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_TRUE(collection.HasValue());
 
