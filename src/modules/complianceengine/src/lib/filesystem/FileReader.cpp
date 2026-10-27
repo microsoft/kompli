@@ -37,26 +37,15 @@ Filesystem::ResolverLimits AcquisitionLimits()
 {
     return {{4096, 128, 100000, 256, 1024 * 1024, 4096}, 4096, 128, 128};
 }
-
-void LogPinCloseError(const ContextInterface& context, const std::string& path, int error) noexcept
-{
-    try
-    {
-        OsConfigLogError(context.GetLogHandle(), "Failed to close pinned descriptors for %s: %d", path.c_str(), error);
-    }
-    catch (...)
-    {
-        // A diagnostic must never replace the acquisition/activation error.
-    }
-}
 } // namespace
 
 struct LinesRange::State
 {
-    State(const ContextInterface& context, std::string path, Policy policy)
+    State(const ContextInterface& context, std::string path, Policy policy, Filesystem::ReadableFile data)
         : context(context),
           path(std::move(path)),
-          policy(std::move(policy))
+          policy(std::move(policy)),
+          data(std::move(data))
     {
     }
     ~State() noexcept
@@ -65,12 +54,9 @@ struct LinesRange::State
             return;
         try
         {
-            if (data)
-            {
-                auto result = data->Close();
-                if (!result.HasValue())
-                    dataCloseError = result.Error().code;
-            }
+            auto result = data.Close();
+            if (!result.HasValue())
+                dataCloseError = result.Error().code;
         }
         catch (...)
         {
@@ -89,7 +75,7 @@ struct LinesRange::State
     const ContextInterface& context;
     std::string path;
     Policy policy;
-    std::unique_ptr<Filesystem::ReadableFile> data;
+    Filesystem::ReadableFile data;
     struct stat before = {};
     std::string buffer;
     std::size_t position = 0, available = 0, consumed = 0;
@@ -114,12 +100,9 @@ struct LinesRange::State
             closed = true;
             current.reset();
             finished = true;
-            if (data)
-            {
-                auto result = data->Close();
-                if (!result.HasValue())
-                    dataCloseError = result.Error().code;
-            }
+            auto result = data.Close();
+            if (!result.HasValue())
+                dataCloseError = result.Error().code;
             finalized = true;
             LogCloseErrors();
         }
@@ -134,7 +117,7 @@ struct LinesRange::State
         finished = true;
     }
 
-    Result<bool> Open()
+    static Result<std::unique_ptr<State>> Open(const ContextInterface& context, std::string path, Policy policy)
     {
         if (path.empty() || path.front() != '/' || path.find('\0') != std::string::npos)
             return Error("A NUL-free absolute file path is required", EINVAL);
@@ -142,20 +125,22 @@ struct LinesRange::State
             return Error("Invalid symlink policy", EINVAL);
         if (!policy.limits.maxBytes || !policy.limits.maxInterruptedReads)
             return Error("File byte and retry limits must be positive", EINVAL);
-        if (policy.limits.maxBytes >= pending.max_size())
+        if (policy.limits.maxBytes >= std::string().max_size())
             return Error("File byte limit is not representable", EOVERFLOW);
         auto acquired =
             Filesystem::Path::AcquireRoot(context, "/", {Filesystem::SymlinkPolicy::Reject, Filesystem::MountPolicy::AllowCrossing}, AcquisitionLimits());
         if (!acquired.HasValue())
             return std::move(acquired).Error();
         auto& pins = acquired.Value();
+        std::unique_ptr<State> state;
         // A primary acquisition/activation error wins over cleanup failures.
         // Close still attempts every hidden acquisition pin and reports its
         // first failure; log it when another error already owns the result.
-        auto fail = [&](Error primary) -> Result<bool> {
+        auto fail = [&](Error primary) -> Result<std::unique_ptr<State>> {
             auto closed = pins.Close();
             if (!closed.HasValue())
-                LogPinCloseError(context, path, closed.Error().code);
+                OsConfigLogError(context.GetLogHandle(), "Failed to close pinned descriptors for %s: %d", (state ? state->path : path).c_str(),
+                    closed.Error().code);
             return primary;
         };
         for (std::size_t start = 1; start < path.size();)
@@ -179,21 +164,21 @@ struct LinesRange::State
         auto opened = pins.Leaf().OpenReadOnly(AcquisitionLimits().shared.fdinfoBytes);
         if (!opened.HasValue())
             return fail(std::move(opened).Error());
-        data.reset(new Filesystem::ReadableFile(std::move(opened).Value()));
-        auto inspected = data->Inspect();
+        state.reset(new State(context, std::move(path), std::move(policy), std::move(opened).Value()));
+        auto inspected = state->data.Inspect();
         if (!inspected.HasValue())
             return fail(std::move(inspected).Error());
-        before = inspected.Value();
+        state->before = inspected.Value();
         const auto held = pins.Leaf().Snapshot();
-        if (held.st_dev != before.st_dev || held.st_ino != before.st_ino || !S_ISREG(before.st_mode))
+        if (held.st_dev != state->before.st_dev || held.st_ino != state->before.st_ino || !S_ISREG(state->before.st_mode))
             return fail(Error("Pinned file identity changed", EAGAIN));
         auto closed = pins.Close();
         if (!closed.HasValue())
         {
-            LogPinCloseError(context, path, closed.Error().code);
+            OsConfigLogError(context.GetLogHandle(), "Failed to close pinned descriptors for %s: %d", state->path.c_str(), closed.Error().code);
             return Error("Failed to close pinned descriptor", closed.Error().code);
         }
-        return true;
+        return std::move(state);
     }
 
     void Complete()
@@ -203,7 +188,7 @@ struct LinesRange::State
             Fail(Error("File ended before its stable size", EIO));
             return;
         }
-        auto after = data->Inspect();
+        auto after = data.Inspect();
         if (!after.HasValue())
         {
             Fail(Error("Failed to verify data descriptor", after.Error().code));
@@ -232,7 +217,7 @@ struct LinesRange::State
                 // from excess, without buffering any excess content.
                 const std::size_t remaining = policy.limits.maxBytes - consumed;
                 const std::size_t requested = std::min(std::size_t(8192), remaining ? remaining : std::size_t(1));
-                auto chunk = data->Read(requested);
+                auto chunk = data.Read(requested);
                 if (!chunk.HasValue())
                 {
                     const int error = chunk.Error().code;
@@ -339,10 +324,9 @@ Result<bool> LinesRange::Close()
 }
 Result<LinesRange> Lines(const ContextInterface& context, std::string path, Policy policy)
 {
-    std::unique_ptr<LinesRange::State> state(new LinesRange::State(context, std::move(path), std::move(policy)));
-    auto opened = state->Open();
+    auto opened = LinesRange::State::Open(context, std::move(path), std::move(policy));
     if (!opened.HasValue())
         return std::move(opened).Error();
-    return LinesRange(std::move(state));
+    return LinesRange(std::move(opened).Value());
 }
 } // namespace FileReader
