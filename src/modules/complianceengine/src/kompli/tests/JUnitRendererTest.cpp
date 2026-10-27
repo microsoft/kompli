@@ -6,6 +6,7 @@
 #include <RuleFilters.hpp>
 #include <cerrno>
 #include <gtest/gtest.h>
+#include <pugixml.hpp>
 #include <string>
 
 using ComplianceEngine::Kompli::RenderJUnit;
@@ -23,9 +24,16 @@ TEST(JUnitRendererTest, EmptyRulesProduceEmptySuite)
 {
     auto r = RenderJUnit(R"({"action":"Audit","rules":[]})", "mysuite");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
-    EXPECT_TRUE(Contains(r.Value(), "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
-    EXPECT_TRUE(Contains(r.Value(), "<testsuite name=\"mysuite\" tests=\"0\" failures=\"0\" skipped=\"0\">"));
-    EXPECT_TRUE(Contains(r.Value(), "</testsuites>"));
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(r.Value().c_str(), pugi::parse_default | pugi::parse_declaration));
+    EXPECT_EQ(std::string("UTF-8"), xml.first_child().attribute("encoding").value());
+    auto suite = xml.child("testsuites").child("testsuite");
+    ASSERT_TRUE(suite);
+    EXPECT_EQ(std::string("mysuite"), suite.attribute("name").value());
+    EXPECT_EQ(0u, suite.attribute("tests").as_uint());
+    EXPECT_EQ(0u, suite.attribute("failures").as_uint());
+    EXPECT_EQ(0u, suite.attribute("skipped").as_uint());
+    EXPECT_FALSE(suite.first_child());
 }
 
 TEST(JUnitRendererTest, FormatterOutputPreservesIdentityTitleTagsAndCounts)
@@ -53,9 +61,23 @@ TEST(JUnitRendererTest, FormatterOutputPreservesIdentityTitleTagsAndCounts)
     auto rendered = RenderJUnit(json.Value(), "suite");
     ASSERT_TRUE(rendered.HasValue()) << rendered.Error().message;
     EXPECT_TRUE(Contains(rendered.Value(), "classname=\"3:cis6:ubuntu5:22.046:v2.0.03:1.1\""));
-    EXPECT_TRUE(Contains(rendered.Value(), "name=\"Human &lt;title&gt;\""));
-    EXPECT_TRUE(Contains(rendered.Value(), "<tag value=\"level:l1\"/>"));
-    EXPECT_TRUE(Contains(rendered.Value(), "<tag value=\"owner:Ops &amp; Sec\"/>"));
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(rendered.Value().c_str()));
+    auto suite = xml.child("testsuites").child("testsuite");
+    EXPECT_EQ(3u, suite.attribute("tests").as_uint());
+    EXPECT_EQ(1u, suite.attribute("failures").as_uint());
+    EXPECT_EQ(1u, suite.attribute("skipped").as_uint());
+    auto testcase = suite.child("testcase");
+    ASSERT_TRUE(testcase);
+    EXPECT_EQ(std::string("Human <title>"), testcase.attribute("name").value());
+    auto tag = testcase.child("tags").child("tag");
+    ASSERT_TRUE(tag);
+    EXPECT_EQ(std::string("level:l1"), tag.attribute("value").value());
+    ASSERT_TRUE(tag.next_sibling("tag"));
+    EXPECT_EQ(std::string("owner:Ops & Sec"), tag.next_sibling("tag").attribute("value").value());
+    EXPECT_FALSE(tag.next_sibling("tag").next_sibling("tag"));
+    EXPECT_TRUE(testcase.next_sibling("testcase").child("failure"));
+    EXPECT_TRUE(testcase.next_sibling("testcase").next_sibling("testcase").child("skipped"));
     EXPECT_TRUE(Contains(rendered.Value(), "tests=\"3\" failures=\"1\" skipped=\"1\""));
 }
 
@@ -92,7 +114,12 @@ TEST(JUnitRendererTest, CompliantRuleIsBarePassingTestcase)
     const std::string json = R"({"rules":[{"id":"1.1","title":"Rule A title","ruleName":"RuleA","status":"Compliant","indicators":[]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
-    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"1.1\" name=\"Rule A title\"/>"));
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(r.Value().c_str()));
+    auto testcase = xml.child("testsuites").child("testsuite").child("testcase");
+    EXPECT_EQ(std::string("1.1"), testcase.attribute("classname").value());
+    EXPECT_EQ(std::string("Rule A title"), testcase.attribute("name").value());
+    EXPECT_FALSE(testcase.first_child());
     EXPECT_FALSE(Contains(r.Value(), "<failure"));
     EXPECT_TRUE(Contains(r.Value(), "tests=\"1\" failures=\"0\""));
 }
@@ -104,8 +131,17 @@ TEST(JUnitRendererTest, IdenticalTitlesAndEngineNamesKeepDistinctTestcaseIds)
                              R"({"id":"SV-2","title":"Same title","ruleName":"SameTitle","status":"NonCompliant","indicators":[]}]})";
     auto result = RenderJUnit(json, "s");
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    EXPECT_TRUE(Contains(result.Value(), "<testcase classname=\"SV-1\" name=\"Same title\"/>"));
-    EXPECT_TRUE(Contains(result.Value(), "<testcase classname=\"SV-2\" name=\"Same title\">"));
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(result.Value().c_str()));
+    auto testcase = xml.child("testsuites").child("testsuite").child("testcase");
+    ASSERT_TRUE(testcase);
+    EXPECT_EQ(std::string("SV-1"), testcase.attribute("classname").value());
+    EXPECT_FALSE(testcase.first_child());
+    testcase = testcase.next_sibling("testcase");
+    ASSERT_TRUE(testcase);
+    EXPECT_EQ(std::string("SV-2"), testcase.attribute("classname").value());
+    EXPECT_EQ(std::string("Same title"), testcase.attribute("name").value());
+    EXPECT_TRUE(testcase.child("failure"));
     EXPECT_TRUE(Contains(result.Value(), "tests=\"2\" failures=\"1\""));
 }
 
@@ -169,8 +205,15 @@ TEST(JUnitRendererTest, NonCompliantRuleHasFailureWithIndicatorBody)
                              R"("indicators":[{"message":"bad thing","status":"NonCompliant"}]}]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
-    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"2.3\" name=\"Rule B title\">"));
-    EXPECT_TRUE(Contains(r.Value(), "<failure message=\"Rule is non-compliant\" type=\"NonCompliant\">"));
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(r.Value().c_str()));
+    auto testcase = xml.child("testsuites").child("testsuite").child("testcase");
+    EXPECT_EQ(std::string("2.3"), testcase.attribute("classname").value());
+    EXPECT_EQ(std::string("Rule B title"), testcase.attribute("name").value());
+    auto failure = testcase.child("failure");
+    ASSERT_TRUE(failure);
+    EXPECT_EQ(std::string("Rule is non-compliant"), failure.attribute("message").value());
+    EXPECT_EQ(std::string("NonCompliant"), failure.attribute("type").value());
     // ruleName (the PascalCase engine name) moves into the body, not the name attribute.
     EXPECT_TRUE(Contains(r.Value(), "Rule: RuleB"));
     EXPECT_TRUE(Contains(r.Value(), "Indicators:"));
@@ -208,12 +251,14 @@ TEST(JUnitRendererTest, XmlSpecialCharsAreEscapedInAttributesAndBody)
                              R"("indicators":[{"message":"m<&>\"'","status":"NonCompliant"}]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
-    EXPECT_TRUE(Contains(r.Value(), "classname=\"1&amp;1\""));
-    EXPECT_TRUE(Contains(r.Value(), "name=\"A &amp; B &lt;c&gt; &quot;d&quot;\""));
-    // Body content is escaped too.
-    EXPECT_TRUE(Contains(r.Value(), "m&lt;&amp;&gt;&quot;&apos;"));
-    // No raw unescaped angle brackets from the rule data leak into the document.
-    EXPECT_FALSE(Contains(r.Value(), "<c>"));
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(r.Value().c_str()));
+    auto testcase = xml.child("testsuites").child("testsuite").child("testcase");
+    ASSERT_TRUE(testcase);
+    EXPECT_EQ(std::string("1&1"), testcase.attribute("classname").value());
+    EXPECT_EQ(std::string("A & B <c> \"d\""), testcase.attribute("name").value());
+    EXPECT_TRUE(Contains(testcase.child("failure").child_value(), "m<&>\"'"));
+    EXPECT_FALSE(xml.child("testsuites").child("c"));
 }
 
 TEST(JUnitRendererTest, SuiteNameIsEscaped)
@@ -227,10 +272,56 @@ TEST(JUnitRendererTest, AttributeWhitespaceUsesCharacterReferences)
 {
     auto r = RenderJUnit(R"({"rules":[{"id":"1\t2","title":"A\nB\rC","status":"Compliant","tags":["axis:x\ty"]}]})", "S\tN\nR");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
-    EXPECT_TRUE(Contains(r.Value(), "classname=\"1&#9;2\""));
-    EXPECT_TRUE(Contains(r.Value(), "name=\"A&#10;B&#13;C\""));
-    EXPECT_TRUE(Contains(r.Value(), "<tag value=\"axis:x&#9;y\"/>"));
-    EXPECT_TRUE(Contains(r.Value(), "<testsuite name=\"S&#9;N&#10;R\""));
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(r.Value().c_str()));
+    auto suite = xml.child("testsuites").child("testsuite");
+    ASSERT_TRUE(suite);
+    EXPECT_EQ(std::string("S\tN\nR"), suite.attribute("name").value());
+    auto testcase = suite.child("testcase");
+    ASSERT_TRUE(testcase);
+    EXPECT_EQ(std::string("1\t2"), testcase.attribute("classname").value());
+    EXPECT_EQ(std::string("A\nB\rC"), testcase.attribute("name").value());
+    EXPECT_EQ(std::string("axis:x\ty"), testcase.child("tags").child("tag").attribute("value").value());
+}
+
+TEST(JUnitRendererTest, UnicodeAndFailureBodyRoundTripWithoutExtraWhitespace)
+{
+    const std::string json = R"({"rules":[{"id":"\u03B1","title":"\u00E9\uD83D\uDE00","ruleName":"AuditRule","status":"NonCompliant",)"
+                             R"("parameters":{"first":"one","second":"two"},"indicators":[{"message":"a\u0001b","status":"NonCompliant"},)"
+                             R"({"message":"\u00E9\uD83D\uDE00","status":"Compliant"}]}]})";
+    auto result = RenderJUnit(json, "s");
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(result.Value().c_str()));
+    auto testcase = xml.child("testsuites").child("testsuite").child("testcase");
+    EXPECT_EQ(std::string("\xCE\xB1"), testcase.attribute("classname").value());
+    EXPECT_EQ(std::string("\xC3\xA9\xF0\x9F\x98\x80"), testcase.attribute("name").value());
+    auto failure = testcase.child("failure");
+    ASSERT_TRUE(failure);
+    EXPECT_EQ(std::string("Rule: AuditRule\n\nParameters:\n  - first: one\n  - second: two\n\nIndicators:\n"
+                          "  - a b [NonCompliant]\n  - \xC3\xA9\xF0\x9F\x98\x80 [Compliant]\n"),
+        failure.child_value());
+}
+
+TEST(JUnitRendererTest, IndicatorDepthLimitIsPreserved)
+{
+    std::string indicator = R"({"message":"excluded","status":"Compliant"})";
+    for (size_t depth = 0; depth < 16; ++depth)
+    {
+        indicator = R"({"message":"visible","status":"Compliant","indicators":[)" + indicator + "]}";
+    }
+    auto result = RenderJUnit(R"({"rules":[{"id":"1","title":"R","status":"NonCompliant","indicators":[)" + indicator + R"(]}]})", "s");
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(result.Value().c_str()));
+    const std::string body = xml.child("testsuites").child("testsuite").child("testcase").child("failure").child_value();
+    EXPECT_FALSE(Contains(body, "excluded"));
+    size_t count = 0;
+    for (size_t pos = body.find("- visible"); pos != std::string::npos; pos = body.find("- visible", pos + 1))
+    {
+        ++count;
+    }
+    EXPECT_EQ(16u, count);
 }
 
 TEST(JUnitRendererTest, MixedRulesCountFailuresCorrectly)
@@ -267,7 +358,9 @@ TEST(JUnitRendererTest, NotApplicableRuleIsSkipped)
                              R"("indicators":[{"message":"n/a on this distro","status":"NotApplicable"}]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
-    EXPECT_TRUE(Contains(r.Value(), "<skipped message=\"Rule is not applicable\">"));
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(r.Value().c_str()));
+    EXPECT_EQ(std::string("Rule is not applicable"), xml.child("testsuites").child("testsuite").child("testcase").child("skipped").attribute("message").value());
     EXPECT_TRUE(Contains(r.Value(), "- n/a on this distro [NotApplicable]"));
     EXPECT_TRUE(Contains(r.Value(), "skipped=\"1\""));
     EXPECT_FALSE(Contains(r.Value(), "<failure"));
@@ -278,8 +371,15 @@ TEST(JUnitRendererTest, SkippedStatusRendersAsSkipped)
     const std::string json = R"({"rules":[{"id":"4.2","title":"Rule title","ruleName":"RuleName","status":"Skipped","indicators":[]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
-    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"4.2\" name=\"Rule title\">"));
-    EXPECT_TRUE(Contains(r.Value(), "<skipped message=\"Rule was skipped\">Rule: RuleName"));
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(r.Value().c_str()));
+    auto testcase = xml.child("testsuites").child("testsuite").child("testcase");
+    EXPECT_EQ(std::string("4.2"), testcase.attribute("classname").value());
+    EXPECT_EQ(std::string("Rule title"), testcase.attribute("name").value());
+    auto skipped = testcase.child("skipped");
+    ASSERT_TRUE(skipped);
+    EXPECT_EQ(std::string("Rule was skipped"), skipped.attribute("message").value());
+    EXPECT_TRUE(Contains(skipped.child_value(), "Rule: RuleName"));
     EXPECT_TRUE(Contains(r.Value(), "tests=\"1\" failures=\"0\" skipped=\"1\""));
     EXPECT_FALSE(Contains(r.Value(), "<failure"));
 }
@@ -290,11 +390,13 @@ TEST(JUnitRendererTest, TagsAreRenderedAsTagsBlock)
                              R"("tags":["level:l1","severity:critical"],"indicators":[]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
-    EXPECT_TRUE(Contains(r.Value(), "<tags>"));
-    EXPECT_TRUE(Contains(r.Value(), "<tag value=\"level:l1\"/>"));
-    EXPECT_TRUE(Contains(r.Value(), "<tag value=\"severity:critical\"/>"));
-    EXPECT_TRUE(Contains(r.Value(), "</tags>"));
-    EXPECT_TRUE(Contains(r.Value(), "</testcase>"));
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(r.Value().c_str()));
+    auto tags = xml.child("testsuites").child("testsuite").child("testcase").child("tags");
+    ASSERT_TRUE(tags);
+    auto tag = tags.child("tag");
+    EXPECT_EQ(std::string("level:l1"), tag.attribute("value").value());
+    EXPECT_EQ(std::string("severity:critical"), tag.next_sibling("tag").attribute("value").value());
 }
 
 TEST(JUnitRendererTest, TagsAreRenderedAndEscapedForEachStatus)
@@ -305,13 +407,23 @@ TEST(JUnitRendererTest, TagsAreRenderedAndEscapedForEachStatus)
                              R"({"id":"3","title":"Skip","ruleName":"SkipRule","status":"NotApplicable","tags":["level:l2"],"indicators":[]}]})";
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
-    EXPECT_TRUE(Contains(r.Value(), "<tag value=\"level:l1\"/>"));
-    EXPECT_TRUE(Contains(r.Value(), "<tag value=\"axis:a&amp;&lt;&quot;\"/>"));
-    EXPECT_TRUE(Contains(r.Value(), "<tag value=\"severity:critical\"/>"));
-    EXPECT_TRUE(Contains(r.Value(), "<tag value=\"level:l2\"/>"));
-    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"1\" name=\"Pass\">\n    <tags>"));
-    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"2\" name=\"Fail\">\n    <tags>"));
-    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"3\" name=\"Skip\">\n    <tags>"));
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(r.Value().c_str()));
+    auto testcase = xml.child("testsuites").child("testsuite").child("testcase");
+    ASSERT_TRUE(testcase);
+    EXPECT_EQ(std::string("1"), testcase.attribute("classname").value());
+    EXPECT_EQ(std::string("level:l1"), testcase.child("tags").child("tag").attribute("value").value());
+    EXPECT_EQ(std::string("axis:a&<\""), testcase.child("tags").child("tag").next_sibling("tag").attribute("value").value());
+    testcase = testcase.next_sibling("testcase");
+    ASSERT_TRUE(testcase);
+    EXPECT_EQ(std::string("2"), testcase.attribute("classname").value());
+    EXPECT_EQ(std::string("severity:critical"), testcase.child("tags").child("tag").attribute("value").value());
+    EXPECT_TRUE(testcase.child("failure"));
+    testcase = testcase.next_sibling("testcase");
+    ASSERT_TRUE(testcase);
+    EXPECT_EQ(std::string("3"), testcase.attribute("classname").value());
+    EXPECT_EQ(std::string("level:l2"), testcase.child("tags").child("tag").attribute("value").value());
+    EXPECT_TRUE(testcase.child("skipped"));
     EXPECT_TRUE(Contains(r.Value(), "tests=\"3\" failures=\"1\" skipped=\"1\""));
 }
 
@@ -321,7 +433,9 @@ TEST(JUnitRendererTest, AbsentTagsOmitTagsBlock)
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
     EXPECT_FALSE(Contains(r.Value(), "<tags>"));
-    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"1.1\" name=\"R\"/>"));
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(r.Value().c_str()));
+    EXPECT_FALSE(xml.child("testsuites").child("testsuite").child("testcase").first_child());
 }
 
 TEST(JUnitRendererTest, AbsentTagsOmitTagsBlockWithTitle)
@@ -330,7 +444,9 @@ TEST(JUnitRendererTest, AbsentTagsOmitTagsBlockWithTitle)
     auto r = RenderJUnit(json, "s");
     ASSERT_TRUE(r.HasValue()) << r.Error().message;
     EXPECT_FALSE(Contains(r.Value(), "<tags>"));
-    EXPECT_TRUE(Contains(r.Value(), "<testcase classname=\"1.1\" name=\"R\"/>"));
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(r.Value().c_str()));
+    EXPECT_FALSE(xml.child("testsuites").child("testsuite").child("testcase").first_child());
 }
 
 TEST(JUnitRendererTest, RejectsMalformedTagsWithoutMisreportingThem)
@@ -439,11 +555,46 @@ TEST(JUnitRendererTest, RejectsOversizeTagsAndBoundedJUnitOutput)
     EXPECT_EQ(tooLarge.Error().code, EFBIG);
 }
 
+TEST(JUnitRendererTest, ManyShortTagsFitWithinBoundedJUnitOutput)
+{
+    // The old 128-byte-per-node allowance rejected this compact XML, even
+    // though its actual serialization is well below the 16 MiB limit.
+    constexpr size_t tagCount = 66000;
+    std::string tags;
+    tags.reserve(tagCount * 6);
+    for (size_t i = 0; i < tagCount; ++i)
+    {
+        if (i != 0)
+        {
+            tags += ',';
+        }
+        tags += R"("x:a")";
+    }
+    auto result = RenderJUnit(R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":[)" + tags + R"(]}]})", "s");
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_LT(result.Value().size(), 16u * 1024 * 1024);
+
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(result.Value().c_str()));
+    auto testcase = xml.child("testsuites").child("testsuite").child("testcase");
+    ASSERT_TRUE(testcase);
+    EXPECT_EQ(std::string("R"), testcase.attribute("name").value());
+    size_t parsedCount = 0;
+    for (auto tag = testcase.child("tags").child("tag"); tag; tag = tag.next_sibling("tag"))
+    {
+        EXPECT_STREQ("x:a", tag.attribute("value").value());
+        ++parsedCount;
+    }
+    EXPECT_EQ(tagCount, parsedCount);
+}
+
 TEST(JUnitRendererTest, LegacyResultUsesRuleNameWhenTitleIsAbsent)
 {
     auto result = RenderJUnit(R"({"rules":[{"id":"1","ruleName":"LegacyRule","status":"Compliant"}]})", "s");
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    EXPECT_TRUE(Contains(result.Value(), "<testcase classname=\"1\" name=\"LegacyRule\"/>"));
+    pugi::xml_document xml;
+    ASSERT_TRUE(xml.load_string(result.Value().c_str()));
+    EXPECT_EQ(std::string("LegacyRule"), xml.child("testsuites").child("testsuite").child("testcase").attribute("name").value());
     EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","title":null,"ruleName":"R","status":"Compliant"}]})", "s").HasValue());
     EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","status":"Compliant"}]})", "s").HasValue());
 }
