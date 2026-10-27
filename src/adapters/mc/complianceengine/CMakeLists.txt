@@ -4,7 +4,7 @@
 # Compliance module for Linux
 project(OsConfigResourceComplianceEngine)
 if (BUILD_FUZZER)
-    add_link_options("LINKER:-z,defs -shared-libasan")
+    add_link_options("LINKER:-z,defs" "-shared-libasan")
 else (BUILD_FUZZER)
     add_link_options("LINKER:-z,defs")
 endif (BUILD_FUZZER)
