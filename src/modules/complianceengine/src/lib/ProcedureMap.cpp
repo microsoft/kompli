@@ -29,10 +29,10 @@ const char* Bindings<DconfValueParams>::names[] = {"key", "value", "operation"};
 // FileExists.h:15
 const char* Bindings<FileExistsParams>::names[] = {"filename"};
 
-// FilePermissions.h:39
+// FilePermissions.h:40
 const char* Bindings<FilePermissionsParams>::names[] = {"path", "owner", "group", "groupId", "permissions", "mask", "behavior"};
 
-// FilePermissions.h:88
+// FilePermissions.h:104
 const char* Bindings<FilePermissionsCollectionParams>::names[] = {"directory", "recurse", "directoriesOnly", "allFileTypes", "excludeSymlinks", "excludeDirectories", "maximumUid", "maximumGid", "filePattern", "filePatternIsRegex", "owner", "group", "groupId", "permissions", "mask", "behavior"};
 
 // FileRegexMatch.h:82

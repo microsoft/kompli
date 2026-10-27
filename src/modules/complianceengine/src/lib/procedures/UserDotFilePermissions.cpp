@@ -21,6 +21,47 @@ namespace ComplianceEngine
 using std::map;
 using std::string;
 
+namespace
+{
+FilesystemCollectionRequest DotfilePolicy(const string& home)
+{
+    FilesystemCollectionRequest policy(home, FilesystemRootKind::Directory);
+    policy.direction = FilesystemDirection::Down;
+    policy.maxDepth = 32;
+    policy.depthAction = FilesystemDepthAction::Error;
+    policy.scope = FilesystemScope::All;
+    policy.rootFileLinkAction = SymlinkFollowing::Follow;
+    policy.rootDirectoryLinkAction = SymlinkFollowing::Follow;
+    policy.childFileLinkAction = SymlinkFollowing::DoNotFollow;
+    policy.childDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
+    policy.yieldType = FilesystemYieldType::RegularFiles;
+    return policy;
+}
+
+Result<const struct group*> LookupUserGroup(gid_t id, const char* user, ContextInterface& context)
+{
+    errno = 0;
+    const auto* group = getgrgid(id);
+    if (nullptr == group)
+    {
+        const int code = errno ? errno : ENOENT;
+        OsConfigLogError(context.GetLogHandle(), "Failed to get group for user '%s': %s", user, strerror(code));
+        return Error(string("Failed to get group for user: ") + strerror(code), code);
+    }
+    return group;
+}
+
+Result<Status> CloseAfterError(const Error& primary, FTW::FileRange& files, ContextInterface& context)
+{
+    const auto cleanup = files.Close();
+    if (!cleanup.HasValue() && (cleanup.Error().code != primary.code || cleanup.Error().message != primary.message))
+    {
+        OsConfigLogError(context.GetLogHandle(), "Dotfile range cleanup failed after primary error: %s", cleanup.Error().message.c_str());
+    }
+    return primary;
+}
+} // namespace
+
 Result<Status> AuditUserDotFilePermissions(IndicatorsTree& indicators, ContextInterface& context)
 {
     return AuditUserDotFilePermissionsWithPasswdFile(indicators, context, "/etc/passwd");
@@ -52,12 +93,12 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
             continue;
         }
 
-        const auto* group = getgrgid(pwd.pw_gid);
-        if (nullptr == group)
+        const auto groupResult = LookupUserGroup(pwd.pw_gid, pwd.pw_name, context);
+        if (!groupResult.HasValue())
         {
-            OsConfigLogError(context.GetLogHandle(), "Failed to get group for user '%s': %s", pwd.pw_name, strerror(errno));
-            return Error(string("Failed to get group for user: ") + strerror(errno), errno);
+            return groupResult.Error();
         }
+        const auto* group = groupResult.Value();
 
         auto processFile = [pwd, group, &indicators, &context](const FilesystemCollectionEntry& entry) -> Result<Status> {
             const auto& path = entry.path;
@@ -76,7 +117,7 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
 
             Result<Status> result = Status::Compliant;
             // Performs a file permissions check and updates the result in case of error or non-compliance
-            auto checkFile = [pwd, group, &path, &indicators, &context, &result](const mode_t mask) {
+            auto checkFile = [pwd, group, &path, &entry, &indicators, &context, &result](const mode_t mask) {
                 auto groupPattern = Pattern::Make(group->gr_name);
                 if (!groupPattern.HasValue())
                 {
@@ -97,7 +138,7 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
                 params.group = {{std::move(groupPattern.Value())}};
                 params.mask = mask;
                 indicators.Push("AuditFilePermissions");
-                auto subResult = AuditFilePermissions(params, indicators, context);
+                auto subResult = CheckPinnedFilePermissions(params, *entry.LiveHandle(), FilesystemCollectionLimits{}.fullPathBytes, indicators, context);
                 if (!subResult.HasValue())
                 {
                     OsConfigLogError(context.GetLogHandle(), "Failed to check permissions for file '%s': %s", path.c_str(), subResult.Error().message.c_str());
@@ -131,16 +172,9 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
             return result;
         };
 
-        FilesystemCollectionRequest policy(pwd.pw_dir, FilesystemRootKind::Directory);
-        policy.direction = FilesystemDirection::Down;
-        policy.maxDepth = 32;
-        policy.depthAction = FilesystemDepthAction::Error;
-        policy.scope = FilesystemScope::All;
-        policy.rootFileLinkAction = FilesystemLinkAction::Follow;
-        policy.rootDirectoryLinkAction = FilesystemLinkAction::Follow;
-        policy.childFileLinkAction = FilesystemLinkAction::Record;
-        policy.childDirectoryLinkAction = FilesystemLinkAction::Record;
-        policy.yieldType = FilesystemYieldType::RegularFiles;
+        const auto policy = DotfilePolicy(pwd.pw_dir);
+        // The selected home is the accepted root; only live pins, not
+        // diagnostic paths, authorize checks or remediation.
         auto opened = FTW::Files(policy, context);
         if (!opened.HasValue())
         {
@@ -153,12 +187,12 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
         {
             if (!entry.HasValue())
             {
-                return entry.Error();
+                return CloseAfterError(entry.Error(), files, context);
             }
             const auto result = processFile(entry.Value());
             if (!result.HasValue())
             {
-                return result.Error();
+                return CloseAfterError(result.Error(), files, context);
             }
             if (result.Value() == Status::NonCompliant)
             {
@@ -212,12 +246,12 @@ Result<Status> RemediateUserDotFilePermissionsWithPasswdFile(IndicatorsTree& ind
             continue;
         }
 
-        const auto* group = getgrgid(user.pw_gid);
-        if (nullptr == group)
+        const auto groupResult = LookupUserGroup(user.pw_gid, user.pw_name, context);
+        if (!groupResult.HasValue())
         {
-            OsConfigLogError(context.GetLogHandle(), "Failed to get group for user '%s': %s", user.pw_name, strerror(errno));
-            status = Status::NonCompliant;
+            return groupResult.Error();
         }
+        const auto* group = groupResult.Value();
 
         auto processFile = [user, group, &indicators, &context](const FilesystemCollectionEntry& entry) -> Result<Status> {
             const auto& path = entry.path;
@@ -236,10 +270,10 @@ Result<Status> RemediateUserDotFilePermissionsWithPasswdFile(IndicatorsTree& ind
             // Since a hard link is an ordinary regular file, it passes the range's regular-file
             // selection and is not caught by symlink protection; remediating it would change the linked file's
             // ownership and mode too, which is a privilege-escalation vector when this runs as root.
-            if (entry.linkMetadata.st_nlink > 1)
+            if (entry.LiveHandle()->Snapshot().st_nlink > 1)
             {
                 OsConfigLogError(context.GetLogHandle(), "Refusing to remediate '%s/%s': file has %lu hard links", directory.c_str(), filename.c_str(),
-                    static_cast<unsigned long>(entry.linkMetadata.st_nlink));
+                    static_cast<unsigned long>(entry.LiveHandle()->Snapshot().st_nlink));
                 return indicators.NonCompliant("Refusing to remediate hard-linked file '" + filename + "' in home directory '" + user.pw_dir + "'");
             }
 
@@ -251,7 +285,7 @@ Result<Status> RemediateUserDotFilePermissionsWithPasswdFile(IndicatorsTree& ind
 
             Result<Status> result = Status::Compliant;
             // Performs a file permissions check and updates the result in case of error or non-compliance
-            auto remediateFile = [user, group, &path, &indicators, &context, &result](const mode_t mask) {
+            auto remediateFile = [user, group, &path, &entry, &indicators, &context, &result](const mode_t mask) {
                 auto pwdPattern = Pattern::Make(user.pw_name);
                 if (!pwdPattern.HasValue())
                 {
@@ -270,7 +304,9 @@ Result<Status> RemediateUserDotFilePermissionsWithPasswdFile(IndicatorsTree& ind
                 params.group = {{groupPattern.Value()}};
                 params.mask = mask;
                 indicators.Push("RemediateFilePermissions");
-                auto subResult = RemediateFilePermissions(params, indicators, context);
+                // The live leaf pin, not this diagnostic path, is the target.
+                // Recheck its link count before each metadata mutation.
+                auto subResult = EnforcePinnedFilePermissions(params, *entry.LiveHandle(), FilesystemCollectionLimits{}.fullPathBytes, true, indicators, context);
                 if (!subResult.HasValue())
                 {
                     OsConfigLogError(context.GetLogHandle(), "Failed to remediate permissions for file '%s': %s", path.c_str(),
@@ -301,16 +337,7 @@ Result<Status> RemediateUserDotFilePermissionsWithPasswdFile(IndicatorsTree& ind
             return result;
         };
 
-        FilesystemCollectionRequest policy(user.pw_dir, FilesystemRootKind::Directory);
-        policy.direction = FilesystemDirection::Down;
-        policy.maxDepth = 32;
-        policy.depthAction = FilesystemDepthAction::Error;
-        policy.scope = FilesystemScope::All;
-        policy.rootFileLinkAction = FilesystemLinkAction::Follow;
-        policy.rootDirectoryLinkAction = FilesystemLinkAction::Follow;
-        policy.childFileLinkAction = FilesystemLinkAction::Record;
-        policy.childDirectoryLinkAction = FilesystemLinkAction::Record;
-        policy.yieldType = FilesystemYieldType::RegularFiles;
+        const auto policy = DotfilePolicy(user.pw_dir);
         auto opened = FTW::Files(policy, context);
         if (!opened.HasValue())
         {
@@ -323,12 +350,12 @@ Result<Status> RemediateUserDotFilePermissionsWithPasswdFile(IndicatorsTree& ind
         {
             if (!entry.HasValue())
             {
-                return entry.Error();
+                return CloseAfterError(entry.Error(), files, context);
             }
             const auto result = processFile(entry.Value());
             if (!result.HasValue())
             {
-                return result.Error();
+                return CloseAfterError(result.Error(), files, context);
             }
             if (result.Value() == Status::NonCompliant)
             {

@@ -5,7 +5,6 @@
 #include <NoDuplicateEntries.h>
 #include <Optional.h>
 #include <Result.h>
-#include <ScopeGuard.h>
 #include <filesystem/FileReader.hpp>
 #include <set>
 #include <sstream>
@@ -46,13 +45,6 @@ Result<Status> AuditNoDuplicateEntries(const NoDuplicateEntriesParams& params, I
     }
 
     auto& range = opened.Value();
-    ScopeGuard closeOnExit([&] {
-        auto closed = range.Close();
-        if (!closed.HasValue())
-        {
-            OsConfigLogError(context.GetLogHandle(), "Failed to close %s: %s", params.filename.c_str(), closed.Error().message.c_str());
-        }
-    });
     for (const auto& item : range)
     {
         if (!item.HasValue())
@@ -81,11 +73,9 @@ Result<Status> AuditNoDuplicateEntries(const NoDuplicateEntriesParams& params, I
         }
     }
 
-    closeOnExit.Dismiss();
     auto closed = range.Close();
     if (!closed.HasValue())
     {
-        OsConfigLogError(context.GetLogHandle(), "Failed to close %s: %s", params.filename.c_str(), closed.Error().message.c_str());
         return std::move(closed).Error();
     }
 

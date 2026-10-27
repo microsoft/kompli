@@ -79,8 +79,9 @@ add_executable(complianceenginetests
     EvaluatorTest.cpp
     FileObjectCollectorTest.cpp
     FileReaderTest.cpp
-    FileTreeWalkTest.cpp
     FilesystemCollectionTest.cpp
+    PathTest.cpp
+    ReadableFileTest.cpp
     FilesystemScannerTest.cpp
     JsonWrapperTest.cpp
     ListValidShellsTest.cpp

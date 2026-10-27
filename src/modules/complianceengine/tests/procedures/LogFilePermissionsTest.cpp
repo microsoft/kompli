@@ -68,28 +68,32 @@ TEST_F(LogFileRangeTest, AuditContinuesPastViolationsAndSelectsOnlyRegularFiles)
     EXPECT_EQ(2u, indicators.GetRootNode()->children.size());
 }
 
-TEST_F(LogFileRangeTest, RemediationContinuesAfterMissingFileVerdicts)
+TEST_F(LogFileRangeTest, VanishingRegularFileHasMissingVerdictWithoutReopening)
 {
-    // Remove each entry after the range's lstat but before the permission helper opens
-    // it. Remediation reports noncompliance, without requiring root or changing owners.
-    for (const char* name : {"first.log", "second.log"})
-    {
-        std::ofstream(testDir + "/" + name) << "log";
-    }
-    ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([this](const char* path, struct stat* metadata) {
-        const int result = context.ContextInterface::LstatPath(path, metadata);
-        if (result == 0 && (std::string(path) == testDir + "/first.log" || std::string(path) == testDir + "/second.log"))
+    // The pinned directory reports regular-file names; they vanish before
+    // child acquisition. Neither audit nor remediation receives a fake pin.
+    ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([this](DIR * stream) -> struct dirent* {
+        struct dirent* entry = readdir(stream);
+        if (entry && ((std::string(entry->d_name) == "first.log") || (std::string(entry->d_name) == "second.log")))
         {
-            EXPECT_EQ(0, unlink(path));
+            entry->d_type = DT_REG; // deterministic type hint, not a file pin
+            EXPECT_EQ(0, unlink((testDir + "/" + entry->d_name).c_str()));
         }
-        return result;
+        return entry;
     });
 
-    const auto result = Run(true);
-    ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(Status::NonCompliant, result.Value());
-    ASSERT_NE(nullptr, indicators.GetRootNode());
-    EXPECT_EQ(2u, indicators.GetRootNode()->children.size());
+    for (bool remediate : {false, true})
+    {
+        for (const char* name : {"first.log", "second.log"})
+        {
+            std::ofstream(testDir + "/" + name) << "log";
+        }
+        const auto result = Run(remediate);
+        ASSERT_TRUE(result.HasValue()) << result.Error().message;
+        EXPECT_EQ(Status::NonCompliant, result.Value());
+        ASSERT_NE(nullptr, indicators.GetRootNode());
+        EXPECT_EQ(remediate ? 4u : 2u, indicators.GetRootNode()->children.size());
+    }
 }
 
 TEST_F(LogFileRangeTest, FactoryFailuresPropagateForAuditAndRemediation)
@@ -113,7 +117,28 @@ TEST_F(LogFileRangeTest, FactoryFailuresPropagateForAuditAndRemediation)
     ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([this](const char* path, struct stat* metadata) {
         return context.ContextInterface::LstatPath(path, metadata);
     });
-    ON_CALL(context, OpenDirectory(::testing::_)).WillByDefault([](const char*) -> DIR* {
+    struct stat expected = {};
+    ASSERT_EQ(0, stat(testDir.c_str(), &expected));
+    ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([this, expected](int descriptor, struct stat* metadata) {
+        struct stat actual = {};
+        if ((0 == fstat(descriptor, &actual)) && (actual.st_dev == expected.st_dev) && (actual.st_ino == expected.st_ino))
+        {
+            errno = EACCES;
+            return -1;
+        }
+        return context.ContextInterface::StatFileDescriptor(descriptor, metadata);
+    });
+    for (bool remediate : {false, true})
+    {
+        const auto result = Run(remediate);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EACCES, result.Error().code);
+    }
+}
+
+TEST_F(LogFileRangeTest, ReadFailureFromHeldRootPropagates)
+{
+    ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([](DIR*) -> struct dirent* {
         errno = EACCES;
         return nullptr;
     });
@@ -172,33 +197,31 @@ TEST_F(LogFileRangeTest, CheckedCloseErrorOverridesVerdictForBothPaths)
         ASSERT_EQ(0, chmod(file.c_str(), 0777));
         if (remediate)
         {
-            ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([this, &file](const char* path, struct stat* metadata) {
-                const int result = context.ContextInterface::LstatPath(path, metadata);
-                if (result == 0 && file == path)
-                {
-                    EXPECT_EQ(0, unlink(path));
-                }
-                return result;
-            });
+            // Exercise a compliant empty range, not a privileged ownership
+            // mutation that can fail before the checked cursor close.
+            ASSERT_EQ(0, unlink(file.c_str()));
         }
         const auto result = Run(remediate);
         ASSERT_FALSE(result.HasValue());
         EXPECT_EQ(EIO, result.Error().code);
     }
-    EXPECT_EQ(2u, indicators.GetRootNode()->children.size());
+    EXPECT_EQ(1u, indicators.GetRootNode()->children.size());
 }
 
 TEST_F(LogFileRangeTest, DescendantErrorIsReachedDespiteDirectoryFiltering)
 {
     const std::string nested = testDir + "/nested";
     ASSERT_EQ(0, mkdir(nested.c_str(), 0700));
-    ON_CALL(context, OpenDirectory(::testing::_)).WillByDefault([&nested](const char* path) -> DIR* {
-        if (nested == path)
+    struct stat expected = {};
+    ASSERT_EQ(0, stat(nested.c_str(), &expected));
+    ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([expected](DIR * stream) -> struct dirent* {
+        struct stat actual = {};
+        if ((0 == fstat(dirfd(stream), &actual)) && (actual.st_dev == expected.st_dev) && (actual.st_ino == expected.st_ino))
         {
             errno = EACCES;
             return nullptr;
         }
-        return opendir(path);
+        return readdir(stream);
     });
     for (bool remediate : {false, true})
     {
@@ -227,7 +250,8 @@ TEST_F(LogFileRangeTest, RootDirectoryLinkIsFollowedAndDepthThirtyThreeErrors)
     }
     const auto tooDeep = Run(false);
     ASSERT_FALSE(tooDeep.HasValue());
-    EXPECT_NE(std::string::npos, tooDeep.Error().message.find("Maximum recursion depth"));
+    // The unraised 16-cursor budget fails explicitly before depth 33.
+    EXPECT_EQ(EMFILE, tooDeep.Error().code);
 }
 
 class EnsureLogfileAccessTest : public ::testing::Test

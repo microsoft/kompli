@@ -36,9 +36,19 @@ public:
     // Syscall results and errno are preserved. Open supports only O_RDONLY (zero),
     // O_PATH, O_CLOEXEC and O_NOFOLLOW; creation and write flags return EINVAL.
     virtual int OpenExistingFile(const char* path, int flags) const;
+    // Native acquisition forwards for the filesystem foundation: absolute
+    // process-root/procfs opens and dirfd-relative child/procfs-alias opens.
+    // These are internal syscall seams, not public Handle fd accessors.
+    virtual int OpenNativePath(const char* path, int flags) const;
+    virtual int OpenNativeAt(int directory, const char* path, int flags) const;
     virtual int StatFileDescriptor(int descriptor, struct stat* metadata) const;
     virtual ssize_t ReadFileDescriptor(int descriptor, void* buffer, std::size_t size) const;
     virtual int CloseFileDescriptor(int descriptor) const;
+    // Internal metadata syscall forwards. The foundation passes only its
+    // live O_PATH pin or its verified procfs directory and decimal alias;
+    // these are not handle descriptor accessors or alternate path lookups.
+    virtual int ChownPinnedFileDescriptor(int descriptor, uid_t owner, gid_t group) const;
+    virtual int ChmodPinnedAlias(int procfsDirectory, const char* decimalAlias, mode_t mode) const;
 
     // POSIX directory and path operations. A null ReadDirectory result is EOF
     // only when errno is zero; callers clear errno immediately before reading.

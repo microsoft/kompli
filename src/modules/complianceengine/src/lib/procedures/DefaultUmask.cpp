@@ -103,13 +103,6 @@ Result<MatchResult> MultilineMatch(const std::string& filename, const regex& val
     }
 
     auto& range = opened.Value();
-    ScopeGuard closeOnExit([&] {
-        auto closed = range.Close();
-        if (!closed.HasValue())
-        {
-            OsConfigLogError(context.GetLogHandle(), "Failed to close %s: %s", filename.c_str(), closed.Error().message.c_str());
-        }
-    });
     int lineNumber = 0;
     MatchResult result = MatchResult::NotFound;
     // The first matching assignment decides this file; Close still precedes publication.
@@ -198,11 +191,9 @@ Result<MatchResult> MultilineMatch(const std::string& filename, const regex& val
         }
     }
 
-    closeOnExit.Dismiss();
     auto closed = range.Close();
     if (!closed.HasValue())
     {
-        OsConfigLogError(context.GetLogHandle(), "Failed to close %s: %s", filename.c_str(), closed.Error().message.c_str());
         return std::move(closed).Error();
     }
     return result;

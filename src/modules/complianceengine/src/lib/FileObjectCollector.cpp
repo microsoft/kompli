@@ -38,11 +38,11 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
         return Error("A NUL-free absolute path is required", EINVAL);
     if (!policy.contentBytes || !policy.occurrences || !policy.captureBytes || !policy.capturedBytes || !policy.values || !policy.readRetries)
         return Error("Exact file limits must be positive", EINVAL);
-    if (policy.rootSymlinks != RootSymlinkPolicy::FollowRegular && policy.rootSymlinks != RootSymlinkPolicy::Reject)
+    if (policy.rootSymlinks != SymlinkFollowing::Follow && policy.rootSymlinks != SymlinkFollowing::DoNotFollow)
         return Error("Invalid root symlink policy", EINVAL);
 
     FileReader::Policy readerPolicy;
-    readerPolicy.symlinks = policy.rootSymlinks == RootSymlinkPolicy::Reject ? FileReader::SymlinksPolicy::RejectFinal : FileReader::SymlinksPolicy::FollowFinal;
+    readerPolicy.symlinks = policy.rootSymlinks;
     readerPolicy.limits.maxBytes = policy.contentBytes;
     readerPolicy.limits.maxInterruptedReads = policy.readRetries;
     NameserverSelection::Limits selectionLimits;
@@ -61,15 +61,7 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
     for (const auto& item : range)
     {
         if (!item.HasValue())
-        {
-            Error primary = item.Error();
-            auto closed = range.Close();
-            if (!closed.HasValue())
-            {
-                primary.message += " [close: " + closed.Error().message + " (" + std::to_string(closed.Error().code) + ")]";
-            }
-            return primary;
-        }
+            return item.Error();
         if (selected.HasValue())
             selected = selection.FeedLine(item.Value());
     }

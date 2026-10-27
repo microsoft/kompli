@@ -7,21 +7,16 @@
 #include <Result.h>
 #include <VariableResolver.h>
 #include <cstddef>
+#include <filesystem/FilesystemPolicy.hpp>
 #include <string>
 
 namespace ComplianceEngine
 {
 class ContextInterface;
 
-enum class RootSymlinkPolicy
-{
-    FollowRegular,
-    Reject,
-};
-
 struct FileCollectionPolicy
 {
-    RootSymlinkPolicy rootSymlinks = RootSymlinkPolicy::FollowRegular;
+    SymlinkFollowing rootSymlinks = SymlinkFollowing::Follow;
     std::size_t contentBytes = 1024 * 1024;
     std::size_t occurrences = 16384;
     std::size_t captureBytes = 65536;

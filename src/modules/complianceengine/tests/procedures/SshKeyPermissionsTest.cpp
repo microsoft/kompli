@@ -104,13 +104,16 @@ TEST(SshKeyRangeTest, RequiredNonYieldedDirectoryFailureAndReachedReadErrorPropa
     const std::string nested = root + "/nested";
     ASSERT_EQ(0, mkdir(nested.c_str(), 0700));
     context.SetSpecialFilePath("/etc/ssh", root);
-    ON_CALL(context, OpenDirectory(::testing::_)).WillByDefault([&nested](const char* path) -> DIR* {
-        if (nested == path)
+    struct stat expectedNested = {};
+    ASSERT_EQ(0, stat(nested.c_str(), &expectedNested));
+    ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([expectedNested](DIR * stream) -> struct dirent* {
+        struct stat actual = {};
+        if (0 == fstat(dirfd(stream), &actual) && actual.st_dev == expectedNested.st_dev && actual.st_ino == expectedNested.st_ino)
         {
             errno = EACCES;
             return nullptr;
         }
-        return opendir(path);
+        return readdir(stream);
     });
     SshKeyPermissionsParams params;
     params.type = SshKeyType::Private;
@@ -118,7 +121,6 @@ TEST(SshKeyRangeTest, RequiredNonYieldedDirectoryFailureAndReachedReadErrorPropa
     ASSERT_FALSE(blocked.HasValue());
     EXPECT_EQ(EACCES, blocked.Error().code);
 
-    ON_CALL(context, OpenDirectory(::testing::_)).WillByDefault([](const char* path) { return opendir(path); });
     ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([](DIR*) -> struct dirent* {
         errno = EIO;
         return nullptr;
@@ -157,7 +159,7 @@ TEST(SshKeyRangeTest, OriginalKeyReadErrorOutranksDestructorCloseFailure)
     EXPECT_EQ("key read failed", result.Error().message);
 }
 
-TEST(SshKeyRangeTest, DepthThirtyThreeIsAnErrorEvenThoughDirectoriesAreNotYielded)
+TEST(SshKeyRangeTest, DeepTraversalRejectsDescriptorBudgetEvenThoughDirectoriesAreNotYielded)
 {
     MockContext context;
     IndicatorsTree indicators;
@@ -174,7 +176,8 @@ TEST(SshKeyRangeTest, DepthThirtyThreeIsAnErrorEvenThoughDirectoriesAreNotYielde
     params.type = SshKeyType::Public;
     const auto result = AuditSshKeyPermissions(params, indicators, context);
     ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ("Maximum recursion depth reached", result.Error().message);
+    EXPECT_EQ(EMFILE, result.Error().code);
+    EXPECT_EQ("Filesystem directory continuation exceeds descriptor budget", result.Error().message);
 }
 
 TEST(SshKeyRangeTest, RootSymlinkIsFollowedButInteriorDirectorySymlinkIsNot)

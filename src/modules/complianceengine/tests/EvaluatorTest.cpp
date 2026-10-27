@@ -15,6 +15,7 @@
 #include <fstream>
 #include <grp.h>
 #include <gtest/gtest.h>
+#include <limits>
 #include <pwd.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -352,6 +353,33 @@ TEST_F(EvaluatorTest, SerializedCollectionRegexSelectsOnlyMatchingFilenames)
     const auto absent = unselectedEvaluator.ExecuteAudit(mFormatter);
     ASSERT_TRUE(absent.HasValue());
     EXPECT_EQ(Status::NonCompliant, absent.Value().status);
+}
+
+TEST_F(EvaluatorTest, SubstitutedLogfileRootRejectsRelativeInputWithoutComplianceVerdict)
+{
+    mContext.SetSpecialFilePath("/etc/shells", mContext.MakeTempfile("/bin/sh\n"));
+    mContext.SetSpecialFilePath("/etc/passwd", mContext.MakeTempfile("root:x:0:0:root:/root:/bin/sh\n"));
+    auto json = JsonWrapper::FromString("{\"LogFilePermissions\":{\"path\":\"$logRoot\"}}");
+    ASSERT_TRUE(json.HasValue());
+    mParameters["logRoot"] = ".";
+    for (bool remediate : {false, true})
+    {
+        Evaluator evaluator("test", json_value_get_object(json->get()), mParameters, mContext);
+        if (remediate)
+        {
+            const auto result = evaluator.ExecuteRemediation();
+            ASSERT_FALSE(result.HasValue());
+            EXPECT_EQ(EINVAL, result.Error().code);
+            EXPECT_EQ("Filesystem collection root path must be absolute", result.Error().message);
+        }
+        else
+        {
+            const auto result = evaluator.ExecuteAudit(mFormatter);
+            ASSERT_FALSE(result.HasValue());
+            EXPECT_EQ(EINVAL, result.Error().code);
+            EXPECT_EQ("Filesystem collection root path must be absolute", result.Error().message);
+        }
+    }
 }
 
 TEST_F(EvaluatorTest, ExecuteRemediation_1)
@@ -789,6 +817,30 @@ TEST(UserDotFilePermissionsErrorsTest, InvalidAccountPatternRemainsError)
     EXPECT_NE(std::string::npos, result.Error().message.find("Regular expression"));
 }
 
+TEST(UserDotFilePermissionsErrorsTest, MissingGroupIgnoresStaleErrnoInAuditAndRemediation)
+{
+    MockContext context;
+    context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    const gid_t absent = std::numeric_limits<gid_t>::max();
+    errno = 0;
+    if (nullptr != getgrgid(absent))
+    {
+        GTEST_SKIP() << "The maximum gid is configured on this host";
+    }
+    const std::string passwd = context.MakeTempfile("fixture:x:" + std::to_string(getuid()) + ":" + std::to_string(absent) + "::/nonexistent:/bin/sh\n");
+    for (bool remediate : {false, true})
+    {
+        ComplianceEngine::IndicatorsTree indicators;
+        indicators.Push("UserDotFilePermissions");
+        errno = EIO;
+        const auto result = remediate ? ComplianceEngine::RemediateUserDotFilePermissionsWithPasswdFile(indicators, context, passwd) :
+                                        ComplianceEngine::AuditUserDotFilePermissionsWithPasswdFile(indicators, context, passwd);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(ENOENT, result.Error().code);
+        EXPECT_NE(std::string::npos, result.Error().message.find("No such file or directory"));
+    }
+}
+
 TEST(UserDotFilePermissionsErrorsTest, ForbiddenDotFileRemainsOrdinaryVerdict)
 {
     MockContext context;
@@ -940,6 +992,25 @@ protected:
     }
 };
 
+TEST_F(UserDotFileRangeTest, MalformedPasswdHomesAreErrorsForAuditAndRemediation)
+{
+    // The username deliberately differs from the process owner: malformed
+    // homes must not be hidden by an owner-only account filter.
+    for (const std::string& home : {"", ".", "..", "relative/home"})
+    {
+        SCOPED_TRACE(home);
+        for (bool remediate : {false, true})
+        {
+            SCOPED_TRACE(remediate);
+            const auto result = Run(remediate, User("fixture", home));
+            ASSERT_FALSE(result.HasValue());
+            EXPECT_EQ(EINVAL, result.Error().code);
+            EXPECT_NE(std::string::npos, result.Error().message.find("Filesystem collection root path"));
+            EXPECT_TRUE(indicators.Back().indicators.empty());
+        }
+    }
+}
+
 TEST_F(UserDotFileRangeTest, AuditStopsAtFirstViolationPerUserAndContinuesToNextUser)
 {
     const auto first = context.GetTempdirPath() + "/first-home";
@@ -989,6 +1060,174 @@ TEST_F(UserDotFileRangeTest, RemediationRefusesHardLinksWithoutChangingTheShared
     EXPECT_EQ(2, metadata.st_nlink);
 }
 
+TEST_F(UserDotFileRangeTest, LeafReplacementAfterAcquisitionKeepsAuditAndRemediationOnThePinnedFile)
+{
+    const auto* user = getpwuid(getuid());
+    ASSERT_NE(nullptr, user);
+    for (bool remediate : {false, true})
+    {
+        const auto home = context.GetTempdirPath() + (remediate ? "/remediate-home" : "/audit-home");
+        ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+        const auto target = home + "/.config";
+        const auto held = context.GetTempdirPath() + (remediate ? "/remediate-held" : "/audit-held");
+        std::ofstream(target) << "original\n";
+        ASSERT_EQ(0, chmod(target.c_str(), remediate ? 0666 : 0600));
+        struct stat original = {};
+        ASSERT_EQ(0, stat(target.c_str(), &original));
+        bool yielded = false;
+        ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([&](DIR * stream) -> struct dirent* {
+            if (yielded)
+            {
+                errno = 0;
+                return nullptr; // The replacement is not another collected entry.
+            }
+            auto* entry = readdir(stream);
+            if (entry && std::string(entry->d_name) == ".config")
+            {
+                yielded = true;
+            }
+            return entry;
+        });
+        int observations = 0;
+        bool replaced = false;
+        ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
+            const int result = context.ContextInterface::StatFileDescriptor(descriptor, metadata);
+            if ((0 == result) && (original.st_dev == metadata->st_dev) && (original.st_ino == metadata->st_ino) && (2 == ++observations))
+            {
+                replaced = (0 == rename(target.c_str(), held.c_str()));
+                std::ofstream(target) << "replacement\n";
+                replaced = replaced && (0 == chmod(target.c_str(), remediate ? 0666 : 0777));
+            }
+            return result;
+        });
+        const auto result = Run(remediate, User(user->pw_name, home));
+        ASSERT_TRUE(result.HasValue()) << result.Error().message;
+        EXPECT_EQ(Status::Compliant, result.Value());
+        EXPECT_TRUE(yielded);
+        EXPECT_TRUE(replaced);
+        struct stat pinned = {}, replacement = {};
+        ASSERT_EQ(0, stat(held.c_str(), &pinned));
+        ASSERT_EQ(0, stat(target.c_str(), &replacement));
+        EXPECT_EQ(remediate ? 0644 : 0600, pinned.st_mode & 0777);
+        EXPECT_EQ(remediate ? 0666 : 0777, replacement.st_mode & 0777);
+        EXPECT_NE(pinned.st_ino, replacement.st_ino);
+    }
+}
+
+TEST_F(UserDotFileRangeTest, ReplacedAncestorAfterAcquisitionDoesNotRedirectRemediation)
+{
+    const auto* user = getpwuid(getuid());
+    ASSERT_NE(nullptr, user);
+    const auto home = context.GetTempdirPath() + "/home";
+    const auto nested = home + "/nested";
+    const auto moved = home + "/moved";
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    ASSERT_EQ(0, mkdir(nested.c_str(), 0700));
+    const auto target = nested + "/.config";
+    std::ofstream(target) << "original\n";
+    ASSERT_EQ(0, chmod(target.c_str(), 0666));
+    struct stat original = {}, root = {}, directory = {};
+    ASSERT_EQ(0, stat(target.c_str(), &original));
+    ASSERT_EQ(0, stat(home.c_str(), &root));
+    ASSERT_EQ(0, stat(nested.c_str(), &directory));
+    bool sawRootChild = false, sawFile = false;
+    ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([&](DIR * stream) -> struct dirent* {
+        struct stat opened = {};
+        if (0 != fstat(dirfd(stream), &opened))
+        {
+            return nullptr;
+        }
+        bool& selected = (opened.st_ino == root.st_ino) ? sawRootChild : sawFile;
+        if (selected)
+        {
+            errno = 0;
+            return nullptr;
+        }
+        auto* entry = readdir(stream);
+        if (entry && ((opened.st_ino == root.st_ino && std::string(entry->d_name) == "nested") ||
+                         (opened.st_ino == directory.st_ino && std::string(entry->d_name) == ".config")))
+        {
+            selected = true;
+        }
+        return entry;
+    });
+    int observations = 0;
+    bool replaced = false;
+    ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
+        const int result = context.ContextInterface::StatFileDescriptor(descriptor, metadata);
+        if ((0 == result) && (original.st_dev == metadata->st_dev) && (original.st_ino == metadata->st_ino) && (2 == ++observations))
+        {
+            replaced = (0 == rename(nested.c_str(), moved.c_str())) && (0 == mkdir(nested.c_str(), 0700));
+            std::ofstream(target) << "replacement\n";
+            replaced = replaced && (0 == chmod(target.c_str(), 0666));
+        }
+        return result;
+    });
+    const auto result = Run(true, User(user->pw_name, home));
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::Compliant, result.Value());
+    EXPECT_TRUE(replaced);
+    EXPECT_TRUE(sawRootChild);
+    EXPECT_TRUE(sawFile);
+    struct stat pinned = {}, replacement = {};
+    ASSERT_EQ(0, stat((moved + "/.config").c_str(), &pinned));
+    ASSERT_EQ(0, stat(target.c_str(), &replacement));
+    EXPECT_EQ(0644, pinned.st_mode & 0777);
+    EXPECT_EQ(0666, replacement.st_mode & 0777);
+}
+
+TEST_F(UserDotFileRangeTest, HardLinkAddedAfterAcquisitionIsRefusedBeforeMutation)
+{
+    const auto* user = getpwuid(getuid());
+    ASSERT_NE(nullptr, user);
+    const auto home = context.GetTempdirPath() + "/home";
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    const auto target = home + "/.config";
+    const auto other = context.GetTempdirPath() + "/another-link";
+    std::ofstream(target) << "original\n";
+    ASSERT_EQ(0, chmod(target.c_str(), 0666));
+    struct stat original = {};
+    ASSERT_EQ(0, stat(target.c_str(), &original));
+    int observations = 0;
+    bool linked = false;
+    ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
+        const int result = context.ContextInterface::StatFileDescriptor(descriptor, metadata);
+        if ((0 == result) && (original.st_dev == metadata->st_dev) && (original.st_ino == metadata->st_ino) && (2 == ++observations))
+        {
+            linked = (0 == link(target.c_str(), other.c_str()));
+        }
+        return result;
+    });
+    const auto result = Run(true, User(user->pw_name, home));
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    EXPECT_TRUE(linked);
+    struct stat unchanged = {};
+    ASSERT_EQ(0, stat(target.c_str(), &unchanged));
+    EXPECT_EQ(0666, unchanged.st_mode & 0777);
+    EXPECT_EQ(2, unchanged.st_nlink);
+}
+
+TEST_F(UserDotFileRangeTest, UnreadableDotfileIsInspectedAndRemediatedThroughItsPin)
+{
+    const auto* user = getpwuid(getuid());
+    ASSERT_NE(nullptr, user);
+    const auto home = context.GetTempdirPath() + "/home";
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    const auto target = home + "/.config";
+    std::ofstream(target) << "original\n";
+    ASSERT_EQ(0, chmod(target.c_str(), 0222));
+    const auto audit = Run(false, User(user->pw_name, home));
+    ASSERT_TRUE(audit.HasValue()) << audit.Error().message;
+    EXPECT_EQ(Status::NonCompliant, audit.Value());
+    const auto remediation = Run(true, User(user->pw_name, home));
+    ASSERT_TRUE(remediation.HasValue()) << remediation.Error().message;
+    EXPECT_EQ(Status::Compliant, remediation.Value());
+    struct stat corrected = {};
+    ASSERT_EQ(0, stat(target.c_str(), &corrected));
+    EXPECT_EQ(0200, corrected.st_mode & 0777);
+}
+
 TEST_F(UserDotFileRangeTest, MetadataDescentIncludesHiddenFilesButNotLinksOrSpecialFiles)
 {
     const auto home = context.GetTempdirPath() + "/home";
@@ -1025,9 +1264,20 @@ TEST_F(UserDotFileRangeTest, MissingRootsAreCompliantAndFactoryFailuresPropagate
         ASSERT_TRUE(absent.HasValue());
         EXPECT_EQ(Status::Compliant, absent.Value());
     }
-    ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([](const char*, struct stat*) {
-        errno = EACCES;
-        return -1;
+    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
+    struct stat expectedHome = {};
+    ASSERT_EQ(0, stat(home.c_str(), &expectedHome));
+    // Fail at the actual accepted-root acquisition seam, not while reading
+    // /etc/shells (which also inspects a descriptor before traversal starts).
+    ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([this, expectedHome](int descriptor, struct stat* metadata) {
+        struct stat acquired = {};
+        if ((0 == ::fstat(descriptor, &acquired)) && (acquired.st_dev == expectedHome.st_dev) && (acquired.st_ino == expectedHome.st_ino) &&
+            S_ISDIR(acquired.st_mode))
+        {
+            errno = EACCES;
+            return -1;
+        }
+        return context.ContextInterface::StatFileDescriptor(descriptor, metadata);
     });
     for (bool remediate : {false, true})
     {
@@ -1035,11 +1285,10 @@ TEST_F(UserDotFileRangeTest, MissingRootsAreCompliantAndFactoryFailuresPropagate
         ASSERT_FALSE(result.HasValue());
         EXPECT_EQ(EACCES, result.Error().code);
     }
-    ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([this](const char* path, struct stat* metadata) {
-        return context.ContextInterface::LstatPath(path, metadata);
+    ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([this](int descriptor, struct stat* metadata) {
+        return context.ContextInterface::StatFileDescriptor(descriptor, metadata);
     });
-    ASSERT_EQ(0, mkdir(home.c_str(), 0700));
-    ON_CALL(context, OpenDirectory(::testing::_)).WillByDefault([](const char*) -> DIR* {
+    ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([](DIR*) -> struct dirent* {
         errno = EACCES;
         return nullptr;
     });
@@ -1108,13 +1357,16 @@ TEST_F(UserDotFileRangeTest, AuditReachedErrorInNextUserOverridesEarlierNoncompl
     ASSERT_EQ(0, mkdir(second.c_str(), 0700));
     std::ofstream(first + "/.rhosts") << "host\n";
     ASSERT_EQ(0, mkdir((second + "/nested").c_str(), 0700));
-    ON_CALL(context, OpenDirectory(::testing::_)).WillByDefault([&second](const char* path) -> DIR* {
-        if (second + "/nested" == path)
+    struct stat nested = {};
+    ASSERT_EQ(0, stat((second + "/nested").c_str(), &nested));
+    ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([nested](DIR * stream) -> struct dirent* {
+        struct stat opened = {};
+        if ((0 == fstat(dirfd(stream), &opened)) && (nested.st_dev == opened.st_dev) && (nested.st_ino == opened.st_ino))
         {
             errno = EACCES;
             return nullptr;
         }
-        return opendir(path);
+        return readdir(stream);
     });
     const auto result = Run(false, User("first", first) + User("second", second));
     ASSERT_FALSE(result.HasValue());
@@ -1143,7 +1395,10 @@ TEST_F(UserDotFileRangeTest, FollowsRootDirectoryLinkAndReportsDepthOverflow)
     // returning its verdict before encountering the depth error.
     const auto tooDeep = Run(true, User("fixture", home));
     ASSERT_FALSE(tooDeep.HasValue());
-    EXPECT_NE(std::string::npos, tooDeep.Error().message.find("Maximum recursion depth"));
+    // Pinned continuation may exhaust the approved descriptor budget before
+    // the 32-level descent limit; neither outcome silently truncates the walk.
+    EXPECT_TRUE((std::string::npos != tooDeep.Error().message.find("Maximum recursion depth")) ||
+                (std::string::npos != tooDeep.Error().message.find("descriptor budget")) || (EMFILE == tooDeep.Error().code));
 }
 
 TEST(UserHomeDirectoryPermissionsErrorsTest, FailedChildRemediationPropagatesWithoutMutatingHome)

@@ -110,10 +110,10 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
     policy.maxDepth = 32;
     policy.depthAction = FilesystemDepthAction::Error;
     policy.scope = FilesystemScope::All;
-    policy.rootFileLinkAction = FilesystemLinkAction::Follow;
-    policy.rootDirectoryLinkAction = FilesystemLinkAction::Follow;
-    policy.childDirectoryLinkAction = FilesystemLinkAction::Record;
-    policy.childFileLinkAction = FilesystemLinkAction::Record;
+    policy.rootFileLinkAction = SymlinkFollowing::Follow;
+    policy.rootDirectoryLinkAction = SymlinkFollowing::Follow;
+    policy.childDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
+    policy.childFileLinkAction = SymlinkFollowing::DoNotFollow;
     policy.yieldType = FilesystemYieldType::RegularFiles;
     auto opened = FTW::Files(policy, context);
     if (!opened.HasValue())

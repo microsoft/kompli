@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 
 #include <ListValidShells.h>
-#include <ScopeGuard.h>
 #include <StringTools.h>
 #include <cerrno>
 #include <filesystem/FileReader.hpp>
@@ -27,13 +26,6 @@ Result<set<string>> ListValidShells(ContextInterface& context)
     }
 
     auto& range = opened.Value();
-    ScopeGuard closeOnExit([&] {
-        auto closed = range.Close();
-        if (!closed.HasValue())
-        {
-            OsConfigLogError(context.GetLogHandle(), "Failed to close %s: %s", etcShellsPath, closed.Error().message.c_str());
-        }
-    });
     set<string> validShells;
     for (const auto& item : range)
     {
@@ -60,11 +52,9 @@ Result<set<string>> ListValidShells(ContextInterface& context)
 
         validShells.insert(std::move(line));
     }
-    closeOnExit.Dismiss();
     auto closed = range.Close();
     if (!closed.HasValue())
     {
-        OsConfigLogError(context.GetLogHandle(), "Failed to close %s: %s", etcShellsPath, closed.Error().message.c_str());
         return std::move(closed).Error();
     }
     return validShells;

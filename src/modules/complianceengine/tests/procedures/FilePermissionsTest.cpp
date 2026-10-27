@@ -17,6 +17,7 @@
 using ComplianceEngine::AuditFilePermissions;
 using ComplianceEngine::AuditFilePermissionsCollection;
 using ComplianceEngine::Behavior;
+using ComplianceEngine::EnforceFilePermissionsAtIdentity;
 using ComplianceEngine::Error;
 using ComplianceEngine::FilePermissionsCollectionParams;
 using ComplianceEngine::FilePermissionsParams;
@@ -470,6 +471,82 @@ TEST_F(EnsureFilePermissionsTest, RemediateWrongGroup)
     ASSERT_EQ(st.st_uid, 0u);
     ASSERT_EQ(st.st_gid, 0u);
     ASSERT_EQ(st.st_mode & 0777, 0610u);
+}
+
+TEST_F(EnsureFilePermissionsTest, EnforceAtIdentitySucceedsWhenIdentityMatches)
+{
+    FilePermissionsParams params;
+    CreateFile(params.path, 1, 1, 0610);
+    auto owner = Pattern::Make("root");
+    ASSERT_TRUE(owner.HasValue());
+    params.owner = {{std::move(owner).Value()}};
+    auto group = Pattern::Make("root");
+    ASSERT_TRUE(group.HasValue());
+    params.group = {{std::move(group).Value()}};
+
+    struct stat observed;
+    ASSERT_EQ(stat(params.path.c_str(), &observed), 0);
+    ComplianceEngine::FileIdentity identity{observed.st_dev, observed.st_ino};
+
+    auto result = EnforceFilePermissionsAtIdentity(params, identity, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::Compliant);
+    struct stat st;
+    ASSERT_EQ(stat(params.path.c_str(), &st), 0);
+    ASSERT_EQ(st.st_uid, 0u);
+    ASSERT_EQ(st.st_gid, 0u);
+}
+
+TEST_F(EnsureFilePermissionsTest, EnforceAtIdentityRefusesWhenPathResolvesToADifferentFile)
+{
+    // Simulates an ancestor directory being replaced between collection (which observed
+    // "original") and this call opening the same path string, which now resolves to "redirected".
+    std::string original;
+    CreateFile(original, 1, 1, 0600);
+    struct stat observed;
+    ASSERT_EQ(stat(original.c_str(), &observed), 0);
+    ComplianceEngine::FileIdentity identity{observed.st_dev, observed.st_ino};
+
+    FilePermissionsParams params;
+    CreateFile(params.path, 0, 0, 0600);
+    struct stat before;
+    ASSERT_EQ(stat(params.path.c_str(), &before), 0);
+    auto owner = Pattern::Make("root");
+    ASSERT_TRUE(owner.HasValue());
+    params.owner = {{std::move(owner).Value()}};
+
+    auto result = EnforceFilePermissionsAtIdentity(params, identity, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::NonCompliant);
+    struct stat after;
+    ASSERT_EQ(stat(params.path.c_str(), &after), 0);
+    ASSERT_EQ(before.st_uid, after.st_uid);
+    ASSERT_EQ(before.st_gid, after.st_gid);
+    ASSERT_EQ(before.st_mode, after.st_mode);
+}
+
+TEST_F(EnsureFilePermissionsTest, EnforceAtIdentityRefusesHardLinkedFileEvenWithMatchingIdentity)
+{
+    FilePermissionsParams params;
+    CreateFile(params.path, 1, 1, 0600);
+    struct stat observed;
+    ASSERT_EQ(stat(params.path.c_str(), &observed), 0);
+    ComplianceEngine::FileIdentity identity{observed.st_dev, observed.st_ino};
+
+    const std::string secondLink = testDir + "/second-link";
+    ASSERT_EQ(link(params.path.c_str(), secondLink.c_str()), 0);
+    files.push_back(secondLink);
+
+    auto owner = Pattern::Make("root");
+    ASSERT_TRUE(owner.HasValue());
+    params.owner = {{std::move(owner).Value()}};
+
+    auto result = EnforceFilePermissionsAtIdentity(params, identity, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    ASSERT_EQ(result.Value(), Status::NonCompliant);
+    struct stat after;
+    ASSERT_EQ(stat(params.path.c_str(), &after), 0);
+    ASSERT_EQ(after.st_uid, 1u);
 }
 
 TEST_F(EnsureFilePermissionsTest, AuditWrongPermissions)
