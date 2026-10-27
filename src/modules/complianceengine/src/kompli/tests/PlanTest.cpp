@@ -314,7 +314,7 @@ TEST_F(ParsePlanFileTest, RejectsInvalidVersionPins)
     ASSERT_TRUE(WriteFile(path, R"({"benchmarks":[{"file":"bench.json","version":null,"versionConstraint":"^1.0.0","rules":{}}]})"));
     EXPECT_FALSE(ParsePlanFile(path, nullptr).HasValue());
 
-    for (const std::string& version : {"1.0", "01.0.0", "1.0.0-beta", "1.0.0.0", R"(1.0.0\u0000)"})
+    for (const std::string version : {"1.0", "01.0.0", "1.0.0-beta", "1.0.0.0", R"(1.0.0\u0000)"})
     {
         const std::string json = R"({"benchmarks":[{"file":"bench.json","version":")" + version + R"(","versionConstraint":"^1.0.0","rules":{}}]})";
         ASSERT_TRUE(WriteFile(path, json));

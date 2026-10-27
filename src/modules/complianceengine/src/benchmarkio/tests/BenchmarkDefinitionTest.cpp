@@ -125,7 +125,7 @@ TEST(BenchmarkDefinitionParserTest, ParsesMultipleRulesInOrder)
 
 TEST(BenchmarkDefinitionParserTest, RejectsMissingOrMalformedContentVersion)
 {
-    for (const std::string& invalid : {"", "1.0", "1.0.0.0", "01.0.0", "1.00.0", "1.0.00", "-1.0.0", "1.0.x", "1.0.0-beta", R"(1.0.0\u0000)"})
+    for (const std::string invalid : {"", "1.0", "1.0.0.0", "01.0.0", "1.00.0", "1.0.00", "-1.0.0", "1.0.x", "1.0.0-beta", R"(1.0.0\u0000)"})
     {
         std::string doc = OneRuleDoc();
         ReplaceOnce(doc, R"("version":"1.0.0")", R"("version":")" + invalid + R"(")");
