@@ -124,7 +124,7 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
             }
             ++recordCount;
             std::size_t keyEnd = keyStart;
-            while ((keyEnd < end) && !IsSeparator(input[keyEnd]))
+            while ((keyEnd < end) && !IsSeparator(input[keyEnd]) && ('#' != input[keyEnd]))
             {
                 ++keyEnd;
             }

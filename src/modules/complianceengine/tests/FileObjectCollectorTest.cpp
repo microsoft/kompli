@@ -40,7 +40,6 @@ std::vector<std::string> Captures(const VariableResolution::ObjectCollection& co
     }
     return captures;
 }
-
 std::string ReadLog(const std::string& path)
 {
     std::ifstream log(path);

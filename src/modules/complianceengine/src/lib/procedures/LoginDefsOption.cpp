@@ -76,6 +76,11 @@ bool IsPasswordAgingOption(const string& option)
     return (option == "PASS_MAX_DAYS") || (option == "PASS_MIN_DAYS") || (option == "PASS_WARN_AGE");
 }
 
+bool IsLoginDefsSeparator(char value)
+{
+    return value == ' ' || value == '\t' || value == '\r' || value == '\v' || value == '\f';
+}
+
 Result<string> GetRemediationValue(const LoginDefsOptionParams& params)
 {
     if (params.option.empty() || params.option.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_") != string::npos)
@@ -131,25 +136,25 @@ string ReplaceEffectiveLoginDefsValue(const string& contents, const string& opti
         const size_t lineEnd = contents.find('\n', lineStart);
         const size_t end = lineEnd == string::npos ? contents.size() : lineEnd;
         size_t cursor = lineStart;
-        while (cursor < end && IsAsciiWhitespace(static_cast<unsigned char>(contents[cursor])))
+        while (cursor < end && IsLoginDefsSeparator(contents[cursor]))
         {
             cursor++;
         }
         if (cursor < end && contents[cursor] != '#')
         {
             const size_t keyStart = cursor;
-            while (cursor < end && !IsAsciiWhitespace(static_cast<unsigned char>(contents[cursor])))
+            while (cursor < end && !IsLoginDefsSeparator(contents[cursor]))
             {
                 cursor++;
             }
             if (contents.compare(keyStart, cursor - keyStart, option) == 0)
             {
-                while (cursor < end && IsAsciiWhitespace(static_cast<unsigned char>(contents[cursor])))
+                while (cursor < end && IsLoginDefsSeparator(contents[cursor]))
                 {
                     cursor++;
                 }
                 size_t valueEnd = cursor + StripComment(contents.substr(cursor, end - cursor)).size();
-                while (valueEnd > cursor && IsAsciiWhitespace(static_cast<unsigned char>(contents[valueEnd - 1])))
+                while (valueEnd > cursor && IsLoginDefsSeparator(contents[valueEnd - 1]))
                 {
                     --valueEnd;
                 }

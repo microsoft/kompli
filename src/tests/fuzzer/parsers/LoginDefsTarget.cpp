@@ -23,6 +23,12 @@ void ReportMaxObservedInput()
 }
 } // namespace
 
+extern "C" int LLVMFuzzerInitialize(int*, char***)
+{
+    SetConsoleLoggingEnabled(false);
+    return 0;
+}
+
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)
 {
     static const int reportRegistration = std::atexit(ReportMaxObservedInput);

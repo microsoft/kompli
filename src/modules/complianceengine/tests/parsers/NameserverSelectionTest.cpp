@@ -213,7 +213,6 @@ TEST(NameserverSelectionTest, RejectsZeroLimitsEvenForUnmatchedInput)
         EXPECT_NE(std::string::npos, result.Error().message.find("fixture"));
     }
 }
-
 TEST(NameserverSelectionTest, IncrementalSelectionAgreesWithDocumentAcrossEverySplit)
 {
     const std::string bytes =

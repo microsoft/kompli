@@ -977,6 +977,7 @@ TEST_F(LoginDefsOptionTest, RemediateUpdatesEqualDuplicatesWithParserWhitespace)
     const auto result = RemediateLoginDefsOption(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(Status::Compliant, result.Value());
+
     const auto contents = ReadFile(path);
     ASSERT_TRUE(contents.HasValue());
     EXPECT_EQ(" \tPASS_MAX_DAYS\v365\nPASS_MAX_DAYS 365\n", contents.Value());
