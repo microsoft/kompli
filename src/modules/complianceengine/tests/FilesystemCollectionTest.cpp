@@ -9,6 +9,7 @@
 #include <filesystem/FilesystemCollection.hpp>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
@@ -202,33 +203,117 @@ TEST(FilesystemCollectionTest, ClosingBeforeFirstPullChecksUnyieldedFilePinAndAl
     struct stat expected = {};
     ASSERT_EQ(0, stat(tree.Path("file").c_str(), &expected));
     MockContext context;
-    std::size_t fileCloses = 0;
-    std::size_t otherCloses = 0;
-    ON_CALL(context, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
-        struct stat held = {};
-        const bool file = (0 == fstat(descriptor, &held)) && (held.st_dev == expected.st_dev) && (held.st_ino == expected.st_ino);
-        const int result = close(descriptor);
-        if (file)
+    struct Pin
+    {
+        Pin(int descriptor, dev_t device, ino_t inode)
+            : descriptor(descriptor),
+              device(device),
+              inode(inode)
         {
-            ++fileCloses;
+        }
+        int descriptor;
+        dev_t device;
+        ino_t inode;
+        std::size_t closeAttempts = 0;
+    };
+    std::vector<Pin> openedPins;
+    // Track each open-to-close lifetime, not the fd number: procfs helpers
+    // close during acquisition and the kernel can reuse their numbers.
+    std::map<int, std::size_t> livePins;
+    const auto recordOpen = [&](int descriptor) {
+        if (descriptor >= 0)
+        {
+            struct stat held = {};
+            EXPECT_EQ(0, fstat(descriptor, &held));
+            const auto index = openedPins.size();
+            openedPins.push_back({descriptor, held.st_dev, held.st_ino});
+            EXPECT_TRUE(livePins.emplace(descriptor, index).second);
+        }
+        return descriptor;
+    };
+    ON_CALL(context, OpenNativePath(testing::_, testing::_)).WillByDefault([&](const char* path, int flags) {
+        return recordOpen(context.ContextInterface::OpenNativePath(path, flags));
+    });
+    ON_CALL(context, OpenNativeAt(testing::_, testing::_, testing::_)).WillByDefault([&](int directory, const char* path, int flags) {
+        return recordOpen(context.ContextInterface::OpenNativeAt(directory, path, flags));
+    });
+    std::size_t failedFilePin = 0;
+    bool injectFileCloseFailure = false;
+    ON_CALL(context, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
+        const auto found = livePins.find(descriptor);
+        EXPECT_NE(livePins.end(), found) << "Closing an untracked or already closed descriptor";
+        const bool fail = (found != livePins.end()) && injectFileCloseFailure && (found->second == failedFilePin);
+        if (found != livePins.end())
+        {
+            ++openedPins[found->second].closeAttempts;
+            livePins.erase(found);
+        }
+        const int result = close(descriptor);
+        EXPECT_EQ(0, result);
+        if (fail)
+        {
             errno = EIO;
             return -1;
         }
-        ++otherCloses;
         return result;
     });
-    auto opened = Files(FilesystemCollectionRequest(tree.Path("file"), FilesystemRootKind::File), context);
-    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
-    ASSERT_EQ(0u, fileCloses);
-    const auto beforeOtherCloses = otherCloses;
-    const auto closed = opened->Close();
-    ASSERT_FALSE(closed.HasValue());
-    EXPECT_EQ(EIO, closed.Error().code);
-    EXPECT_EQ(1u, fileCloses);
-    EXPECT_GT(otherCloses, beforeOtherCloses);
-    const auto total = fileCloses + otherCloses;
-    EXPECT_EQ(EIO, opened->Close().Error().code);
-    EXPECT_EQ(total, fileCloses + otherCloses);
+    std::vector<std::size_t> ownedPins;
+    {
+        auto opened = Files(FilesystemCollectionRequest(tree.Path("file"), FilesystemRootKind::File), context);
+        ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+        // All helpers have already closed. What remains belongs to the range:
+        // one pending file pin and the individual acquisition-path pins.
+        for (const auto& live : livePins)
+        {
+            ownedPins.push_back(live.second);
+        }
+        ASSERT_GT(ownedPins.size(), 1u);
+        std::size_t filePins = 0;
+        std::size_t directoryPins = 0;
+        for (const auto index : ownedPins)
+        {
+            const Pin& pin = openedPins[index];
+            EXPECT_EQ(0u, pin.closeAttempts);
+            struct stat held = {};
+            ASSERT_EQ(0, fstat(pin.descriptor, &held));
+            EXPECT_EQ(pin.device, held.st_dev);
+            EXPECT_EQ(pin.inode, held.st_ino);
+            if (held.st_dev == expected.st_dev && held.st_ino == expected.st_ino)
+            {
+                failedFilePin = index;
+                ++filePins;
+            }
+            else
+            {
+                EXPECT_TRUE(S_ISDIR(held.st_mode));
+                ++directoryPins;
+            }
+        }
+        ASSERT_EQ(1u, filePins);
+        ASSERT_GT(directoryPins, 0u);
+        injectFileCloseFailure = true;
+        const auto closed = opened->Close();
+        ASSERT_FALSE(closed.HasValue());
+        EXPECT_EQ(EIO, closed.Error().code);
+        EXPECT_TRUE(livePins.empty());
+        for (const auto index : ownedPins)
+        {
+            EXPECT_EQ(1u, openedPins[index].closeAttempts) << "Pin lifetime " << index;
+        }
+        const auto repeated = opened->Close();
+        ASSERT_FALSE(repeated.HasValue());
+        EXPECT_EQ(EIO, repeated.Error().code);
+        EXPECT_TRUE(livePins.empty());
+        for (const auto index : ownedPins)
+        {
+            EXPECT_EQ(1u, openedPins[index].closeAttempts) << "Retried pin lifetime " << index;
+        }
+    }
+    EXPECT_TRUE(livePins.empty());
+    for (const auto index : ownedPins)
+    {
+        EXPECT_EQ(1u, openedPins[index].closeAttempts) << "Destructor retried pin lifetime " << index;
+    }
 }
 
 TEST(FilesystemCollectionTest, CloseAttemptsCursorAndPinsAfterFirstCleanupFailure)
