@@ -77,7 +77,7 @@ struct Record
 {
     Directive directive = Directive::Blank;
     std::size_t line = 0;
-    std::vector<Span> tokens; // Keyword first; raw trivia remains in entries.
+    std::vector<Span> tokens; // Keyword first; raw trivia remains in the owning entry.
 };
 
 struct Projection
@@ -112,22 +112,51 @@ struct Diagnostic
     std::string message;
 };
 
-struct Document
+// One owned physical entry and all of its evidence. Spans use physical entry
+// numbers, so consumers may retain or discard each result independently.
+// Projection::record is the zero-based physical entry index, as before.
+struct Entry
 {
-    std::string source;
-    std::vector<std::string> entries; // Owned, exact LF-stripped supplied bytes.
-    std::vector<Record> records;
+    std::string source; // Owned source identity; valid after Parser destruction.
+    std::string text;   // Exact LF-stripped supplied bytes, including trivia.
+    Record record;
     std::vector<Projection> projections;
     std::vector<Diagnostic> diagnostics;
 };
 
-// Supply completed, LF-stripped physical entries (as yielded by a line
-// reader), not an acquisition result. Empty vector means successful empty
-// input; acquisition failure must be handled by the caller. No I/O occurs.
+// Feed LF-stripped physical entries one at a time (e.g. FileReader::Lines
+// values). No reader or whole-file buffer is owned by this parser. Next
+// returns owned, per-entry evidence; callers can consume/discard it promptly.
+// Until Finish succeeds every returned entry is provisional, NOT a completed
+// aggregate result. A fatal error is sticky and the failing entry is not
+// published; previously emitted entries cannot be retroactively revoked.
 // Space/tab are provisional separators. Only first-column # and ; are
 // comments. Other ambiguous syntax is retained and flagged, never dropped.
-// EINVAL: zero budget; E2BIG: exceeded budget. Neither publishes a prefix.
-Result<Document> Parse(std::vector<std::string> entries, std::string source, const Limits& limits = {});
+class Parser
+{
+public:
+    explicit Parser(std::string source, Limits limits = {});
+    Result<Entry> Next(std::string text);
+    // Call only after reaching verified EOF and checking Close. Pass true
+    // only if both succeeded; forward any acquisition/read/Close Error here,
+    // or false for incomplete iteration (EIO). The parser cannot observe
+    // unseen input, verify EOF or close an external reader itself. Empty
+    // input succeeds only when the caller confirms completion. Repeated
+    // Finish is idempotent unless Next is illegally called after completion,
+    // in which case that EINVAL becomes sticky.
+    // EINVAL: zero budget/invalid call; E2BIG: exceeded budget.
+    Result<bool> Finish(Result<bool> acquisition);
+
+private:
+    std::string mSource;
+    Limits mLimits;
+    std::size_t mBytes = 0;
+    std::size_t mEntries = 0;
+    std::size_t mTokens = 0;
+    std::size_t mDiagnostics = 0;
+    Result<bool> mCompletion = true;
+    bool mFinished = false;
+};
 } // namespace ResolvConf
 } // namespace ComplianceEngine
 

@@ -24,17 +24,18 @@ Error LimitError(const std::string& source, const char* budget)
     return Error(source + ": resolv.conf " + budget + " limit exceeded", E2BIG);
 }
 
-Result<bool> Note(Document& doc, const Limits& limits, DiagnosticKind kind, Span span, const char* message)
+Result<bool> Note(Entry& entry, std::size_t& diagnosticCount, const Limits& limits, const std::string& source, DiagnosticKind kind, Span span, const char* message)
 {
-    if (doc.diagnostics.size() >= limits.diagnostics)
-        return LimitError(doc.source, "diagnostic");
-    doc.diagnostics.push_back({kind, span, message});
+    if (diagnosticCount >= limits.diagnostics)
+        return LimitError(source, "diagnostic");
+    entry.diagnostics.push_back({kind, span, message});
+    ++diagnosticCount;
     return true;
 }
 
-std::string Text(const Document& doc, Span span)
+std::string Text(const Entry& entry, Span span)
 {
-    return doc.entries[span.line - 1].substr(span.column - 1, span.length);
+    return entry.text.substr(span.column - 1, span.length);
 }
 
 bool Address(const std::string& text, int family, std::array<unsigned char, 16>& bytes)
@@ -65,12 +66,12 @@ unsigned int NumericCap(const std::string& name)
     return 0;
 }
 
-Result<bool> Project(Document& doc, const Limits& limits, std::size_t index, Span span)
+Result<bool> Project(Entry& entry, std::size_t& diagnosticCount, const Limits& limits, const std::string& source, Span span)
 {
-    const auto& record = doc.records[index];
-    const auto value = Text(doc, span);
+    const auto& record = entry.record;
+    const auto value = Text(entry, span);
     Projection projection;
-    projection.record = index;
+    projection.record = record.line - 1;
     projection.token = span;
 
     if (record.directive == Directive::Nameserver)
@@ -89,7 +90,7 @@ Result<bool> Project(Document& doc, const Limits& limits, std::size_t index, Spa
         else
         {
             projection.status = Status::Invalid;
-            auto noted = Note(doc, limits, DiagnosticKind::Malformed, span, "invalid nameserver address");
+            auto noted = Note(entry, diagnosticCount, limits, source, DiagnosticKind::Malformed, span, "invalid nameserver address");
             if (!noted.HasValue())
                 return noted.Error();
         }
@@ -117,14 +118,14 @@ Result<bool> Project(Document& doc, const Limits& limits, std::size_t index, Spa
             // The manual's sortlist example is IPv4; do not assert IPv6
             // pair semantics or synthesize a natural netmask.
             projection.status = Status::Unverified;
-            auto noted = Note(doc, limits, DiagnosticKind::Unverified, span, "IPv6 sortlist semantics unverified");
+            auto noted = Note(entry, diagnosticCount, limits, source, DiagnosticKind::Unverified, span, "IPv6 sortlist semantics unverified");
             if (!noted.HasValue())
                 return noted.Error();
         }
         else
         {
             projection.status = Status::Invalid;
-            auto noted = Note(doc, limits, DiagnosticKind::Malformed, span, "invalid sortlist address or netmask");
+            auto noted = Note(entry, diagnosticCount, limits, source, DiagnosticKind::Malformed, span, "invalid sortlist address or netmask");
             if (!noted.HasValue())
                 return noted.Error();
         }
@@ -151,7 +152,7 @@ Result<bool> Project(Document& doc, const Limits& limits, std::size_t index, Spa
             else
             {
                 projection.status = Status::Invalid;
-                auto noted = Note(doc, limits, DiagnosticKind::Malformed, span, "invalid numeric option");
+                auto noted = Note(entry, diagnosticCount, limits, source, DiagnosticKind::Malformed, span, "invalid numeric option");
                 if (!noted.HasValue())
                     return noted.Error();
             }
@@ -165,20 +166,20 @@ Result<bool> Project(Document& doc, const Limits& limits, std::size_t index, Spa
         {
             projection.kind = ValueKind::UnknownOption;
             projection.status = Status::Unknown;
-            auto noted = Note(doc, limits, DiagnosticKind::Unknown, span, "unknown option or extra option operand");
+            auto noted = Note(entry, diagnosticCount, limits, source, DiagnosticKind::Unknown, span, "unknown option or extra option operand");
             if (!noted.HasValue())
                 return noted.Error();
         }
     }
-    doc.projections.push_back(std::move(projection));
+    entry.projections.push_back(std::move(projection));
     return true;
 }
 
-Result<bool> Analyze(Document& doc, const Limits& limits, std::size_t index, std::size_t& tokenCount)
+Result<bool> Analyze(Entry& entry, const Limits& limits, const std::string& source, std::size_t& tokenCount, std::size_t& diagnosticCount)
 {
-    auto& record = doc.records[index];
-    const auto& line = doc.entries[index];
-    record.line = index + 1;
+    auto& record = entry.record;
+    const auto& line = entry.text;
+    const auto lineNumber = record.line;
     // Every supplied byte is retained, including bytes not given a token.
     // Surface ambiguous binary/quoting/continuation rather than treating it
     // as verified glibc grammar.
@@ -187,8 +188,8 @@ Result<bool> Analyze(Document& doc, const Limits& limits, std::size_t index, std
         const unsigned char byte = static_cast<unsigned char>(line[i]);
         if (byte == '\0' || byte == '\r' || byte >= 128 || byte == '"' || byte == '\\')
         {
-            auto noted = Note(doc, limits, byte == '\0' ? DiagnosticKind::Malformed : DiagnosticKind::Unverified, {index + 1, i + 1, 1},
-                byte == '\0' ? "embedded NUL" : "byte grammar unverified");
+            auto noted = Note(entry, diagnosticCount, limits, source, byte == '\0' ? DiagnosticKind::Malformed : DiagnosticKind::Unverified,
+                {lineNumber, i + 1, 1}, byte == '\0' ? "embedded NUL" : "byte grammar unverified");
             if (!noted.HasValue())
                 return noted.Error();
         }
@@ -203,7 +204,7 @@ Result<bool> Analyze(Document& doc, const Limits& limits, std::size_t index, std
     if (Separator(line[0]))
     {
         record.directive = Directive::Malformed;
-        return Note(doc, limits, DiagnosticKind::Malformed, {index + 1, 1, 1}, "keyword not in first column");
+        return Note(entry, diagnosticCount, limits, source, DiagnosticKind::Malformed, {lineNumber, 1, 1}, "keyword not in first column");
     }
     for (std::size_t i = 0; i < line.size();)
     {
@@ -216,11 +217,11 @@ Result<bool> Analyze(Document& doc, const Limits& limits, std::size_t index, std
         while (i < line.size() && !Separator(line[i]))
             ++i;
         if (tokenCount >= limits.tokens)
-            return LimitError(doc.source, "token");
-        record.tokens.push_back({index + 1, start + 1, i - start});
+            return LimitError(source, "token");
+        record.tokens.push_back({lineNumber, start + 1, i - start});
         ++tokenCount;
     }
-    const auto key = Text(doc, record.tokens.front());
+    const auto key = Text(entry, record.tokens.front());
     if (key == "nameserver")
         record.directive = Directive::Nameserver;
     else if (key == "search")
@@ -234,16 +235,16 @@ Result<bool> Analyze(Document& doc, const Limits& limits, std::size_t index, std
     else
     {
         record.directive = Directive::Unknown;
-        return Note(doc, limits, DiagnosticKind::Unknown, record.tokens.front(), "unknown directive");
+        return Note(entry, diagnosticCount, limits, source, DiagnosticKind::Unknown, record.tokens.front(), "unknown directive");
     }
     if (record.tokens.size() == 1)
     {
         record.directive = Directive::Malformed;
-        return Note(doc, limits, DiagnosticKind::Malformed, {index + 1, line.size() + 1, 0}, "missing directive operand");
+        return Note(entry, diagnosticCount, limits, source, DiagnosticKind::Malformed, {lineNumber, line.size() + 1, 0}, "missing directive operand");
     }
     if ((record.directive == Directive::Nameserver || record.directive == Directive::Domain) && record.tokens.size() > 2)
     {
-        auto noted = Note(doc, limits, DiagnosticKind::Malformed, record.tokens[2], "extra directive operand");
+        auto noted = Note(entry, diagnosticCount, limits, source, DiagnosticKind::Malformed, record.tokens[2], "extra directive operand");
         if (!noted.HasValue())
             return noted.Error();
         record.directive = Directive::Malformed;
@@ -258,7 +259,7 @@ Result<bool> Analyze(Document& doc, const Limits& limits, std::size_t index, std
             continue;
         if (record.directive == Directive::Malformed)
             record.directive = directive == "nameserver" ? Directive::Nameserver : Directive::Domain;
-        auto projected = Project(doc, limits, index, record.tokens[i]);
+        auto projected = Project(entry, diagnosticCount, limits, source, record.tokens[i]);
         if (!projected.HasValue())
             return projected.Error();
         if ((directive == "nameserver" || directive == "domain") && record.tokens.size() > 2)
@@ -268,35 +269,56 @@ Result<bool> Analyze(Document& doc, const Limits& limits, std::size_t index, std
 }
 } // namespace
 
-Result<Document> Parse(std::vector<std::string> entries, std::string source, const Limits& limits)
+Parser::Parser(std::string source, Limits limits)
+    : mSource(std::move(source)),
+      mLimits(limits)
 {
     if (!limits.bytes || !limits.lineBytes || !limits.entries || !limits.tokens || !limits.diagnostics)
-        return Error(source + ": resolv.conf limits must be positive", EINVAL);
-    if (entries.size() > limits.entries)
-        return LimitError(source, "entry");
-    std::size_t total = 0;
-    for (const auto& line : entries)
+        mCompletion = Error(mSource + ": resolv.conf limits must be positive", EINVAL);
+}
+
+Result<Entry> Parser::Next(std::string text)
+{
+    if (!mCompletion.HasValue())
+        return mCompletion.Error();
+    if (mFinished)
     {
-        if (line.size() > limits.lineBytes)
-            return LimitError(source, "line");
-        if (line.size() > limits.bytes - total)
-            return LimitError(source, "byte");
-        total += line.size();
+        mCompletion = Error(mSource + ": resolv.conf entry after finalization", EINVAL);
+        return mCompletion.Error();
     }
-    Document doc;
-    doc.source = std::move(source);
-    doc.entries = std::move(entries);
-    std::size_t tokenCount = 0;
-    for (std::size_t index = 0; index < doc.entries.size(); ++index)
+    if (mEntries >= mLimits.entries)
+        mCompletion = LimitError(mSource, "entry");
+    else if (text.size() > mLimits.lineBytes)
+        mCompletion = LimitError(mSource, "line");
+    else if (text.size() > mLimits.bytes - mBytes)
+        mCompletion = LimitError(mSource, "byte");
+    if (!mCompletion.HasValue())
+        return mCompletion.Error();
+
+    Entry entry;
+    entry.source = mSource;
+    entry.text = std::move(text);
+    entry.record.line = ++mEntries;
+    mBytes += entry.text.size();
+    auto analyzed = Analyze(entry, mLimits, mSource, mTokens, mDiagnostics);
+    if (!analyzed.HasValue())
     {
-        if (doc.records.size() >= limits.entries)
-            return LimitError(doc.source, "record");
-        doc.records.emplace_back();
-        auto analyzed = Analyze(doc, limits, index, tokenCount);
-        if (!analyzed.HasValue())
-            return analyzed.Error();
+        mCompletion = std::move(analyzed).Error();
+        return mCompletion.Error();
     }
-    return doc;
+    return entry;
+}
+
+Result<bool> Parser::Finish(Result<bool> acquisition)
+{
+    if (!mCompletion.HasValue() || mFinished)
+        return mCompletion;
+    mFinished = true;
+    if (!acquisition.HasValue())
+        mCompletion = std::move(acquisition).Error();
+    else if (!acquisition.Value())
+        mCompletion = Error(mSource + ": resolv.conf input not fully acquired", EIO);
+    return mCompletion;
 }
 } // namespace ResolvConf
 } // namespace ComplianceEngine
