@@ -41,6 +41,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <utility>
 
 using ComplianceEngine::Cli::Context;
 using ComplianceEngine::Engine;
@@ -192,7 +193,13 @@ int main()
         return 1;
     }
 
-    auto context = std::unique_ptr<Context>(new Context(nullptr));
+    auto contextResult = Context::Make(nullptr);
+    if (!contextResult.HasValue())
+    {
+        std::cerr << "komplid: failed to create CLI context: " << contextResult.Error().message << std::endl;
+        return 1;
+    }
+    auto context = std::move(contextResult).Value();
     // Same as the kompli CLI: the Engine takes ownership of a PayloadFormatter
     // and uses it polymorphically to render each rule's indicators. The JSON
     // one is required here since the indicators become part of the
