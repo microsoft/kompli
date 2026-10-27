@@ -417,6 +417,89 @@ TEST_F(PathFile, BoundedChunksAndLazyEarlyBreakCloseExactlyOnce)
     EXPECT_EQ(1, closes);
 }
 
+TEST_F(PathFile, IteratorOwnsOneErrorItemAndEndsAfterAdvance)
+{
+    Write(std::string("ok\nbad\0tail\n", 12));
+    auto opened = Lines(context, path, Limited(12));
+    ASSERT_TRUE(opened.HasValue());
+    auto& range = opened.Value();
+    auto cursor = range.begin();
+    ASSERT_TRUE(cursor != range.end());
+    ASSERT_TRUE(cursor->HasValue());
+    EXPECT_EQ("ok", (*cursor).Value());
+    auto moved = std::move(cursor);
+    EXPECT_FALSE(cursor != range.end());
+    ASSERT_TRUE(moved != range.end());
+    EXPECT_EQ("ok", moved->Value());
+    ++moved;
+    ASSERT_TRUE(moved != range.end());
+    ASSERT_FALSE(moved->HasValue());
+    EXPECT_EQ(EBADMSG, moved->Error().code);
+    ++moved;
+    EXPECT_FALSE(moved != range.end());
+    EXPECT_FALSE(range.end() != moved);
+    EXPECT_TRUE(range.Close().HasValue());
+}
+
+TEST_F(PathFile, CloseInvalidatesBufferedIteratorWithoutReadingTail)
+{
+    Write("first\nsecond\n");
+    int reads = 0;
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+        if (IsFileDescriptor(fd, true))
+            ++reads;
+        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+    });
+    auto opened = Lines(context, path, Limited(13));
+    ASSERT_TRUE(opened.HasValue());
+    auto& range = opened.Value();
+    auto cursor = range.begin();
+    ASSERT_TRUE(cursor != range.end());
+    EXPECT_EQ("first", cursor->Value());
+    const int before = reads;
+    EXPECT_TRUE(range.Close().HasValue());
+    EXPECT_FALSE(cursor != range.end());
+    EXPECT_FALSE(range.end() != cursor);
+    EXPECT_FALSE(range.begin() != range.end());
+    EXPECT_EQ(before, reads);
+}
+
+TEST_F(PathFile, ExactChunkCapProbesOnceAndCumulativeInterruptsIncludeProbe)
+{
+    Write(std::string(8192, 'x'));
+    std::vector<std::size_t> requests;
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+        if (IsFileDescriptor(fd, true))
+            requests.push_back(size);
+        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+    });
+    EXPECT_EQ(std::string(8192, 'x'), Collect(path, Limited(8192)).Value());
+    EXPECT_EQ((std::vector<std::size_t>{8192, 1}), requests);
+    Write(std::string(8193, 'x'));
+    requests.clear();
+    EXPECT_EQ(E2BIG, Collect(path, Limited(8192)).Error().code);
+    EXPECT_EQ((std::vector<std::size_t>{8192, 1}), requests);
+
+    Write(std::string(8192, 'x'));
+    int interrupts = 0;
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (!IsFileDescriptor(fd, true))
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        if ((size == 8192 && interrupts == 0) || (size == 1 && interrupts == 1))
+        {
+            ++interrupts;
+            errno = EINTR;
+            return -1;
+        }
+        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+    });
+    auto result = Collect(path, Limited(8192, 1));
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(E2BIG, result.Error().code);
+    EXPECT_EQ("File read interrupt retry limit exceeded", result.Error().message);
+    EXPECT_EQ(2, interrupts);
+}
+
 TEST_F(PathFile, RangeMoveAndEarlyCloseNeverReadTail)
 {
     Write("one\nsecond\n");
@@ -488,7 +571,7 @@ TEST_F(PathFile, RepeatedFailedCloseReportsOriginalOutcomeWithoutRetry)
     auto first = range.Close();
     ASSERT_FALSE(first.HasValue());
     EXPECT_EQ(EBADF, first.Error().code);
-    EXPECT_EQ("Failed to close data descriptor", first.Error().message);
+    EXPECT_EQ("Cannot close readable file", first.Error().message);
     auto again = range.Close();
     ASSERT_FALSE(again.HasValue());
     EXPECT_EQ(first.Error().code, again.Error().code);
@@ -1152,7 +1235,7 @@ TEST_F(PathFile, DataCloseErrorIsPrimaryAfterSuccessButNotAfterReadFailure)
     auto result = Collect(path, Limited(4));
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EBADF, result.Error().code);
-    EXPECT_EQ("Failed to close data descriptor", result.Error().message);
+    EXPECT_EQ("Cannot close readable file", result.Error().message);
     EXPECT_EQ(1, dataCloses);
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))

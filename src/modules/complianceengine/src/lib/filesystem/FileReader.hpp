@@ -4,6 +4,7 @@
 #ifndef COMPLIANCEENGINE_FILE_READER_HPP
 #define COMPLIANCEENGINE_FILE_READER_HPP
 
+#include "Optional.h"
 #include "Result.h"
 #include "filesystem/FilesystemPolicy.hpp"
 
@@ -30,7 +31,8 @@ namespace FileReader
 // terminating LF, if present; an unterminated final line is unchanged.
 // Empty input yields nothing, and a trailing LF adds no synthetic empty line.
 // CR and non-ASCII bytes are preserved; embedded NUL is rejected with EBADMSG
-// before the affected line can be yielded.
+// before the affected line can be yielded. Read and EOF-verification failures
+// appear as one error item, followed by end; Close invalidates any held item.
 struct Limits
 {
     std::size_t maxBytes = 1024 * 1024;
@@ -70,7 +72,11 @@ public:
 
     private:
         explicit Iterator(LinesRange* range);
+        void Next();
+
         LinesRange* mRange = nullptr;
+        ComplianceEngine::Optional<value_type> mCurrent;
+
         friend class LinesRange;
     };
 
@@ -79,11 +85,13 @@ public:
     LinesRange(const LinesRange&) = delete;
     LinesRange& operator=(const LinesRange&) = delete;
     ~LinesRange();
+
     Iterator begin();    // NOLINT(*-identifier-naming)
     Iterator end() const // NOLINT(*-identifier-naming)
     {
         return {};
     }
+
     // Idempotent, including failures: the data descriptor is attempted once.
     // Failed closes log the source path and descriptor error once, even when
     // Close is called again. Destruction also closes and logs if needed;
@@ -94,8 +102,10 @@ public:
 private:
     struct State;
     explicit LinesRange(std::unique_ptr<State> state);
+
     std::unique_ptr<State> mState;
     bool mStarted = false;
+
     friend ComplianceEngine::Result<LinesRange> Lines(const ComplianceEngine::ContextInterface&, std::string, Policy);
 };
 

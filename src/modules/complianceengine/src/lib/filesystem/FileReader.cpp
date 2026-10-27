@@ -4,9 +4,11 @@
 #include "FileReader.hpp"
 
 #include "ContextInterface.h"
+#include "Optional.h"
 #include "filesystem/Path.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cerrno>
 #include <limits>
 #include <new>
@@ -19,8 +21,11 @@ namespace
 {
 using ComplianceEngine::ContextInterface;
 using ComplianceEngine::Error;
+using ComplianceEngine::Optional;
 namespace Filesystem = ComplianceEngine::Filesystem;
 using ComplianceEngine::Result;
+
+constexpr std::size_t ReadChunkBytes = 8192;
 
 bool SameFile(const struct stat& before, const struct stat& after)
 {
@@ -35,7 +40,17 @@ bool SameFile(const struct stat& before, const struct stat& after)
 // This does not establish trust in a caller-supplied path's ancestors.
 Filesystem::ResolverLimits AcquisitionLimits()
 {
-    return {{4096, 128, 100000, 256, 1024 * 1024, 4096}, 4096, 128, 128};
+    Filesystem::ResolverLimits limits;
+    limits.shared.targetBytes = 4096;
+    limits.shared.components = 128;
+    limits.shared.work = 100000;
+    limits.shared.liveDescriptors = 256;
+    limits.shared.retainedBytes = 1024 * 1024;
+    limits.shared.fdinfoBytes = 4096;
+    limits.linkTargetBytes = 4096;
+    limits.linkExpansions = 128;
+    limits.depth = 128;
+    return limits;
 }
 } // namespace
 
@@ -48,27 +63,19 @@ struct LinesRange::State
           data(std::move(data))
     {
     }
+
     ~State() noexcept
     {
-        if (finalized)
-            return;
-        try
+        if (!closed)
         {
-            auto result = data.Close();
-            if (!result.HasValue())
-                dataCloseError = result.Error().code;
-        }
-        catch (...)
-        {
-            dataCloseError = EIO;
-        }
-        try
-        {
-            LogCloseErrors();
-        }
-        catch (...)
-        {
-            // Logging must not terminate during unwinding.
+            try
+            {
+                Close();
+            }
+            catch (...)
+            {
+                // Cleanup and diagnostic failure cannot terminate destruction.
+            }
         }
     }
 
@@ -78,43 +85,24 @@ struct LinesRange::State
     Filesystem::ReadableFile data;
     struct stat before = {};
     std::string buffer;
-    std::size_t position = 0, available = 0, consumed = 0;
+    std::size_t position = 0, consumed = 0;
     std::size_t interrupts = 0;
     std::string pending;
-    std::unique_ptr<Result<std::string>> current;
     bool finished = false;
     bool closed = false;
-    bool finalized = false;
-    int dataCloseError = 0;
-
-    void LogCloseErrors() const
-    {
-        if (dataCloseError)
-            OsConfigLogError(context.GetLogHandle(), "Failed to close data descriptor for %s: %d", path.c_str(), dataCloseError);
-    }
 
     Result<bool> Close()
     {
         if (!closed)
         {
             closed = true;
-            current.reset();
             finished = true;
             auto result = data.Close();
             if (!result.HasValue())
-                dataCloseError = result.Error().code;
-            finalized = true;
-            LogCloseErrors();
+                OsConfigLogError(context.GetLogHandle(), "Failed to close data descriptor for %s: %d", path.c_str(), result.Error().code);
+            return result;
         }
-        if (!dataCloseError)
-            return true;
-        return Error("Failed to close data descriptor", dataCloseError);
-    }
-
-    void Fail(Error error)
-    {
-        current.reset(new Result<std::string>(std::move(error)));
-        finished = true;
+        return data.Close();
     }
 
     static Result<std::unique_ptr<State>> Open(const ContextInterface& context, std::string path, Policy policy)
@@ -181,82 +169,82 @@ struct LinesRange::State
         return std::move(state);
     }
 
-    void Complete()
+    Result<Optional<std::string>> Complete()
     {
         if (before.st_size > 0 && static_cast<unsigned long long>(before.st_size) != consumed)
-        {
-            Fail(Error("File ended before its stable size", EIO));
-            return;
-        }
+            return Error("File ended before its stable size", EIO);
         auto after = data.Inspect();
         if (!after.HasValue())
-        {
-            Fail(Error("Failed to verify data descriptor", after.Error().code));
-            return;
-        }
+            return Error("Failed to verify data descriptor", after.Error().code);
         if (!SameFile(before, after.Value()))
-        {
-            Fail(Error("File changed while being read", EAGAIN));
-            return;
-        }
-        finished = true;
+            return Error("File changed while being read", EAGAIN);
         if (!pending.empty())
-            current.reset(new Result<std::string>(std::move(pending)));
+            return Optional<std::string>(std::move(pending));
+        return Optional<std::string>();
     }
 
-    void Advance()
+    // Refill only when exhausted. A one-byte read at the cap proves exact
+    // EOF without storing or charging any excess byte.
+    Result<bool> Refill()
     {
-        current.reset();
-        if (finished)
-            return;
         while (true)
         {
-            if (position == available)
+            const std::size_t remaining = policy.limits.maxBytes - consumed;
+            const std::size_t requested = std::min(ReadChunkBytes, remaining ? remaining : std::size_t(1));
+            auto chunk = data.Read(requested);
+            if (!chunk.HasValue())
             {
-                // A single-byte probe at the cap distinguishes exact EOF
-                // from excess, without buffering any excess content.
-                const std::size_t remaining = policy.limits.maxBytes - consumed;
-                const std::size_t requested = std::min(std::size_t(8192), remaining ? remaining : std::size_t(1));
-                auto chunk = data.Read(requested);
-                if (!chunk.HasValue())
+                const int error = chunk.Error().code;
+                if (error == EINTR)
                 {
-                    const int error = chunk.Error().code;
-                    if (error == EINTR)
-                    {
-                        if (interrupts++ < policy.limits.maxInterruptedReads)
-                            continue;
-                        Fail(Error("File read interrupt retry limit exceeded", E2BIG));
-                    }
-                    else
-                        Fail(Error("Failed to read file bytes", error));
-                    return;
+                    if (interrupts++ < policy.limits.maxInterruptedReads)
+                        continue;
+                    return Error("File read interrupt retry limit exceeded", E2BIG);
                 }
-                if (chunk.Value().empty())
+                return Error("Failed to read file bytes", error);
+            }
+            if (chunk.Value().empty())
+                return false;
+            if (chunk.Value().size() > remaining)
+                return Error("File byte limit exceeded", E2BIG);
+            buffer = std::move(chunk).Value();
+            position = 0;
+            return true;
+        }
+    }
+
+    Result<Optional<std::string>> Next()
+    {
+        if (finished || closed)
+            return Optional<std::string>();
+        while (true)
+        {
+            if (position == buffer.size())
+            {
+                auto filled = Refill();
+                if (!filled.HasValue())
                 {
-                    Complete();
-                    return;
+                    finished = true;
+                    return std::move(filled).Error();
                 }
-                if (chunk.Value().size() > remaining)
+                if (!filled.Value())
                 {
-                    Fail(Error("File byte limit exceeded", E2BIG));
-                    return;
+                    finished = true;
+                    return Complete();
                 }
-                buffer = std::move(chunk).Value();
-                available = buffer.size();
-                position = 0;
             }
             const char byte = buffer[position++];
             ++consumed;
             if (byte == '\0')
             {
-                Fail(Error("Embedded NUL in text file", EBADMSG));
-                return;
+                finished = true;
+                return Error("Embedded NUL in text file", EBADMSG);
             }
             if (byte == '\n')
             {
-                current.reset(new Result<std::string>(std::move(pending)));
+                Optional<std::string> line(std::move(pending));
                 pending.clear();
-                return;
+                return line;
             }
             pending.push_back(byte);
         }
@@ -264,43 +252,69 @@ struct LinesRange::State
 };
 
 LinesRange::Iterator::Iterator() = default;
+
 LinesRange::Iterator::Iterator(LinesRange* range)
     : mRange(range)
 {
-    mRange->mState->Advance();
+    Next();
 }
+
 LinesRange::Iterator::Iterator(Iterator&& other) noexcept
-    : mRange(other.mRange)
+    : mRange(other.mRange),
+      mCurrent(std::move(other.mCurrent))
 {
     other.mRange = nullptr;
 }
+
 LinesRange::Iterator& LinesRange::Iterator::operator=(Iterator&& other) noexcept
 {
     if (this != &other)
     {
         mRange = other.mRange;
+        mCurrent = std::move(other.mCurrent);
         other.mRange = nullptr;
     }
     return *this;
 }
+
 LinesRange::Iterator::~Iterator() = default;
+
 LinesRange::Iterator::reference LinesRange::Iterator::operator*() const
 {
-    return *mRange->mState->current;
+    assert(mRange && mRange->mState && !mRange->mState->closed && mCurrent.HasValue());
+    return mCurrent.Value();
 }
+
 LinesRange::Iterator::pointer LinesRange::Iterator::operator->() const
 {
-    return mRange->mState->current.get();
+    return &**this;
 }
+
 LinesRange::Iterator& LinesRange::Iterator::operator++()
 {
-    mRange->mState->Advance();
+    assert(mRange && mRange->mState && !mRange->mState->closed && mCurrent.HasValue());
+    Next();
     return *this;
 }
+
+void LinesRange::Iterator::Next()
+{
+    mCurrent.Reset();
+    auto next = mRange->mState->Next();
+    if (!next.HasValue())
+    {
+        mCurrent = Result<std::string>(std::move(next).Error());
+        return;
+    }
+    auto& line = next.Value();
+    if (line.HasValue())
+        mCurrent = Result<std::string>(std::move(line).Value());
+}
+
 bool LinesRange::Iterator::operator!=(const Iterator& other) const
 {
-    const bool active = mRange && mRange->mState && mRange->mState->current;
-    const bool otherActive = other.mRange && other.mRange->mState && other.mRange->mState->current;
+    const bool active = mRange && mRange->mState && !mRange->mState->closed && mCurrent.HasValue();
+    const bool otherActive = other.mRange && other.mRange->mState && !other.mRange->mState->closed && other.mCurrent.HasValue();
     return active != otherActive || (active && mRange != other.mRange);
 }
 
@@ -308,9 +322,13 @@ LinesRange::LinesRange(std::unique_ptr<State> state)
     : mState(std::move(state))
 {
 }
+
 LinesRange::LinesRange(LinesRange&&) noexcept = default;
+
 LinesRange& LinesRange::operator=(LinesRange&&) noexcept = default;
+
 LinesRange::~LinesRange() = default;
+
 LinesRange::Iterator LinesRange::begin() // NOLINT(*-identifier-naming)
 {
     if (!mState || mStarted || mState->closed)
@@ -318,10 +336,12 @@ LinesRange::Iterator LinesRange::begin() // NOLINT(*-identifier-naming)
     mStarted = true;
     return Iterator(this);
 }
+
 Result<bool> LinesRange::Close()
 {
     return mState ? mState->Close() : Result<bool>(true);
 }
+
 Result<LinesRange> Lines(const ContextInterface& context, std::string path, Policy policy)
 {
     auto opened = LinesRange::State::Open(context, std::move(path), std::move(policy));
