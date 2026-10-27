@@ -7,7 +7,11 @@
 #include "MockContext.h"
 #include "parson.h"
 
+#include <UserDotFilePermissions.h>
+#include <cerrno>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <sys/stat.h>
 
 using ComplianceEngine::action_func_t;
 using ComplianceEngine::Error;
@@ -23,6 +27,38 @@ protected:
     MockContext mContext;
     ComplianceEngine::DebugFormatter mFormatter;
 };
+
+TEST_F(EvaluatorTest, UserDotFileRemediationIsDisabledWithoutChangingFiles)
+{
+    const auto& actions = Evaluator::mProcedureMap.at("UserDotFilePermissions");
+    ASSERT_TRUE(actions.audit);
+    ASSERT_TRUE(actions.remediate); // A null handler would fall back to audit in remediation mode.
+
+    const std::string file = mContext.MakeTempfile("unchanged\n");
+    ASSERT_EQ(0, chmod(file.c_str(), 0666));
+    struct stat before = {}, after = {};
+    ASSERT_EQ(0, stat(file.c_str(), &before));
+
+    ComplianceEngine::IndicatorsTree indicators;
+    indicators.Push("UserDotFilePermissions");
+    const auto direct = ComplianceEngine::RemediateUserDotFilePermissions(indicators, mContext);
+    ASSERT_FALSE(direct.HasValue());
+    EXPECT_EQ(ENOTSUP, direct.Error().code);
+    EXPECT_EQ("UserDotFilePermissions remediation is disabled", direct.Error().message);
+    EXPECT_TRUE(indicators.Back().indicators.empty());
+
+    auto json = JsonWrapper::FromString("{\"UserDotFilePermissions\":{}}");
+    ASSERT_TRUE(json.HasValue());
+    Evaluator evaluator("test", json_value_get_object(json->get()), mParameters, mContext);
+    const auto result = evaluator.ExecuteRemediation();
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(ENOTSUP, result.Error().code);
+    EXPECT_EQ("UserDotFilePermissions remediation is disabled", result.Error().message);
+    ASSERT_EQ(0, stat(file.c_str(), &after));
+    EXPECT_EQ(before.st_mode, after.st_mode);
+    EXPECT_EQ(before.st_uid, after.st_uid);
+    EXPECT_EQ(before.st_gid, after.st_gid);
+}
 
 TEST_F(EvaluatorTest, Contructor)
 {
