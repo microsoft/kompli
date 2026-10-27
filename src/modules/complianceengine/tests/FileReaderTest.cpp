@@ -67,6 +67,12 @@ protected:
     {
         return IsFileDescriptor(fd, readable, path);
     }
+    bool IsLinkDescriptor(int fd, const std::string& link) const
+    {
+        struct stat held = {}, fixture = {};
+        return ::fstat(fd, &held) == 0 && ::lstat(link.c_str(), &fixture) == 0 && S_ISLNK(held.st_mode) && held.st_dev == fixture.st_dev &&
+               held.st_ino == fixture.st_ino;
+    }
     bool MakeAncestorTargets(const std::string& ancestor, const std::string& alternate)
     {
         if ((0 != ::mkdir(ancestor.c_str(), 0700)) || (0 != ::mkdir(alternate.c_str(), 0700)))
@@ -154,17 +160,36 @@ TEST_F(PathFile, OmittedPolicyFollowsFinalSymlinkAndRejectsNul)
     EXPECT_EQ(ELOOP, Collect(path + ".link", reject).Error().code);
 }
 
-TEST_F(PathFile, DoNotFollowRejectsOnlyTheFinalSymlink)
+TEST_F(PathFile, DoNotFollowRejectsIntermediateAndFinalSymlinksWithoutReading)
 {
     Write("plain\n");
-    // The same link can be an intermediate component or the final component.
+    // Both links occur in the same path; the final link can also be requested alone.
     ASSERT_EQ(0, ::symlink(context.GetTempdirPath().c_str(), (path + ".link").c_str()));
+    ASSERT_EQ(0, ::symlink(path.c_str(), (path + ".old").c_str()));
+    const auto chained = path + ".link/" + path.substr(path.find_last_of('/') + 1) + ".old";
+    int reads = 0, intermediateCloses = 0, finalCloses = 0;
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        reads += IsFileDescriptor(fd, true);
+        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+    });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
+        intermediateCloses += IsLinkDescriptor(fd, path + ".link");
+        finalCloses += IsLinkDescriptor(fd, path + ".old");
+        return context.ContextInterface::CloseFileDescriptor(fd);
+    });
+    EXPECT_EQ("plain", Collect(chained, Policy{}).Value());
+    EXPECT_GT(reads, 0);
+    reads = intermediateCloses = finalCloses = 0;
     Policy policy;
     policy.symlinks = SymlinkFollowing::DoNotFollow;
-    EXPECT_EQ("plain", Collect(path + ".link/" + path.substr(path.find_last_of('/') + 1), policy).Value());
-    const auto rejected = Lines(context, path + ".link", policy);
-    ASSERT_FALSE(rejected.HasValue());
-    EXPECT_EQ(ELOOP, rejected.Error().code);
+    EXPECT_EQ(ELOOP, Collect(chained, policy).Error().code);
+    EXPECT_EQ(1, intermediateCloses);
+    EXPECT_EQ(0, finalCloses);
+    EXPECT_EQ(0, reads);
+    EXPECT_EQ(ELOOP, Collect(path + ".old", policy).Error().code);
+    EXPECT_EQ(1, intermediateCloses);
+    EXPECT_EQ(1, finalCloses);
+    EXPECT_EQ(0, reads);
     EXPECT_EQ("plain", Collect(path, policy).Value());
 }
 
@@ -948,9 +973,10 @@ TEST_F(PathFile, PinnedInodeSymlinkAndNonregular)
     EXPECT_EQ(EINVAL, Collect(context.GetTempdirPath(), Limited(3)).Error().code);
 }
 
-TEST_F(PathFile, AncestorReplacementBeforeAcquisitionSelectsReplacement)
+TEST_F(PathFile, AncestorReplacementBeforeAcquisitionRespectsLinkPolicy)
 {
-    // Final-link rejection does not reject an ancestor swapped before descent.
+    // Swap before descent: reject the new ancestor link, rather than reading
+    // from the replacement directory. Follow still selects the replacement.
     const std::string root = context.GetTempdirPath();
     const std::string ancestor = root + "/ancestor";
     const std::string alternate = root + "/alternate";
@@ -959,6 +985,15 @@ TEST_F(PathFile, AncestorReplacementBeforeAcquisitionSelectsReplacement)
     ASSERT_TRUE(MakeAncestorTargets(ancestor, alternate));
 
     bool swapped = false;
+    int reads = 0, linkCloses = 0;
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        reads += IsFileDescriptor(fd, true, alternate + "/target");
+        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+    });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
+        linkCloses += IsLinkDescriptor(fd, ancestor);
+        return context.ContextInterface::CloseFileDescriptor(fd);
+    });
     struct stat processRoot = {};
     ASSERT_EQ(0, ::stat("/", &processRoot));
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
@@ -972,12 +1007,15 @@ TEST_F(PathFile, AncestorReplacementBeforeAcquisitionSelectsReplacement)
         return status;
     });
 
-    auto rejectFinal = Limited(16);
-    rejectFinal.symlinks = SymlinkFollowing::DoNotFollow;
-    auto result = Collect(requested, rejectFinal);
-    ASSERT_TRUE(result.HasValue());
+    auto reject = Limited(16);
+    reject.symlinks = SymlinkFollowing::DoNotFollow;
+    auto result = Collect(requested, reject);
+    ASSERT_FALSE(result.HasValue());
     EXPECT_TRUE(swapped);
-    EXPECT_EQ("alternate", result.Value());
+    EXPECT_EQ(ELOOP, result.Error().code);
+    EXPECT_EQ(0, reads);
+    EXPECT_EQ(1, linkCloses);
+    EXPECT_EQ("alternate", Collect(requested, Limited(16)).Value());
 }
 
 TEST_F(PathFile, AncestorReplacementAfterAcquisitionKeepsPinnedFile)
@@ -1002,9 +1040,7 @@ TEST_F(PathFile, AncestorReplacementAfterAcquisitionKeepsPinnedFile)
         return status;
     });
 
-    auto rejectFinal = Limited(16);
-    rejectFinal.symlinks = SymlinkFollowing::DoNotFollow;
-    auto result = Collect(requested, rejectFinal);
+    auto result = Collect(requested, Limited(16));
     ASSERT_TRUE(result.HasValue());
     EXPECT_TRUE(swapped);
     EXPECT_EQ("original", result.Value());

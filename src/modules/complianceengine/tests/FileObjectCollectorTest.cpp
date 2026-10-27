@@ -64,6 +64,12 @@ bool IsFixture(int fd, const std::string& path, bool data)
            held.st_ino == fixture.st_ino && (data ? !(flags & O_PATH) && (flags & O_ACCMODE) == O_RDONLY : (flags & O_PATH) != 0);
 }
 
+bool IsLinkPin(int fd, const std::string& path)
+{
+    struct stat held = {}, link = {};
+    return ::fstat(fd, &held) == 0 && ::lstat(path.c_str(), &link) == 0 && S_ISLNK(held.st_mode) && held.st_dev == link.st_dev && held.st_ino == link.st_ino;
+}
+
 bool IsAliasDirectory(int fd)
 {
     struct stat held = {}, procfs = {};
@@ -418,22 +424,46 @@ TEST(FileObjectCollectorTest, MalformedEvidenceDefersToReachedReadAndCloseFailur
     EXPECT_EQ(2, dataCloses);
 }
 
-TEST(FileObjectCollectorTest, RejectPolicyRefusesFinalSymlink)
+TEST(FileObjectCollectorTest, PolicyForwardsFollowAndRejectForEveryComponent)
 {
     NiceMock<MockContext> context;
     const auto target = context.MakeTempfile("nameserver 192.0.2.1\n");
-    const auto link = context.GetTempdirPath() + "/resolv.conf";
-    ASSERT_EQ(0, ::symlink(target.c_str(), link.c_str()));
+    const auto directoryLink = context.GetTempdirPath() + "/directory.link";
+    const auto finalLink = context.GetTempdirPath() + "/resolv.conf";
+    ASSERT_EQ(0, ::symlink(context.GetTempdirPath().c_str(), directoryLink.c_str()));
+    ASSERT_EQ(0, ::symlink(target.c_str(), finalLink.c_str()));
+    const auto chained = directoryLink + "/resolv.conf";
+    int reads = 0, intermediateCloses = 0, finalCloses = 0;
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        reads += IsFixture(fd, target, true);
+        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+    });
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
+        intermediateCloses += IsLinkPin(fd, directoryLink);
+        finalCloses += IsLinkPin(fd, finalLink);
+        return context.ContextInterface::CloseFileDescriptor(fd);
+    });
 
-    auto followed = ComplianceEngine::CollectNameserverObject(context, link);
+    auto followed = ComplianceEngine::CollectNameserverObject(context, chained);
     ASSERT_TRUE(followed.HasValue());
     EXPECT_EQ((std::vector<std::string>{"192.0.2.1"}), Captures(followed.Value()));
+    EXPECT_GT(reads, 0);
+    reads = intermediateCloses = finalCloses = 0;
 
     FileCollectionPolicy policy;
-    policy.rootSymlinks = SymlinkFollowing::DoNotFollow;
-    const auto rejected = ComplianceEngine::CollectNameserverObject(context, link, policy);
+    policy.symlinks = SymlinkFollowing::DoNotFollow;
+    const auto rejected = ComplianceEngine::CollectNameserverObject(context, chained, policy);
     ASSERT_FALSE(rejected.HasValue());
     EXPECT_EQ(ELOOP, rejected.Error().code);
+    EXPECT_EQ(0, reads);
+    EXPECT_EQ(1, intermediateCloses);
+    EXPECT_EQ(0, finalCloses);
+    const auto finalRejected = ComplianceEngine::CollectNameserverObject(context, finalLink, policy);
+    ASSERT_FALSE(finalRejected.HasValue());
+    EXPECT_EQ(ELOOP, finalRejected.Error().code);
+    EXPECT_EQ(0, reads);
+    EXPECT_EQ(1, intermediateCloses);
+    EXPECT_EQ(1, finalCloses);
 }
 
 TEST(FileObjectCollectorTest, NonregularTargetIsRejected)
@@ -1015,7 +1045,7 @@ TEST(FileObjectCollectorTest, RejectsEmbeddedNulAndInvalidInputsBeforeOpening)
     EXPECT_EQ(EINVAL, result.Error().code);
 
     FileCollectionPolicy invalidPolicy;
-    invalidPolicy.rootSymlinks = static_cast<SymlinkFollowing>(2);
+    invalidPolicy.symlinks = static_cast<SymlinkFollowing>(2);
     result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", invalidPolicy);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);

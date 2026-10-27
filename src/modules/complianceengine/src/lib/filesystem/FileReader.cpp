@@ -31,7 +31,7 @@ bool SameFile(const struct stat& before, const struct stat& after)
 
 // The Path resolver charges link work and retained pins separately from the
 // reader's content-byte budget. Root "/" preserves absolute-path semantics:
-// intermediate links can be followed, while the last component uses Policy.
+// every component uses Policy.
 // This does not establish trust in a caller-supplied path's ancestors.
 Filesystem::ResolverLimits AcquisitionLimits()
 {
@@ -139,7 +139,7 @@ struct LinesRange::State
         if (path.empty() || path.front() != '/' || path.find('\0') != std::string::npos)
             return Error("A NUL-free absolute file path is required", EINVAL);
         if (policy.symlinks != ComplianceEngine::SymlinkFollowing::Follow && policy.symlinks != ComplianceEngine::SymlinkFollowing::DoNotFollow)
-            return Error("Invalid final symlink policy", EINVAL);
+            return Error("Invalid symlink policy", EINVAL);
         if (!policy.limits.maxBytes || !policy.limits.maxInterruptedReads)
             return Error("File byte and retry limits must be positive", EINVAL);
         if (policy.limits.maxBytes >= pending.max_size())
@@ -164,9 +164,8 @@ struct LinesRange::State
             const auto end = slash == std::string::npos ? path.size() : slash;
             if (end != start)
             {
-                const bool final = end == path.size();
                 auto pushed = pins.Push(path.substr(start, end - start),
-                    {final && policy.symlinks == ComplianceEngine::SymlinkFollowing::DoNotFollow ? Filesystem::SymlinkPolicy::Reject : Filesystem::SymlinkPolicy::FollowWithinRoot,
+                    {policy.symlinks == ComplianceEngine::SymlinkFollowing::DoNotFollow ? Filesystem::SymlinkPolicy::Reject : Filesystem::SymlinkPolicy::FollowWithinRoot,
                         Filesystem::MountPolicy::AllowCrossing, Filesystem::HardlinkPolicy::Permit});
                 if (!pushed.HasValue())
                     return fail(std::move(pushed).Error());

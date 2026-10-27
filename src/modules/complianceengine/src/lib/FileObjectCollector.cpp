@@ -13,15 +13,13 @@ namespace ComplianceEngine
 {
 namespace
 {
-// A malformed unrelated directive is not a DNS nameserver assessment error.
-// The parser classifies first-column missing/extra operands as Malformed and
-// indented keywords as Malformed without tokenizing them. Inspect only the
-// first keyword in those cases, without treating later text as a directive.
+// The parser rejects known malformed syntax. Retain the conservative
+// classification for unknown spellings such as "nameserver\r".
 bool NameserverEvidence(const ResolvConf::Entry& entry)
 {
     if (ResolvConf::Directive::Nameserver == entry.record.directive)
         return true;
-    if (ResolvConf::Directive::Malformed != entry.record.directive && ResolvConf::Directive::Unknown != entry.record.directive)
+    if (ResolvConf::Directive::Unknown != entry.record.directive)
         return false;
     const auto first = entry.text.find_first_not_of(" \t");
     if (std::string::npos == first || 0 != entry.text.compare(first, sizeof("nameserver") - 1, "nameserver"))
@@ -35,32 +33,9 @@ Result<bool> AppendNameserver(const ResolvConf::Entry& entry, const FileCollecti
 {
     if (!NameserverEvidence(entry))
         return true;
-    // Do not publish a valid-looking first operand on an incomplete or
-    // malformed directive; diagnostics retain the precise evidence.
-    if (ResolvConf::Directive::Nameserver != entry.record.directive || entry.hasMalformedEvidence || 1 != entry.projections.size() ||
-        ResolvConf::ValueKind::Nameserver != entry.projections.front().kind || ResolvConf::Status::Parsed != entry.projections.front().status)
-    {
-        std::string detail = "unresolved nameserver evidence";
-        ResolvConf::Span location{entry.record.line, 1, 0};
-        if (!entry.diagnostics.empty())
-        {
-            detail = entry.diagnostics.front().message;
-            location = entry.diagnostics.front().span;
-        }
-        for (const auto& diagnostic : entry.diagnostics)
-        {
-            if (ResolvConf::DiagnosticKind::Malformed == diagnostic.kind)
-            {
-                detail = diagnostic.message;
-                location = diagnostic.span;
-                break;
-            }
-        }
-        return Error(entry.source + ":" + std::to_string(location.line) + ":" + std::to_string(location.column) + ": " + detail, EBADMSG);
-    }
+    if (ResolvConf::Directive::Nameserver != entry.record.directive)
+        return Error(entry.source + ": unsupported nameserver syntax", EBADMSG);
     const auto& span = entry.projections.front().token;
-    if (0 == span.column || span.column > entry.text.size() || span.length > entry.text.size() - (span.column - 1))
-        return Error(entry.source + ":" + std::to_string(entry.record.line) + ": invalid nameserver token span", EINVAL);
     if (collection.items.size() >= policy.occurrences || collection.items.size() >= policy.values)
         return Error("Nameserver value limit exceeded", E2BIG);
     if (collection.items.size() >= collection.items.max_size())
@@ -82,11 +57,11 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
         return Error("A NUL-free absolute path is required", EINVAL);
     if (!policy.contentBytes || !policy.occurrences || !policy.captureBytes || !policy.capturedBytes || !policy.values || !policy.readRetries)
         return Error("File collection limits must be positive", EINVAL);
-    if (policy.rootSymlinks != SymlinkFollowing::Follow && policy.rootSymlinks != SymlinkFollowing::DoNotFollow)
-        return Error("Invalid root symlink policy", EINVAL);
+    if (policy.symlinks != SymlinkFollowing::Follow && policy.symlinks != SymlinkFollowing::DoNotFollow)
+        return Error("Invalid symlink policy", EINVAL);
 
     FileReader::Policy readerPolicy;
-    readerPolicy.symlinks = policy.rootSymlinks;
+    readerPolicy.symlinks = policy.symlinks;
     readerPolicy.limits.maxBytes = policy.contentBytes;
     readerPolicy.limits.maxInterruptedReads = policy.readRetries;
     VariableResolution::ObjectCollection collection;

@@ -16,7 +16,8 @@ class ContextInterface;
 
 struct FileCollectionPolicy
 {
-    SymlinkFollowing rootSymlinks = SymlinkFollowing::Follow;
+    // Applies to every path component, as in FileReader::Policy.
+    SymlinkFollowing symlinks = SymlinkFollowing::Follow;
     // Acquisition bytes include LF; the parser independently caps entry
     // length, aggregate entry bytes/count, tokens and diagnostics. The next
     // four limits bound selected valid address tokens, not raw line captures.

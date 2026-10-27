@@ -39,7 +39,7 @@ struct Limits
 
 struct Policy
 {
-    // Applies to the final component only; DoNotFollow rejects a link with ELOOP.
+    // Applies to every path component; DoNotFollow rejects any link with ELOOP.
     ComplianceEngine::SymlinkFollowing symlinks = ComplianceEngine::SymlinkFollowing::Follow;
     Limits limits;
 };
@@ -100,8 +100,8 @@ private:
 };
 
 // Acquires an absolute path from the filesystem root with bounded, checked
-// descriptor-backed resolution. Intermediate links can be followed; Policy
-// controls only the final link. Mount crossing remains allowed. Activates a
+// descriptor-backed resolution. Policy controls every component's links;
+// Follow permits intermediate and final links. Mount crossing remains allowed. Activates a
 // readable file from the final pin, verifies identity, then checks release of
 // all acquisition pins before returning. Reads no content bytes. The range
 // owns only the independently activated readable file.
