@@ -774,6 +774,111 @@ TEST_F(PathFile, MoveAssignmentClosesOldOwnershipAndTransfersNew)
     EXPECT_EQ(2, closes);
 }
 
+TEST_F(PathFile, MoveConstructionLeavesSourceInertBeforeBeginDuringReadAndAfterEof)
+{
+    Write("one\ntwo\n");
+    int closes = 0;
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+        closes += IsFileDescriptor(fd, true);
+        return context.ContextInterface::CloseFileDescriptor(fd);
+    });
+    for (const int stage : {0, 1, 2})
+    {
+        auto opened = Lines::Open(context, path, Limited(8));
+        ASSERT_TRUE(opened.HasValue());
+        auto& source = opened.Value();
+        Lines::Iterator cursor;
+        if (stage != 0)
+        {
+            cursor = source.begin();
+            ASSERT_TRUE(cursor != source.end());
+            EXPECT_EQ("one", cursor->Value());
+        }
+        if (stage == 2)
+        {
+            ++cursor;
+            ASSERT_TRUE(cursor != source.end());
+            EXPECT_EQ("two", cursor->Value());
+            ++cursor;
+            EXPECT_FALSE(cursor != source.end());
+        }
+        Lines moved(std::move(source));
+        EXPECT_FALSE(source.begin() != source.end());
+        EXPECT_FALSE(cursor != source.end());
+        EXPECT_TRUE(source.Close().HasValue());
+        EXPECT_EQ(stage, closes);
+        if (stage == 0)
+        {
+            auto first = moved.begin();
+            ASSERT_TRUE(first != moved.end());
+            EXPECT_EQ("one", first->Value());
+        }
+        else
+        {
+            EXPECT_FALSE(moved.begin() != moved.end()); // Traversal already started.
+        }
+        EXPECT_TRUE(moved.Close().HasValue());
+        EXPECT_EQ(stage + 1, closes);
+    }
+}
+
+TEST_F(PathFile, MoveAssignmentAcrossContextsPreservesSourceAndSelfMoveAndClosesOnce)
+{
+    Write("old\n");
+    NiceMock<MockContext> otherContext;
+    const std::string otherPath = otherContext.MakeTempfile("new\nnext\n");
+    int oldCloses = 0, newCloses = 0;
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+        oldCloses += IsFileDescriptor(fd, true);
+        return context.ContextInterface::CloseFileDescriptor(fd);
+    });
+    ON_CALL(otherContext, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+        newCloses += IsFileDescriptor(fd, true, otherPath);
+        return otherContext.ContextInterface::CloseFileDescriptor(fd);
+    });
+    auto old = Lines::Open(context, path);
+    auto fresh = Lines::Open(otherContext, otherPath);
+    ASSERT_TRUE(old.HasValue());
+    ASSERT_TRUE(fresh.HasValue());
+    auto& target = old.Value();
+    auto& source = fresh.Value();
+    auto oldCursor = target.begin();
+    ASSERT_TRUE(oldCursor != target.end());
+    target = std::move(source);
+    EXPECT_EQ(1, oldCloses);
+    EXPECT_EQ(0, newCloses);
+    // Iterators into a moved owner are invalid; do not use oldCursor again.
+    EXPECT_FALSE(source.begin() != source.end());
+    EXPECT_TRUE(source.Close().HasValue());
+    auto cursor = target.begin();
+    ASSERT_TRUE(cursor != target.end());
+    EXPECT_EQ("new", cursor->Value());
+    Lines& self = target;
+    target = std::move(self);
+    EXPECT_EQ(0, newCloses);
+    ASSERT_TRUE(cursor != target.end());
+    ++cursor;
+    ASSERT_TRUE(cursor != target.end());
+    EXPECT_EQ("next", cursor->Value());
+    EXPECT_TRUE(target.Close().HasValue());
+    EXPECT_FALSE(cursor != target.end());
+    EXPECT_EQ(1, oldCloses);
+    EXPECT_EQ(1, newCloses);
+
+    auto closed = Lines::Open(otherContext, otherPath);
+    ASSERT_TRUE(closed.HasValue());
+    ASSERT_TRUE(closed.Value().Close().HasValue());
+    EXPECT_EQ(2, newCloses);
+    auto replacement = Lines::Open(context, path);
+    ASSERT_TRUE(replacement.HasValue());
+    replacement.Value() = std::move(closed.Value());
+    EXPECT_EQ(2, oldCloses);
+    EXPECT_FALSE(replacement.Value().begin() != replacement.Value().end());
+    EXPECT_TRUE(closed.Value().Close().HasValue());
+    EXPECT_TRUE(replacement.Value().Close().HasValue());
+    EXPECT_EQ(2, newCloses);
+}
+
 TEST_F(PathFile, CloseBeforeBeginDoesNotReadOrReopen)
 {
     int reads = 0, closes = 0;

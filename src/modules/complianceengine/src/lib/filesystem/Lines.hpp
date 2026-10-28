@@ -7,11 +7,12 @@
 #include "Optional.h"
 #include "Result.h"
 #include "filesystem/FilesystemPolicy.hpp"
+#include "filesystem/ReadableFile.hpp"
 
 #include <cstddef>
 #include <iterator>
-#include <memory>
 #include <string>
+#include <sys/stat.h>
 
 namespace ComplianceEngine
 {
@@ -25,7 +26,7 @@ namespace Filesystem
 // input; reaching EOF checks size and before/after descriptor metadata but
 // cannot prove an atomic or consistently unchanged read. EOF does not close
 // handles.
-// maxBytes bounds acquisition (including delimiters); no entire-file buffer
+// maxBytes bounds content bytes (including delimiters); no entire-file buffer
 // is retained by the reader. Every yielded string excludes only its
 // terminating LF, if present; an unterminated final line is unchanged.
 // Empty input yields nothing, and a trailing LF adds no synthetic empty line.
@@ -102,17 +103,27 @@ public:
 
     // The data descriptor is attempted once. The first call returns its native
     // close failure, if any; subsequent calls succeed without another attempt.
-    // Failed closes log the source path and descriptor error once.
+    // Failed closes log the descriptor diagnostic and native error once.
     // Destruction also closes and logs if needed;
     // the context (and its log handle) must outlive Lines.
     // Success means closure succeeded, not that an early-stopped read verified EOF.
     ComplianceEngine::Result<bool> Close();
 
 private:
-    struct State;
-    explicit Lines(std::unique_ptr<State> state);
+    Lines(ReadableFile&& data, Policy policy, const struct stat& before) noexcept;
+    ComplianceEngine::Result<ComplianceEngine::Optional<std::string>> Next();
+    ComplianceEngine::Result<bool> Refill();
+    ComplianceEngine::Result<ComplianceEngine::Optional<std::string>> Complete();
 
-    std::unique_ptr<State> mState;
+    Policy mPolicy;
+    ReadableFile mData;
+    struct stat mBefore = {};
+    std::string mBuffer;
+    std::size_t mPosition = 0, mConsumed = 0;
+    std::size_t mInterruptRetriesRemaining;
+    std::string mPending;
+    bool mFinished = false;
+    bool mClosed = false;
     bool mStarted = false;
 };
 } // namespace Filesystem
