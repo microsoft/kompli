@@ -185,7 +185,7 @@ add_library(complianceenginelib STATIC
     Engine.cpp
     Evaluator.cpp
     FileObjectCollector.cpp
-    filesystem/FileReader.cpp
+    filesystem/Lines.cpp
     filesystem/FilesystemCollection.cpp
     filesystem/Handle.cpp
     filesystem/Path.cpp

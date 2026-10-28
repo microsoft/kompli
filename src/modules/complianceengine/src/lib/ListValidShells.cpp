@@ -4,7 +4,7 @@
 #include <ListValidShells.h>
 #include <StringTools.h>
 #include <cerrno>
-#include <filesystem/FileReader.hpp>
+#include <filesystem/Lines.hpp>
 #include <utility>
 
 namespace ComplianceEngine
@@ -18,7 +18,7 @@ Result<set<string>> ListValidShells(ContextInterface& context)
     OsConfigLogDebug(context.GetLogHandle(), "Listing valid shells from %s", path.c_str());
     // Keep the historical open-failure contract for callers; the reader's
     // reached read, text and limit errors are reported rather than discarded.
-    auto opened = Filesystem::FileReader::Lines(context, path);
+    auto opened = Filesystem::Lines::Open(context, path);
     if (!opened.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to open %s file", etcShellsPath);

@@ -6,7 +6,7 @@
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
-#include <filesystem/FileReader.hpp>
+#include <filesystem/Lines.hpp>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
@@ -19,16 +19,16 @@
 #include <utility>
 #include <vector>
 
-using namespace ComplianceEngine::Filesystem::FileReader;
+using ComplianceEngine::Filesystem::Lines;
 using ComplianceEngine::Filesystem::SymlinkFollowing;
 using testing::_;
 using testing::NiceMock;
 
 namespace
 {
-Policy Limited(std::size_t maxBytes, std::size_t retries = 2)
+Lines::Policy Limited(std::size_t maxBytes, std::size_t retries = 2)
 {
-    Policy policy;
+    Lines::Policy policy;
     policy.symlinks = SymlinkFollowing::Follow;
     policy.limits.maxBytes = maxBytes;
     policy.limits.maxInterruptedReads = retries;
@@ -82,9 +82,9 @@ protected:
         return (0 == ::rename(original.c_str(), (ancestor + "/target").c_str())) && (0 == ::rename(replacement.c_str(), (alternate + "/target").c_str()));
     }
     // Consume errors as items; never confuse early stop with complete input.
-    ComplianceEngine::Result<std::string> Collect(const std::string& source, Policy policy)
+    ComplianceEngine::Result<std::string> Collect(const std::string& source, Lines::Policy policy)
     {
-        auto opened = Lines(context, source, std::move(policy));
+        auto opened = Lines::Open(context, source, std::move(policy));
         if (!opened.HasValue())
             return std::move(opened).Error();
         auto& range = opened.Value();
@@ -111,12 +111,12 @@ protected:
 
 TEST_F(PathFile, DefaultPolicyValuesAndExplicitOverrides)
 {
-    const Policy defaults;
+    const Lines::Policy defaults;
     EXPECT_EQ(SymlinkFollowing::Follow, defaults.symlinks);
     EXPECT_EQ(1024U * 1024U, defaults.limits.maxBytes);
     EXPECT_EQ(128U, defaults.limits.maxInterruptedReads);
 
-    Policy custom;
+    Lines::Policy custom;
     custom.symlinks = SymlinkFollowing::DoNotFollow;
     custom.limits.maxBytes = 3;
     custom.limits.maxInterruptedReads = 1;
@@ -130,7 +130,7 @@ TEST_F(PathFile, OmittedPolicyFollowsFinalSymlinkAndRejectsNul)
     Write("plain\n");
     ASSERT_EQ(0, ::symlink(path.c_str(), (path + ".link").c_str()));
     std::string collected;
-    auto opened = Lines(context, path + ".link");
+    auto opened = Lines::Open(context, path + ".link");
     ASSERT_TRUE(opened.HasValue());
     auto& range = opened.Value();
     for (const auto& item : range)
@@ -143,7 +143,7 @@ TEST_F(PathFile, OmittedPolicyFollowsFinalSymlinkAndRejectsNul)
 
     Write(std::string("a\0b", 3));
     int errors = 0;
-    auto textOpened = Lines(context, path);
+    auto textOpened = Lines::Open(context, path);
     ASSERT_TRUE(textOpened.HasValue());
     auto& textRange = textOpened.Value();
     for (const auto& item : textRange)
@@ -155,7 +155,7 @@ TEST_F(PathFile, OmittedPolicyFollowsFinalSymlinkAndRejectsNul)
     EXPECT_EQ(1, errors);
     EXPECT_TRUE(textRange.Close().HasValue());
     EXPECT_EQ(EBADMSG, Collect(path, Limited(3)).Error().code);
-    Policy reject;
+    Lines::Policy reject;
     reject.symlinks = SymlinkFollowing::DoNotFollow;
     EXPECT_EQ(ELOOP, Collect(path + ".link", reject).Error().code);
 }
@@ -177,10 +177,10 @@ TEST_F(PathFile, DoNotFollowRejectsIntermediateAndFinalSymlinksWithoutReading)
         finalCloses += IsLinkDescriptor(fd, path + ".old");
         return context.ContextInterface::CloseFileDescriptor(fd);
     });
-    EXPECT_EQ("plain", Collect(chained, Policy{}).Value());
+    EXPECT_EQ("plain", Collect(chained, Lines::Policy{}).Value());
     EXPECT_GT(reads, 0);
     reads = intermediateCloses = finalCloses = 0;
-    Policy policy;
+    Lines::Policy policy;
     policy.symlinks = SymlinkFollowing::DoNotFollow;
     EXPECT_EQ(ELOOP, Collect(chained, policy).Error().code);
     EXPECT_EQ(1, intermediateCloses);
@@ -195,7 +195,7 @@ TEST_F(PathFile, DoNotFollowRejectsIntermediateAndFinalSymlinksWithoutReading)
 
 TEST_F(PathFile, DefaultLimitsBoundBytesAndInterruptedReads)
 {
-    const std::size_t cap = Policy{}.limits.maxBytes;
+    const std::size_t cap = Lines::Policy{}.limits.maxBytes;
     std::size_t requested = 0;
     int probes = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
@@ -207,7 +207,7 @@ TEST_F(PathFile, DefaultLimitsBoundBytesAndInterruptedReads)
         std::memset(buffer, 'x', size);
         return static_cast<ssize_t>(size);
     });
-    auto result = Collect(path, Policy{});
+    auto result = Collect(path, Lines::Policy{});
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);
     EXPECT_EQ(cap + 1, requested);
@@ -221,7 +221,7 @@ TEST_F(PathFile, DefaultLimitsBoundBytesAndInterruptedReads)
         errno = EINTR;
         return -1;
     });
-    result = Collect(path, Policy{});
+    result = Collect(path, Lines::Policy{});
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);
     EXPECT_EQ(129, attempts);
@@ -242,7 +242,7 @@ TEST_F(PathFile, ValidationAndOpenAreFactoryOperations)
         }
         return context.ContextInterface::StatFileDescriptor(fd, metadata);
     });
-    auto invalidPath = Lines(context, "relative", Limited(16));
+    auto invalidPath = Lines::Open(context, "relative", Limited(16));
     EXPECT_FALSE(invalidPath.HasValue());
     EXPECT_EQ(0, fileStats);
     for (const auto& name : {std::string(), std::string("relative"), std::string("a\0b", 3)})
@@ -266,7 +266,7 @@ TEST_F(PathFile, EmptyUnterminatedAndBareLines)
     EXPECT_EQ("", Collect(path, Limited(1)).Value());
     Write("a\r\n\nlast");
     std::vector<std::string> lines;
-    auto opened = Lines(context, path, Limited(8));
+    auto opened = Lines::Open(context, path, Limited(8));
     ASSERT_TRUE(opened.HasValue());
     auto& range = opened.Value();
     for (const auto& item : range)
@@ -290,7 +290,7 @@ TEST_F(PathFile, FinalLfDoesNotProducePhantomItemAndCountsTowardByteCap)
     {
         const auto& content = fixture.first;
         Write(content);
-        auto opened = Lines(context, path, Limited(std::max<std::size_t>(1, content.size())));
+        auto opened = Lines::Open(context, path, Limited(std::max<std::size_t>(1, content.size())));
         ASSERT_TRUE(opened.HasValue());
         auto& range = opened.Value();
         std::vector<std::string> items;
@@ -329,7 +329,7 @@ TEST_F(PathFile, NulAtStartMiddleOrEndNeverYieldsAffectedLine)
                 ++closes;
             return context.ContextInterface::CloseFileDescriptor(fd);
         });
-        auto opened = Lines(context, path);
+        auto opened = Lines::Open(context, path);
         ASSERT_TRUE(opened.HasValue());
         auto& range = opened.Value();
         for (const auto& item : range)
@@ -358,7 +358,7 @@ TEST_F(PathFile, ValidLineThenNulAcrossReadChunksYieldsErrorNotTruncatedLine)
                 ++closes;
             return context.ContextInterface::CloseFileDescriptor(fd);
         });
-        auto opened = Lines(context, path, Limited(8200));
+        auto opened = Lines::Open(context, path, Limited(8200));
         ASSERT_TRUE(opened.HasValue());
         auto& range = opened.Value();
         auto it = range.begin();
@@ -393,7 +393,7 @@ TEST_F(PathFile, BoundedChunksAndLazyEarlyBreakCloseExactlyOnce)
             ++closes;
         return context.ContextInterface::CloseFileDescriptor(fd);
     });
-    auto opened = Lines(context, path, Limited(80000));
+    auto opened = Lines::Open(context, path, Limited(80000));
     ASSERT_TRUE(opened.HasValue());
     auto& range = opened.Value();
     EXPECT_EQ(0, closes); // All acquisition pins close before factory success.
@@ -433,7 +433,7 @@ TEST_F(PathFile, ShortNativeReadsFillOneBoundedChunkBeforeEarlyBreak)
             ++closes;
         return context.ContextInterface::CloseFileDescriptor(fd);
     });
-    auto opened = Lines(context, path, Limited(13));
+    auto opened = Lines::Open(context, path, Limited(13));
     ASSERT_TRUE(opened.HasValue());
     auto& range = opened.Value();
     auto cursor = range.begin();
@@ -449,7 +449,7 @@ TEST_F(PathFile, ShortNativeReadsFillOneBoundedChunkBeforeEarlyBreak)
 TEST_F(PathFile, IteratorOwnsOneErrorItemAndEndsAfterAdvance)
 {
     Write(std::string("ok\nbad\0tail\n", 12));
-    auto opened = Lines(context, path, Limited(12));
+    auto opened = Lines::Open(context, path, Limited(12));
     ASSERT_TRUE(opened.HasValue());
     auto& range = opened.Value();
     auto cursor = range.begin();
@@ -479,7 +479,7 @@ TEST_F(PathFile, CloseInvalidatesBufferedIteratorWithoutReadingTail)
             ++reads;
         return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
     });
-    auto opened = Lines(context, path, Limited(13));
+    auto opened = Lines::Open(context, path, Limited(13));
     ASSERT_TRUE(opened.HasValue());
     auto& range = opened.Value();
     auto cursor = range.begin();
@@ -567,12 +567,12 @@ TEST_F(PathFile, RangeMoveAndEarlyCloseNeverReadTail)
         return context.ContextInterface::CloseFileDescriptor(fd);
     });
     {
-        auto opened = Lines(context, path, Limited(11));
+        auto opened = Lines::Open(context, path, Limited(11));
         ASSERT_TRUE(opened.HasValue());
         EXPECT_EQ(0, closes);
         EXPECT_EQ(0, reads);
         auto& original = opened.Value();
-        LinesRange moved(std::move(original));
+        Lines moved(std::move(original));
         EXPECT_TRUE(original.Close().HasValue());
         EXPECT_EQ(0, closes);
         auto cursor = moved.begin();
@@ -589,7 +589,7 @@ TEST_F(PathFile, RangeMoveAndEarlyCloseNeverReadTail)
     }
     EXPECT_EQ(1, closes);
     {
-        auto opened = Lines(context, path, Limited(11));
+        auto opened = Lines::Open(context, path, Limited(11));
         ASSERT_TRUE(opened.HasValue());
         EXPECT_EQ(1, closes);
         // Destruction of an unopened range is a nonthrowing closure fallback.
@@ -612,7 +612,7 @@ TEST_F(PathFile, RepeatedFailedCloseSucceedsWithoutRetry)
         return -1;
     });
     {
-        auto opened = Lines(context, path, Limited(2));
+        auto opened = Lines::Open(context, path, Limited(2));
         ASSERT_TRUE(opened.HasValue());
         auto& range = opened.Value();
         auto cursor = range.begin();
@@ -649,7 +649,7 @@ TEST_F(PathFile, FailedExplicitCloseLogsDescriptorErrorOnlyOnce)
         errno = EBADF;
         return -1;
     });
-    auto opened = Lines(context, path);
+    auto opened = Lines::Open(context, path);
     EXPECT_TRUE(opened.HasValue());
     if (opened.HasValue())
     {
@@ -696,8 +696,8 @@ TEST_F(PathFile, DestructionAndMoveAssignmentLogDataFailureOncePerRange)
         return -1;
     });
     {
-        auto first = Lines(context, path);
-        auto second = Lines(context, path);
+        auto first = Lines::Open(context, path);
+        auto second = Lines::Open(context, path);
         ASSERT_TRUE(first.HasValue());
         ASSERT_TRUE(second.HasValue());
         first.Value() = std::move(second.Value()); // finalizes old state
@@ -738,7 +738,7 @@ TEST_F(PathFile, DestructorSuppressesThrowingDataCloseAndLogsOnce)
         throw std::runtime_error("injected data close failure");
     });
     {
-        auto opened = Lines(context, path);
+        auto opened = Lines::Open(context, path);
         ASSERT_TRUE(opened.HasValue());
     }
     EXPECT_EQ(1, closes);
@@ -762,8 +762,8 @@ TEST_F(PathFile, MoveAssignmentClosesOldOwnershipAndTransfersNew)
             ++closes;
         return context.ContextInterface::CloseFileDescriptor(fd);
     });
-    auto first = Lines(context, path);
-    auto second = Lines(context, path);
+    auto first = Lines::Open(context, path);
+    auto second = Lines::Open(context, path);
     ASSERT_TRUE(first.HasValue());
     ASSERT_TRUE(second.HasValue());
     first.Value() = std::move(second.Value());
@@ -788,7 +788,7 @@ TEST_F(PathFile, CloseBeforeBeginDoesNotReadOrReopen)
             ++closes;
         return context.ContextInterface::CloseFileDescriptor(fd);
     });
-    auto opened = Lines(context, path);
+    auto opened = Lines::Open(context, path);
     ASSERT_TRUE(opened.HasValue());
     auto& range = opened.Value();
     EXPECT_EQ(0, closes);
@@ -827,7 +827,7 @@ TEST_F(PathFile, FactoryFailureClosesAcquiredPinAndReportsPrimary)
         }
         return 0;
     });
-    auto opened = Lines(context, path);
+    auto opened = Lines::Open(context, path);
     ASSERT_FALSE(opened.HasValue());
     EXPECT_EQ(EACCES, opened.Error().code);
     EXPECT_EQ(1, dataStats);
@@ -867,7 +867,7 @@ TEST_F(PathFile, FactoryClosesPinAfterIdentityCheckBeforeReturnOrRead)
         ++reads;
         return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
     });
-    auto opened = Lines(context, path);
+    auto opened = Lines::Open(context, path);
     ASSERT_TRUE(opened.HasValue());
     ASSERT_GE(pin, 0);
     ASSERT_GE(data, 0);
@@ -904,7 +904,7 @@ TEST_F(PathFile, EarlyStatFailuresCloseEveryAcquiredDescriptor)
                 closed.push_back(fd);
             return context.ContextInterface::CloseFileDescriptor(fd);
         });
-        auto opened = Lines(context, path);
+        auto opened = Lines::Open(context, path);
         ASSERT_FALSE(opened.HasValue());
         EXPECT_EQ(EACCES, opened.Error().code);
         EXPECT_GE(stats, 1);
@@ -951,7 +951,7 @@ TEST_F(PathFile, FailedPinCloseIsPrimaryAndStillLogsDataCleanupFailure)
         ++reads;
         return 0;
     });
-    auto opened = Lines(context, path);
+    auto opened = Lines::Open(context, path);
     ASSERT_FALSE(opened.HasValue());
     EXPECT_EQ(EACCES, opened.Error().code);
     EXPECT_EQ("Failed to close pinned descriptor", opened.Error().message);
@@ -997,7 +997,7 @@ TEST_F(PathFile, CheckedAcquisitionReleaseAttemptsAllPinsAndLogsSecondaryFailure
         }
         return 0;
     });
-    auto opened = Lines(context, path);
+    auto opened = Lines::Open(context, path);
     ASSERT_FALSE(opened.HasValue());
     EXPECT_EQ(EACCES, opened.Error().code);
     EXPECT_EQ("Failed to close pinned descriptor", opened.Error().message);
@@ -1033,7 +1033,7 @@ TEST_F(PathFile, ThrowingAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
     });
     try
     {
-        (void)Lines(context, path);
+        (void)Lines::Open(context, path);
         FAIL() << "Data stat should throw";
     }
     catch (const std::runtime_error& error)
@@ -1049,7 +1049,7 @@ TEST_F(PathFile, ThrowingAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
         return context.ContextInterface::StatFileDescriptor(fd, metadata);
     });
     dataStats = pinCloses = dataCloses = 0;
-    auto opened = Lines(context, path);
+    auto opened = Lines::Open(context, path);
     ASSERT_FALSE(opened.HasValue());
     EXPECT_EQ(EIO, opened.Error().code); // Opaque close catches, caches, never retries.
     EXPECT_GE(pinCloses, 1);
@@ -1059,7 +1059,7 @@ TEST_F(PathFile, ThrowingAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
 TEST_F(PathFile, ChunkBoundaryAndTrailingNewlineAreVerifiedWithoutExtraEmptyLine)
 {
     Write(std::string(8191, 'a') + "\n\n");
-    auto opened = Lines(context, path, Limited(8193));
+    auto opened = Lines::Open(context, path, Limited(8193));
     ASSERT_TRUE(opened.HasValue());
     std::vector<std::string> lines;
     auto& range = opened.Value();
@@ -1199,7 +1199,7 @@ TEST_F(PathFile, VerificationAndFinalAdvanceReportErrors)
             ++metadata->st_mtim.tv_nsec;
         return status;
     });
-    auto opened = Lines(context, path, Limited(4));
+    auto opened = Lines::Open(context, path, Limited(4));
     ASSERT_TRUE(opened.HasValue());
     auto& range = opened.Value();
     auto cursor = range.begin();
@@ -1238,7 +1238,7 @@ TEST_F(PathFile, ErrorsOnIntermediateReadsAndRetryLimit)
         errno = EACCES;
         return -1;
     });
-    auto opened = Lines(context, path, Limited(8194));
+    auto opened = Lines::Open(context, path, Limited(8194));
     ASSERT_TRUE(opened.HasValue());
     auto& range = opened.Value();
     auto it = range.begin();
@@ -1311,7 +1311,7 @@ TEST_F(PathFile, LastUnterminatedLineIsNotPublishedWhenVerificationOrCloseFails)
             ++metadata->st_ctim.tv_nsec;
         return status;
     });
-    auto opened = Lines(context, path, Limited(4));
+    auto opened = Lines::Open(context, path, Limited(4));
     ASSERT_TRUE(opened.HasValue());
     auto& range = opened.Value();
     int lines = 0;
@@ -1337,7 +1337,7 @@ TEST_F(PathFile, LastUnterminatedLineIsNotPublishedWhenVerificationOrCloseFails)
         return 0;
     });
     // A failed close no longer suppresses the verified unterminated line.
-    auto tail = Lines(context, path, Limited(4));
+    auto tail = Lines::Open(context, path, Limited(4));
     ASSERT_TRUE(tail.HasValue());
     auto& tailRange = tail.Value();
     auto cursor = tailRange.begin();
@@ -1405,7 +1405,7 @@ TEST_F(PathFile, ThrowingReadDuringIterationPropagatesAndClosesData)
         return context.ContextInterface::CloseFileDescriptor(fd);
     });
     {
-        auto opened = Lines(context, path, Limited(8199));
+        auto opened = Lines::Open(context, path, Limited(8199));
         ASSERT_TRUE(opened.HasValue());
         auto cursor = opened.Value().begin();
         ASSERT_TRUE(cursor->HasValue());

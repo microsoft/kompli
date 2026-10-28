@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_FILE_READER_HPP
-#define COMPLIANCEENGINE_FILE_READER_HPP
+#ifndef COMPLIANCEENGINE_LINES_HPP
+#define COMPLIANCEENGINE_LINES_HPP
 
 #include "Optional.h"
 #include "Result.h"
@@ -18,11 +18,8 @@ namespace ComplianceEngine
 class ContextInterface;
 namespace Filesystem
 {
-namespace FileReader
-{
-
-// The context must outlive the range. Iterators are valid only while their
-// range remains alive and unmoved; Close invalidates them. A range is a
+// The context must outlive the lines. Iterators are valid only while their
+// owner remains alive and unmoved; Close invalidates them. Lines is a
 // move-only, single-pass resource owner. Only the first begin traverses it.
 // Close before EOF (or destruction) releases handles without verifying unread
 // input; reaching EOF checks size and before/after descriptor metadata but
@@ -35,22 +32,22 @@ namespace FileReader
 // CR and non-ASCII bytes are preserved; embedded NUL is rejected with EBADMSG
 // before the affected line can be yielded. Read and EOF-verification failures
 // appear as one error item, followed by end; Close invalidates any held item.
-struct Limits
-{
-    std::size_t maxBytes = 1024 * 1024;
-    std::size_t maxInterruptedReads = 128;
-};
-
-struct Policy
-{
-    // Applies to every path component; DoNotFollow rejects any link with ELOOP.
-    SymlinkFollowing symlinks = SymlinkFollowing::Follow;
-    Limits limits;
-};
-
-class LinesRange
+class Lines
 {
 public:
+    struct Limits
+    {
+        std::size_t maxBytes = std::size_t{1024} * 1024;
+        std::size_t maxInterruptedReads = 128;
+    };
+
+    struct Policy
+    {
+        // Applies to every path component; DoNotFollow rejects any link with ELOOP.
+        SymlinkFollowing symlinks = SymlinkFollowing::Follow;
+        Limits limits;
+    };
+
     class Iterator
     {
     public:
@@ -73,20 +70,29 @@ public:
         bool operator!=(const Iterator& other) const;
 
     private:
-        explicit Iterator(LinesRange* range);
+        explicit Iterator(Lines* range);
         void Next();
 
-        LinesRange* mRange = nullptr;
+        Lines* mRange = nullptr;
         ComplianceEngine::Optional<value_type> mCurrent;
 
-        friend class LinesRange;
+        friend class Lines;
     };
 
-    LinesRange(LinesRange&&) noexcept;
-    LinesRange& operator=(LinesRange&&) noexcept;
-    LinesRange(const LinesRange&) = delete;
-    LinesRange& operator=(const LinesRange&) = delete;
-    ~LinesRange();
+    Lines(Lines&&) noexcept;
+    Lines& operator=(Lines&&) noexcept;
+    Lines(const Lines&) = delete;
+    Lines& operator=(const Lines&) = delete;
+    ~Lines();
+
+    // Acquires an absolute path from the filesystem root with bounded, checked
+    // descriptor-backed resolution. Policy controls every component's links;
+    // Follow permits intermediate and final links. Mount crossing remains allowed.
+    // Activates a readable file from the final pin, verifies identity, then
+    // checks release of all acquisition pins before returning. Reads no content
+    // bytes. Lines owns only the independently activated readable file.
+    static ComplianceEngine::Result<Lines> Open(const ComplianceEngine::ContextInterface& context, std::string path);
+    static ComplianceEngine::Result<Lines> Open(const ComplianceEngine::ContextInterface& context, std::string path, Policy policy);
 
     Iterator begin();    // NOLINT(*-identifier-naming)
     Iterator end() const // NOLINT(*-identifier-naming)
@@ -98,29 +104,18 @@ public:
     // close failure, if any; subsequent calls succeed without another attempt.
     // Failed closes log the source path and descriptor error once.
     // Destruction also closes and logs if needed;
-    // the context (and its log handle) must outlive the range.
+    // the context (and its log handle) must outlive Lines.
     // Success means closure succeeded, not that an early-stopped read verified EOF.
     ComplianceEngine::Result<bool> Close();
 
 private:
     struct State;
-    explicit LinesRange(std::unique_ptr<State> state);
+    explicit Lines(std::unique_ptr<State> state);
 
     std::unique_ptr<State> mState;
     bool mStarted = false;
-
-    friend ComplianceEngine::Result<LinesRange> Lines(const ComplianceEngine::ContextInterface&, std::string, Policy);
 };
-
-// Acquires an absolute path from the filesystem root with bounded, checked
-// descriptor-backed resolution. Policy controls every component's links;
-// Follow permits intermediate and final links. Mount crossing remains allowed. Activates a
-// readable file from the final pin, verifies identity, then checks release of
-// all acquisition pins before returning. Reads no content bytes. The range
-// owns only the independently activated readable file.
-ComplianceEngine::Result<LinesRange> Lines(const ComplianceEngine::ContextInterface& context, std::string path, Policy policy = Policy{});
-} // namespace FileReader
 } // namespace Filesystem
 } // namespace ComplianceEngine
 
-#endif // COMPLIANCEENGINE_FILE_READER_HPP
+#endif // COMPLIANCEENGINE_LINES_HPP

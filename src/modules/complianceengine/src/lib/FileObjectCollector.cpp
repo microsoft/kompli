@@ -4,7 +4,7 @@
 #include <ContextInterface.h>
 #include <FileObjectCollector.h>
 #include <cerrno>
-#include <filesystem/FileReader.hpp>
+#include <filesystem/Lines.hpp>
 #include <parsers/ResolvConf.h>
 #include <string>
 #include <utility>
@@ -46,14 +46,14 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
     if (policy.symlinks != Filesystem::SymlinkFollowing::Follow && policy.symlinks != Filesystem::SymlinkFollowing::DoNotFollow)
         return Error("Invalid symlink policy", EINVAL);
 
-    Filesystem::FileReader::Policy readerPolicy;
+    Filesystem::Lines::Policy readerPolicy;
     readerPolicy.symlinks = policy.symlinks;
     readerPolicy.limits.maxBytes = policy.contentBytes;
     readerPolicy.limits.maxInterruptedReads = policy.readRetries;
     VariableResolution::ObjectCollection collection;
     std::size_t capturedBytes = 0;
     Result<bool> selected(true);
-    auto opened = Filesystem::FileReader::Lines(context, path, readerPolicy);
+    auto opened = Filesystem::Lines::Open(context, path, readerPolicy);
     if (!opened.HasValue())
         return std::move(opened).Error();
     ResolvConf::Parser parser(path);

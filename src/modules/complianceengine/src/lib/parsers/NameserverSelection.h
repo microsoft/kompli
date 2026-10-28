@@ -85,7 +85,7 @@ private:
     std::vector<std::string> mValues;
 };
 
-// Physical lines from FileReader (without terminating LF). Reuse the byte
+// Physical lines from Filesystem::Lines (without terminating LF). Reuse the byte
 // selector's grammar, inserting LF only between observed lines: a final LF
 // cannot turn a bare "nameserver" into an empty capture. Raw document
 // selection and its exact-byte offsets remain on Stream/FindNameserverCaptures.

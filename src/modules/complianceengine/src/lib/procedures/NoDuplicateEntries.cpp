@@ -5,7 +5,7 @@
 #include <NoDuplicateEntries.h>
 #include <Optional.h>
 #include <Result.h>
-#include <filesystem/FileReader.hpp>
+#include <filesystem/Lines.hpp>
 #include <set>
 #include <sstream>
 #include <string>
@@ -37,7 +37,7 @@ Result<Status> AuditNoDuplicateEntries(const NoDuplicateEntriesParams& params, I
 
     std::set<std::string> uniqueEntries;
     std::set<std::string> duplicateEntries;
-    auto opened = Filesystem::FileReader::Lines(context, params.filename);
+    auto opened = Filesystem::Lines::Open(context, params.filename);
     if (!opened.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to open %s: %s", params.filename.c_str(), opened.Error().message.c_str());

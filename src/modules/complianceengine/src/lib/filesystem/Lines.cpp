@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "FileReader.hpp"
+#include "Lines.hpp"
 
 #include "ContextInterface.h"
 #include "Optional.h"
@@ -20,8 +20,6 @@
 namespace ComplianceEngine
 {
 namespace Filesystem
-{
-namespace FileReader
 {
 namespace
 {
@@ -55,7 +53,7 @@ Filesystem::ResolverLimits AcquisitionLimits()
 }
 } // namespace
 
-struct LinesRange::State
+struct Lines::State
 {
     State(const ContextInterface& context, std::string path, Policy policy, Filesystem::ReadableFile data)
         : context(context),
@@ -251,22 +249,22 @@ struct LinesRange::State
     }
 };
 
-LinesRange::Iterator::Iterator() = default;
+Lines::Iterator::Iterator() = default;
 
-LinesRange::Iterator::Iterator(LinesRange* range)
+Lines::Iterator::Iterator(Lines* range)
     : mRange(range)
 {
     Next();
 }
 
-LinesRange::Iterator::Iterator(Iterator&& other) noexcept
+Lines::Iterator::Iterator(Iterator&& other) noexcept
     : mRange(other.mRange),
       mCurrent(std::move(other.mCurrent))
 {
     other.mRange = nullptr;
 }
 
-LinesRange::Iterator& LinesRange::Iterator::operator=(Iterator&& other) noexcept
+Lines::Iterator& Lines::Iterator::operator=(Iterator&& other) noexcept
 {
     if (this != &other)
     {
@@ -277,27 +275,27 @@ LinesRange::Iterator& LinesRange::Iterator::operator=(Iterator&& other) noexcept
     return *this;
 }
 
-LinesRange::Iterator::~Iterator() = default;
+Lines::Iterator::~Iterator() = default;
 
-LinesRange::Iterator::reference LinesRange::Iterator::operator*() const
+Lines::Iterator::reference Lines::Iterator::operator*() const
 {
     assert(mRange && mRange->mState && !mRange->mState->closed && mCurrent.HasValue());
     return mCurrent.Value();
 }
 
-LinesRange::Iterator::pointer LinesRange::Iterator::operator->() const
+Lines::Iterator::pointer Lines::Iterator::operator->() const
 {
     return &**this;
 }
 
-LinesRange::Iterator& LinesRange::Iterator::operator++()
+Lines::Iterator& Lines::Iterator::operator++()
 {
     assert(mRange && mRange->mState && !mRange->mState->closed && mCurrent.HasValue());
     Next();
     return *this;
 }
 
-void LinesRange::Iterator::Next()
+void Lines::Iterator::Next()
 {
     mCurrent.Reset();
     auto next = mRange->mState->Next();
@@ -311,25 +309,25 @@ void LinesRange::Iterator::Next()
         mCurrent = Result<std::string>(std::move(line).Value());
 }
 
-bool LinesRange::Iterator::operator!=(const Iterator& other) const
+bool Lines::Iterator::operator!=(const Iterator& other) const
 {
     const bool active = mRange && mRange->mState && !mRange->mState->closed && mCurrent.HasValue();
     const bool otherActive = other.mRange && other.mRange->mState && !other.mRange->mState->closed && other.mCurrent.HasValue();
     return active != otherActive || (active && mRange != other.mRange);
 }
 
-LinesRange::LinesRange(std::unique_ptr<State> state)
+Lines::Lines(std::unique_ptr<State> state)
     : mState(std::move(state))
 {
 }
 
-LinesRange::LinesRange(LinesRange&&) noexcept = default;
+Lines::Lines(Lines&&) noexcept = default;
 
-LinesRange& LinesRange::operator=(LinesRange&&) noexcept = default;
+Lines& Lines::operator=(Lines&&) noexcept = default;
 
-LinesRange::~LinesRange() = default;
+Lines::~Lines() = default;
 
-LinesRange::Iterator LinesRange::begin() // NOLINT(*-identifier-naming)
+Lines::Iterator Lines::begin() // NOLINT(*-identifier-naming)
 {
     if (!mState || mStarted || mState->closed)
         return {};
@@ -337,18 +335,22 @@ LinesRange::Iterator LinesRange::begin() // NOLINT(*-identifier-naming)
     return Iterator(this);
 }
 
-Result<bool> LinesRange::Close()
+Result<bool> Lines::Close()
 {
     return mState ? mState->Close() : Result<bool>(true);
 }
 
-Result<LinesRange> Lines(const ContextInterface& context, std::string path, Policy policy)
+Result<Lines> Lines::Open(const ContextInterface& context, std::string path)
 {
-    auto opened = LinesRange::State::Open(context, std::move(path), std::move(policy));
+    return Open(context, std::move(path), Policy{});
+}
+
+Result<Lines> Lines::Open(const ContextInterface& context, std::string path, Policy policy)
+{
+    auto opened = State::Open(context, std::move(path), std::move(policy));
     if (!opened.HasValue())
         return std::move(opened).Error();
-    return LinesRange(std::move(opened).Value());
+    return Lines(std::move(opened).Value());
 }
-} // namespace FileReader
 } // namespace Filesystem
 } // namespace ComplianceEngine

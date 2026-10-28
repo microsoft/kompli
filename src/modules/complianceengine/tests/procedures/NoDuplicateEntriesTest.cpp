@@ -345,7 +345,7 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, ReachedReadFailureRejectsPartialResult
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const string closeEntry = "Failed to close data descriptor for " + filename + ": " + std::to_string(EBADF);
+    const string closeEntry = "Failed to close directory activation: " + std::to_string(EBADF);
     const auto first = text.find(closeEntry);
     ASSERT_NE(string::npos, first);
     EXPECT_EQ(string::npos, text.find(closeEntry, first + closeEntry.size()));

@@ -11,7 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <dirent.h>
-#include <filesystem/FileReader.hpp>
+#include <filesystem/Lines.hpp>
 #include <fstream>
 #include <iterator>
 #include <pwd.h>
@@ -95,7 +95,7 @@ mode_t ParseSymbolicValue(const std::string& user, const std::string& group, con
 
 Result<MatchResult> MultilineMatch(const std::string& filename, const regex& valuePattern, const regex& pamPattern, ContextInterface& context)
 {
-    auto opened = Filesystem::FileReader::Lines(context, filename);
+    auto opened = Filesystem::Lines::Open(context, filename);
     if (!opened.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to open %s: %s", filename.c_str(), opened.Error().message.c_str());
