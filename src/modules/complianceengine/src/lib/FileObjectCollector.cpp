@@ -43,7 +43,7 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
         return Error("A NUL-free absolute path is required", EINVAL);
     if (!policy.contentBytes || !policy.occurrences || !policy.captureBytes || !policy.capturedBytes || !policy.values || !policy.readRetries)
         return Error("File collection limits must be positive", EINVAL);
-    if (policy.symlinks != Filesystem::SymlinkFollowing::Follow && policy.symlinks != Filesystem::SymlinkFollowing::DoNotFollow)
+    if (policy.symlinks != Filesystem::SymlinkPolicy::Follow && policy.symlinks != Filesystem::SymlinkPolicy::DoNotFollow)
         return Error("Invalid symlink policy", EINVAL);
 
     Filesystem::LinesRange::Policy readerPolicy;

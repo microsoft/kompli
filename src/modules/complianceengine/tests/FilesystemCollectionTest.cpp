@@ -32,7 +32,8 @@ using ComplianceEngine::Filesystem::FilesystemYieldType;
 using ComplianceEngine::Filesystem::ResolvedFilesystemCollectionRequest;
 using ComplianceEngine::Filesystem::ResolveFilesystemCollectionRequest;
 using ComplianceEngine::Filesystem::StreamFilesystemCollection;
-using ComplianceEngine::Filesystem::SymlinkFollowing;
+using ComplianceEngine::Filesystem::SymlinkPolicy;
+using ComplianceEngine::Filesystem::UnsupportedTypeAction;
 using ComplianceEngine::Filesystem::FTW::Files;
 namespace
 {
@@ -139,8 +140,8 @@ TEST(FilesystemCollectionTest, UnifiedRangeRetainsLiveLeafAndSupportsRootDeviceS
     request.depthAction = FilesystemDepthAction::Error;
     request.scope = FilesystemScope::All;
     request.yieldType = FilesystemYieldType::RegularFiles;
-    request.rootDirectoryLinkAction = SymlinkFollowing::Follow;
-    request.rootFileLinkAction = SymlinkFollowing::Follow;
+    request.rootDirectoryLinkAction = SymlinkPolicy::Follow;
+    request.rootFileLinkAction = SymlinkPolicy::Follow;
     auto followed = Files(request, context);
     ASSERT_TRUE(followed.HasValue()) << followed.Error().message;
     ASSERT_TRUE(followed.Value().RootExists());
@@ -152,16 +153,16 @@ TEST(FilesystemCollectionTest, UnifiedRangeRetainsLiveLeafAndSupportsRootDeviceS
     EXPECT_EQ(ComplianceEngine::Filesystem::Handle::Type::RegularFile, entry->Value().LiveHandle()->AcquiredType());
     ASSERT_TRUE(followed.Value().Close().HasValue());
 
-    request.rootDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
-    request.rootFileLinkAction = SymlinkFollowing::DoNotFollow;
+    request.rootDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
+    request.rootFileLinkAction = SymlinkPolicy::DoNotFollow;
     auto rejected = Files(request, context);
     ASSERT_TRUE(rejected.HasValue());
     EXPECT_TRUE(rejected.Value().RootExists());
     ASSERT_TRUE(rejected.Value().Close().HasValue());
 
     request.scope = FilesystemScope::RootDevice;
-    request.rootDirectoryLinkAction = SymlinkFollowing::Follow;
-    request.rootFileLinkAction = SymlinkFollowing::Follow;
+    request.rootDirectoryLinkAction = SymlinkPolicy::Follow;
+    request.rootFileLinkAction = SymlinkPolicy::Follow;
     auto scoped = Files(request, context);
     ASSERT_TRUE(scoped.HasValue()) << scoped.Error().message;
     ASSERT_TRUE(scoped.Value().Close().HasValue());
@@ -428,7 +429,7 @@ TEST(FilesystemCollectionTest, MissingRegularNameReportsWithoutFabricatingAMetad
     EXPECT_EQ(ENOENT, defaultResult.Error().code);
 }
 
-TEST(FilesystemCollectionTest, MissingObservationDoesNotSwallowChildInspectionFailure)
+TEST(FilesystemCollectionTest, MissingPolicyDoesNotSwallowPinnedChildInspectionFailure)
 {
     TestTree tree;
     tree.Directory("root");
@@ -451,7 +452,7 @@ TEST(FilesystemCollectionTest, MissingObservationDoesNotSwallowChildInspectionFa
     const auto failure = CollectFilesystem(request, context);
     ASSERT_FALSE(failure.HasValue());
     EXPECT_EQ(ENOENT, failure.Error().code);
-    EXPECT_NE(std::string::npos, failure.Error().message.find("Cannot inspect pinned directory child"));
+    EXPECT_NE(std::string::npos, failure.Error().message.find("Cannot inspect confined component"));
 }
 
 TEST(FilesystemCollectionTest, RejectsInvalidAcquisitionRootsBeforeLookup)
@@ -505,10 +506,10 @@ TEST(FilesystemCollectionTest, InitializesNativeDefaultsAndMatchesExplicitDefaul
     const FilesystemCollectionRequest request = Request();
     EXPECT_EQ(FilesystemDirection::None, request.direction);
     EXPECT_EQ(32, request.maxDepth);
-    EXPECT_EQ(SymlinkFollowing::DoNotFollow, request.rootFileLinkAction);
-    EXPECT_EQ(SymlinkFollowing::DoNotFollow, request.rootDirectoryLinkAction);
-    EXPECT_EQ(SymlinkFollowing::DoNotFollow, request.childFileLinkAction);
-    EXPECT_EQ(SymlinkFollowing::DoNotFollow, request.childDirectoryLinkAction);
+    EXPECT_EQ(SymlinkPolicy::DoNotFollow, request.rootFileLinkAction);
+    EXPECT_EQ(SymlinkPolicy::DoNotFollow, request.rootDirectoryLinkAction);
+    EXPECT_EQ(SymlinkPolicy::DoNotFollow, request.childFileLinkAction);
+    EXPECT_EQ(SymlinkPolicy::DoNotFollow, request.childDirectoryLinkAction);
     EXPECT_EQ(FilesystemScope::RootDevice, request.scope);
     EXPECT_EQ(FilesystemYieldType::All, request.yieldType);
     EXPECT_EQ(FilesystemDepthAction::Stop, request.depthAction);
@@ -522,10 +523,10 @@ TEST(FilesystemCollectionTest, InitializesNativeDefaultsAndMatchesExplicitDefaul
     FilesystemCollectionRequest explicitDefaults = Request();
     explicitDefaults.direction = FilesystemDirection::None;
     explicitDefaults.maxDepth = 32;
-    explicitDefaults.rootFileLinkAction = SymlinkFollowing::DoNotFollow;
-    explicitDefaults.rootDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
-    explicitDefaults.childFileLinkAction = SymlinkFollowing::DoNotFollow;
-    explicitDefaults.childDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
+    explicitDefaults.rootFileLinkAction = SymlinkPolicy::DoNotFollow;
+    explicitDefaults.rootDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
+    explicitDefaults.childFileLinkAction = SymlinkPolicy::DoNotFollow;
+    explicitDefaults.childDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
     explicitDefaults.scope = FilesystemScope::RootDevice;
     explicitDefaults.yieldType = FilesystemYieldType::All;
     explicitDefaults.depthAction = FilesystemDepthAction::Stop;
@@ -545,10 +546,10 @@ TEST(FilesystemCollectionTest, InitializesNativeDefaultsAndMatchesExplicitDefaul
     const ResolvedFilesystemCollectionRequest& explicitResolved = explicitResult.Value();
     EXPECT_EQ(FilesystemDirection::None, resolved.direction);
     EXPECT_EQ(32, resolved.maxDepth);
-    EXPECT_EQ(SymlinkFollowing::DoNotFollow, resolved.rootFileLinkAction);
-    EXPECT_EQ(SymlinkFollowing::DoNotFollow, resolved.rootDirectoryLinkAction);
-    EXPECT_EQ(SymlinkFollowing::DoNotFollow, resolved.childFileLinkAction);
-    EXPECT_EQ(SymlinkFollowing::DoNotFollow, resolved.childDirectoryLinkAction);
+    EXPECT_EQ(SymlinkPolicy::DoNotFollow, resolved.rootFileLinkAction);
+    EXPECT_EQ(SymlinkPolicy::DoNotFollow, resolved.rootDirectoryLinkAction);
+    EXPECT_EQ(SymlinkPolicy::DoNotFollow, resolved.childFileLinkAction);
+    EXPECT_EQ(SymlinkPolicy::DoNotFollow, resolved.childDirectoryLinkAction);
     EXPECT_EQ(FilesystemScope::RootDevice, resolved.scope);
     EXPECT_EQ(FilesystemYieldType::All, resolved.yieldType);
     EXPECT_EQ(FilesystemDepthAction::Stop, resolved.depthAction);
@@ -580,10 +581,10 @@ TEST(FilesystemCollectionTest, PreservesExplicitSelectionAndLinkSettings)
     FilesystemCollectionRequest request = Request();
     request.direction = FilesystemDirection::Down;
     request.maxDepth = 0;
-    request.rootFileLinkAction = SymlinkFollowing::Follow;
-    request.rootDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
-    request.childFileLinkAction = SymlinkFollowing::DoNotFollow;
-    request.childDirectoryLinkAction = SymlinkFollowing::Follow;
+    request.rootFileLinkAction = SymlinkPolicy::Follow;
+    request.rootDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
+    request.childFileLinkAction = SymlinkPolicy::DoNotFollow;
+    request.childDirectoryLinkAction = SymlinkPolicy::Follow;
     request.scope = FilesystemScope::All;
 
     const Result<ResolvedFilesystemCollectionRequest> result = ResolveFilesystemCollectionRequest(request);
@@ -591,10 +592,10 @@ TEST(FilesystemCollectionTest, PreservesExplicitSelectionAndLinkSettings)
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(FilesystemDirection::Down, result->direction);
     EXPECT_EQ(0, result->maxDepth);
-    EXPECT_EQ(SymlinkFollowing::Follow, result->rootFileLinkAction);
-    EXPECT_EQ(SymlinkFollowing::DoNotFollow, result->rootDirectoryLinkAction);
-    EXPECT_EQ(SymlinkFollowing::DoNotFollow, result->childFileLinkAction);
-    EXPECT_EQ(SymlinkFollowing::Follow, result->childDirectoryLinkAction);
+    EXPECT_EQ(SymlinkPolicy::Follow, result->rootFileLinkAction);
+    EXPECT_EQ(SymlinkPolicy::DoNotFollow, result->rootDirectoryLinkAction);
+    EXPECT_EQ(SymlinkPolicy::DoNotFollow, result->childFileLinkAction);
+    EXPECT_EQ(SymlinkPolicy::Follow, result->childDirectoryLinkAction);
     EXPECT_EQ(FilesystemScope::All, result->scope);
 }
 
@@ -679,7 +680,7 @@ TEST(FilesystemCollectionTest, RejectsInvalidEnumValues)
              &FilesystemCollectionRequest::childFileLinkAction, &FilesystemCollectionRequest::childDirectoryLinkAction})
     {
         FilesystemCollectionRequest invalidLink = Request();
-        invalidLink.*field = static_cast<SymlinkFollowing>(99);
+        invalidLink.*field = static_cast<SymlinkPolicy>(99);
         ExpectInvalid(invalidLink, EINVAL);
     }
 
@@ -889,7 +890,7 @@ TEST(FilesystemCollectionTest, SkipsAndFollowsDirectoryLinksIndependently)
     request.direction = FilesystemDirection::Down;
     const auto skipped = CollectFilesystem(request);
 
-    request.childDirectoryLinkAction = SymlinkFollowing::Follow;
+    request.childDirectoryLinkAction = SymlinkPolicy::Follow;
     const auto followed = CollectFilesystem(request);
 
     ASSERT_TRUE(skipped.HasValue());
@@ -909,8 +910,8 @@ TEST(FilesystemCollectionTest, SkipsAndFollowsDirectoryLinksIndependently)
     EXPECT_TRUE(followed->exclusions.empty());
 
     // A file-only follow setting does not cause directory traversal.
-    request.childFileLinkAction = SymlinkFollowing::Follow;
-    request.childDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
+    request.childFileLinkAction = SymlinkPolicy::Follow;
+    request.childDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
     const auto directorySkipped = CollectFilesystem(request);
     ASSERT_TRUE(directorySkipped.HasValue());
     EXPECT_EQ((std::vector<std::string>{tree.Path("root"), tree.Path("root/target"), tree.Path("root/target/item")}), Paths(directorySkipped->entries));
@@ -928,7 +929,7 @@ TEST(FilesystemCollectionTest, RejectsFollowedCyclesButPermitsDistinctAliases)
     tree.Link(tree.Path("root/target"), "root/alias");
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.direction = FilesystemDirection::Down;
-    request.childDirectoryLinkAction = SymlinkFollowing::Follow;
+    request.childDirectoryLinkAction = SymlinkPolicy::Follow;
     const auto cycle = CollectFilesystem(request);
     ASSERT_FALSE(cycle.HasValue());
     EXPECT_EQ(ELOOP, cycle.Error().code);
@@ -948,7 +949,7 @@ TEST(FilesystemCollectionTest, DescendantAbsoluteLinkOutsideAcceptedRootFailsClo
     tree.File("outside");
     tree.Link(tree.Path("outside"), "root/alias");
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
-    request.childFileLinkAction = SymlinkFollowing::Follow;
+    request.childFileLinkAction = SymlinkPolicy::Follow;
     const auto result = CollectFilesystem(request);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(ENOTDIR, result.Error().code); // The outside prefix is not an accepted-root directory.
@@ -1174,7 +1175,7 @@ TEST(FilesystemCollectionTest, RootDirectoryLinkSkipIsAnExclusionNotAnAbsentRoot
     ASSERT_EQ(1u, streamed->exclusions.size());
     EXPECT_EQ(tree.Path("alias"), streamed->exclusions[0].path);
 
-    request.rootDirectoryLinkAction = SymlinkFollowing::Follow;
+    request.rootDirectoryLinkAction = SymlinkPolicy::Follow;
     const auto followed = CollectFilesystem(request);
     ASSERT_TRUE(followed.HasValue());
     EXPECT_EQ(2u, followed->entries.size());
@@ -1203,7 +1204,7 @@ TEST(FilesystemCollectionTest, RootFileLinkAndChildFileLinkUseIndependentSetting
     EXPECT_EQ(tree.Path("alias"), skippedRoot->exclusions[0].path);
     EXPECT_EQ("link policy", skippedRoot->exclusions[0].reason);
 
-    file.rootFileLinkAction = SymlinkFollowing::Follow;
+    file.rootFileLinkAction = SymlinkPolicy::Follow;
     const auto followedRoot = CollectFilesystem(file);
     ASSERT_TRUE(followedRoot.HasValue());
     ASSERT_EQ(1u, followedRoot->entries.size());
@@ -1220,7 +1221,7 @@ TEST(FilesystemCollectionTest, RootFileLinkAndChildFileLinkUseIndependentSetting
     ASSERT_EQ(1u, skippedChild->exclusions.size());
     EXPECT_EQ(tree.Path("root/alias"), skippedChild->exclusions[0].path);
 
-    children.childFileLinkAction = SymlinkFollowing::Follow;
+    children.childFileLinkAction = SymlinkPolicy::Follow;
     const auto followedChild = CollectFilesystem(children);
     ASSERT_TRUE(followedChild.HasValue());
     ASSERT_EQ(2u, followedChild->entries.size());
@@ -1267,8 +1268,8 @@ TEST(FilesystemCollectionTest, SkippedDanglingLinksDoNotStatTargetsOrBecomeMissi
     ASSERT_EQ(1u, child->exclusions.size());
     EXPECT_EQ(tree.Path("root/dangling"), child->exclusions[0].path);
     EXPECT_EQ(0, targetStats);
-    request.childFileLinkAction = SymlinkFollowing::Follow;
-    request.childDirectoryLinkAction = SymlinkFollowing::Follow;
+    request.childFileLinkAction = SymlinkPolicy::Follow;
+    request.childDirectoryLinkAction = SymlinkPolicy::Follow;
     const auto followed = ComplianceEngine::Filesystem::CollectFilesystem(request, context);
     ASSERT_FALSE(followed.HasValue());
     EXPECT_EQ(ENOENT, followed.Error().code);
@@ -1280,8 +1281,8 @@ TEST(FilesystemCollectionTest, FollowingDanglingLinkFailsRatherThanReturningAbse
     TestTree tree;
     tree.Link(tree.Path("missing"), "dangling");
     FilesystemCollectionRequest request(tree.Path("dangling"), FilesystemRootKind::File);
-    request.rootFileLinkAction = SymlinkFollowing::Follow;
-    request.rootDirectoryLinkAction = SymlinkFollowing::Follow;
+    request.rootFileLinkAction = SymlinkPolicy::Follow;
+    request.rootDirectoryLinkAction = SymlinkPolicy::Follow;
     const auto result = CollectFilesystem(request);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(ENOENT, result.Error().code);
@@ -1338,7 +1339,7 @@ TEST(FilesystemCollectionTest, FileRootPinAndSnapshotHaveAnExactRetainedBudgetBo
     EXPECT_EQ(E2BIG, exceeded.Error().code);
 }
 
-TEST(FilesystemCollectionTest, ReplacingObservedChildLinkBeforePinningFailsInsteadOfMixingEvidence)
+TEST(FilesystemCollectionTest, ReplacingPinnedChildLinkKeepsOriginalLinkAndTargetIdentity)
 {
     TestTree tree;
     tree.Directory("root");
@@ -1361,41 +1362,60 @@ TEST(FilesystemCollectionTest, ReplacingObservedChildLinkBeforePinningFailsInste
     });
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.direction = FilesystemDirection::Down;
-    request.childFileLinkAction = SymlinkFollowing::Follow;
+    request.childFileLinkAction = SymlinkPolicy::Follow;
     request.yieldType = FilesystemYieldType::RegularFiles;
     const auto collected = ComplianceEngine::Filesystem::CollectFilesystem(request, context);
     EXPECT_TRUE(replaced);
-    ASSERT_FALSE(collected.HasValue());
-    EXPECT_EQ(ESTALE, collected.Error().code);
+    ASSERT_TRUE(collected.HasValue()) << collected.Error().message;
+    const auto& entries = collected->entries;
+    auto alias =
+        std::find_if(entries.begin(), entries.end(), [&](const FilesystemCollectionEntry& entry) { return entry.path == tree.Path("root/alias"); });
+    ASSERT_NE(entries.end(), alias);
+    EXPECT_EQ(original.st_ino, alias->linkMetadata.st_ino);
+    ASSERT_TRUE(alias->targetMetadata.HasValue());
+    struct stat first = {};
+    ASSERT_EQ(0, stat(tree.Path("root/first").c_str(), &first));
+    EXPECT_EQ(first.st_ino, alias->targetMetadata.Value().st_ino);
 }
 
-TEST(FilesystemCollectionTest, ReplacingObservedRootLinkBeforePinningFailsInsteadOfMixingEvidence)
+TEST(FilesystemCollectionTest, ReplacingPinnedRootLinkKeepsOriginalLinkAndTargetIdentity)
 {
     TestTree tree;
     tree.File("first");
     tree.File("second");
     tree.Link("first", "alias");
     MockContext context;
-    ON_CALL(context, LstatPath(testing::_, testing::_)).WillByDefault([&](const char* path, struct stat* metadata) {
-        const int result = lstat(path, metadata);
-        if (0 == result)
+    struct stat original = {};
+    ASSERT_EQ(0, lstat(tree.Path("alias").c_str(), &original));
+    bool replaced = false;
+    ON_CALL(context, StatFileDescriptor(testing::_, testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
+        const int result = fstat(descriptor, metadata);
+        if (!replaced && result == 0 && S_ISLNK(metadata->st_mode) && metadata->st_ino == original.st_ino)
         {
+            replaced = true;
             EXPECT_EQ(0, rename(tree.Path("alias").c_str(), tree.Path("old-alias").c_str()));
             tree.Link("second", "alias");
         }
         return result;
     });
     FilesystemCollectionRequest request(tree.Path("alias"), FilesystemRootKind::File);
-    request.rootFileLinkAction = SymlinkFollowing::Follow;
-    const auto opened = Files(request, context);
-    ASSERT_FALSE(opened.HasValue());
-    EXPECT_EQ(ESTALE, opened.Error().code);
+    request.rootFileLinkAction = SymlinkPolicy::Follow;
+    const auto opened = CollectFilesystem(request, context);
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    EXPECT_TRUE(replaced);
+    ASSERT_EQ(1u, opened->entries.size());
+    const auto& entry = opened->entries.front();
+    EXPECT_EQ(original.st_ino, entry.linkMetadata.st_ino);
+    ASSERT_TRUE(entry.targetMetadata.HasValue());
+    struct stat first = {};
+    ASSERT_EQ(0, stat(tree.Path("first").c_str(), &first));
+    EXPECT_EQ(first.st_ino, entry.targetMetadata.Value().st_ino);
 }
 
-TEST(FilesystemCollectionTest, FactoryConvertsAllocationFailureDuringRootLookupToENOMEM)
+TEST(FilesystemCollectionTest, FactoryConvertsAllocationFailureDuringPinnedRootOpenToENOMEM)
 {
     MockContext context;
-    ON_CALL(context, LstatPath(testing::_, testing::_)).WillByDefault([](const char*, struct stat*) -> int { throw std::bad_alloc(); });
+    ON_CALL(context, OpenNativePath(testing::_, testing::_)).WillByDefault([](const char*, int) -> int { throw std::bad_alloc(); });
     const auto opened = Files(Request(), context);
     ASSERT_FALSE(opened.HasValue());
     EXPECT_EQ(ENOMEM, opened.Error().code);
@@ -1417,6 +1437,59 @@ TEST(FilesystemCollectionTest, SkippedRootLinkStillChargesItsExclusion)
     const auto exceeded = CollectFilesystem(request);
     ASSERT_FALSE(exceeded.HasValue());
     EXPECT_EQ(E2BIG, exceeded.Error().code);
+}
+
+TEST(FilesystemCollectionTest, UnsupportedObjectsRejectByDefaultAndSkipOnlyWhenRequested)
+{
+    TestTree tree;
+    tree.Directory("root");
+    const std::string special = tree.Path("root/special");
+    ASSERT_EQ(0, ::mkfifo(special.c_str(), 0600));
+    tree.Link("special", "root/alias");
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    request.scope = FilesystemScope::All;
+    request.childFileLinkAction = SymlinkPolicy::Follow;
+    request.childDirectoryLinkAction = SymlinkPolicy::Follow;
+    const auto rejected = CollectFilesystem(request);
+    ASSERT_FALSE(rejected.HasValue());
+    EXPECT_EQ(EOPNOTSUPP, rejected.Error().code);
+
+    request.unsupported = UnsupportedTypeAction::Skip;
+    const auto skipped = CollectFilesystem(request);
+    ASSERT_TRUE(skipped.HasValue()) << skipped.Error().message;
+    EXPECT_EQ(std::vector<std::string>{tree.Path("root")}, Paths(skipped->entries));
+    ASSERT_EQ(2u, skipped->exclusions.size());
+    for (const auto& excluded : skipped->exclusions)
+        EXPECT_EQ("unsupported type", excluded.reason);
+
+    FilesystemCollectionRequest unsupportedRoot(special, FilesystemRootKind::File);
+    unsupportedRoot.unsupported = UnsupportedTypeAction::Skip;
+    const auto root = CollectFilesystem(unsupportedRoot);
+    ASSERT_FALSE(root.HasValue());
+    EXPECT_EQ(EOPNOTSUPP, root.Error().code);
+}
+
+TEST(FilesystemCollectionTest, UnsupportedSkipDoesNotTurnMissingRegularChildIntoExclusion)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.File("root/lost");
+    MockContext context;
+    ON_CALL(context, OpenNativeAt(testing::_, testing::_, testing::_)).WillByDefault([&](int directory, const char* name, int flags) {
+        if (std::string(name) == "lost")
+        {
+            errno = ENOENT;
+            return -1;
+        }
+        return context.ContextInterface::OpenNativeAt(directory, name, flags);
+    });
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    request.unsupported = UnsupportedTypeAction::Skip;
+    const auto missing = CollectFilesystem(request, context);
+    ASSERT_FALSE(missing.HasValue());
+    EXPECT_EQ(ENOENT, missing.Error().code);
 }
 
 TEST(FilesystemCollectionTest, DefaultDepthThirtyTwoStopsSelectionButContinuesDescriptors)
@@ -1578,7 +1651,7 @@ TEST(FilesystemCollectionTest, FactoryAcquiresRootButReadsDescendantsOnePullAtAT
     auto opened = Files(request, context);
     ASSERT_TRUE(opened.HasValue());
     auto& files = opened.Value();
-    EXPECT_EQ(1u, stats);
+    EXPECT_EQ(0u, stats);
     EXPECT_EQ(0u, reads);
     EXPECT_TRUE(files.RootExists());
 
@@ -1589,14 +1662,14 @@ TEST(FilesystemCollectionTest, FactoryAcquiresRootButReadsDescendantsOnePullAtAT
     ASSERT_NE(nullptr, entry->Value().LiveHandle());
     auto rootIdentity = entry->Value().LiveHandle()->Stat(FilesystemCollectionLimits{}.fullPathBytes);
     ASSERT_TRUE(rootIdentity.HasValue()) << rootIdentity.Error().message;
-    EXPECT_EQ(1u, stats);
+    EXPECT_EQ(0u, stats);
     EXPECT_EQ(0u, reads);
 
     ++entry;
     ASSERT_NE(entry, files.end());
     ASSERT_TRUE(entry->HasValue());
     EXPECT_EQ(tree.Path("root/item"), entry->Value().path);
-    EXPECT_EQ(1u, stats);
+    EXPECT_EQ(0u, stats);
     EXPECT_EQ(1u, reads);
     ASSERT_NE(nullptr, entry->Value().LiveHandle());
     EXPECT_EQ(ComplianceEngine::Filesystem::Handle::Type::RegularFile, entry->Value().LiveHandle()->AcquiredType());
@@ -1604,7 +1677,7 @@ TEST(FilesystemCollectionTest, FactoryAcquiresRootButReadsDescendantsOnePullAtAT
     ++entry;
     EXPECT_EQ(entry, files.end());
     EXPECT_TRUE(files.Close().HasValue());
-    EXPECT_EQ(1u, stats);
+    EXPECT_EQ(0u, stats);
 }
 
 TEST(FilesystemCollectionTest, RangeForRetainsEachRegularFilePinWithoutReacquiringItsName)
@@ -1640,7 +1713,7 @@ TEST(FilesystemCollectionTest, RangeForRetainsEachRegularFilePinWithoutReacquiri
     }
     std::sort(seen.begin(), seen.end());
     EXPECT_EQ((std::vector<std::string>{tree.Path("root/first"), tree.Path("root/second")}), seen);
-    EXPECT_EQ(1u, rootLookups);
+    EXPECT_EQ(0u, rootLookups);
     EXPECT_TRUE(opened->Close().HasValue());
 }
 
@@ -1686,13 +1759,16 @@ TEST(FilesystemCollectionTest, FactorySeparatesAbsentRootFromInitializationFailu
     ASSERT_FALSE(statFailure.HasValue());
     EXPECT_EQ(EIO, statFailure.Error().code);
 
-    ON_CALL(context, LstatPath(testing::_, testing::_)).WillByDefault([](const char*, struct stat*) {
+    ON_CALL(context, StatFileDescriptor(testing::_, testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
+        return context.ContextInterface::StatFileDescriptor(descriptor, metadata);
+    });
+    ON_CALL(context, OpenNativeAt(testing::_, testing::_, testing::_)).WillByDefault([](int, const char*, int) {
         errno = EACCES;
         return -1;
     });
-    const auto lstatFailure = Files(request, context);
-    ASSERT_FALSE(lstatFailure.HasValue());
-    EXPECT_EQ(EACCES, lstatFailure.Error().code);
+    const auto rootOpenFailure = Files(request, context);
+    ASSERT_FALSE(rootOpenFailure.HasValue());
+    EXPECT_EQ(EACCES, rootOpenFailure.Error().code);
 }
 
 TEST(FilesystemCollectionTest, YieldSelectionDoesNotSuppressDescentOrWorkBudgets)
@@ -1755,7 +1831,7 @@ TEST(FilesystemCollectionTest, LinkSelectionUsesEffectiveMetadataWithoutLosingLs
     ASSERT_TRUE(recorded.HasValue());
     EXPECT_EQ(std::vector<std::string>{tree.Path("root/target")}, Paths(recorded->entries));
 
-    request.childFileLinkAction = SymlinkFollowing::Follow;
+    request.childFileLinkAction = SymlinkPolicy::Follow;
     auto followed = ComplianceEngine::Filesystem::CollectFilesystem(request, context);
     ASSERT_TRUE(followed.HasValue());
     ASSERT_EQ(2u, followed->entries.size());
@@ -1771,7 +1847,7 @@ TEST(FilesystemCollectionTest, LinkSelectionUsesEffectiveMetadataWithoutLosingLs
     EXPECT_TRUE(S_ISREG(link->targetMetadata.Value().st_mode));
 
     request.yieldType = FilesystemYieldType::SymbolicLinks;
-    request.childFileLinkAction = SymlinkFollowing::DoNotFollow;
+    request.childFileLinkAction = SymlinkPolicy::DoNotFollow;
     auto links = ComplianceEngine::Filesystem::CollectFilesystem(request, context);
     ASSERT_TRUE(links.HasValue());
     EXPECT_TRUE(links->entries.empty());

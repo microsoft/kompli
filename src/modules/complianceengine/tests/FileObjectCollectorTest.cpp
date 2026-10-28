@@ -20,7 +20,7 @@
 #include <vector>
 
 using ComplianceEngine::FileCollectionPolicy;
-using ComplianceEngine::Filesystem::SymlinkFollowing;
+using ComplianceEngine::Filesystem::SymlinkPolicy;
 using testing::_;
 using testing::NiceMock;
 namespace VariableResolution = ComplianceEngine::VariableResolution;
@@ -460,7 +460,7 @@ TEST(FileObjectCollectorTest, PolicyForwardsFollowAndRejectForEveryComponent)
     reads = intermediateCloses = finalCloses = 0;
 
     FileCollectionPolicy policy;
-    policy.symlinks = SymlinkFollowing::DoNotFollow;
+    policy.symlinks = SymlinkPolicy::DoNotFollow;
     const auto rejected = ComplianceEngine::CollectNameserverObject(context, chained, policy);
     ASSERT_FALSE(rejected.HasValue());
     EXPECT_EQ(ELOOP, rejected.Error().code);
@@ -1054,7 +1054,7 @@ TEST(FileObjectCollectorTest, RejectsEmbeddedNulAndInvalidInputsBeforeOpening)
     EXPECT_EQ(EINVAL, result.Error().code);
 
     FileCollectionPolicy invalidPolicy;
-    invalidPolicy.symlinks = static_cast<SymlinkFollowing>(2);
+    invalidPolicy.symlinks = static_cast<SymlinkPolicy>(2);
     result = ComplianceEngine::CollectNameserverObject(context, "/etc/resolv.conf", invalidPolicy);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);

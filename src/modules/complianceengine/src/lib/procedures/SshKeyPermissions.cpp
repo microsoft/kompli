@@ -18,7 +18,7 @@ using Filesystem::FilesystemDirection;
 using Filesystem::FilesystemRootKind;
 using Filesystem::FilesystemScope;
 using Filesystem::FilesystemYieldType;
-using Filesystem::SymlinkFollowing;
+using Filesystem::SymlinkPolicy;
 // Helper routine shared by audit and remediation for SSH key permission checks.
 // When isRemediation == true it will remediate permissions/ownership, otherwise only audit.
 Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTree& indicators, ContextInterface& context)
@@ -117,10 +117,10 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
     policy.maxDepth = 32;
     policy.depthAction = FilesystemDepthAction::Error;
     policy.scope = FilesystemScope::All;
-    policy.rootFileLinkAction = SymlinkFollowing::Follow;
-    policy.rootDirectoryLinkAction = SymlinkFollowing::Follow;
-    policy.childDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
-    policy.childFileLinkAction = SymlinkFollowing::DoNotFollow;
+    policy.rootFileLinkAction = SymlinkPolicy::Follow;
+    policy.rootDirectoryLinkAction = SymlinkPolicy::Follow;
+    policy.childDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
+    policy.childFileLinkAction = SymlinkPolicy::DoNotFollow;
     policy.yieldType = FilesystemYieldType::RegularFiles;
     auto opened = Filesystem::FTW::Files(policy, context);
     if (!opened.HasValue())

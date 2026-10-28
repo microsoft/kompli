@@ -6,12 +6,12 @@
 
 #include "Descriptor.hpp"
 #include "Optional.h"
+#include "ReadableFile.hpp"
 #include "Result.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <dirent.h>
-#include <memory>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -55,16 +55,13 @@ private:
     DIR* mStream = nullptr;
     int mCloseError = 0;
 };
-namespace Detail
-{
-struct DetachedResources;
-} // namespace Detail
-
 // Owns exactly one pinned descriptor. A popped handle needs only its own pin
 // for inspection, read-only activation and metadata operations;
 // it cannot extend a Path or reacquire its former parent. Construction is
 // confined to Path's acquisition implementation; neither the descriptor nor
-// ownership escapes through this interface. The context must outlive it.
+// ownership escapes through this interface. Popped handles are independently
+// owned and no longer count against their former Path's resource limits;
+// consumers must bound how many they retain. The context must outlive them.
 class Handle
 {
 public:
@@ -103,19 +100,20 @@ public:
     // Activates only a held regular file, using verified procfs alias identity
     // and mount checks. The new descriptor survives this Handle's destruction.
     Result<ReadableFile> OpenReadOnly(std::size_t fdinfoByteCap) const;
+    Result<ReadableFile> OpenReadOnly(std::size_t fdinfoByteCap, ReadableFile::Policy policy) const;
     // Enumerate through a verified read-only alias; only names escape.
     // Children must still be acquired from the live parent Path.
     Result<DirectoryCursor> OpenChildren(std::size_t fdinfoByteCap) const;
     // Relinquish this pin before attempting its native close, exactly once.
     // A failed close is returned unchanged on later calls, without retrying
-    // a descriptor number that may have been reused. Detached Path accounting
-    // is released on the first attempt. Existing readable files remain valid.
+    // a descriptor number that may have been reused. Existing readable files
+    // remain valid.
     // Destruction logs close failure only if no explicit attempt was made.
     Result<bool> Close();
 
 private:
-    // Path owns composition and detached-resource accounting. The checked
-    // acquisition methods below are private: no consumer can supply an fd.
+    // Path owns composition. The checked acquisition methods below are
+    // private: no consumer can supply an fd.
     friend class Path;
     Handle(Detail::Descriptor&& descriptor, Type type, std::string component, const struct stat& snapshot);
     static Result<Handle> AcquireChild(const ContextInterface& context, int parentDirectory, std::string component, bool directory);
@@ -135,8 +133,6 @@ private:
     struct stat mSnapshot = {};
     bool mPin = true;
     int mCloseError = 0;
-    std::shared_ptr<Detail::DetachedResources> mDetachedResources;
-    std::size_t mDetachedBytes = 0;
 };
 } // namespace Filesystem
 } // namespace ComplianceEngine

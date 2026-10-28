@@ -20,7 +20,7 @@
 #include <vector>
 
 using ComplianceEngine::Filesystem::LinesRange;
-using ComplianceEngine::Filesystem::SymlinkFollowing;
+using ComplianceEngine::Filesystem::SymlinkPolicy;
 using testing::_;
 using testing::NiceMock;
 
@@ -29,7 +29,7 @@ namespace
 LinesRange::Policy Limited(std::size_t maxBytes, std::size_t retries = 2)
 {
     LinesRange::Policy policy;
-    policy.symlinks = SymlinkFollowing::Follow;
+    policy.symlinks = SymlinkPolicy::Follow;
     policy.limits.maxBytes = maxBytes;
     policy.limits.maxInterruptedReads = retries;
     return policy;
@@ -112,15 +112,15 @@ protected:
 TEST_F(PathFile, DefaultPolicyValuesAndExplicitOverrides)
 {
     const LinesRange::Policy defaults;
-    EXPECT_EQ(SymlinkFollowing::Follow, defaults.symlinks);
+    EXPECT_EQ(SymlinkPolicy::Follow, defaults.symlinks);
     EXPECT_EQ(1024U * 1024U, defaults.limits.maxBytes);
     EXPECT_EQ(128U, defaults.limits.maxInterruptedReads);
 
     LinesRange::Policy custom;
-    custom.symlinks = SymlinkFollowing::DoNotFollow;
+    custom.symlinks = SymlinkPolicy::DoNotFollow;
     custom.limits.maxBytes = 3;
     custom.limits.maxInterruptedReads = 1;
-    EXPECT_EQ(SymlinkFollowing::DoNotFollow, custom.symlinks);
+    EXPECT_EQ(SymlinkPolicy::DoNotFollow, custom.symlinks);
     EXPECT_EQ(3U, custom.limits.maxBytes);
     EXPECT_EQ(1U, custom.limits.maxInterruptedReads);
 }
@@ -156,7 +156,7 @@ TEST_F(PathFile, OmittedPolicyFollowsFinalSymlinkAndRejectsNul)
     EXPECT_TRUE(textRange.Close().HasValue());
     EXPECT_EQ(EBADMSG, Collect(path, Limited(3)).Error().code);
     LinesRange::Policy reject;
-    reject.symlinks = SymlinkFollowing::DoNotFollow;
+    reject.symlinks = SymlinkPolicy::DoNotFollow;
     EXPECT_EQ(ELOOP, Collect(path + ".link", reject).Error().code);
 }
 
@@ -181,7 +181,7 @@ TEST_F(PathFile, DoNotFollowRejectsIntermediateAndFinalSymlinksWithoutReading)
     EXPECT_GT(reads, 0);
     reads = intermediateCloses = finalCloses = 0;
     LinesRange::Policy policy;
-    policy.symlinks = SymlinkFollowing::DoNotFollow;
+    policy.symlinks = SymlinkPolicy::DoNotFollow;
     EXPECT_EQ(ELOOP, Collect(chained, policy).Error().code);
     EXPECT_EQ(1, intermediateCloses);
     EXPECT_EQ(0, finalCloses);
@@ -248,7 +248,7 @@ TEST_F(PathFile, ValidationAndMakeAreFactoryOperations)
     for (const auto& name : {std::string(), std::string("relative"), std::string("a\0b", 3)})
         EXPECT_EQ(EINVAL, Collect(name, Limited(16)).Error().code);
     auto invalid = Limited(16);
-    invalid.symlinks = static_cast<SymlinkFollowing>(99);
+    invalid.symlinks = static_cast<SymlinkPolicy>(99);
     EXPECT_EQ(EINVAL, Collect(path, invalid).Error().code);
     invalid = Limited(0);
     EXPECT_EQ(EINVAL, Collect(path, invalid).Error().code);
@@ -373,6 +373,38 @@ TEST_F(PathFile, ValidLineThenNulAcrossReadChunksYieldsErrorNotTruncatedLine)
         EXPECT_FALSE(it != range.end());
         EXPECT_TRUE(range.Close().HasValue());
         EXPECT_EQ(1, closes);
+    }
+}
+
+TEST_F(PathFile, SpanDelimiterAcrossRefillDefersLaterNulUntilAdvance)
+{
+    for (const std::size_t padding : {2U, 8191U, 8192U})
+    {
+        const std::string first(padding, 'x');
+        Write(first + std::string("\n\0tail", 6));
+        int reads = 0;
+        ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+            if (IsFileDescriptor(fd, true))
+                ++reads;
+            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        });
+
+        auto opened = LinesRange::Make(context, path, Limited(padding + 6));
+        ASSERT_TRUE(opened.HasValue());
+        auto& range = opened.Value();
+        auto line = range.begin();
+        ASSERT_TRUE(line != range.end());
+        ASSERT_TRUE(line->HasValue());
+        EXPECT_EQ(first, line->Value());
+        EXPECT_EQ(padding == 8192 ? 2 : 1, reads);
+        ++line;
+        ASSERT_TRUE(line != range.end());
+        ASSERT_FALSE(line->HasValue());
+        EXPECT_EQ(EBADMSG, line->Error().code);
+        EXPECT_EQ(padding >= 8191 ? 2 : 1, reads);
+        ++line;
+        EXPECT_FALSE(line != range.end());
+        ASSERT_TRUE(range.Close().HasValue());
     }
 }
 
@@ -1204,7 +1236,7 @@ TEST_F(PathFile, PinnedInodeSymlinkAndNonregular)
     ASSERT_EQ(0, ::symlink(path.c_str(), (path + ".link").c_str()));
     EXPECT_EQ("new", Collect(path + ".link", Limited(3)).Value());
     auto reject = Limited(3);
-    reject.symlinks = SymlinkFollowing::DoNotFollow;
+    reject.symlinks = SymlinkPolicy::DoNotFollow;
     EXPECT_EQ(ELOOP, Collect(path + ".link", reject).Error().code);
     EXPECT_EQ(EINVAL, Collect(context.GetTempdirPath(), Limited(3)).Error().code);
 }
@@ -1244,7 +1276,7 @@ TEST_F(PathFile, AncestorReplacementBeforeAcquisitionRespectsLinkPolicy)
     });
 
     auto reject = Limited(16);
-    reject.symlinks = SymlinkFollowing::DoNotFollow;
+    reject.symlinks = SymlinkPolicy::DoNotFollow;
     auto result = Collect(requested, reject);
     ASSERT_FALSE(result.HasValue());
     EXPECT_TRUE(swapped);

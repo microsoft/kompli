@@ -31,7 +31,6 @@ using ComplianceEngine::Filesystem::MountPolicy;
 using ComplianceEngine::Filesystem::Path;
 using ComplianceEngine::Filesystem::ReadableFile;
 using ComplianceEngine::Filesystem::ResolverLimits;
-using ComplianceEngine::Filesystem::RootPolicy;
 using ComplianceEngine::Filesystem::SymlinkPolicy;
 using ComplianceEngine::Filesystem::Detail::Descriptor;
 using ComplianceEngine::Filesystem::Detail::VerifiedProcfs;
@@ -89,18 +88,21 @@ class ReadableFileTest : public testing::Test
 protected:
     NiceMock<MockContext> context;
     static constexpr std::size_t fdinfoCap = 4096;
-    std::size_t interruptRetriesRemaining = 1;
 
     ComplianceEngine::Result<Handle> Pin(MockContext& selectedContext, const std::string& component)
     {
         const ResolverLimits limits{{4096, 100, 100000, 256, 262144, fdinfoCap}, 4096, 8, 128};
-        auto root = Path::AcquireRoot(selectedContext, selectedContext.GetTempdirPath(), RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+        auto root = Path::Make(selectedContext, selectedContext.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
         if (!root.HasValue())
         {
             return std::move(root).Error();
         }
-        Path path = std::move(root).Value();
-        auto pushed = path.Push(component, ExtensionPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
+        if (root.Value().GetStatus() != Path::Result::Status::Accepted)
+        {
+            return ComplianceEngine::Error("Fixture directory is unavailable", ENOENT);
+        }
+        Path path = std::move(root.Value()).TakePath();
+        auto pushed = path.Push(component, ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
         if (!pushed.HasValue())
         {
             return std::move(pushed).Error();
@@ -122,7 +124,7 @@ protected:
 
 TEST_F(ReadableFileTest, IsOpaqueAndMoveOnly)
 {
-    static_assert(std::is_same<decltype(&ReadableFile::Read), ComplianceEngine::Result<ComplianceEngine::Optional<std::string>> (ReadableFile::*)(std::size_t, std::size_t&)>::value,
+    static_assert(std::is_same<decltype(&ReadableFile::Read), ComplianceEngine::Result<ComplianceEngine::Optional<std::string>> (ReadableFile::*)(std::size_t)>::value,
         "Reading must mutate the stream");
     static_assert(!std::is_default_constructible<ReadableFile>::value, "Cannot fabricate readable ownership");
     static_assert(!std::is_constructible<ReadableFile, int>::value, "No raw descriptor constructor");
@@ -315,11 +317,11 @@ TEST_F(ReadableFileTest, SurvivesPinAndNameReplacementAndInspectsReadableDescrip
     ASSERT_TRUE(before.HasValue());
     EXPECT_EQ(inode, before.Value().st_ino);
     EXPECT_TRUE(S_ISREG(before.Value().st_mode));
-    auto read = readable.Read(8, interruptRetriesRemaining);
+    auto read = readable.Read(8);
     ASSERT_TRUE(read.HasValue());
     ASSERT_TRUE(read.Value().HasValue());
     EXPECT_EQ("first", read.Value().Value());
-    auto eof = readable.Read(8, interruptRetriesRemaining);
+    auto eof = readable.Read(8);
     ASSERT_TRUE(eof.HasValue());
     EXPECT_FALSE(eof.Value().HasValue());
     auto after = readable.Stat();
@@ -329,7 +331,7 @@ TEST_F(ReadableFileTest, SurvivesPinAndNameReplacementAndInspectsReadableDescrip
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
     EXPECT_TRUE(readable.Close().HasValue());
     EXPECT_TRUE(readable.Close().HasValue());
-    EXPECT_EQ(EBADF, readable.Read(1, interruptRetriesRemaining).Error().code);
+    EXPECT_EQ(EBADF, readable.Read(1).Error().code);
     EXPECT_EQ(EBADF, readable.Stat().Error().code);
 }
 
@@ -383,7 +385,7 @@ TEST_F(ReadableFileTest, NativeDescriptorZeroRemainsOwnedThroughEofUntilClose)
             {
                 ::_exit(5);
             }
-            auto chunk = readable.Read(8, interruptRetriesRemaining);
+            auto chunk = readable.Read(8);
             if (!chunk.HasValue() || !chunk.Value().HasValue() || (chunk.Value().Value() != "zero") || !readable.AtEnd() || !readable.Stat().HasValue())
             {
                 ::_exit(6);
@@ -422,20 +424,20 @@ TEST_F(ReadableFileTest, ReturnsOwnedBinaryChunksWithoutTextFiltering)
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 8)).Times(1);
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1);
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(0);
-    auto first = readable.Read(2, interruptRetriesRemaining);
+    auto first = readable.Read(2);
     ASSERT_TRUE(first.HasValue());
     ASSERT_TRUE(first.Value().HasValue());
     EXPECT_EQ(payload.substr(0, 2), first.Value().Value());
-    auto second = readable.Read(8, interruptRetriesRemaining);
+    auto second = readable.Read(8);
     ASSERT_TRUE(second.HasValue());
     ASSERT_TRUE(second.Value().HasValue());
     EXPECT_EQ(payload.substr(2), second.Value().Value());
     EXPECT_TRUE(readable.AtEnd());                          // short read followed by native EOF
     EXPECT_EQ(payload.substr(0, 2), first.Value().Value()); // earlier owned chunk is unchanged
-    auto eof = readable.Read(1, interruptRetriesRemaining);
+    auto eof = readable.Read(1);
     ASSERT_TRUE(eof.HasValue());
     EXPECT_FALSE(eof.Value().HasValue());
-    auto repeated = readable.Read(1, interruptRetriesRemaining);
+    auto repeated = readable.Read(1);
     ASSERT_TRUE(repeated.HasValue());
     EXPECT_FALSE(repeated.Value().HasValue());
 }
@@ -462,14 +464,13 @@ TEST_F(ReadableFileTest, ShortNativeReadsFillCapacityAtShrinkingOffsetsWithoutEo
         EXPECT_EQ(static_cast<char*>(start) + 3, buffer);
         return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
     });
-    auto filled = readable.Read(5, interruptRetriesRemaining);
+    auto filled = readable.Read(5);
     ASSERT_TRUE(filled.HasValue());
     ASSERT_TRUE(filled.Value().HasValue());
     EXPECT_EQ(std::string("a\0bcd", 5), filled.Value().Value());
     EXPECT_FALSE(readable.AtEnd()); // full capacity is not proof of EOF
-    EXPECT_EQ(1U, interruptRetriesRemaining);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    auto eof = readable.Read(1, interruptRetriesRemaining);
+    auto eof = readable.Read(1);
     ASSERT_TRUE(eof.HasValue());
     EXPECT_FALSE(eof.Value().HasValue());
     EXPECT_TRUE(readable.AtEnd());
@@ -493,14 +494,14 @@ TEST_F(ReadableFileTest, EofAfterShortProgressReturnsEngagedPartialButImmediateE
         EXPECT_EQ(static_cast<char*>(start) + 2, buffer);
         return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
     });
-    auto partial = readable.Read(5, interruptRetriesRemaining);
+    auto partial = readable.Read(5);
     ASSERT_TRUE(partial.HasValue());
     ASSERT_TRUE(partial.Value().HasValue());
     EXPECT_EQ("ab", partial.Value().Value());
     EXPECT_TRUE(readable.AtEnd());
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
     EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
-    auto eof = readable.Read(5, interruptRetriesRemaining);
+    auto eof = readable.Read(5);
     ASSERT_TRUE(eof.HasValue());
     EXPECT_FALSE(eof.Value().HasValue());
     EXPECT_TRUE(readable.AtEnd());
@@ -519,26 +520,26 @@ TEST_F(ReadableFileTest, ObservedEofTransfersWithOwnershipAndResetsOnClose)
     ReadableFile replacement = std::move(second).Value();
     EXPECT_FALSE(original.AtEnd());
     EXPECT_FALSE(replacement.AtEnd());
-    auto partial = original.Read(5, interruptRetriesRemaining);
+    auto partial = original.Read(5);
     ASSERT_TRUE(partial.HasValue());
     ASSERT_TRUE(partial.Value().HasValue());
     EXPECT_EQ("ab", partial.Value().Value());
     EXPECT_TRUE(original.AtEnd());
     ReadableFile moved(std::move(original));
     EXPECT_FALSE(original.AtEnd());
-    EXPECT_EQ(EBADF, original.Read(1, interruptRetriesRemaining).Error().code);
+    EXPECT_EQ(EBADF, original.Read(1).Error().code);
     EXPECT_TRUE(moved.AtEnd());
     replacement = std::move(moved);
     EXPECT_FALSE(moved.AtEnd());
-    EXPECT_EQ(EBADF, moved.Read(1, interruptRetriesRemaining).Error().code);
+    EXPECT_EQ(EBADF, moved.Read(1).Error().code);
     EXPECT_TRUE(replacement.AtEnd());
     EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
-    auto eof = replacement.Read(1, interruptRetriesRemaining);
+    auto eof = replacement.Read(1);
     ASSERT_TRUE(eof.HasValue());
     EXPECT_FALSE(eof.Value().HasValue());
     EXPECT_TRUE(replacement.Close().HasValue());
     EXPECT_FALSE(replacement.AtEnd());
-    EXPECT_EQ(EBADF, replacement.Read(1, interruptRetriesRemaining).Error().code);
+    EXPECT_EQ(EBADF, replacement.Read(1).Error().code);
 }
 
 TEST_F(ReadableFileTest, InterruptedShortReadsShareCumulativeBudgetAndAllowProgressAtZero)
@@ -546,10 +547,9 @@ TEST_F(ReadableFileTest, InterruptedShortReadsShareCumulativeBudgetAndAllowProgr
     const std::string source = context.MakeTempfile("abcde");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly(fdinfoCap, ReadableFile::Policy(2));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
-    interruptRetriesRemaining = 2;
     int calls = 0;
     void* start = nullptr;
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(2).WillRepeatedly([&](int fd, void* buffer, std::size_t) -> ssize_t {
@@ -574,13 +574,20 @@ TEST_F(ReadableFileTest, InterruptedShortReadsShareCumulativeBudgetAndAllowProgr
         EXPECT_EQ(static_cast<char*>(start) + 3, buffer);
         return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
     });
-    auto filled = readable.Read(5, interruptRetriesRemaining);
+    auto filled = readable.Read(5);
     ASSERT_TRUE(filled.HasValue());
     ASSERT_TRUE(filled.Value().HasValue());
     EXPECT_EQ("abcde", filled.Value().Value());
     EXPECT_FALSE(readable.AtEnd());
-    EXPECT_EQ(0U, interruptRetriesRemaining);
     EXPECT_EQ(4, calls);
+    // The budget belongs to the readable owner across subsequent calls.
+    EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
+        errno = EINTR;
+        return -1;
+    });
+    auto exhausted = readable.Read(1);
+    ASSERT_FALSE(exhausted.HasValue());
+    EXPECT_EQ(EINTR, exhausted.Error().code);
 }
 
 TEST_F(ReadableFileTest, NativeErrorAfterShortProgressDoesNotReturnPartialDataOrResetOffset)
@@ -598,14 +605,13 @@ TEST_F(ReadableFileTest, NativeErrorAfterShortProgressDoesNotReturnPartialDataOr
         errno = EIO;
         return -1;
     });
-    auto failed = readable.Read(5, interruptRetriesRemaining);
+    auto failed = readable.Read(5);
     ASSERT_FALSE(failed.HasValue());
     EXPECT_EQ(EIO, failed.Error().code);
     EXPECT_FALSE(readable.AtEnd());
     EXPECT_EQ("Cannot read acquired file", failed.Error().message);
-    EXPECT_EQ(1U, interruptRetriesRemaining);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    auto remaining = readable.Read(3, interruptRetriesRemaining);
+    auto remaining = readable.Read(3);
     ASSERT_TRUE(remaining.HasValue());
     ASSERT_TRUE(remaining.Value().HasValue());
     EXPECT_EQ("cde", remaining.Value().Value());
@@ -616,10 +622,9 @@ TEST_F(ReadableFileTest, ExhaustedEintrAfterShortProgressIsErrorNotPartialData)
     const std::string source = context.MakeTempfile("abc");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly(fdinfoCap, ReadableFile::Policy(0));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
-    interruptRetriesRemaining = 0;
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 3)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
         return context.ContextInterface::ReadFileDescriptor(fd, buffer, 1);
     });
@@ -627,13 +632,12 @@ TEST_F(ReadableFileTest, ExhaustedEintrAfterShortProgressIsErrorNotPartialData)
         errno = EINTR;
         return -1;
     });
-    auto failed = readable.Read(3, interruptRetriesRemaining);
+    auto failed = readable.Read(3);
     ASSERT_FALSE(failed.HasValue());
     EXPECT_EQ(EINTR, failed.Error().code);
     EXPECT_FALSE(readable.AtEnd());
-    EXPECT_EQ(0U, interruptRetriesRemaining);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    auto remaining = readable.Read(2, interruptRetriesRemaining);
+    auto remaining = readable.Read(2);
     ASSERT_TRUE(remaining.HasValue());
     ASSERT_TRUE(remaining.Value().HasValue());
     EXPECT_EQ("bc", remaining.Value().Value());
@@ -651,13 +655,13 @@ TEST_F(ReadableFileTest, OverreportOnReducedRemainingRequestFailsBeforePublishin
         return context.ContextInterface::ReadFileDescriptor(fd, buffer, 2);
     });
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 3)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t { return 4; });
-    auto failed = readable.Read(5, interruptRetriesRemaining);
+    auto failed = readable.Read(5);
     ASSERT_FALSE(failed.HasValue());
     EXPECT_EQ(EIO, failed.Error().code);
     EXPECT_FALSE(readable.AtEnd());
     EXPECT_EQ("Readable file returned more bytes than requested", failed.Error().message);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    auto remaining = readable.Read(3, interruptRetriesRemaining);
+    auto remaining = readable.Read(3);
     ASSERT_TRUE(remaining.HasValue());
     ASSERT_TRUE(remaining.Value().HasValue());
     EXPECT_EQ("cde", remaining.Value().Value());
@@ -668,23 +672,21 @@ TEST_F(ReadableFileTest, ZeroBudgetPreservesInterruptedReadAndInspectErrnosWitho
     const std::string source = context.MakeTempfile("x");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly(fdinfoCap, ReadableFile::Policy(0));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
         errno = EINTR;
         return -1;
     });
-    interruptRetriesRemaining = 0;
-    auto interrupted = readable.Read(1, interruptRetriesRemaining);
+    auto interrupted = readable.Read(1);
     ASSERT_FALSE(interrupted.HasValue());
     EXPECT_EQ(EINTR, interrupted.Error().code);
-    EXPECT_EQ(0U, interruptRetriesRemaining);
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
         errno = EIO;
         return -1;
     });
-    auto failed = readable.Read(1, interruptRetriesRemaining);
+    auto failed = readable.Read(1);
     ASSERT_FALSE(failed.HasValue());
     EXPECT_EQ(EIO, failed.Error().code);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
@@ -696,15 +698,15 @@ TEST_F(ReadableFileTest, ZeroBudgetPreservesInterruptedReadAndInspectErrnosWitho
     ASSERT_FALSE(inspection.HasValue());
     EXPECT_EQ(EACCES, inspection.Error().code);
     EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
-    EXPECT_EQ(EINVAL, readable.Read(0, interruptRetriesRemaining).Error().code);
-    EXPECT_EQ(EINVAL, readable.Read(static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()) + 1, interruptRetriesRemaining).Error().code);
+    EXPECT_EQ(EINVAL, readable.Read(0).Error().code);
+    EXPECT_EQ(EINVAL, readable.Read(static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()) + 1).Error().code);
     if (std::string().max_size() < static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()))
     {
-        EXPECT_EQ(EOVERFLOW, readable.Read(std::string().max_size() + 1, interruptRetriesRemaining).Error().code);
+        EXPECT_EQ(EOVERFLOW, readable.Read(std::string().max_size() + 1).Error().code);
     }
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
     // A rejected zero request did not consume the byte or falsely report EOF.
-    auto next = readable.Read(1, interruptRetriesRemaining);
+    auto next = readable.Read(1);
     ASSERT_TRUE(next.HasValue());
     ASSERT_TRUE(next.Value().HasValue());
     EXPECT_EQ("x", next.Value().Value());
@@ -715,10 +717,9 @@ TEST_F(ReadableFileTest, InterruptedReadConsumesOnlyRetriesAndPreservesBinaryDat
     const std::string source = context.MakeTempfile(std::string("a\0b", 3));
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly(fdinfoCap, ReadableFile::Policy(2));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
-    interruptRetriesRemaining = 2;
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 8))
         .Times(3)
         .WillOnce([](int, void*, std::size_t) -> ssize_t {
@@ -731,18 +732,16 @@ TEST_F(ReadableFileTest, InterruptedReadConsumesOnlyRetriesAndPreservesBinaryDat
         })
         .WillOnce([&](int descriptor, void* buffer, std::size_t size) { return context.ContextInterface::ReadFileDescriptor(descriptor, buffer, size); });
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1);
-    auto read = readable.Read(8, interruptRetriesRemaining);
+    auto read = readable.Read(8);
     ASSERT_TRUE(read.HasValue());
     ASSERT_TRUE(read.Value().HasValue());
     EXPECT_EQ(std::string("a\0b", 3), read.Value().Value());
     EXPECT_TRUE(readable.AtEnd());
-    EXPECT_EQ(0U, interruptRetriesRemaining);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    auto eof = readable.Read(8, interruptRetriesRemaining);
+    auto eof = readable.Read(8);
     ASSERT_TRUE(eof.HasValue());
     EXPECT_FALSE(eof.Value().HasValue());
     EXPECT_TRUE(readable.AtEnd());
-    EXPECT_EQ(0U, interruptRetriesRemaining);
 }
 
 TEST_F(ReadableFileTest, ExhaustedInterruptedReadReturnsNativeEintrAfterLimitPlusOneAttempts)
@@ -750,22 +749,56 @@ TEST_F(ReadableFileTest, ExhaustedInterruptedReadReturnsNativeEintrAfterLimitPlu
     const std::string source = context.MakeTempfile("x");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly(fdinfoCap, ReadableFile::Policy(1));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(2).WillRepeatedly([](int, void*, std::size_t) -> ssize_t {
         errno = EINTR;
         return -1;
     });
-    auto interrupted = readable.Read(1, interruptRetriesRemaining);
+    auto interrupted = readable.Read(1);
     ASSERT_FALSE(interrupted.HasValue());
     EXPECT_EQ(EINTR, interrupted.Error().code);
-    EXPECT_EQ(0U, interruptRetriesRemaining);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    auto next = readable.Read(1, interruptRetriesRemaining);
+    auto next = readable.Read(1);
     ASSERT_TRUE(next.HasValue());
     ASSERT_TRUE(next.Value().HasValue());
     EXPECT_EQ("x", next.Value().Value());
+}
+
+TEST_F(ReadableFileTest, InterruptedBudgetMovesWithReadableAcrossSeparateReads)
+{
+    const std::string source = context.MakeTempfile("ab");
+    auto pinned = Pin(Component(source));
+    ASSERT_TRUE(pinned.HasValue());
+    auto activated = pinned.Value().OpenReadOnly(fdinfoCap, ReadableFile::Policy(1));
+    ASSERT_TRUE(activated.HasValue());
+    ReadableFile readable = std::move(activated).Value();
+    int calls = 0;
+    EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(4).WillRepeatedly([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        ++calls;
+        if ((calls == 1) || (calls == 3))
+        {
+            errno = EINTR;
+            return -1;
+        }
+        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+    });
+
+    auto first = readable.Read(1);
+    ASSERT_TRUE(first.HasValue());
+    ASSERT_TRUE(first.Value().HasValue());
+    EXPECT_EQ("a", first.Value().Value());
+    ReadableFile moved(std::move(readable));
+    EXPECT_EQ(EBADF, readable.Read(1).Error().code);
+    auto second = moved.Read(1);
+    ASSERT_FALSE(second.HasValue());
+    EXPECT_EQ(EINTR, second.Error().code);
+    auto last = moved.Read(1);
+    ASSERT_TRUE(last.HasValue());
+    ASSERT_TRUE(last.Value().HasValue());
+    EXPECT_EQ("b", last.Value().Value());
+    EXPECT_EQ(4, calls);
 }
 
 TEST_F(ReadableFileTest, NonInterruptedNativeErrorsNeverSpendRetryBudget)
@@ -782,13 +815,12 @@ TEST_F(ReadableFileTest, NonInterruptedNativeErrorsNeverSpendRetryBudget)
             errno = failure;
             return -1;
         });
-        auto failed = readable.Read(1, interruptRetriesRemaining);
+        auto failed = readable.Read(1);
         ASSERT_FALSE(failed.HasValue());
         EXPECT_EQ(failure, failed.Error().code);
-        EXPECT_EQ(1U, interruptRetriesRemaining);
         ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
     }
-    auto next = readable.Read(1, interruptRetriesRemaining);
+    auto next = readable.Read(1);
     ASSERT_TRUE(next.HasValue());
     ASSERT_TRUE(next.Value().HasValue());
     EXPECT_EQ("x", next.Value().Value());
@@ -807,11 +839,11 @@ TEST_F(ReadableFileTest, EmptyFilePositiveReadReturnsEof)
     EXPECT_EQ(0, metadata.Value().st_size);
     EXPECT_FALSE(readable.AtEnd()); // stat does not predict EOF
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1);
-    auto end = readable.Read(1, interruptRetriesRemaining);
+    auto end = readable.Read(1);
     ASSERT_TRUE(end.HasValue());
     EXPECT_FALSE(end.Value().HasValue());
     EXPECT_TRUE(readable.AtEnd());
-    auto again = readable.Read(1, interruptRetriesRemaining);
+    auto again = readable.Read(1);
     ASSERT_TRUE(again.HasValue());
     EXPECT_FALSE(again.Value().HasValue());
     EXPECT_TRUE(readable.AtEnd());
@@ -826,11 +858,11 @@ TEST_F(ReadableFileTest, OverreportedReadIsAnErrorNotDataOrEof)
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t { return 2; });
-    auto overreported = readable.Read(1, interruptRetriesRemaining);
+    auto overreported = readable.Read(1);
     ASSERT_FALSE(overreported.HasValue());
     EXPECT_EQ(EIO, overreported.Error().code);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    auto next = readable.Read(1, interruptRetriesRemaining);
+    auto next = readable.Read(1);
     ASSERT_TRUE(next.HasValue());
     ASSERT_TRUE(next.Value().HasValue());
     EXPECT_EQ("x", next.Value().Value());
@@ -845,14 +877,14 @@ TEST_F(ReadableFileTest, ThrowingReadPropagatesWithoutInvalidatingDescriptor)
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t { throw std::bad_alloc(); });
-    EXPECT_THROW((void)readable.Read(1, interruptRetriesRemaining), std::bad_alloc);
+    EXPECT_THROW((void)readable.Read(1), std::bad_alloc);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
         throw std::length_error("native read fault");
     });
-    EXPECT_THROW((void)readable.Read(1, interruptRetriesRemaining), std::length_error);
+    EXPECT_THROW((void)readable.Read(1), std::length_error);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    auto next = readable.Read(1, interruptRetriesRemaining);
+    auto next = readable.Read(1);
     ASSERT_TRUE(next.HasValue());
     ASSERT_TRUE(next.Value().HasValue());
     EXPECT_EQ("x", next.Value().Value());
@@ -862,23 +894,25 @@ TEST_F(ReadableFileTest, CheckedLeafAndPathReleasePreservesIndependentReadable)
 {
     const std::string source = context.MakeTempfile(std::string("a\0b", 3));
     const ResolverLimits limits{{4096, 100, 100000, 256, 262144, fdinfoCap}, 4096, 8, 128};
-    auto opened = Path::AcquireRoot(context, context.GetTempdirPath(), RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto opened = Path::Make(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue());
-    Path path = std::move(opened).Value();
-    ASSERT_TRUE(path.Push(Component(source), ExtensionPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit}).HasValue());
+    ASSERT_EQ(Path::Result::Status::Accepted, opened.Value().GetStatus());
+    Path path = std::move(opened.Value()).TakePath();
+    ASSERT_TRUE(path.Push(Component(source), ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit}).HasValue());
     auto popped = path.Pop();
     ASSERT_TRUE(popped.HasValue());
     Handle leaf = std::move(popped).Value();
+    EXPECT_GT(path.RetainedDescriptors(), 0U);
     auto activated = leaf.OpenReadOnly(fdinfoCap);
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     const std::size_t pins = path.RetainedDescriptors();
     ASSERT_GT(pins, 1U);
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(pins - 1).WillRepeatedly([](int fd) { return ::close(fd); });
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([](int fd) { return ::close(fd); });
     EXPECT_TRUE(path.Close().HasValue());
     EXPECT_TRUE(path.Close().HasValue());
     EXPECT_EQ(0U, path.Size());
-    EXPECT_EQ(1U, path.RetainedDescriptors()); // the popped handle belongs to the caller
+    EXPECT_EQ(0U, path.RetainedDescriptors()); // the popped handle belongs to the caller
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
     EXPECT_TRUE(leaf.Stat(fdinfoCap).HasValue());
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int fd) { return ::close(fd); });
@@ -886,16 +920,16 @@ TEST_F(ReadableFileTest, CheckedLeafAndPathReleasePreservesIndependentReadable)
     EXPECT_EQ(EBADF, leaf.OpenReadOnly(fdinfoCap).Error().code);
     EXPECT_EQ(0U, path.RetainedDescriptors());
     EXPECT_EQ(0U, path.RetainedBytes());
-    EXPECT_EQ(EINVAL, path.Push("other", ExtensionPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit}).Error().code);
+    EXPECT_EQ(EINVAL, path.Push("other", ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit}).Error().code);
     EXPECT_EQ(EINVAL, path.Pop().Error().code);
-    EXPECT_EQ(EINVAL, path.ObserveChild("other", fdinfoCap).Error().code);
+    EXPECT_EQ(EINVAL, path.Push("other", ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit}).Error().code);
     EXPECT_THROW(path.Root(), std::logic_error);
     EXPECT_THROW(path.Leaf(), std::logic_error);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
     auto metadata = readable.Stat();
     ASSERT_TRUE(metadata.HasValue());
     EXPECT_EQ(3, metadata.Value().st_size);
-    auto chunk = readable.Read(8, interruptRetriesRemaining);
+    auto chunk = readable.Read(8);
     ASSERT_TRUE(chunk.HasValue());
     ASSERT_TRUE(chunk.Value().HasValue());
     EXPECT_EQ(std::string("a\0b", 3), chunk.Value().Value());
@@ -907,9 +941,10 @@ TEST_F(ReadableFileTest, RejectsDirectoryInvalidCapAndPinInspectionFailureWithou
     const std::size_t before = OpenDescriptors();
     {
         const ResolverLimits limits{{4096, 100, 100000, 256, 262144, fdinfoCap}, 4096, 8, 128};
-        auto directory = Path::AcquireRoot(context, context.GetTempdirPath(), RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+        auto directory = Path::Make(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
         ASSERT_TRUE(directory.HasValue());
-        auto wrongType = directory.Value().Leaf().OpenReadOnly(fdinfoCap);
+        ASSERT_EQ(Path::Result::Status::Accepted, directory.Value().GetStatus());
+        auto wrongType = directory.Value().AcceptedPath().Leaf().OpenReadOnly(fdinfoCap);
         ASSERT_FALSE(wrongType.HasValue());
         EXPECT_EQ(EINVAL, wrongType.Error().code);
         const std::string source = context.MakeTempfile("x");
@@ -1103,7 +1138,7 @@ TEST_F(ReadableFileTest, MoveAssignmentContainsThrowingLogAndRetainsIncomingOwne
             EXPECT_EQ(EBADF, source.Stat().Error().code);
             EXPECT_TRUE(source.Close().HasValue());
             EXPECT_TRUE(destination.Stat().HasValue());
-            auto bytes = destination.Read(3, interruptRetriesRemaining);
+            auto bytes = destination.Read(3);
             ASSERT_TRUE(bytes.HasValue());
             ASSERT_TRUE(bytes.Value().HasValue());
             EXPECT_EQ("new", bytes.Value().Value());
@@ -1159,7 +1194,7 @@ TEST_F(ReadableFileTest, SameContextMoveConstructorAssignmentAndSelfMoveKeepSing
 
     ReadableFile original = std::move(first).Value();
     ReadableFile moved(std::move(original));
-    EXPECT_EQ(EBADF, original.Read(1, interruptRetriesRemaining).Error().code);
+    EXPECT_EQ(EBADF, original.Read(1).Error().code);
     EXPECT_EQ(EBADF, original.Stat().Error().code);
     EXPECT_TRUE(original.Close().HasValue());
     EXPECT_TRUE(moved.Stat().HasValue());
@@ -1170,10 +1205,10 @@ TEST_F(ReadableFileTest, SameContextMoveConstructorAssignmentAndSelfMoveKeepSing
     moved = std::move(self);
     EXPECT_TRUE(moved.Stat().HasValue());
     moved = std::move(incoming);
-    EXPECT_EQ(EBADF, incoming.Read(1, interruptRetriesRemaining).Error().code);
+    EXPECT_EQ(EBADF, incoming.Read(1).Error().code);
     EXPECT_EQ(EBADF, incoming.Stat().Error().code);
     EXPECT_TRUE(incoming.Close().HasValue());
-    auto read = moved.Read(1, interruptRetriesRemaining);
+    auto read = moved.Read(1);
     ASSERT_TRUE(read.HasValue());
     ASSERT_TRUE(read.Value().HasValue());
     EXPECT_EQ("x", read.Value().Value());
@@ -1226,14 +1261,14 @@ TEST_F(ReadableFileTest, CrossContextMoveAssignmentClosesOldOwnerAndRoutesIncomi
     ASSERT_GE(oldDescriptor, 0);
     EXPECT_EQ(-1, ::fcntl(oldDescriptor, F_GETFD));
     EXPECT_EQ(EBADF, errno);
-    EXPECT_EQ(EBADF, source.Read(1, interruptRetriesRemaining).Error().code);
+    EXPECT_EQ(EBADF, source.Read(1).Error().code);
     EXPECT_EQ(EBADF, source.Stat().Error().code);
     EXPECT_TRUE(source.Close().HasValue());
     EXPECT_TRUE(destination.Stat().HasValue());
     ASSERT_GE(incomingDescriptor, 0);
     EXPECT_NE(oldDescriptor, incomingDescriptor);
     EXPECT_GE(::fcntl(incomingDescriptor, F_GETFD), 0);
-    auto bytes = destination.Read(3, interruptRetriesRemaining);
+    auto bytes = destination.Read(3);
     ASSERT_TRUE(bytes.HasValue());
     ASSERT_TRUE(bytes.Value().HasValue());
     EXPECT_EQ("new", bytes.Value().Value());
@@ -1276,7 +1311,7 @@ TEST_F(ReadableFileTest, CrossContextMoveReplacementContainsOldOwnerLoggingFault
     EXPECT_EQ(1, oldContext.logHandleRequests);
     EXPECT_FALSE(source.AtEnd());
     EXPECT_EQ(EBADF, source.Stat().Error().code);
-    auto bytes = destination.Read(3, interruptRetriesRemaining);
+    auto bytes = destination.Read(3);
     ASSERT_TRUE(bytes.HasValue());
     ASSERT_TRUE(bytes.Value().HasValue());
     EXPECT_EQ("new", bytes.Value().Value());
@@ -1303,7 +1338,7 @@ TEST_F(ReadableFileTest, CrossContextClosedAndMovedFromAssignmentsTransferEofAnd
 
     ReadableFile destination = std::move(activated).Value();
     ReadableFile source = std::move(foreignActivated).Value();
-    auto bytes = source.Read(2, interruptRetriesRemaining);
+    auto bytes = source.Read(2);
     ASSERT_TRUE(bytes.HasValue());
     ASSERT_TRUE(bytes.Value().HasValue());
     EXPECT_EQ("b", bytes.Value().Value());
@@ -1325,7 +1360,7 @@ TEST_F(ReadableFileTest, CrossContextClosedAndMovedFromAssignmentsTransferEofAnd
     EXPECT_CALL(foreignContext, StatFileDescriptor(_, _)).Times(1);
     EXPECT_CALL(foreignContext, ReadFileDescriptor(_, _, _)).Times(0); // cached EOF
     EXPECT_TRUE(destination.Stat().HasValue());
-    auto eof = destination.Read(1, interruptRetriesRemaining);
+    auto eof = destination.Read(1);
     ASSERT_TRUE(eof.HasValue());
     EXPECT_FALSE(eof.Value().HasValue());
     ReadableFile& self = destination;

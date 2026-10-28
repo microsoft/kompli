@@ -8,7 +8,7 @@ namespace ComplianceEngine
 {
 namespace Filesystem
 {
-enum class SymlinkFollowing
+enum class SymlinkPolicy
 {
     Follow,
     DoNotFollow,

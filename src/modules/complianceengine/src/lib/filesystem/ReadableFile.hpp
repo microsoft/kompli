@@ -25,6 +25,15 @@ class Handle;
 class ReadableFile
 {
 public:
+    struct Policy
+    {
+        explicit Policy(std::size_t interruptedReads = 128)
+            : maxInterruptedReads(interruptedReads)
+        {
+        }
+        std::size_t maxInterruptedReads;
+    };
+
     ReadableFile(const ReadableFile&) = delete;
     ReadableFile& operator=(const ReadableFile&) = delete;
     ReadableFile(ReadableFile&& other) noexcept = default;
@@ -36,15 +45,15 @@ public:
     // Callers supply a positive, representable maxBytes. Fill that many bytes
     // across positive short native reads, or stop at native EOF. Each attempt
     // requests only the unfilled capacity; a full buffer needs no EOF probe.
-    // Retry only EINTR while the caller's cumulative remaining interruption
-    // budget is positive. Each retry decrements it; positive progress does not
-    // reset it. Zero permits a native attempt but no EINTR retry. On exhaustion
+    // Retry only EINTR while this owner's lifetime interruption budget is
+    // positive. Each retry decrements it; positive progress and separate Read
+    // calls do not reset it. Zero permits a native attempt but no retry. On exhaustion
     // return native EINTR so the caller can apply its own error policy.
     // A successful disengaged optional means EOF before any bytes; EOF after
     // progress returns an engaged partial string, with NUL and all bytes
     // unchanged. Any error after progress is still an error, not partial data;
     // the descriptor's offset is not rolled back.
-    Result<Optional<std::string>> Read(std::size_t maxBytes, std::size_t& remainingInterruptRetries);
+    Result<Optional<std::string>> Read(std::size_t maxBytes);
 
     // True only after a native read returned zero, including after partial
     // progress. This sticky observation is not a prediction from a short
@@ -69,8 +78,9 @@ public:
 
 private:
     friend class Handle;
-    explicit ReadableFile(Detail::Descriptor&& descriptor) noexcept;
+    ReadableFile(Detail::Descriptor&& descriptor, Policy policy) noexcept;
     Optional<Detail::Descriptor> mDescriptor;
+    std::size_t mInterruptRetriesRemaining;
     // Read advances the native descriptor offset and updates observed EOF.
     bool mAtEnd = false;
 };

@@ -41,7 +41,7 @@ Filesystem::ResolverLimits AcquisitionLimits()
     limits.shared.components = 128;
     limits.shared.work = 100000;
     limits.shared.liveDescriptors = 256;
-    limits.shared.retainedBytes = 1024 * 1024;
+    limits.shared.retainedBytes = std::size_t{1024} * 1024;
     limits.shared.fdinfoBytes = 4096;
     limits.linkTargetBytes = 4096;
     limits.linkExpansions = 128;
@@ -53,8 +53,7 @@ Filesystem::ResolverLimits AcquisitionLimits()
 LinesRange::LinesRange(ReadableFile&& data, Policy policy, const struct stat& before) noexcept
     : mPolicy(std::move(policy)),
       mData(std::move(data)),
-      mBefore(before),
-      mInterruptRetriesRemaining(mPolicy.limits.maxInterruptedReads)
+      mBefore(before)
 {
 }
 
@@ -62,13 +61,17 @@ Result<Optional<std::string>> LinesRange::Complete()
 {
     if (mBefore.st_size > 0 && static_cast<unsigned long long>(mBefore.st_size) != mConsumed)
         return Error("File ended before its stable size", EIO);
+
     auto after = mData.Stat();
     if (!after.HasValue())
         return Error("Failed to verify data descriptor", after.Error().code);
+
     if (!SameFile(mBefore, after.Value()))
         return Error("File changed while being read", EAGAIN);
+
     if (!mPending.empty())
         return Optional<std::string>(std::move(mPending));
+
     return Optional<std::string>();
 }
 
@@ -78,27 +81,34 @@ Result<bool> LinesRange::Refill()
 {
     const std::size_t remaining = mPolicy.limits.maxBytes - mConsumed;
     const std::size_t requested = std::min(ReadChunkBytes, remaining ? remaining : std::size_t(1));
-    auto chunk = mData.Read(requested, mInterruptRetriesRemaining);
+    auto chunk = mData.Read(requested);
     if (!chunk.HasValue())
     {
         const int error = chunk.Error().code;
         if (error == EINTR)
             return Error("File read interrupt retry limit exceeded", E2BIG);
+
         return Error("Failed to read file bytes", error);
     }
-    if (!chunk.Value().HasValue())
+
+    auto& optionalBytes = chunk.Value();
+    if (!optionalBytes.HasValue())
         return false;
-    if (chunk.Value().Value().size() > remaining)
+
+    auto& bytes = optionalBytes.Value();
+    if (bytes.size() > remaining)
         return Error("File byte limit exceeded", E2BIG);
-    mBuffer = std::move(chunk).Value().Value();
+
+    mBuffer = std::move(bytes);
     mPosition = 0;
     return true;
 }
 
 Result<Optional<std::string>> LinesRange::Next()
 {
-    if (mFinished || mClosed)
+    if (mState != State::Reading)
         return Optional<std::string>();
+
     while (true)
     {
         if (mPosition == mBuffer.size())
@@ -106,29 +116,45 @@ Result<Optional<std::string>> LinesRange::Next()
             auto filled = Refill();
             if (!filled.HasValue())
             {
-                mFinished = true;
+                mState = State::Finished;
                 return std::move(filled).Error();
             }
+
             if (!filled.Value())
             {
-                mFinished = true;
+                mState = State::Finished;
                 return Complete();
             }
         }
-        const char byte = mBuffer[mPosition++];
-        ++mConsumed;
-        if (byte == '\0')
+
+        const std::size_t start = mPosition;
+        const std::size_t delimiter = mBuffer.find_first_of("\n\0", start, 2);
+        const std::size_t end = delimiter == std::string::npos ? mBuffer.size() : delimiter;
+        const std::size_t contentBytes = end - start;
+        mConsumed += contentBytes + (delimiter == std::string::npos ? 0 : 1);
+        if (delimiter == std::string::npos)
         {
-            mFinished = true;
+            mPending.append(mBuffer, start, contentBytes);
+            mPosition = end;
+            continue;
+        }
+
+        mPosition = delimiter + 1;
+        if (mBuffer[delimiter] == '\0')
+        {
+            mState = State::Finished;
             return Error("Embedded NUL in text file", EBADMSG);
         }
-        if (byte == '\n')
+
+        if (mPending.empty())
         {
-            Optional<std::string> line(std::move(mPending));
-            mPending.clear();
-            return line;
+            return Optional<std::string>(mBuffer.substr(start, contentBytes));
         }
-        mPending.push_back(byte);
+
+        mPending.append(mBuffer, start, contentBytes);
+        Optional<std::string> line(std::move(mPending));
+        mPending.clear();
+        return line;
     }
 }
 
@@ -155,6 +181,7 @@ LinesRange::Iterator& LinesRange::Iterator::operator=(Iterator&& other) noexcept
         mCurrent = std::move(other.mCurrent);
         other.mRange = nullptr;
     }
+
     return *this;
 }
 
@@ -162,7 +189,7 @@ LinesRange::Iterator::~Iterator() = default;
 
 LinesRange::Iterator::reference LinesRange::Iterator::operator*() const
 {
-    assert(mRange && !mRange->mClosed && mCurrent.HasValue());
+    assert(mRange && mRange->mState != State::Closed && mCurrent.HasValue());
     return mCurrent.Value();
 }
 
@@ -173,7 +200,7 @@ LinesRange::Iterator::pointer LinesRange::Iterator::operator->() const
 
 LinesRange::Iterator& LinesRange::Iterator::operator++()
 {
-    assert(mRange && !mRange->mClosed && mCurrent.HasValue());
+    assert(mRange && mRange->mState != State::Closed && mCurrent.HasValue());
     Next();
     return *this;
 }
@@ -181,12 +208,14 @@ LinesRange::Iterator& LinesRange::Iterator::operator++()
 void LinesRange::Iterator::Next()
 {
     mCurrent.Reset();
+
     auto next = mRange->Next();
     if (!next.HasValue())
     {
         mCurrent = Result<std::string>(std::move(next).Error());
         return;
     }
+
     auto& line = next.Value();
     if (line.HasValue())
         mCurrent = Result<std::string>(std::move(line).Value());
@@ -194,8 +223,8 @@ void LinesRange::Iterator::Next()
 
 bool LinesRange::Iterator::operator!=(const Iterator& other) const
 {
-    const bool active = mRange && !mRange->mClosed && mCurrent.HasValue();
-    const bool otherActive = other.mRange && !other.mRange->mClosed && other.mCurrent.HasValue();
+    const bool active = mRange && mRange->mState != State::Closed && mCurrent.HasValue();
+    const bool otherActive = other.mRange && other.mRange->mState != State::Closed && other.mCurrent.HasValue();
     return active != otherActive || (active && mRange != other.mRange);
 }
 
@@ -206,14 +235,10 @@ LinesRange::LinesRange(LinesRange&& other) noexcept
       mBuffer(std::move(other.mBuffer)),
       mPosition(other.mPosition),
       mConsumed(other.mConsumed),
-      mInterruptRetriesRemaining(other.mInterruptRetriesRemaining),
       mPending(std::move(other.mPending)),
-      mFinished(other.mFinished),
-      mClosed(other.mClosed),
-      mStarted(other.mStarted)
+      mState(other.mState)
 {
-    other.mClosed = true;
-    other.mFinished = true;
+    other.mState = State::Closed;
 }
 
 LinesRange& LinesRange::operator=(LinesRange&& other) noexcept
@@ -228,14 +253,11 @@ LinesRange& LinesRange::operator=(LinesRange&& other) noexcept
         mBuffer = std::move(other.mBuffer);
         mPosition = other.mPosition;
         mConsumed = other.mConsumed;
-        mInterruptRetriesRemaining = other.mInterruptRetriesRemaining;
         mPending = std::move(other.mPending);
-        mFinished = other.mFinished;
-        mClosed = other.mClosed;
-        mStarted = other.mStarted;
-        other.mClosed = true;
-        other.mFinished = true;
+        mState = other.mState;
+        other.mState = State::Closed;
     }
+
     return *this;
 }
 
@@ -243,16 +265,16 @@ LinesRange::~LinesRange() = default;
 
 LinesRange::Iterator LinesRange::begin() // NOLINT(*-identifier-naming)
 {
-    if (mStarted || mClosed)
+    if (mState != State::Ready)
         return {};
-    mStarted = true;
+
+    mState = State::Reading;
     return Iterator(this);
 }
 
 Result<bool> LinesRange::Close()
 {
-    mClosed = true;
-    mFinished = true;
+    mState = State::Closed;
     return mData.Close();
 }
 
@@ -265,17 +287,27 @@ Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string
 {
     if (path.empty() || path.front() != '/' || path.find('\0') != std::string::npos)
         return Error("A NUL-free absolute file path is required", EINVAL);
-    if (policy.symlinks != SymlinkFollowing::Follow && policy.symlinks != SymlinkFollowing::DoNotFollow)
+
+    if (policy.symlinks != SymlinkPolicy::Follow && policy.symlinks != SymlinkPolicy::DoNotFollow)
         return Error("Invalid symlink policy", EINVAL);
+
     if (!policy.limits.maxBytes || !policy.limits.maxInterruptedReads)
         return Error("File byte and retry limits must be positive", EINVAL);
+
     if (policy.limits.maxBytes >= std::string().max_size())
         return Error("File byte limit is not representable", EOVERFLOW);
-    auto acquired =
-        Filesystem::Path::AcquireRoot(context, "/", {Filesystem::SymlinkPolicy::Reject, Filesystem::MountPolicy::AllowCrossing}, AcquisitionLimits());
+
+    const auto limits = AcquisitionLimits();
+    auto acquired = Filesystem::Path::Make(context, path, {policy.symlinks, Filesystem::MountPolicy::AllowCrossing}, limits);
     if (!acquired.HasValue())
         return std::move(acquired).Error();
-    auto& pins = acquired.Value();
+
+    if (acquired.Value().GetStatus() == Filesystem::Path::Result::Status::Missing)
+        return Error("File target is missing", ENOENT);
+    if (acquired.Value().GetStatus() == Filesystem::Path::Result::Status::Excluded)
+        return Error("File target is excluded", ELOOP);
+    auto& pins = acquired.Value().AcceptedPath();
+
     // A primary acquisition/activation error wins over cleanup failures.
     // Close still attempts every hidden acquisition pin and reports its
     // first failure; log it when another error already owns the result.
@@ -292,40 +324,31 @@ Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string
                 OsConfigLogError(nullptr, "File reader secondary pin close log failure: %d", closed.Error().code);
             }
         }
+
         return primary;
     };
-    for (std::size_t start = 1; start < path.size();)
-    {
-        const auto slash = path.find('/', start);
-        const auto end = slash == std::string::npos ? path.size() : slash;
-        if (end != start)
-        {
-            auto pushed = pins.Push(path.substr(start, end - start),
-                {policy.symlinks == SymlinkFollowing::DoNotFollow ? Filesystem::SymlinkPolicy::Reject : Filesystem::SymlinkPolicy::FollowWithinRoot,
-                    Filesystem::MountPolicy::AllowCrossing, Filesystem::HardlinkPolicy::Permit});
-            if (!pushed.HasValue())
-                return fail(std::move(pushed).Error());
-        }
-        start = end == path.size() ? end : end + 1;
-    }
+
     if (pins.Leaf().AcquiredType() != Filesystem::Handle::Type::RegularFile)
         return fail(Error("File target is not regular", EINVAL));
-    if (path.back() == '/')
-        return fail(Error("File path ends in a directory separator", ENOTDIR));
-    auto opened = pins.Leaf().OpenReadOnly(AcquisitionLimits().shared.fdinfoBytes);
+
+    auto opened = pins.Leaf().OpenReadOnly(limits.shared.fdinfoBytes, ReadableFile::Policy(policy.limits.maxInterruptedReads));
     if (!opened.HasValue())
         return fail(std::move(opened).Error());
+
     ReadableFile data(std::move(opened).Value());
     auto inspected = data.Stat();
     if (!inspected.HasValue())
         return fail(std::move(inspected).Error());
+
     const struct stat before = inspected.Value();
     const auto held = pins.Leaf().Stat();
     if (held.st_dev != before.st_dev || held.st_ino != before.st_ino || !S_ISREG(before.st_mode))
         return fail(Error("Pinned file identity changed", EAGAIN));
+
     auto closed = pins.Close();
     if (!closed.HasValue())
         return Error("Failed to close pinned descriptor", closed.Error().code);
+
     return LinesRange(std::move(data), std::move(policy), before);
 }
 } // namespace Filesystem

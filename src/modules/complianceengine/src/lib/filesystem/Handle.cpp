@@ -815,13 +815,10 @@ Handle::Handle(Handle&& other) noexcept
       mComponent(std::move(other.mComponent)),
       mSnapshot(other.mSnapshot),
       mPin(other.mPin),
-      mCloseError(other.mCloseError),
-      mDetachedResources(std::move(other.mDetachedResources)),
-      mDetachedBytes(other.mDetachedBytes)
+      mCloseError(other.mCloseError)
 {
     other.mContext = nullptr;
     other.mCloseError = 0;
-    other.mDetachedBytes = 0;
 }
 
 Handle& Handle::operator=(Handle&& other) noexcept
@@ -1282,6 +1279,11 @@ Result<Optional<DirectoryChild>> DirectoryCursor::NextEntry()
 
 Result<ReadableFile> Handle::OpenReadOnly(std::size_t fdinfoByteCap) const
 {
+    return OpenReadOnly(fdinfoByteCap, ReadableFile::Policy{});
+}
+
+Result<ReadableFile> Handle::OpenReadOnly(std::size_t fdinfoByteCap, ReadableFile::Policy policy) const
+{
     if ((!mPin) || (mContext == nullptr) || !mDescriptor.HasValue())
     {
         return Error("Read-only activation requires a live file pin", EBADF);
@@ -1296,7 +1298,7 @@ Result<ReadableFile> Handle::OpenReadOnly(std::size_t fdinfoByteCap) const
     {
         return std::move(activated).Error();
     }
-    return ReadableFile(activated.Value().TakeDescriptor());
+    return ReadableFile(activated.Value().TakeDescriptor(), policy);
 }
 
 Result<DirectoryCursor> Handle::OpenChildren(std::size_t fdinfoByteCap) const
@@ -1379,8 +1381,6 @@ void Handle::Swap(Handle& other) noexcept
     swap(mSnapshot, other.mSnapshot);
     swap(mPin, other.mPin);
     swap(mCloseError, other.mCloseError);
-    mDetachedResources.swap(other.mDetachedResources);
-    swap(mDetachedBytes, other.mDetachedBytes);
 }
 
 int Handle::CloseOnce() noexcept
@@ -1391,15 +1391,8 @@ int Handle::CloseOnce() noexcept
     {
         return mCloseError;
     }
-    if (mDetachedResources)
-    {
-        --mDetachedResources->descriptors;
-        mDetachedResources->bytes -= mDetachedBytes;
-        mDetachedResources.reset();
-        mDetachedBytes = 0;
-    }
     // The owner relinquishes the fd before the native close, even if it
-    // throws; cached errors and detached accounting remain Handle-specific.
+    // throws; the cached error remains with this Handle.
     try
     {
         auto closed = mDescriptor.Close();

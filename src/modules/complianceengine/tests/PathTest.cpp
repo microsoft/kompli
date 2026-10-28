@@ -33,9 +33,10 @@
 using ComplianceEngine::Filesystem::ExtensionPolicy;
 using ComplianceEngine::Filesystem::Handle;
 using ComplianceEngine::Filesystem::HardlinkPolicy;
+using ComplianceEngine::Filesystem::NonFollowedLinkAction;
 using ComplianceEngine::Filesystem::Path;
-using ComplianceEngine::Filesystem::RootPolicy;
 using ComplianceEngine::Filesystem::SymlinkPolicy;
+using ComplianceEngine::Filesystem::UnsupportedTypeAction;
 using ComplianceEngine::Filesystem::Detail::Descriptor;
 using ComplianceEngine::Filesystem::Detail::IsSingleChildComponent;
 using ComplianceEngine::Filesystem::Detail::MountPolicy;
@@ -45,6 +46,9 @@ using ComplianceEngine::Filesystem::Detail::ResolverLimits;
 using ComplianceEngine::Filesystem::Detail::VerifiedProcfs;
 using testing::_;
 using testing::NiceMock;
+
+static_assert(!std::is_default_constructible<Path::Result>::value, "A path result must carry a factory outcome");
+static_assert(!std::is_copy_assignable<Path::Result>::value, "A path result cannot be reassigned without its path");
 
 namespace
 {
@@ -97,6 +101,18 @@ protected:
         return ResolverLimits{{4096, 100, 100000, 256, 262144, 4096}, 4096, 8, 128};
     }
 };
+// Tests that require an accepted pin unwrap the factory's typed missing and
+// policy-exclusion statuses explicitly rather than treating them as errors
+// from a helper open.
+ComplianceEngine::Result<Path> SelectAcceptedPath(const ComplianceEngine::ContextInterface& context, const std::string& path, Path::Policy policy, ResolverLimits limits)
+{
+    auto selected = Path::Make(context, path, policy, limits);
+    if (!selected.HasValue())
+        return std::move(selected).Error();
+    if (selected.Value().GetStatus() != Path::Result::Status::Accepted)
+        return ComplianceEngine::Error("Test requires an accepted path", selected.Value().GetStatus() == Path::Result::Status::Missing ? ENOENT : ELOOP);
+    return std::move(selected.Value()).TakePath();
+}
 // Exercise ownership on a descriptor adopted by the production procfs
 // verifier; tests must not have direct access to native adoption.
 ComplianceEngine::Result<Descriptor> VerifiedTestDescriptor(const ComplianceEngine::ContextInterface& context)
@@ -202,7 +218,7 @@ void CheckRealBindMounts(const NiceMock<MockContext>& context, const std::string
 {
     const ResolverLimits limits{{4096, 100, 100000, 256, 262144, 4096}, 4096, 8, 128};
     // Authorize the selected root mount separately; only descendants stay.
-    auto opened = Path::AcquireRoot(context, accepted, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto opened = SelectAcceptedPath(context, accepted, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
 
@@ -229,8 +245,8 @@ void CheckRealBindMounts(const NiceMock<MockContext>& context, const std::string
     ASSERT_TRUE(pinnedRootId.HasValue()) << pinnedRootId.Error().message;
     EXPECT_EQ(rootId.Value(), pinnedRootId.Value());
 
-    const ExtensionPolicy stay{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
-    const ExtensionPolicy allow{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
+    const ExtensionPolicy stay{SymlinkPolicy::DoNotFollow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy allow{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
     auto inside = path.Push("inside", stay);
     ASSERT_TRUE(inside.HasValue()) << inside.Error().message;
     ASSERT_TRUE(path.Pop().HasValue());
@@ -248,8 +264,7 @@ void CheckRealBindMounts(const NiceMock<MockContext>& context, const std::string
     ASSERT_TRUE(file.HasValue()) << file.Error().message;
     auto readable = path.Leaf().OpenReadOnly(limits.shared.fdinfoBytes);
     ASSERT_TRUE(readable.HasValue()) << readable.Error().message;
-    std::size_t remainingInterruptRetries = 1;
-    auto data = readable.Value().Read(32, remainingInterruptRetries);
+    auto data = readable.Value().Read(32);
     ASSERT_TRUE(data.HasValue()) << data.Error().message;
     ASSERT_TRUE(data.Value().HasValue());
     EXPECT_EQ("bound", data.Value().Value());
@@ -314,12 +329,12 @@ TEST_F(PathAliasTest, ProcessRootNativeOpenFailureAndThrowDoNotEscapeOrLeak)
         errno = EACCES;
         return -1;
     });
-    auto denied = Path::AcquireRoot(context, "/", RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+    auto denied = SelectAcceptedPath(context, "/", {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
     ASSERT_FALSE(denied.HasValue());
     EXPECT_EQ(EACCES, denied.Error().code);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
     EXPECT_CALL(context, OpenNativePath(testing::StrEq("/"), _)).WillOnce([](const char*, int) -> int { throw std::runtime_error("native open fault"); });
-    EXPECT_THROW((void)Path::AcquireRoot(context, "/", RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits()), std::runtime_error);
+    EXPECT_THROW((void)SelectAcceptedPath(context, "/", {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits()), std::runtime_error);
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
@@ -328,7 +343,7 @@ TEST_F(PathAliasTest, ConfinedChildNativeOpenFailureDoesNotReopenTargetName)
     const std::string root = context.GetTempdirPath();
     const std::string source = context.MakeTempfile("held");
     const std::string name = source.substr(source.find_last_of('/') + 1);
-    auto opened = Path::AcquireRoot(context, root, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+    auto opened = SelectAcceptedPath(context, root, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     const auto before = CountOpenDescriptors();
@@ -345,7 +360,7 @@ TEST_F(PathAliasTest, ConfinedChildNativeOpenFailureDoesNotReopenTargetName)
         errno = ENOENT;
         return -1;
     });
-    auto pushed = path.Push(name, ExtensionPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
+    auto pushed = path.Push(name, ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
     ASSERT_FALSE(pushed.HasValue());
     EXPECT_EQ(ENOENT, pushed.Error().code);
     EXPECT_EQ(before, CountOpenDescriptors());
@@ -367,7 +382,7 @@ TEST_F(PathAliasTest, ProcfsHelpersCloseCheckedOnceAndFirstFailureWins)
 
         return status;
     });
-    auto opened = Path::AcquireRoot(context, "/", RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+    auto opened = SelectAcceptedPath(context, "/", {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
     ASSERT_FALSE(opened.HasValue());
     EXPECT_EQ(EACCES, opened.Error().code);
     EXPECT_EQ(2U, failed);
@@ -545,7 +560,7 @@ TEST_F(PathAliasTest, PrimaryFdinfoReadErrorOutranksHelperCloseFailure)
         }
         return status;
     });
-    auto opened = Path::AcquireRoot(context, "/", RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+    auto opened = SelectAcceptedPath(context, "/", {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
     ASSERT_FALSE(opened.HasValue());
     EXPECT_EQ(ENOSPC, opened.Error().code);
     EXPECT_TRUE(failedRead);
@@ -553,11 +568,11 @@ TEST_F(PathAliasTest, PrimaryFdinfoReadErrorOutranksHelperCloseFailure)
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
-TEST_F(PathAliasTest, InspectionAndChildObservationReportHelperCloseFailure)
+TEST_F(PathAliasTest, InspectionAndChildAcquisitionReportHelperCloseFailure)
 {
     const std::string source = context.MakeTempfile("held");
     const std::string name = source.substr(source.find_last_of('/') + 1);
-    auto opened = Path::AcquireRoot(context, context.GetTempdirPath(), RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     const auto before = CountOpenDescriptors();
@@ -583,9 +598,9 @@ TEST_F(PathAliasTest, InspectionAndChildObservationReportHelperCloseFailure)
         }
         return status;
     });
-    auto observation = path.ObserveChild(name, 4096);
-    ASSERT_FALSE(observation.HasValue());
-    EXPECT_EQ(EACCES, observation.Error().code);
+    auto acquired = path.Push(name, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
+    ASSERT_FALSE(acquired.HasValue());
+    EXPECT_EQ(EACCES, acquired.Error().code);
     EXPECT_TRUE(childOpened);
     EXPECT_TRUE(failed);
     EXPECT_EQ(before, CountOpenDescriptors());
@@ -614,7 +629,7 @@ TEST_F(PathAliasTest, PrimaryChildStatErrorOutranksItsTemporaryCloseFailure)
 {
     const std::string source = context.MakeTempfile("held");
     const std::string name = source.substr(source.find_last_of('/') + 1);
-    auto opened = Path::AcquireRoot(context, context.GetTempdirPath(), RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     const auto before = CountOpenDescriptors();
@@ -648,9 +663,9 @@ TEST_F(PathAliasTest, PrimaryChildStatErrorOutranksItsTemporaryCloseFailure)
         }
         return status;
     });
-    auto observation = path.ObserveChild(name, 4096);
-    ASSERT_FALSE(observation.HasValue());
-    EXPECT_EQ(EACCES, observation.Error().code);
+    auto acquired = path.Push(name, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
+    ASSERT_FALSE(acquired.HasValue());
+    EXPECT_EQ(EACCES, acquired.Error().code);
     EXPECT_TRUE(closeFailed);
     EXPECT_EQ(before, CountOpenDescriptors());
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
@@ -658,7 +673,7 @@ TEST_F(PathAliasTest, PrimaryChildStatErrorOutranksItsTemporaryCloseFailure)
 
 TEST_F(PathAliasTest, DirectoryActivationCloseFailureDoesNotReturnCursorOrLeakStream)
 {
-    auto opened = Path::AcquireRoot(context, context.GetTempdirPath(), RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     const auto before = CountOpenDescriptors();
@@ -699,7 +714,7 @@ TEST_F(PathAliasTest, DirectoryActivationCloseFailureDoesNotReturnCursorOrLeakSt
 
 TEST_F(PathAliasTest, DirectoryCursorFailedCloseIsCachedWithoutRetry)
 {
-    auto opened = Path::AcquireRoot(context, context.GetTempdirPath(), RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     const auto before = CountOpenDescriptors();
@@ -726,7 +741,7 @@ TEST_F(PathAliasTest, AbsolutePrefixTemporaryPinCloseFailureRejectsValidCandidat
     const std::string file = context.MakeTempfile("held");
     ASSERT_EQ(0, ::rename(file.c_str(), (root + "/inside").c_str()));
     ASSERT_EQ(0, ::symlink((root + "/inside").c_str(), (root + "/absolute").c_str()));
-    auto opened = Path::AcquireRoot(context, root, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+    auto opened = SelectAcceptedPath(context, root, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     const auto before = CountOpenDescriptors();
@@ -750,7 +765,7 @@ TEST_F(PathAliasTest, AbsolutePrefixTemporaryPinCloseFailureRejectsValidCandidat
         }
         return status;
     });
-    auto pushed = path.Push("absolute", ExtensionPolicy{SymlinkPolicy::FollowWithinRoot, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
+    auto pushed = path.Push("absolute", ExtensionPolicy{SymlinkPolicy::Follow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
     ASSERT_FALSE(pushed.HasValue());
     EXPECT_EQ(EIO, pushed.Error().code);
     EXPECT_TRUE(failed);
@@ -816,7 +831,7 @@ TEST(PathKernelIntegrationTest, NativeProcfsAndPinnedOperations)
     const std::string source = context.MakeTempfile("kernel-procfs");
     const std::string name = source.substr(source.find_last_of('/') + 1);
     const ResolverLimits limits{{4096, 100, 100000, 256, 262144, 4096}, 4096, 8, 128};
-    auto opened = Path::AcquireRoot(context, context.GetTempdirPath(), RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
     auto rootId = path.Root().MountIdentity(limits.shared.fdinfoBytes);
@@ -835,7 +850,7 @@ TEST(PathKernelIntegrationTest, NativeProcfsAndPinnedOperations)
         found = found || (name == entry.Value().Value());
     }
     EXPECT_TRUE(found);
-    const ExtensionPolicy stay{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy stay{SymlinkPolicy::DoNotFollow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
     auto pushed = path.Push(name, stay);
     ASSERT_TRUE(pushed.HasValue()) << pushed.Error().message;
     auto leafId = path.Leaf().MountIdentity(limits.shared.fdinfoBytes);
@@ -846,8 +861,7 @@ TEST(PathKernelIntegrationTest, NativeProcfsAndPinnedOperations)
     EXPECT_TRUE(S_ISREG(metadata.Value().st_mode));
     auto readable = path.Leaf().OpenReadOnly(limits.shared.fdinfoBytes);
     ASSERT_TRUE(readable.HasValue()) << readable.Error().message;
-    std::size_t remainingInterruptRetries = 1;
-    auto read = readable.Value().Read(32, remainingInterruptRetries);
+    auto read = readable.Value().Read(32);
     ASSERT_TRUE(read.HasValue()) << read.Error().message;
     ASSERT_TRUE(read.Value().HasValue());
     EXPECT_EQ("kernel-procfs", read.Value().Value());
@@ -895,13 +909,13 @@ TEST_F(PathAliasTest, MoveTransfersOwnershipAndFailedCloseIsNotRetried)
     const std::size_t before = CountOpenDescriptors();
     {
         auto acquired = [&]() -> ComplianceEngine::Result<Handle> {
-            auto opened = Path::AcquireRoot(context, context.GetTempdirPath(), RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+            auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
             if (!opened.HasValue())
             {
                 return std::move(opened).Error();
             }
             Path path = std::move(opened).Value();
-            auto pushed = path.Push(component, ExtensionPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
+            auto pushed = path.Push(component, ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
             if (!pushed.HasValue())
             {
                 return std::move(pushed).Error();
@@ -931,10 +945,10 @@ TEST_F(PathAliasTest, CompleteAbsolutePrefixUsesEveryHeldDirectoryIdentity)
     ASSERT_EQ(0, ::rename(file.c_str(), (rootPath + "/inside").c_str()));
     const std::size_t before = CountOpenDescriptors();
     {
-        auto opened = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+        auto opened = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
         ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
         Path path = std::move(opened).Value();
-        const ExtensionPolicy follow{SymlinkPolicy::FollowWithinRoot, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
+        const ExtensionPolicy follow{SymlinkPolicy::Follow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
         auto accepted = path.Push("absolute", follow);
         ASSERT_TRUE(accepted.HasValue()) << accepted.Error().message;
         ASSERT_TRUE(path.Pop().HasValue());
@@ -968,12 +982,12 @@ TEST_F(PathAliasTest, ConfinedResolverFollowsRelativeAndRecognizedAbsoluteLinks)
     ASSERT_EQ(0, ::symlink("inside/", (rootPath + "/trailing").c_str()));
     ASSERT_EQ(0, ::symlink("relative", (rootPath + "/double").c_str()));
     const ResolverLimits limits{{4096, 100, 100000, 256, 262144, 4096}, 4096, 8, 128};
-    auto opened = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto opened = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
-    const ExtensionPolicy strict{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
-    const ExtensionPolicy follow{SymlinkPolicy::FollowWithinRoot, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
-    const ExtensionPolicy stay{SymlinkPolicy::FollowWithinRoot, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy strict{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
+    const ExtensionPolicy follow{SymlinkPolicy::Follow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
+    const ExtensionPolicy stay{SymlinkPolicy::Follow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
     struct stat original = {};
     ASSERT_EQ(0, ::stat((rootPath + "/inside").c_str(), &original));
     const std::size_t before = CountOpenDescriptors();
@@ -1000,14 +1014,14 @@ TEST_F(PathAliasTest, ConfinedResolverFollowsRelativeAndRecognizedAbsoluteLinks)
         EXPECT_EQ(ELOOP, loop.Error().code);
         ResolverLimits oneLink = AmpleLimits();
         oneLink.linkExpansions = 1;
-        auto reopened = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, oneLink);
+        auto reopened = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, oneLink);
         ASSERT_TRUE(reopened.HasValue());
         Path bounded = std::move(reopened).Value();
         auto beyondLink = bounded.Push("double", follow);
         ASSERT_FALSE(beyondLink.HasValue());
         EXPECT_EQ(ELOOP, beyondLink.Error().code);
         oneLink.linkExpansions = 2;
-        auto two = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, oneLink);
+        auto two = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, oneLink);
         ASSERT_TRUE(two.HasValue());
         Path allowed = std::move(two).Value();
         auto exactlyTwo = allowed.Push("double", follow);
@@ -1027,7 +1041,7 @@ TEST_F(PathAliasTest, ResolverUsesPinnedLinkWhenNameChangesDuringInspection)
     const std::string file = context.MakeTempfile("contents");
     ASSERT_EQ(0, ::rename(file.c_str(), (rootPath + "/inside").c_str()));
     ASSERT_EQ(0, ::symlink("inside", (rootPath + "/link").c_str()));
-    auto opened = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+    auto opened = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
     bool replaced = false;
@@ -1042,7 +1056,7 @@ TEST_F(PathAliasTest, ResolverUsesPinnedLinkWhenNameChangesDuringInspection)
         return status;
     });
     const std::size_t before = CountOpenDescriptors();
-    auto resolved = path.Push("link", ExtensionPolicy{SymlinkPolicy::FollowWithinRoot, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit});
+    auto resolved = path.Push("link", ExtensionPolicy{SymlinkPolicy::Follow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit});
     ASSERT_TRUE(resolved.HasValue()) << resolved.Error().message;
     EXPECT_TRUE(replaced);
     struct stat expected = {};
@@ -1059,11 +1073,11 @@ TEST_F(PathAliasTest, RelativeParentIsBoundedByAcceptedRoot)
     const std::string file = context.MakeTempfile("contents");
     ASSERT_EQ(0, ::rename(file.c_str(), (rootPath + "/inside").c_str()));
     ASSERT_EQ(0, ::symlink("../inside", (rootPath + "/sub/up").c_str()));
-    auto opened = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+    auto opened = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
-    ASSERT_TRUE(path.Push("sub", ExtensionPolicy{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit}).HasValue());
-    auto resolved = path.Push("up", ExtensionPolicy{SymlinkPolicy::FollowWithinRoot, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit});
+    ASSERT_TRUE(path.Push("sub", ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit}).HasValue());
+    auto resolved = path.Push("up", ExtensionPolicy{SymlinkPolicy::Follow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit});
     ASSERT_TRUE(resolved.HasValue()) << resolved.Error().message;
     struct stat expected = {};
     ASSERT_EQ(0, ::stat((rootPath + "/inside").c_str(), &expected));
@@ -1080,11 +1094,11 @@ TEST_F(PathAliasTest, LinkExpansionKeepsPhysicalLineageForContinuation)
     ASSERT_EQ(0, ::rename(file.c_str(), (rootPath + "/second/child").c_str()));
     ASSERT_EQ(0, ::symlink("../second", (rootPath + "/first/shortcut").c_str()));
     ASSERT_EQ(0, ::symlink("..", (rootPath + "/second/up").c_str()));
-    auto opened = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+    auto opened = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
-    const ExtensionPolicy strict{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
-    const ExtensionPolicy follow{SymlinkPolicy::FollowWithinRoot, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy strict{SymlinkPolicy::DoNotFollow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy follow{SymlinkPolicy::Follow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
     ASSERT_TRUE(path.Push("first", strict).HasValue());
     auto shortcut = path.Push("shortcut", follow);
     ASSERT_TRUE(shortcut.HasValue()) << shortcut.Error().message;
@@ -1111,12 +1125,12 @@ TEST_F(PathAliasTest, ResolverBudgetsFailAtOneBeyondAndLeavePinsAlive)
     ASSERT_EQ(0, ::symlink("inside", (rootPath + "/link").c_str()));
     ResolverLimits limits = AmpleLimits();
     limits.linkTargetBytes = 5;
-    auto opened = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto opened = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
     const std::size_t before = CountOpenDescriptors();
-    const ExtensionPolicy strict{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
-    const ExtensionPolicy follow{SymlinkPolicy::FollowWithinRoot, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy strict{SymlinkPolicy::DoNotFollow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy follow{SymlinkPolicy::Follow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
     auto direct = path.Push("inside", strict);
     ASSERT_TRUE(direct.HasValue()) << direct.Error().message;
     ASSERT_TRUE(path.Pop().HasValue());
@@ -1135,7 +1149,7 @@ TEST_F(PathAliasTest, ResolverBudgetsFailAtOneBeyondAndLeavePinsAlive)
     const std::size_t rootComponents = static_cast<std::size_t>(std::count(rootPath.begin(), rootPath.end(), '/'));
     ResolverLimits exact = AmpleLimits();
     exact.shared.work = (2 + 2 * rootComponents + 3) * charge;
-    auto root = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, exact);
+    auto root = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, exact);
     ASSERT_TRUE(root.HasValue());
     Path bounded = std::move(root).Value();
     ASSERT_TRUE(bounded.Push("budget-child", strict).HasValue());
@@ -1154,12 +1168,12 @@ TEST_F(PathAliasTest, PublicRootAndPushKeepOriginalPinsAndSeparatePolicies)
     ASSERT_EQ(0, ::symlink("inside", (rootPath + "/allowed").c_str()));
     ASSERT_EQ(0, ::symlink("/etc/passwd", (rootPath + "/outside").c_str()));
     const ResolverLimits limits{{4096, 4096, 2000000, 4096, 16U * 1024U * 1024U, 4096}, 4096, 8, 4096};
-    const RootPolicy rootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing};
-    const ExtensionPolicy strict{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
-    const ExtensionPolicy follow{SymlinkPolicy::FollowWithinRoot, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const Path::Policy rootPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing};
+    const ExtensionPolicy strict{SymlinkPolicy::DoNotFollow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy follow{SymlinkPolicy::Follow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
     const std::size_t before = CountOpenDescriptors();
     {
-        auto opened = Path::AcquireRoot(context, rootPath, rootPolicy, limits);
+        auto opened = SelectAcceptedPath(context, rootPath, rootPolicy, limits);
         ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
         Path path = std::move(opened).Value();
         ASSERT_EQ(1U, path.Size());
@@ -1185,6 +1199,197 @@ TEST_F(PathAliasTest, PublicRootAndPushKeepOriginalPinsAndSeparatePolicies)
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
+TEST_F(PathAliasTest, AbsoluteFactoryNormalizesSeparatorsAndHonorsLinkPolicy)
+{
+    const std::string file = context.MakeTempfile("contents");
+    const std::string link = file + ".link";
+    ASSERT_EQ(0, ::symlink(file.c_str(), link.c_str()));
+    const Path::Policy strict{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing};
+    const Path::Policy follow{SymlinkPolicy::Follow, MountPolicy::AllowCrossing};
+    const std::size_t before = CountOpenDescriptors();
+
+    auto invalid = Path::Make(context, file + std::string("\0bad", 4), follow, AmpleLimits());
+    ASSERT_FALSE(invalid.HasValue());
+    EXPECT_EQ(EINVAL, invalid.Error().code);
+    auto relative = Path::Make(context, "relative", follow, AmpleLimits());
+    ASSERT_FALSE(relative.HasValue());
+    EXPECT_EQ(EINVAL, relative.Error().code);
+    auto denied = Path::Make(context, link, strict, AmpleLimits());
+    ASSERT_FALSE(denied.HasValue());
+    EXPECT_EQ(ELOOP, denied.Error().code);
+    auto trailing = Path::Make(context, file + "/", follow, AmpleLimits());
+    ASSERT_FALSE(trailing.HasValue());
+    EXPECT_EQ(ENOTDIR, trailing.Error().code);
+    auto parent = Path::Make(context, context.GetTempdirPath() + "/../", follow, AmpleLimits());
+    ASSERT_FALSE(parent.HasValue());
+    EXPECT_EQ(EINVAL, parent.Error().code);
+
+    std::string repeated = "/";
+    for (const char character : link)
+    {
+        repeated += character;
+        if (character == '/')
+        {
+            repeated += '/';
+        }
+    }
+    auto opened = Path::Make(context, repeated, follow, AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    ASSERT_EQ(Path::Result::Status::Accepted, opened.Value().GetStatus());
+    EXPECT_EQ(Handle::Type::RegularFile, opened.Value().AcceptedPath().Leaf().AcquiredType());
+    auto processRoot = Path::Make(context, "/", strict, AmpleLimits());
+    ASSERT_TRUE(processRoot.HasValue());
+    EXPECT_EQ(1U, processRoot.Value().AcceptedPath().Size());
+    ASSERT_TRUE(processRoot.Value().AcceptedPath().Close().HasValue());
+    Path::Result moved(std::move(opened.Value()));
+    EXPECT_EQ(Path::Result::Status::Missing, opened.Value().GetStatus());
+    EXPECT_EQ(Path::Result::Status::Accepted, moved.GetStatus());
+    ASSERT_TRUE(moved.AcceptedPath().Close().HasValue());
+    EXPECT_EQ(before, CountOpenDescriptors());
+    ASSERT_EQ(0, ::unlink(link.c_str()));
+}
+
+TEST_F(PathAliasTest, NonFollowedLinksSkipOnlySelectedFinalLinks)
+{
+    const std::string root = context.GetTempdirPath() + "/link-policy-root";
+    ASSERT_EQ(0, ::mkdir(root.c_str(), 0700));
+    const std::string file = context.MakeTempfile("contents");
+    ASSERT_EQ(0, ::rename(file.c_str(), (root + "/file").c_str()));
+    ASSERT_EQ(0, ::mkdir((root + "/directory").c_str(), 0700));
+    ASSERT_EQ(0, ::symlink("file", (root + "/file-link").c_str()));
+    ASSERT_EQ(0, ::symlink("directory", (root + "/directory-link").c_str()));
+
+    Path::Policy policy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing};
+    EXPECT_EQ(NonFollowedLinkAction::Reject, policy.nonFollowedLinks);
+    auto rejected = Path::Make(context, root + "/file-link", policy, AmpleLimits());
+    ASSERT_FALSE(rejected.HasValue());
+    EXPECT_EQ(ELOOP, rejected.Error().code);
+
+    policy.nonFollowedLinks = NonFollowedLinkAction::Skip;
+    auto excluded = Path::Make(context, root + "/file-link", policy, AmpleLimits());
+    ASSERT_TRUE(excluded.HasValue()) << excluded.Error().message;
+    EXPECT_EQ(Path::Result::Status::Excluded, excluded.Value().GetStatus());
+    ASSERT_EQ(0, ::symlink("link-policy-root", (context.GetTempdirPath() + "/prefix-link").c_str()));
+    auto prefix = Path::Make(context, context.GetTempdirPath() + "/prefix-link/file-link", policy, AmpleLimits());
+    ASSERT_FALSE(prefix.HasValue());
+    EXPECT_EQ(ELOOP, prefix.Error().code);
+
+    policy.directoryLinks = SymlinkPolicy::Follow;
+    auto excludedFile = Path::Make(context, root + "/file-link", policy, AmpleLimits());
+    ASSERT_TRUE(excludedFile.HasValue()) << excludedFile.Error().message;
+    EXPECT_EQ(Path::Result::Status::Excluded, excludedFile.Value().GetStatus());
+    auto followedDirectory = Path::Make(context, root + "/directory-link", policy, AmpleLimits());
+    ASSERT_TRUE(followedDirectory.HasValue()) << followedDirectory.Error().message;
+    ASSERT_EQ(Path::Result::Status::Accepted, followedDirectory.Value().GetStatus());
+    ASSERT_TRUE(followedDirectory.Value().AcceptedPath().Close().HasValue());
+
+    auto opened = SelectAcceptedPath(context, root, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+    ExtensionPolicy child{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
+    EXPECT_EQ(NonFollowedLinkAction::Reject, child.nonFollowedLinks);
+    auto denied = path.Push("file-link", child);
+    ASSERT_FALSE(denied.HasValue());
+    EXPECT_EQ(ELOOP, denied.Error().code);
+    child.nonFollowedLinks = NonFollowedLinkAction::Skip;
+    auto skipped = path.Push("file-link", child);
+    ASSERT_TRUE(skipped.HasValue()) << skipped.Error().message;
+    EXPECT_EQ(Path::PushOutcome::SkippedLink, skipped.Value());
+    EXPECT_EQ(1U, path.Size());
+    child.directoryLinks = SymlinkPolicy::Follow;
+    auto skippedFile = path.Push("file-link", child);
+    ASSERT_TRUE(skippedFile.HasValue()) << skippedFile.Error().message;
+    EXPECT_EQ(Path::PushOutcome::SkippedLink, skippedFile.Value());
+    auto followed = path.Push("directory-link", child);
+    ASSERT_TRUE(followed.HasValue()) << followed.Error().message;
+    EXPECT_EQ(Path::PushOutcome::Pushed, followed.Value());
+    EXPECT_EQ(Handle::Type::Directory, path.Leaf().AcquiredType());
+    ASSERT_TRUE(path.Close().HasValue());
+}
+
+TEST_F(PathAliasTest, RejectsInvalidFollowingAndNonFollowedLinkDisposition)
+{
+    Path::Policy root{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing};
+    for (int field = 0; field < 3; ++field)
+    {
+        Path::Policy invalid = root;
+        if (field == 0)
+            invalid.symlinks = static_cast<SymlinkPolicy>(99);
+        else if (field == 1)
+            invalid.fileLinks = static_cast<SymlinkPolicy>(99);
+        else
+            invalid.directoryLinks = static_cast<SymlinkPolicy>(99);
+        auto result = Path::Make(context, "/", invalid, AmpleLimits());
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EINVAL, result.Error().code);
+    }
+    root.nonFollowedLinks = static_cast<NonFollowedLinkAction>(99);
+    auto invalidRoot = Path::Make(context, "/", root, AmpleLimits());
+    ASSERT_FALSE(invalidRoot.HasValue());
+    EXPECT_EQ(EINVAL, invalidRoot.Error().code);
+
+    auto opened = SelectAcceptedPath(context, "/", {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
+    ASSERT_TRUE(opened.HasValue());
+    Path path = std::move(opened).Value();
+    ExtensionPolicy extension{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
+    for (int field = 0; field < 3; ++field)
+    {
+        ExtensionPolicy invalid = extension;
+        if (field == 0)
+            invalid.symlinks = static_cast<SymlinkPolicy>(99);
+        else if (field == 1)
+            invalid.fileLinks = static_cast<SymlinkPolicy>(99);
+        else
+            invalid.directoryLinks = static_cast<SymlinkPolicy>(99);
+        auto result = path.Push("child", invalid);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EINVAL, result.Error().code);
+    }
+    extension.nonFollowedLinks = static_cast<NonFollowedLinkAction>(99);
+    auto invalidChild = path.Push("child", extension);
+    ASSERT_FALSE(invalidChild.HasValue());
+    EXPECT_EQ(EINVAL, invalidChild.Error().code);
+    ASSERT_TRUE(path.Close().HasValue());
+}
+
+TEST_F(PathAliasTest, MissingFactorySelectionCannotHideCheckedRootCloseFailure)
+{
+    const std::string missing = context.GetTempdirPath() + "/missing-absolute-child";
+    const std::string logPath = context.GetTempdirPath() + "/absolute-close.log";
+    OsConfigLogHandle log = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, log);
+    context.SetLogHandle(log);
+    struct stat root = {};
+    ASSERT_EQ(0, ::stat("/", &root));
+    int rootCloses = 0;
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+        struct stat held = {};
+        const int flags = ::fcntl(fd, F_GETFL);
+        const bool rootPin = flags >= 0 && (flags & O_PATH) && ::fstat(fd, &held) == 0 && held.st_dev == root.st_dev && held.st_ino == root.st_ino;
+        const int result = context.ContextInterface::CloseFileDescriptor(fd);
+        if (rootPin)
+        {
+            ++rootCloses;
+            errno = EACCES;
+            return -1;
+        }
+        return result;
+    });
+
+    auto opened = Path::Make(context, missing, {SymlinkPolicy::Follow, MountPolicy::AllowCrossing}, AmpleLimits());
+    EXPECT_FALSE(opened.HasValue());
+    if (!opened.HasValue())
+    {
+        EXPECT_EQ(EACCES, opened.Error().code);
+    }
+    EXPECT_EQ(1, rootCloses);
+    CloseLog(&log);
+    context.SetLogHandle(nullptr);
+    std::ifstream contents(logPath);
+    const std::string text((std::istreambuf_iterator<char>(contents)), std::istreambuf_iterator<char>());
+    EXPECT_NE(std::string::npos, text.find("Failed to close internal filesystem descriptor: " + std::to_string(EACCES)));
+}
+
 TEST_F(PathAliasTest, ExplicitAdministrativeRootLinkAndMovedPath)
 {
     const std::string rootPath = context.GetTempdirPath() + "/accepted";
@@ -1192,24 +1397,31 @@ TEST_F(PathAliasTest, ExplicitAdministrativeRootLinkAndMovedPath)
     const std::string rootLink = context.GetTempdirPath() + "/administrative";
     ASSERT_EQ(0, ::symlink(rootPath.c_str(), rootLink.c_str()));
     const ResolverLimits limits{{4096, 4096, 2000000, 4096, 16U * 1024U * 1024U, 4096}, 4096, 8, 4096};
-    auto rejected = Path::AcquireRoot(context, rootLink, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto rejected = SelectAcceptedPath(context, rootLink, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_FALSE(rejected.HasValue());
     EXPECT_EQ(ELOOP, rejected.Error().code);
-    auto approved = Path::AcquireRoot(context, rootLink, RootPolicy{SymlinkPolicy::FollowWithinRoot, MountPolicy::AllowCrossing}, limits);
+    auto approved = SelectAcceptedPath(context, rootLink, {SymlinkPolicy::Follow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(approved.HasValue()) << approved.Error().message;
     Path original = std::move(approved).Value();
     const std::size_t inode = original.Root().Stat().st_ino;
     Path moved = std::move(original);
     EXPECT_EQ(1U, moved.Size());
     EXPECT_EQ(inode, moved.Root().Stat().st_ino);
-    auto noRoot = original.Push("anything", ExtensionPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
+    auto noRoot = original.Push("anything", ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
     ASSERT_FALSE(noRoot.HasValue());
     EXPECT_EQ(EINVAL, noRoot.Error().code);
     const std::string file = context.MakeTempfile("contents");
     ASSERT_EQ(0, ::rename(file.c_str(), (rootPath + "/child").c_str()));
-    auto accepted = moved.Push("child", ExtensionPolicy{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit});
+    auto accepted = moved.Push("child", ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit});
     ASSERT_TRUE(accepted.HasValue()) << accepted.Error().message;
     EXPECT_EQ(2U, moved.Size());
+    ASSERT_TRUE(moved.Pop().HasValue());
+    ASSERT_EQ(0, ::symlink("../", (rootPath + "/parent").c_str()));
+    auto escaped = moved.Push("parent", ExtensionPolicy{SymlinkPolicy::Follow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
+    ASSERT_FALSE(escaped.HasValue());
+    EXPECT_EQ(EXDEV, escaped.Error().code);
+    EXPECT_EQ(1U, moved.Size());
+    EXPECT_EQ(inode, moved.Leaf().Stat().st_ino);
 }
 
 TEST_F(PathAliasTest, EndInsertionKeepsBorrowsStableAndFailedPushDoesNotChangeStack)
@@ -1217,13 +1429,13 @@ TEST_F(PathAliasTest, EndInsertionKeepsBorrowsStableAndFailedPushDoesNotChangeSt
     const std::string rootPath = context.GetTempdirPath() + "/accepted";
     ASSERT_EQ(0, ::mkdir(rootPath.c_str(), 0700));
     const ResolverLimits limits{{4096, 4096, 2000000, 4096, 16U * 1024U * 1024U, 4096}, 4096, 8, 4096};
-    auto opened = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto opened = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
     const Handle& rootBorrow = path.Root();
     const Handle* first = nullptr;
     std::string current = rootPath;
-    const ExtensionPolicy strict{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy strict{SymlinkPolicy::DoNotFollow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
     for (int index = 0; index < 72; ++index)
     {
         current += "/d";
@@ -1259,14 +1471,14 @@ TEST_F(PathAliasTest, FailedPublicPushConsumesWorkWithoutChangingAcceptedRoot)
 {
     const std::size_t cost = 128 + 4 * (4096 / 256);
     const ResolverLimits limits{{4096, 64, 5 * cost, 64, 262144, 4096}, 128, 2, 64};
-    auto opened = Path::AcquireRoot(context, "/", RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto opened = SelectAcceptedPath(context, "/", {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
     const std::string absent = "/m71-nonexistent-fixture-entry";
     struct stat unused = {};
     ASSERT_EQ(-1, ::lstat(absent.c_str(), &unused));
     ASSERT_EQ(ENOENT, errno);
-    const ExtensionPolicy allow{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
+    const ExtensionPolicy allow{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
     const auto missing = path.Push(absent.substr(1), allow);
     ASSERT_FALSE(missing.HasValue());
     EXPECT_EQ(ENOENT, missing.Error().code);
@@ -1280,11 +1492,11 @@ TEST_F(PathAliasTest, FailedPublicPushConsumesWorkWithoutChangingAcceptedRoot)
 TEST_F(PathAliasTest, MovedPublicPathRetainsDescriptorCapAndRejectsUnsupportedHardlinkMode)
 {
     const ResolverLimits limits{{4096, 64, 100000, 8, 262144, 4096}, 128, 2, 64};
-    auto opened = Path::AcquireRoot(context, "/", RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto opened = SelectAcceptedPath(context, "/", {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
-    const ExtensionPolicy allow{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
-    const ExtensionPolicy unsupported{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::RequireUnique};
+    const ExtensionPolicy allow{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
+    const ExtensionPolicy unsupported{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::RequireUnique};
     auto denied = path.Push("etc", unsupported);
     ASSERT_FALSE(denied.HasValue());
     EXPECT_EQ(ENOTSUP, denied.Error().code);
@@ -1304,10 +1516,10 @@ TEST_F(PathAliasTest, PopTransfersLeafAndPreservesSurvivingBorrows)
     ASSERT_EQ(0, ::mkdir((rootPath + "/one").c_str(), 0700));
     ASSERT_EQ(0, ::mkdir((rootPath + "/one/two").c_str(), 0700));
     const ResolverLimits limits{{4096, 4096, 2000000, 4096, 16U * 1024U * 1024U, 4096}, 4096, 8, 4096};
-    const ExtensionPolicy strict{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy strict{SymlinkPolicy::DoNotFollow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
     const std::size_t before = CountOpenDescriptors();
     {
-        auto opened = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+        auto opened = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
         ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
         Path path = std::move(opened).Value();
         const Handle& root = path.Root();
@@ -1339,10 +1551,10 @@ TEST_F(PathAliasTest, PopTransfersLeafAndPreservesSurvivingBorrows)
 TEST_F(PathAliasTest, IgnoredPopClosesOnceAndEmptyAccessIsExplicit)
 {
     const ResolverLimits limits{{4096, 128, 100000, 64, 262144, 4096}, 128, 2, 128};
-    const ExtensionPolicy allow{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
+    const ExtensionPolicy allow{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
     const std::size_t before = CountOpenDescriptors();
     {
-        auto opened = Path::AcquireRoot(context, "/", RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+        auto opened = SelectAcceptedPath(context, "/", {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
         ASSERT_TRUE(opened.HasValue());
         Path path = std::move(opened).Value();
         ASSERT_TRUE(path.Push("etc", allow).HasValue());
@@ -1379,11 +1591,11 @@ TEST_F(PathAliasTest, DetachedRootAndFileRemainPinnedAfterPathDestruction)
     const std::string original = context.MakeTempfile("old contents");
     ASSERT_EQ(0, ::rename(original.c_str(), (rootPath + "/file").c_str()));
     const ResolverLimits limits{{4096, 128, 200000, 128, 262144, 4096}, 128, 2, 128};
-    const ExtensionPolicy strict{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy strict{SymlinkPolicy::DoNotFollow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
     const std::size_t before = CountOpenDescriptors();
     {
         auto detached = [&]() -> ComplianceEngine::Result<Handle> {
-            auto opened = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+            auto opened = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
             if (!opened.HasValue())
             {
                 return std::move(opened).Error();
@@ -1412,7 +1624,7 @@ TEST_F(PathAliasTest, DetachedRootAndFileRemainPinnedAfterPathDestruction)
     EXPECT_EQ(before, CountOpenDescriptors());
     {
         auto detachedRoot = [&]() -> ComplianceEngine::Result<Handle> {
-            auto opened = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+            auto opened = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
             if (!opened.HasValue())
             {
                 return std::move(opened).Error();
@@ -1431,29 +1643,55 @@ TEST_F(PathAliasTest, DetachedRootAndFileRemainPinnedAfterPathDestruction)
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
-TEST_F(PathAliasTest, DetachedResourceChargesPersistAcrossMovesUntilClose)
+TEST_F(PathAliasTest, PoppedHandlesLeavePathBudgetAndRemainIndependentlyOwned)
 {
     const std::size_t firstStage = sizeof(Handle) + 4 * sizeof(const Handle*) + 1 + sizeof(std::string) + 3 + sizeof(Handle) + 3 + 4 * sizeof(const Handle*);
     const ResolverLimits memoryLimits{{4096, 128, 200000, 64, sizeof(Handle) + 1 + firstStage + sizeof(Handle) + 2, 4096}, 128, 2, 128};
     const ResolverLimits fdLimits{{4096, 128, 200000, 8, 262144, 4096}, 128, 2, 128};
-    const ExtensionPolicy allow{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
+    const ExtensionPolicy allow{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
     const std::size_t before = CountOpenDescriptors();
     for (const auto& limits : {fdLimits, memoryLimits})
     {
-        auto opened = Path::AcquireRoot(context, "/", RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+        auto opened = SelectAcceptedPath(context, "/", {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
         ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
         Path path = std::move(opened).Value();
+        const std::size_t rootBytes = path.RetainedBytes();
         ASSERT_TRUE(path.Push("etc", allow).HasValue());
-        {
-            auto popped = path.Pop();
-            ASSERT_TRUE(popped.HasValue());
-            Handle moved = std::move(popped).Value();
-            auto blocked = path.Push("etc", allow);
-            ASSERT_FALSE(blocked.HasValue());
-            EXPECT_EQ(limits.shared.liveDescriptors == 8 ? EMFILE : E2BIG, blocked.Error().code);
-            EXPECT_EQ(1U, path.Size());
-        }
-        EXPECT_TRUE(path.Push("etc", allow).HasValue());
+        const std::size_t charged = path.RetainedBytes();
+        const std::size_t pins = path.RetainedDescriptors();
+        auto popped = path.Pop();
+        ASSERT_TRUE(popped.HasValue());
+        Handle first = std::move(popped).Value();
+        EXPECT_EQ(pins - 1, path.RetainedDescriptors());
+        EXPECT_GT(charged, rootBytes);
+        EXPECT_EQ(rootBytes, path.RetainedBytes());
+        // Even while the consumer retains the first pin, a bounded Path
+        // can reacquire another child using its own remaining capacity.
+        auto pushed = path.Push("etc", allow);
+        ASSERT_TRUE(pushed.HasValue()) << pushed.Error().message;
+        auto blocked = path.Push("passwd", allow);
+        ASSERT_FALSE(blocked.HasValue());
+        EXPECT_EQ(limits.shared.liveDescriptors == 8 ? EMFILE : E2BIG, blocked.Error().code);
+        auto second = path.Pop();
+        ASSERT_TRUE(second.HasValue());
+        Handle other = std::move(second).Value();
+        const std::size_t ownedPins = path.RetainedDescriptors();
+        const std::size_t ownedBytes = path.RetainedBytes();
+        Path moved(std::move(path));
+        EXPECT_EQ(ownedPins, moved.RetainedDescriptors());
+        EXPECT_EQ(ownedBytes, moved.RetainedBytes());
+        EXPECT_EQ(0U, path.RetainedDescriptors());
+        EXPECT_EQ(0U, path.RetainedBytes());
+        EXPECT_TRUE(first.Close().HasValue());
+        EXPECT_EQ(ownedPins, moved.RetainedDescriptors());
+        EXPECT_EQ(ownedBytes, moved.RetainedBytes());
+        EXPECT_TRUE(other.Stat(limits.shared.fdinfoBytes).HasValue());
+        EXPECT_TRUE(other.Close().HasValue());
+        EXPECT_EQ(ownedPins, moved.RetainedDescriptors());
+        EXPECT_EQ(ownedBytes, moved.RetainedBytes());
+        EXPECT_TRUE(moved.Close().HasValue());
+        EXPECT_EQ(0U, moved.RetainedDescriptors());
+        EXPECT_EQ(0U, moved.RetainedBytes());
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }
@@ -1467,11 +1705,11 @@ TEST_F(PathAliasTest, PopRestoresPinnedPhysicalLineageThroughDirectoryLink)
     const std::string file = context.MakeTempfile("contents");
     ASSERT_EQ(0, ::rename(file.c_str(), (rootPath + "/actual/child").c_str()));
     const ResolverLimits limits{{4096, 4096, 2000000, 4096, 16U * 1024U * 1024U, 4096}, 4096, 8, 4096};
-    const ExtensionPolicy follow{SymlinkPolicy::FollowWithinRoot, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
-    const ExtensionPolicy strict{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy follow{SymlinkPolicy::Follow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy strict{SymlinkPolicy::DoNotFollow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
     const std::size_t before = CountOpenDescriptors();
     {
-        auto opened = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+        auto opened = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
         ASSERT_TRUE(opened.HasValue());
         Path path = std::move(opened).Value();
         ASSERT_TRUE(path.Push("shortcut", follow).HasValue());
@@ -1496,7 +1734,7 @@ TEST_F(PathAliasTest, PoppedHandleFailedCloseIsSingleShotEvenAfterMove)
     const ResolverLimits limits{{4096, 128, 200000, 64, 262144, 4096}, 128, 2, 128};
     const std::size_t before = CountOpenDescriptors();
     auto popped = [&]() -> ComplianceEngine::Result<Handle> {
-        auto opened = Path::AcquireRoot(context, "/", RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+        auto opened = SelectAcceptedPath(context, "/", {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
         if (!opened.HasValue())
         {
             return std::move(opened).Error();
@@ -1538,10 +1776,10 @@ TEST_F(PathAliasTest, CheckedPathReleaseVisitsRootLineageHiddenAndLeafPins)
     {
         struct stat target = {};
         ASSERT_EQ(0, ::stat(name.c_str(), &target));
-        auto opened = Path::AcquireRoot(context, root, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+        auto opened = SelectAcceptedPath(context, root, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
         ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
         Path path = std::move(opened).Value();
-        ASSERT_TRUE(path.Push("shortcut", ExtensionPolicy{SymlinkPolicy::FollowWithinRoot, MountPolicy::AllowCrossing, HardlinkPolicy::Permit}).HasValue());
+        ASSERT_TRUE(path.Push("shortcut", ExtensionPolicy{SymlinkPolicy::Follow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit}).HasValue());
         const std::size_t pins = path.RetainedDescriptors();
         ASSERT_GT(pins, 4U); // includes the directory retained through the symlink
         std::size_t closed = 0, matched = 0;
@@ -1588,18 +1826,22 @@ TEST_F(PathAliasTest, PoppedFileRootKeepsHiddenPinsForCheckedPathClose)
     struct stat hiddenStat = {};
     ASSERT_EQ(0, ::stat(hidden.c_str(), &hiddenStat));
     const ResolverLimits limits{{4096, 128, 200000, 128, 262144, 4096}, 4096, 8, 128};
-    auto opened = Path::AcquireRoot(context, root + "/shortcut", RootPolicy{SymlinkPolicy::FollowWithinRoot, MountPolicy::AllowCrossing}, limits, true);
+    auto opened = SelectAcceptedPath(context, root + "/shortcut", {SymlinkPolicy::Follow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
+    const std::size_t beforePins = path.RetainedDescriptors();
+    const std::size_t beforeBytes = path.RetainedBytes();
     auto popped = path.Pop();
     ASSERT_TRUE(popped.HasValue());
     Handle leaf = std::move(popped).Value();
     ASSERT_EQ(0U, path.Size());
     const std::size_t retained = path.RetainedDescriptors();
-    ASSERT_GT(retained, 2U); // detached leaf plus hidden and root-lineage pins
+    ASSERT_GT(retained, 1U); // only Path-owned hidden and root-lineage pins
+    EXPECT_EQ(beforePins - 1, retained);
+    EXPECT_EQ(beforeBytes - sizeof(Handle) - leaf.Component().size(), path.RetainedBytes());
     const std::size_t before = CountOpenDescriptors();
     std::size_t attempts = 0, hiddenAttempts = 0;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(retained - 1).WillRepeatedly([&](int fd) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(retained).WillRepeatedly([&](int fd) {
         struct stat observed = {};
         EXPECT_EQ(0, ::fstat(fd, &observed));
         const bool isHidden = observed.st_dev == hiddenStat.st_dev && observed.st_ino == hiddenStat.st_ino;
@@ -1617,16 +1859,15 @@ TEST_F(PathAliasTest, PoppedFileRootKeepsHiddenPinsForCheckedPathClose)
         return 0;
     });
     EXPECT_EQ(EACCES, path.Close().Error().code);
-    EXPECT_EQ(retained - 1, attempts);
+    EXPECT_EQ(retained, attempts);
     EXPECT_EQ(1U, hiddenAttempts);
-    EXPECT_EQ(1U, path.RetainedDescriptors());
+    EXPECT_EQ(0U, path.RetainedDescriptors());
     EXPECT_EQ(EACCES, path.Close().Error().code);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
     EXPECT_EQ(before - attempts, CountOpenDescriptors());
     auto activated = leaf.OpenReadOnly(4096);
     ASSERT_TRUE(activated.HasValue());
-    std::size_t remainingInterruptRetries = 1;
-    auto chunk = activated.Value().Read(32, remainingInterruptRetries);
+    auto chunk = activated.Value().Read(32);
     ASSERT_TRUE(chunk.HasValue());
     ASSERT_TRUE(chunk.Value().HasValue());
     EXPECT_EQ("still readable", chunk.Value().Value());
@@ -1648,18 +1889,22 @@ TEST_F(PathAliasTest, PoppedDescendantRetainsHiddenPinsUntilCheckedRelease)
     struct stat hiddenStat = {};
     ASSERT_EQ(0, ::stat(hidden.c_str(), &hiddenStat));
     const ResolverLimits limits{{4096, 128, 200000, 128, 262144, 4096}, 4096, 8, 128};
-    auto opened = Path::AcquireRoot(context, root, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto opened = SelectAcceptedPath(context, root, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
-    ASSERT_TRUE(path.Push("shortcut", ExtensionPolicy{SymlinkPolicy::FollowWithinRoot, MountPolicy::AllowCrossing, HardlinkPolicy::Permit}).HasValue());
+    ASSERT_TRUE(path.Push("shortcut", ExtensionPolicy{SymlinkPolicy::Follow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit}).HasValue());
+    const std::size_t beforePins = path.RetainedDescriptors();
+    const std::size_t beforeBytes = path.RetainedBytes();
     auto popped = path.Pop();
     ASSERT_TRUE(popped.HasValue());
     Handle leaf = std::move(popped).Value();
     EXPECT_EQ(1U, path.Size());
     const std::size_t retained = path.RetainedDescriptors();
     ASSERT_GT(retained, 3U);
+    EXPECT_EQ(beforePins - 1, retained);
+    EXPECT_EQ(beforeBytes - sizeof(Handle) - leaf.Component().size(), path.RetainedBytes());
     std::size_t attempts = 0, hiddenAttempts = 0;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(retained - 1).WillRepeatedly([&](int fd) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(retained).WillRepeatedly([&](int fd) {
         struct stat observed = {};
         EXPECT_EQ(0, ::fstat(fd, &observed));
         const bool isHidden = observed.st_dev == hiddenStat.st_dev && observed.st_ino == hiddenStat.st_ino;
@@ -1677,14 +1922,13 @@ TEST_F(PathAliasTest, PoppedDescendantRetainsHiddenPinsUntilCheckedRelease)
         return 0;
     });
     EXPECT_EQ(EACCES, path.Close().Error().code);
-    EXPECT_EQ(retained - 1, attempts);
+    EXPECT_EQ(retained, attempts);
     EXPECT_EQ(1U, hiddenAttempts);
-    EXPECT_EQ(1U, path.RetainedDescriptors());
+    EXPECT_EQ(0U, path.RetainedDescriptors());
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
     auto activated = leaf.OpenReadOnly(4096);
     ASSERT_TRUE(activated.HasValue());
-    std::size_t remainingInterruptRetries = 1;
-    auto chunk = activated.Value().Read(32, remainingInterruptRetries);
+    auto chunk = activated.Value().Read(32);
     ASSERT_TRUE(chunk.HasValue());
     ASSERT_TRUE(chunk.Value().HasValue());
     EXPECT_EQ("descendant", chunk.Value().Value());
@@ -1697,7 +1941,7 @@ TEST_F(PathAliasTest, MultipleCloseFailuresPreserveFirstAndLogSecondary)
 {
     const std::string root = context.GetTempdirPath();
     const ResolverLimits limits{{4096, 128, 200000, 128, 262144, 4096}, 4096, 8, 128};
-    auto opened = Path::AcquireRoot(context, root, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto opened = SelectAcceptedPath(context, root, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     const std::size_t pins = path.RetainedDescriptors();
@@ -1739,13 +1983,14 @@ TEST_F(PathAliasTest, MultipleCloseFailuresPreserveFirstAndLogSecondary)
 TEST_F(PathAliasTest, HandleCloseFailureAfterMoveNeverRetriesReusedDescriptor)
 {
     const ResolverLimits limits{{4096, 128, 200000, 64, 262144, 4096}, 128, 2, 128};
-    auto opened = Path::AcquireRoot(context, "/", RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto opened = SelectAcceptedPath(context, "/", {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     auto removed = path.Pop();
     ASSERT_TRUE(removed.HasValue());
     Handle leaf = std::move(removed).Value();
-    EXPECT_EQ(1U, path.RetainedDescriptors());
+    EXPECT_EQ(0U, path.RetainedDescriptors());
+    EXPECT_EQ(0U, path.RetainedBytes());
     int reused = -1;
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([&](int descriptor) {
         EXPECT_EQ(0, ::close(descriptor));
@@ -1769,6 +2014,8 @@ TEST_F(PathAliasTest, HandleCloseFailureAfterMoveNeverRetriesReusedDescriptor)
     Handle moved = std::move(leaf);
     EXPECT_EQ(EIO, moved.Close().Error().code);
     EXPECT_TRUE(leaf.Close().HasValue());
+    EXPECT_EQ(0U, path.RetainedDescriptors());
+    EXPECT_EQ(0U, path.RetainedBytes());
     EXPECT_TRUE(path.Close().HasValue());
     EXPECT_EQ(0U, path.RetainedDescriptors());
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
@@ -1780,7 +2027,7 @@ TEST_F(PathAliasTest, HandleCloseFailureAfterMoveNeverRetriesReusedDescriptor)
 TEST_F(PathAliasTest, MovedPathCachesFailedCloseWithoutClosingReusedDescriptor)
 {
     const ResolverLimits limits{{4096, 128, 200000, 64, 262144, 4096}, 128, 2, 128};
-    auto opened = Path::AcquireRoot(context, "/", RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto opened = SelectAcceptedPath(context, "/", {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     int reused = -1;
@@ -1816,7 +2063,7 @@ TEST_F(PathAliasTest, ActivationErrorRemainsPrimaryWhenCheckedCleanupFails)
 {
     const std::string source = context.MakeTempfile("contents");
     const ResolverLimits limits{{4096, 128, 200000, 128, 262144, 4096}, 128, 2, 128};
-    auto opened = Path::AcquireRoot(context, source, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits, true);
+    auto opened = SelectAcceptedPath(context, source, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     const std::size_t pins = path.RetainedDescriptors();
@@ -1858,8 +2105,8 @@ TEST_F(PathAliasTest, ActivationErrorRemainsPrimaryWhenCheckedCleanupFails)
 TEST_F(PathAliasTest, MoveAssignmentTransfersFailedCloseAndReleasesReplacedPins)
 {
     const ResolverLimits limits{{4096, 128, 200000, 64, 262144, 4096}, 128, 2, 128};
-    auto first = Path::AcquireRoot(context, "/", RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
-    auto second = Path::AcquireRoot(context, "/", RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto first = SelectAcceptedPath(context, "/", {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
+    auto second = SelectAcceptedPath(context, "/", {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(first.HasValue());
     ASSERT_TRUE(second.HasValue());
     const std::size_t before = CountOpenDescriptors();
@@ -1884,7 +2131,7 @@ TEST_F(PathAliasTest, MoveAssignmentTransfersFailedCloseAndReleasesReplacedPins)
 TEST_F(PathAliasTest, ThrowingCloseIsAttemptedOnlyOnceAndOtherPinsStillRelease)
 {
     const ResolverLimits limits{{4096, 128, 200000, 128, 262144, 4096}, 128, 2, 128};
-    auto opened = Path::AcquireRoot(context, context.GetTempdirPath(), RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     const std::size_t pins = path.RetainedDescriptors();
@@ -1914,10 +2161,10 @@ TEST_F(PathAliasTest, FreshMetadataAndModeStayOnUnlinkedUnreadablePin)
     const std::string file = context.MakeTempfile("contents");
     ASSERT_EQ(0, ::rename(file.c_str(), (rootPath + "/target").c_str()));
     const ResolverLimits limits{{4096, 128, 200000, 128, 262144, 4096}, 128, 2, 128};
-    const ExtensionPolicy strict{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy strict{SymlinkPolicy::DoNotFollow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
     const std::size_t before = CountOpenDescriptors();
     {
-        auto acquired = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+        auto acquired = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
         ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
         Path path = std::move(acquired).Value();
         ASSERT_TRUE(path.Push("target", strict).HasValue());
@@ -1966,11 +2213,11 @@ TEST_F(PathAliasTest, DetachedOwnershipUsesPinWithoutChangingHostAccounts)
     const std::string file = context.MakeTempfile("contents");
     ASSERT_EQ(0, ::rename(file.c_str(), (rootPath + "/target").c_str()));
     const ResolverLimits limits{{4096, 128, 200000, 128, 262144, 4096}, 128, 2, 128};
-    const ExtensionPolicy strict{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy strict{SymlinkPolicy::DoNotFollow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
     const std::size_t before = CountOpenDescriptors();
     {
         auto detached = [&]() -> ComplianceEngine::Result<Handle> {
-            auto acquired = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+            auto acquired = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
             if (!acquired.HasValue())
             {
                 return std::move(acquired).Error();
@@ -2014,7 +2261,7 @@ TEST_F(PathAliasTest, DetachedDirectoryModeDoesNotChangeReplacementRoot)
     const std::size_t before = CountOpenDescriptors();
     {
         auto detached = [&]() -> ComplianceEngine::Result<Handle> {
-            auto acquired = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+            auto acquired = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
             if (!acquired.HasValue())
             {
                 return std::move(acquired).Error();
@@ -2045,10 +2292,10 @@ TEST_F(PathAliasTest, MetadataPreflightFailureMakesNoChangeAndPostcheckReportsPa
     const std::string component = file.substr(file.find_last_of('/') + 1);
     const std::size_t before = CountOpenDescriptors();
     {
-        auto opened = Path::AcquireRoot(context, context.GetTempdirPath(), RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+        auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
         ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
         Path path = std::move(opened).Value();
-        ASSERT_TRUE(path.Push(component, ExtensionPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit}).HasValue());
+        ASSERT_TRUE(path.Push(component, ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit}).HasValue());
         const Handle& pinned = path.Leaf();
         ASSERT_EQ(0, ::chmod(file.c_str(), 0600));
         auto shortInfo = pinned.SetMode(0400, 1);
@@ -2113,10 +2360,10 @@ TEST_F(PathAliasTest, DeniedOwnershipAndModeSyscallsLeaveHeldAndReplacementObjec
     ASSERT_EQ(0, ::rename(file.c_str(), (rootPath + "/target").c_str()));
     ASSERT_EQ(0, ::chmod((rootPath + "/target").c_str(), 0600));
     const ResolverLimits limits{{4096, 128, 200000, 128, 262144, 4096}, 128, 2, 128};
-    const ExtensionPolicy strict{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy strict{SymlinkPolicy::DoNotFollow, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
     const std::size_t before = CountOpenDescriptors();
     {
-        auto acquired = Path::AcquireRoot(context, rootPath, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+        auto acquired = SelectAcceptedPath(context, rootPath, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
         ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
         Path path = std::move(acquired).Value();
         ASSERT_TRUE(path.Push("target", strict).HasValue());
@@ -2188,7 +2435,7 @@ TEST_F(PathAliasTest, InspectionFailureClosesAcquiredDescriptorWithoutHidingPrim
 {
     const std::string source = context.MakeTempfile("contents");
     const std::string component = source.substr(source.find_last_of('/') + 1);
-    auto opened = Path::AcquireRoot(context, context.GetTempdirPath(), RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     struct stat target = {};
@@ -2202,7 +2449,7 @@ TEST_F(PathAliasTest, InspectionFailureClosesAcquiredDescriptorWithoutHidingPrim
         }
         return context.ContextInterface::StatFileDescriptor(descriptor, metadata);
     });
-    const auto failed = path.Push(component, ExtensionPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
+    const auto failed = path.Push(component, ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
     ASSERT_FALSE(failed.HasValue());
     EXPECT_EQ(EIO, failed.Error().code);
     EXPECT_EQ(before, CountOpenDescriptors());
@@ -2287,13 +2534,25 @@ TEST_F(PathAliasTest, ActivationHandsOffOwnerWithoutRetryingFailedClose)
 
 TEST_F(PathAliasTest, UnsupportedTypesAndInvalidNamesDoNotActivate)
 {
-    auto opened = Path::AcquireRoot(context, context.GetTempdirPath(), RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, AmpleLimits());
+    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
-    const ExtensionPolicy strict{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
+    const ExtensionPolicy strict{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
     const std::size_t before = CountOpenDescriptors();
+    const ino_t root = path.Leaf().Stat().st_ino;
     const std::string special = context.GetTempdirPath() + "/special";
     ASSERT_EQ(0, ::mkfifo(special.c_str(), 0600));
+    bool sawSpecial = false, sawLink = false;
+    EXPECT_CALL(context, OpenNativeAt(_, _, _)).WillRepeatedly([&](int directory, const char* name, int flags) {
+        if (std::string(name) == "special" || std::string(name) == "special.link")
+        {
+            EXPECT_NE(0, flags & O_PATH);
+            EXPECT_NE(0, flags & O_NOFOLLOW);
+            sawSpecial |= std::string(name) == "special";
+            sawLink |= std::string(name) == "special.link";
+        }
+        return context.ContextInterface::OpenNativeAt(directory, name, flags);
+    });
     const auto fifo = path.Push("special", strict);
     ASSERT_FALSE(fifo.HasValue());
     EXPECT_EQ(EOPNOTSUPP, fifo.Error().code);
@@ -2307,7 +2566,106 @@ TEST_F(PathAliasTest, UnsupportedTypesAndInvalidNamesDoNotActivate)
     const auto link = path.Push("special.link", strict);
     ASSERT_FALSE(link.HasValue());
     EXPECT_EQ(ELOOP, link.Error().code);
+    auto followedUnsupported = path.Push("special.link", ExtensionPolicy{SymlinkPolicy::Follow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
+    ASSERT_FALSE(followedUnsupported.HasValue());
+    EXPECT_EQ(EOPNOTSUPP, followedUnsupported.Error().code);
+    ExtensionPolicy skip{SymlinkPolicy::Follow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit, UnsupportedTypeAction::Skip};
+    EXPECT_EQ(Path::PushOutcome::SkippedUnsupported, path.Push("special", skip).Value());
+    EXPECT_EQ(1U, path.Size());
+    EXPECT_EQ(root, path.Leaf().Stat().st_ino);
+    auto skippedLinkTarget = path.Push("special.link", skip);
+    ASSERT_TRUE(skippedLinkTarget.HasValue()) << skippedLinkTarget.Error().message;
+    EXPECT_EQ(Path::PushOutcome::SkippedUnsupported, skippedLinkTarget.Value());
+    EXPECT_EQ(1U, path.Size());
+    EXPECT_EQ(root, path.Leaf().Stat().st_ino);
+    EXPECT_EQ(Handle::Type::Directory, path.Leaf().AcquiredType());
+    EXPECT_TRUE(sawSpecial);
+    EXPECT_TRUE(sawLink);
     EXPECT_EQ(before, CountOpenDescriptors());
+    auto rootSpecial = Path::Make(context, special, {SymlinkPolicy::Follow, MountPolicy::AllowCrossing}, AmpleLimits());
+    ASSERT_FALSE(rootSpecial.HasValue());
+    EXPECT_EQ(EOPNOTSUPP, rootSpecial.Error().code);
+    ASSERT_EQ(0, ::symlink("missing-special", (special + ".broken").c_str()));
+    auto missing = path.Push("special.broken", skip);
+    ASSERT_FALSE(missing.HasValue());
+    EXPECT_EQ(ENOENT, missing.Error().code);
+    EXPECT_EQ(1U, path.Size());
+    EXPECT_EQ(before, CountOpenDescriptors());
+}
+
+TEST_F(PathAliasTest, UnsupportedSkipCloseFailureOverridesSkipAndPreservesRoot)
+{
+    const std::string special = context.GetTempdirPath() + "/special-close";
+    ASSERT_EQ(0, ::mkfifo(special.c_str(), 0600));
+    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+    const ino_t root = path.Leaf().Stat().st_ino;
+    int specialPin = -1;
+    EXPECT_CALL(context, OpenNativeAt(_, _, _)).WillRepeatedly([&](int directory, const char* name, int flags) {
+        if (std::string(name) == "special-close")
+        {
+            EXPECT_NE(0, flags & O_PATH);
+        }
+        const int descriptor = context.ContextInterface::OpenNativeAt(directory, name, flags);
+        if (std::string(name) == "special-close")
+            specialPin = descriptor;
+        return descriptor;
+    });
+    bool failed = false;
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) {
+        const int status = ::close(descriptor);
+        if (descriptor == specialPin && !failed)
+        {
+            failed = true;
+            errno = EIO;
+            return -1;
+        }
+        return status;
+    });
+    ExtensionPolicy skip{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit, UnsupportedTypeAction::Skip};
+    auto result = path.Push("special-close", skip);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EIO, result.Error().code);
+    EXPECT_TRUE(failed);
+    EXPECT_EQ(1U, path.Size());
+    EXPECT_EQ(root, path.Leaf().Stat().st_ino);
+    EXPECT_TRUE(path.Close().HasValue());
+}
+
+TEST_F(PathAliasTest, UnsupportedLinkTargetSkipChecksHiddenDirectoryClose)
+{
+    const std::string directory = context.GetTempdirPath() + "/hidden-special";
+    ASSERT_EQ(0, ::mkdir(directory.c_str(), 0700));
+    ASSERT_EQ(0, ::mkfifo((directory + "/fifo").c_str(), 0600));
+    ASSERT_EQ(0, ::symlink("hidden-special/fifo", (context.GetTempdirPath() + "/shortcut").c_str()));
+    struct stat hidden = {};
+    ASSERT_EQ(0, ::stat(directory.c_str(), &hidden));
+    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+    const ino_t root = path.Leaf().Stat().st_ino;
+    bool failed = false;
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) {
+        struct stat held = {};
+        const bool hiddenPin = ::fstat(descriptor, &held) == 0 && held.st_dev == hidden.st_dev && held.st_ino == hidden.st_ino;
+        const int status = ::close(descriptor);
+        if (hiddenPin && !failed)
+        {
+            failed = true;
+            errno = EACCES;
+            return -1;
+        }
+        return status;
+    });
+    ExtensionPolicy skip{SymlinkPolicy::Follow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit, UnsupportedTypeAction::Skip};
+    auto result = path.Push("shortcut", skip);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EACCES, result.Error().code);
+    EXPECT_TRUE(failed);
+    EXPECT_EQ(1U, path.Size());
+    EXPECT_EQ(root, path.Leaf().Stat().st_ino);
+    EXPECT_TRUE(path.Close().HasValue());
 }
 
 TEST_F(PathAliasTest, FdinfoCapFailsClosedAndCleansUp)
@@ -2430,15 +2788,15 @@ TEST_F(PathAliasTest, AcceptedRootRecognitionUsesHeldIdentityNotCandidateName)
     const ResolverLimits limits = AmpleLimits();
     const std::size_t before = CountOpenDescriptors();
     {
-        auto accepted = Path::AcquireRoot(context, rootName, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
-        auto matching = Path::AcquireRoot(context, rootName, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+        auto accepted = SelectAcceptedPath(context, rootName, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
+        auto matching = SelectAcceptedPath(context, rootName, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
         ASSERT_TRUE(accepted.HasValue());
         ASSERT_TRUE(matching.HasValue());
         EXPECT_EQ(accepted.Value().Root().Stat().st_ino, matching.Value().Root().Stat().st_ino);
 
         ASSERT_EQ(0, ::rename(rootName.c_str(), (rootName + ".former").c_str()));
         ASSERT_EQ(0, ::mkdir(rootName.c_str(), 0700));
-        auto replacement = Path::AcquireRoot(context, rootName, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+        auto replacement = SelectAcceptedPath(context, rootName, {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
         ASSERT_TRUE(replacement.HasValue());
         EXPECT_NE(accepted.Value().Root().Stat().st_ino, replacement.Value().Root().Stat().st_ino);
         EXPECT_EQ(accepted.Value().Root().Stat().st_ino, matching.Value().Root().Stat().st_ino);

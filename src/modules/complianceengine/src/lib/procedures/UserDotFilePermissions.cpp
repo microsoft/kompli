@@ -31,7 +31,7 @@ using Filesystem::FilesystemDirection;
 using Filesystem::FilesystemRootKind;
 using Filesystem::FilesystemScope;
 using Filesystem::FilesystemYieldType;
-using Filesystem::SymlinkFollowing;
+using Filesystem::SymlinkPolicy;
 
 FilesystemCollectionRequest DotfilePolicy(const string& home)
 {
@@ -40,10 +40,10 @@ FilesystemCollectionRequest DotfilePolicy(const string& home)
     policy.maxDepth = 32;
     policy.depthAction = FilesystemDepthAction::Error;
     policy.scope = FilesystemScope::All;
-    policy.rootFileLinkAction = SymlinkFollowing::Follow;
-    policy.rootDirectoryLinkAction = SymlinkFollowing::Follow;
-    policy.childFileLinkAction = SymlinkFollowing::DoNotFollow;
-    policy.childDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
+    policy.rootFileLinkAction = SymlinkPolicy::Follow;
+    policy.rootDirectoryLinkAction = SymlinkPolicy::Follow;
+    policy.childFileLinkAction = SymlinkPolicy::DoNotFollow;
+    policy.childDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
     policy.yieldType = FilesystemYieldType::RegularFiles;
     return policy;
 }

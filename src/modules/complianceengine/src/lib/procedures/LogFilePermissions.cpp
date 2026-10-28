@@ -29,7 +29,7 @@ using Filesystem::FilesystemMissingChildAction;
 using Filesystem::FilesystemRootKind;
 using Filesystem::FilesystemScope;
 using Filesystem::FilesystemYieldType;
-using Filesystem::SymlinkFollowing;
+using Filesystem::SymlinkPolicy;
 
 // Global map of fnmatch patterns to file permission arguments
 // Pattern -> {args}
@@ -207,10 +207,10 @@ Result<Status> WalkLogfiles(const std::string& path, const DaemonUidSet& daemonU
     policy.maxDepth = 32;
     policy.depthAction = FilesystemDepthAction::Error;
     policy.scope = FilesystemScope::All;
-    policy.rootFileLinkAction = SymlinkFollowing::Follow;
-    policy.rootDirectoryLinkAction = SymlinkFollowing::Follow;
-    policy.childFileLinkAction = SymlinkFollowing::DoNotFollow;
-    policy.childDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
+    policy.rootFileLinkAction = SymlinkPolicy::Follow;
+    policy.rootDirectoryLinkAction = SymlinkPolicy::Follow;
+    policy.childFileLinkAction = SymlinkPolicy::DoNotFollow;
+    policy.childDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
     policy.yieldType = FilesystemYieldType::RegularFiles;
     policy.missingChildAction = FilesystemMissingChildAction::ReportRegularFile;
 

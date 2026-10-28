@@ -45,7 +45,7 @@ public:
     struct Policy
     {
         // Applies to every path component; DoNotFollow rejects any link with ELOOP.
-        SymlinkFollowing symlinks = SymlinkFollowing::Follow;
+        SymlinkPolicy symlinks = SymlinkPolicy::Follow;
         Limits limits;
     };
 
@@ -110,6 +110,14 @@ public:
     ComplianceEngine::Result<bool> Close();
 
 private:
+    enum class State
+    {
+        Ready,
+        Reading,
+        Finished,
+        Closed
+    };
+
     LinesRange(ReadableFile&& data, Policy policy, const struct stat& before) noexcept;
     ComplianceEngine::Result<ComplianceEngine::Optional<std::string>> Next();
     ComplianceEngine::Result<bool> Refill();
@@ -120,11 +128,8 @@ private:
     struct stat mBefore = {};
     std::string mBuffer;
     std::size_t mPosition = 0, mConsumed = 0;
-    std::size_t mInterruptRetriesRemaining;
     std::string mPending;
-    bool mFinished = false;
-    bool mClosed = false;
-    bool mStarted = false;
+    State mState = State::Ready;
 };
 } // namespace Filesystem
 } // namespace ComplianceEngine

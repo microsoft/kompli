@@ -67,8 +67,8 @@ struct FilesystemCollectionLimits
     std::size_t fullPathBytes = 4096;
     // Collection-owned observation path strings retained in pending/result
     // entries, traversal frames and exclusions (including their NUL bytes).
-    // Not a total-memory limit: the resolver separately applies its broader
-    // retainedBytes accounting using this value; the request root, yielded
+    // Not a total-memory limit: the resolver separately reserves bounded
+    // internal acquisition pins; the request root, yielded
     // caller-owned entries, objects, metadata and allocator capacity are not
     // charged to the collection's observation-path counter.
     std::size_t retainedPathBytes = 32 * 1024 * 1024;
@@ -97,12 +97,13 @@ struct FilesystemCollectionRequest
     FilesystemDirection direction = FilesystemDirection::None;
     int maxDepth = 32;
     // DoNotFollow excludes links with their path and reason; Follow uses target metadata.
-    SymlinkFollowing rootFileLinkAction = SymlinkFollowing::DoNotFollow;
-    SymlinkFollowing rootDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
-    SymlinkFollowing childFileLinkAction = SymlinkFollowing::DoNotFollow;
-    SymlinkFollowing childDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
+    SymlinkPolicy rootFileLinkAction = SymlinkPolicy::DoNotFollow;
+    SymlinkPolicy rootDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
+    SymlinkPolicy childFileLinkAction = SymlinkPolicy::DoNotFollow;
+    SymlinkPolicy childDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
     FilesystemScope scope = FilesystemScope::RootDevice;
     FilesystemYieldType yieldType = FilesystemYieldType::All;
+    UnsupportedTypeAction unsupported = UnsupportedTypeAction::Reject;
     FilesystemDepthAction depthAction = FilesystemDepthAction::Stop;
     // A vanished name hinted DT_REG by the pinned directory enumeration may
     // be reported without metadata or a handle. DT_UNKNOWN still fails.
@@ -121,12 +122,13 @@ struct ResolvedFilesystemCollectionRequest
     FilesystemRootKind rootKind = FilesystemRootKind::File;
     FilesystemDirection direction = FilesystemDirection::None;
     int maxDepth = 32;
-    SymlinkFollowing rootFileLinkAction = SymlinkFollowing::DoNotFollow;
-    SymlinkFollowing rootDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
-    SymlinkFollowing childFileLinkAction = SymlinkFollowing::DoNotFollow;
-    SymlinkFollowing childDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
+    SymlinkPolicy rootFileLinkAction = SymlinkPolicy::DoNotFollow;
+    SymlinkPolicy rootDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
+    SymlinkPolicy childFileLinkAction = SymlinkPolicy::DoNotFollow;
+    SymlinkPolicy childDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
     FilesystemScope scope = FilesystemScope::RootDevice;
     FilesystemYieldType yieldType = FilesystemYieldType::All;
+    UnsupportedTypeAction unsupported = UnsupportedTypeAction::Reject;
     FilesystemDepthAction depthAction = FilesystemDepthAction::Stop;
     FilesystemMissingChildAction missingChildAction = FilesystemMissingChildAction::Error;
     FilesystemCollectionLimits limits;

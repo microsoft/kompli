@@ -95,9 +95,9 @@ Result<bool> Validate(const ResolvedFilesystemCollectionRequest& request)
     {
         return Error("Filesystem collection maximum depth must be -1 or nonnegative", EINVAL);
     }
-    for (SymlinkFollowing action : {request.rootFileLinkAction, request.rootDirectoryLinkAction, request.childFileLinkAction, request.childDirectoryLinkAction})
+    for (SymlinkPolicy action : {request.rootFileLinkAction, request.rootDirectoryLinkAction, request.childFileLinkAction, request.childDirectoryLinkAction})
     {
-        if ((SymlinkFollowing::Follow != action) && (SymlinkFollowing::DoNotFollow != action))
+        if ((SymlinkPolicy::Follow != action) && (SymlinkPolicy::DoNotFollow != action))
         {
             return Error("Invalid filesystem symlink following policy", EINVAL);
         }
@@ -114,6 +114,10 @@ Result<bool> Validate(const ResolvedFilesystemCollectionRequest& request)
         (FilesystemYieldType::Directories != request.yieldType) && (FilesystemYieldType::SymbolicLinks != request.yieldType))
     {
         return Error("Invalid filesystem yield type", EINVAL);
+    }
+    if (request.unsupported != UnsupportedTypeAction::Reject && request.unsupported != UnsupportedTypeAction::Skip)
+    {
+        return Error("Invalid unsupported filesystem type action", EINVAL);
     }
     if ((FilesystemDepthAction::Stop != request.depthAction) && (FilesystemDepthAction::Error != request.depthAction))
     {
@@ -214,6 +218,7 @@ Result<ResolvedFilesystemCollectionRequest> ResolveFilesystemCollectionRequest(c
         resolved.childDirectoryLinkAction = request.childDirectoryLinkAction;
         resolved.scope = request.scope;
         resolved.yieldType = request.yieldType;
+        resolved.unsupported = request.unsupported;
         resolved.depthAction = request.depthAction;
         resolved.missingChildAction = request.missingChildAction;
         auto limit = Limit(request.operationalDescent, "operational descent limit");
@@ -362,73 +367,48 @@ struct FileRange::State
         // independently of the collection's one-per-entry work budget.
         const std::size_t work = limits.entryWork > (std::numeric_limits<std::size_t>::max() - 32768) / 512 ? std::numeric_limits<std::size_t>::max() :
                                                                                                               limits.entryWork * 512 + 32768;
-        return {{limits.fullPathBytes, limits.operationalDescent + components + 1, work, limits.openDirectories + components + 8,
-                    limits.retainedPathBytes, limits.fullPathBytes},
+        // A tiny collection-owned path-string cap must not prevent Path from
+        // pinning a root link before the collector can charge its exclusion.
+        // Keep internal pin accounting separate, explicit and bounded.
+        const std::size_t max = std::numeric_limits<std::size_t>::max();
+        const std::size_t perPrefix = 8 * sizeof(Handle);
+        const std::size_t overhead = components > (max - 65536) / perPrefix ? max : 65536 + components * perPrefix;
+        const std::size_t minimum = request.rootPath.size() > max - overhead ? max : overhead + request.rootPath.size();
+        const std::size_t resolverBytes = std::max(limits.retainedPathBytes, minimum);
+        return {{limits.fullPathBytes, limits.operationalDescent + components + 1, work, limits.openDirectories + components + 8, resolverBytes, limits.fullPathBytes},
             limits.fullPathBytes, limits.entryWork, limits.operationalDescent + components + 1};
     }
 
     Result<bool> Initialize()
     {
         const std::string& rootName = request.rootPath;
-        // This lookup classifies an explicitly selected root. Once acquired,
-        // no pathname is used for descent or for subsequent operations.
-        struct stat link = {};
-        if (0 != context.LstatPath(rootName.c_str(), &link))
-        {
-            if (ENOENT == errno)
-            {
-                rootExists = false;
-                return true;
-            }
-            return OperationError("lstat", rootName, errno);
-        }
-        struct stat target = link;
-        bool followed = false;
-        if (S_ISLNK(link.st_mode))
-        {
-            const auto fileAction = request.rootFileLinkAction;
-            const auto dirAction = request.rootDirectoryLinkAction;
-            if ((fileAction != dirAction) || (SymlinkFollowing::Follow == fileAction))
-            {
-                if (0 != context.StatPath(rootName.c_str(), &target))
-                {
-                    return OperationError("stat link target", rootName, errno);
-                }
-                if (!S_ISREG(target.st_mode) && !S_ISDIR(target.st_mode))
-                {
-                    return Error("Cannot classify link target as file or directory at '" + rootName + "'", EINVAL);
-                }
-            }
-            const auto action = S_ISDIR(target.st_mode) ? dirAction : fileAction;
-            if (SymlinkFollowing::DoNotFollow == action)
-            {
-                return Exclude(rootName, "link policy");
-            }
-            followed = true;
-        }
-        if ((FilesystemRootKind::Directory == request.rootKind) && !S_ISDIR(target.st_mode))
-        {
-            return Error("Expected directory root at '" + rootName + "'", ENOTDIR);
-        }
-        if ((FilesystemRootKind::File == request.rootKind) && !S_ISREG(target.st_mode))
-        {
-            return Error("Expected file root at '" + rootName + "'", EISDIR);
-        }
-        const Filesystem::RootPolicy rootPolicy{
-            followed || (SymlinkFollowing::Follow == request.rootDirectoryLinkAction && FilesystemRootKind::Directory == request.rootKind) ?
-                Filesystem::SymlinkPolicy::FollowWithinRoot :
-                Filesystem::SymlinkPolicy::Reject,
-            Filesystem::MountPolicy::AllowCrossing};
-        auto acquired = Filesystem::Path::AcquireRoot(context, rootName, rootPolicy, ResolverBudget(), FilesystemRootKind::File == request.rootKind);
+        const bool followRootLinks = request.rootFileLinkAction == SymlinkPolicy::Follow || request.rootDirectoryLinkAction == SymlinkPolicy::Follow;
+        Path::Policy rootPolicy(followRootLinks ? SymlinkPolicy::Follow : SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing);
+        rootPolicy.fileLinks = request.rootFileLinkAction;
+        rootPolicy.directoryLinks = request.rootDirectoryLinkAction;
+        rootPolicy.nonFollowedLinks = NonFollowedLinkAction::Skip;
+        auto acquired = Path::Make(context, rootName, rootPolicy, ResolverBudget());
         if (!acquired.HasValue())
         {
             return std::move(acquired).Error();
         }
-        path.reset(new Filesystem::Path(std::move(acquired).Value()));
-        if (!S_ISLNK(link.st_mode) && ((link.st_dev != path->Root().Stat().st_dev) || (link.st_ino != path->Root().Stat().st_ino) ||
-                                          ((link.st_mode & S_IFMT) != (path->Root().Stat().st_mode & S_IFMT))))
+        if (acquired.Value().GetStatus() == Path::Result::Status::Missing)
         {
-            return Error("Filesystem root changed during acquisition at '" + rootName + "'", ESTALE);
+            rootExists = false;
+            return true;
+        }
+        if (acquired.Value().GetStatus() == Path::Result::Status::Excluded)
+        {
+            return Exclude(rootName, "link policy");
+        }
+        path.reset(new Path(std::move(acquired.Value()).TakePath()));
+        if ((FilesystemRootKind::Directory == request.rootKind) && (path->Root().AcquiredType() != Handle::Type::Directory))
+        {
+            return Error("Expected directory root at '" + rootName + "'", ENOTDIR);
+        }
+        if ((FilesystemRootKind::File == request.rootKind) && (path->Root().AcquiredType() != Handle::Type::RegularFile))
+        {
+            return Error("Expected file root at '" + rootName + "'", EISDIR);
         }
         auto rootMount = path->Root().MountIdentity(request.limits.fullPathBytes);
         if (!rootMount.HasValue())
@@ -438,17 +418,11 @@ struct FileRange::State
         baseline = rootMount.Value();
         FilesystemCollectionEntry entry;
         entry.path = rootName;
-        entry.linkMetadata = link;
-        if (followed)
+        const auto metadata = path->LeafMetadata();
+        entry.linkMetadata = metadata.initialLink.HasValue() ? metadata.initialLink.Value() : metadata.accepted;
+        if (metadata.initialLink.HasValue())
         {
-            const auto pinnedLink = path->LeafLinkMetadata();
-            if (!pinnedLink.HasValue() || (link.st_dev != pinnedLink.Value().st_dev) || (link.st_ino != pinnedLink.Value().st_ino) ||
-                ((link.st_mode & S_IFMT) != (pinnedLink.Value().st_mode & S_IFMT)))
-            {
-                return Error("Filesystem root link changed during acquisition at '" + rootName + "'", ESTALE);
-            }
-            entry.linkMetadata = pinnedLink.Value();
-            entry.targetMetadata = path->Leaf().Stat();
+            entry.targetMetadata = metadata.accepted;
         }
         if (FilesystemRootKind::File == request.rootKind)
         {
@@ -495,11 +469,13 @@ struct FileRange::State
         return Offer(std::move(missing));
     }
 
-    Result<bool> PushChild(const Filesystem::DirectoryChild& child, FilesystemCollectionEntry& entry, bool follow)
+    Result<bool> PushChild(const Filesystem::DirectoryChild& child, FilesystemCollectionEntry& entry)
     {
-        const auto extension = Filesystem::ExtensionPolicy{follow ? Filesystem::SymlinkPolicy::FollowWithinRoot : Filesystem::SymlinkPolicy::Reject,
-            (FilesystemScope::All == request.scope) ? Filesystem::MountPolicy::AllowCrossing : Filesystem::MountPolicy::StayOnRootMount,
-            Filesystem::HardlinkPolicy::Permit};
+        ExtensionPolicy extension{SymlinkPolicy::Follow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit, request.unsupported};
+        extension.fileLinks = request.childFileLinkAction;
+        extension.directoryLinks = request.childDirectoryLinkAction;
+        extension.nonFollowedLinks = NonFollowedLinkAction::Skip;
+        extension.reportMissingRegularFile = request.missingChildAction == FilesystemMissingChildAction::ReportRegularFile && child.type == DT_REG;
         const std::size_t live = path->RetainedDescriptors() + frames.size();
         const std::size_t cap = ResolverBudget().shared.liveDescriptors;
         if ((live > cap) || (cap - live < 7))
@@ -509,45 +485,35 @@ struct FileRange::State
         auto pushed = path->Push(child.name, extension);
         if (!pushed.HasValue())
         {
-            // Only a failed direct child open is a missing-name observation.
-            // ENOENT from trusted procfs, an absolute link, or any other
-            // resolution step must remain a factory/continuation error.
-            if (!follow && (ENOENT == pushed.Error().code) && ("Cannot pin confined component" == pushed.Error().message))
-            {
-                return MissingChild(child, entry.path);
-            }
-            if ((EXDEV == pushed.Error().code) && ("Component crosses accepted root mount" == pushed.Error().message))
-            {
-                return Exclude(entry.path, "filesystem scope");
-            }
             return std::move(pushed).Error();
         }
-        const auto& handle = path->Leaf();
-        if (S_ISLNK(entry.linkMetadata.st_mode))
+        if (pushed.Value() == Path::PushOutcome::Missing)
         {
-            const auto pinnedLink = path->LeafLinkMetadata();
-            if (!pinnedLink.HasValue() || (entry.linkMetadata.st_dev != pinnedLink.Value().st_dev) ||
-                (entry.linkMetadata.st_ino != pinnedLink.Value().st_ino) || ((entry.linkMetadata.st_mode & S_IFMT) != (pinnedLink.Value().st_mode & S_IFMT)))
-            {
-                return Error("Filesystem child link changed during acquisition at '" + entry.path + "'", ESTALE);
-            }
-            entry.linkMetadata = pinnedLink.Value();
-            entry.targetMetadata = handle.Stat();
-            const auto selected = (Filesystem::Handle::Type::Directory == handle.AcquiredType()) ? request.childDirectoryLinkAction : request.childFileLinkAction;
-            if (SymlinkFollowing::DoNotFollow == selected)
-            {
-                auto dropped = path->Pop();
-                if (!dropped.HasValue())
-                {
-                    return std::move(dropped).Error();
-                }
-                return Exclude(entry.path, "link policy");
-            }
+            return MissingChild(child, entry.path);
         }
-        else if ((entry.linkMetadata.st_dev != handle.Stat().st_dev) || (entry.linkMetadata.st_ino != handle.Stat().st_ino) ||
-                 ((entry.linkMetadata.st_mode & S_IFMT) != (handle.Stat().st_mode & S_IFMT)))
+        if (pushed.Value() == Path::PushOutcome::SkippedUnsupported)
         {
-            return Error("Filesystem child changed during acquisition at '" + entry.path + "'", ESTALE);
+            return Exclude(entry.path, "unsupported type");
+        }
+        if (pushed.Value() == Path::PushOutcome::SkippedLink)
+        {
+            return Exclude(entry.path, "link policy");
+        }
+        const auto& handle = path->Leaf();
+        const auto metadata = path->LeafMetadata();
+        entry.linkMetadata = metadata.initialLink.HasValue() ? metadata.initialLink.Value() : metadata.accepted;
+        if (metadata.initialLink.HasValue())
+        {
+            entry.targetMetadata = metadata.accepted;
+        }
+        if ((FilesystemScope::All != request.scope) && (baseline != metadata.mountId))
+        {
+            auto dropped = path->Pop();
+            if (!dropped.HasValue())
+            {
+                return std::move(dropped).Error();
+            }
+            return Exclude(entry.path, "filesystem scope");
         }
         auto mount = handle.MountIdentity(request.limits.fullPathBytes);
         if (!mount.HasValue())
@@ -632,45 +598,9 @@ struct FileRange::State
         {
             return Error("Filesystem path exceeds full path budget at '" + full + "'", ENAMETOOLONG);
         }
-        auto observed = path->ObserveChild(child.name, request.limits.fullPathBytes);
-        if (!observed.HasValue())
-        {
-            return std::move(observed).Error();
-        }
-        if (!observed.Value().HasValue())
-        {
-            return MissingChild(child, full);
-        }
         FilesystemCollectionEntry entry;
         entry.path = full;
-        entry.linkMetadata = observed.Value().Value().metadata;
-        if (S_ISLNK(entry.linkMetadata.st_mode))
-        {
-            const auto fileAction = request.childFileLinkAction;
-            const auto dirAction = request.childDirectoryLinkAction;
-            if ((fileAction == dirAction) && (SymlinkFollowing::DoNotFollow == fileAction))
-            {
-                return Exclude(full, "link policy");
-            }
-            if ((FilesystemScope::All != request.scope) && (baseline != observed.Value().Value().mountId))
-            {
-                return Exclude(full, "filesystem scope");
-            }
-            // Classification of a selected link is performed by confined
-            // acquisition, not an unrestricted stat of the spelled name.
-            return PushChild(child, entry, true);
-        }
-        if ((FilesystemScope::All != request.scope) && (baseline != observed.Value().Value().mountId))
-        {
-            return Exclude(full, "filesystem scope");
-        }
-        if (!S_ISDIR(entry.linkMetadata.st_mode) && !S_ISREG(entry.linkMetadata.st_mode))
-        {
-            // Special files have no supported operational Handle. They may
-            // be observed as metadata but never activated through this API.
-            return Offer(std::move(entry));
-        }
-        return PushChild(child, entry, false);
+        return PushChild(child, entry);
     }
 
     Result<Optional<FilesystemCollectionEntry>> Pull()

@@ -30,13 +30,6 @@ struct VerifiedProcfs
 };
 Result<std::uint64_t> MountId(const ContextInterface& context, int fdinfoDirectory, int descriptor, std::size_t byteCap);
 
-// Keep popped handles charged to their originating Path while any pin lives.
-struct DetachedResources
-{
-    std::size_t descriptors = 0;
-    std::size_t bytes = 0;
-};
-
 // A strict child component, not a pathname. Root resolution and any
 // whole-path parsing belong to the separately authorized acquisition layer.
 bool IsSingleChildComponent(const std::string& component) noexcept;
@@ -112,6 +105,10 @@ private:
     const Handle* mForwardedLeaf = nullptr;
     std::size_t mAccountedBytes = 0;
     Optional<struct stat> mInitialLinkMetadata;
+    std::uint64_t mInitialMountId = 0;
+    bool mUnsupportedLeaf = false;
+    bool mMissingLeaf = false;
+    bool mExcludedLink = false;
 };
 
 } // namespace Detail

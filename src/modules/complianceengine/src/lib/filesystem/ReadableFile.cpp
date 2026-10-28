@@ -14,12 +14,13 @@ namespace ComplianceEngine
 namespace Filesystem
 {
 using std::string;
-ReadableFile::ReadableFile(Detail::Descriptor&& descriptor) noexcept
-    : mDescriptor(std::move(descriptor))
+ReadableFile::ReadableFile(Detail::Descriptor&& descriptor, Policy policy) noexcept
+    : mDescriptor(std::move(descriptor)),
+      mInterruptRetriesRemaining(policy.maxInterruptedReads)
 {
 }
 
-Result<Optional<string>> ReadableFile::Read(std::size_t maxBytes, std::size_t& remainingInterruptRetries)
+Result<Optional<string>> ReadableFile::Read(std::size_t maxBytes)
 {
     if (!mDescriptor.HasValue())
     {
@@ -55,12 +56,12 @@ Result<Optional<string>> ReadableFile::Read(std::size_t maxBytes, std::size_t& r
         if (bytes < 0)
         {
             const int error = Detail::SavedError();
-            if ((error != EINTR) || (remainingInterruptRetries == 0))
+            if ((error != EINTR) || (mInterruptRetriesRemaining == 0))
             {
                 return Error("Cannot read acquired file", error);
             }
 
-            --remainingInterruptRetries;
+            --mInterruptRetriesRemaining;
             continue;
         }
 
