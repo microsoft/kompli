@@ -414,8 +414,8 @@ struct FileRange::State
             return std::move(acquired).Error();
         }
         path.reset(new Filesystem::Path(std::move(acquired).Value()));
-        if (!S_ISLNK(link.st_mode) && ((link.st_dev != path->Root().Snapshot().st_dev) || (link.st_ino != path->Root().Snapshot().st_ino) ||
-                                          ((link.st_mode & S_IFMT) != (path->Root().Snapshot().st_mode & S_IFMT))))
+        if (!S_ISLNK(link.st_mode) && ((link.st_dev != path->Root().Stat().st_dev) || (link.st_ino != path->Root().Stat().st_ino) ||
+                                          ((link.st_mode & S_IFMT) != (path->Root().Stat().st_mode & S_IFMT))))
         {
             return Error("Filesystem root changed during acquisition at '" + rootName + "'", ESTALE);
         }
@@ -437,7 +437,7 @@ struct FileRange::State
                 return Error("Filesystem root link changed during acquisition at '" + rootName + "'", ESTALE);
             }
             entry.linkMetadata = pinnedLink.Value();
-            entry.targetMetadata = path->Leaf().Snapshot();
+            entry.targetMetadata = path->Leaf().Stat();
         }
         if (FilesystemRootKind::File == request.rootKind)
         {
@@ -454,8 +454,8 @@ struct FileRange::State
             Frame frame;
             frame.path = rootName;
             frame.bytes = frame.path.size() + 1;
-            frame.device = path->Leaf().Snapshot().st_dev;
-            frame.inode = path->Leaf().Snapshot().st_ino;
+            frame.device = path->Leaf().Stat().st_dev;
+            frame.inode = path->Leaf().Stat().st_ino;
             auto charged = Charge(frame.bytes, rootName);
             if (!charged.HasValue())
             {
@@ -521,7 +521,7 @@ struct FileRange::State
                 return Error("Filesystem child link changed during acquisition at '" + entry.path + "'", ESTALE);
             }
             entry.linkMetadata = pinnedLink.Value();
-            entry.targetMetadata = handle.Snapshot();
+            entry.targetMetadata = handle.Stat();
             const auto selected = (Filesystem::Handle::Type::Directory == handle.AcquiredType()) ? request.childDirectoryLinkAction : request.childFileLinkAction;
             if (SymlinkFollowing::DoNotFollow == selected)
             {
@@ -533,8 +533,8 @@ struct FileRange::State
                 return Exclude(entry.path, "link policy");
             }
         }
-        else if ((entry.linkMetadata.st_dev != handle.Snapshot().st_dev) || (entry.linkMetadata.st_ino != handle.Snapshot().st_ino) ||
-                 ((entry.linkMetadata.st_mode & S_IFMT) != (handle.Snapshot().st_mode & S_IFMT)))
+        else if ((entry.linkMetadata.st_dev != handle.Stat().st_dev) || (entry.linkMetadata.st_ino != handle.Stat().st_ino) ||
+                 ((entry.linkMetadata.st_mode & S_IFMT) != (handle.Stat().st_mode & S_IFMT)))
         {
             return Error("Filesystem child changed during acquisition at '" + entry.path + "'", ESTALE);
         }
@@ -573,7 +573,7 @@ struct FileRange::State
             {
                 for (const auto& ancestor : frames)
                 {
-                    if ((ancestor.device == handle.Snapshot().st_dev) && (ancestor.inode == handle.Snapshot().st_ino))
+                    if ((ancestor.device == handle.Stat().st_dev) && (ancestor.inode == handle.Stat().st_ino))
                     {
                         return Error("Directory ancestor cycle at '" + entry.path + "'", ELOOP);
                     }
@@ -581,8 +581,8 @@ struct FileRange::State
                 Frame frame;
                 frame.path = entry.path;
                 frame.bytes = frame.path.size() + 1;
-                frame.device = handle.Snapshot().st_dev;
-                frame.inode = handle.Snapshot().st_ino;
+                frame.device = handle.Stat().st_dev;
+                frame.inode = handle.Stat().st_ino;
                 auto charged = Charge(frame.bytes, entry.path);
                 if (!charged.HasValue())
                 {

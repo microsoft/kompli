@@ -41,7 +41,7 @@ FilesystemCollectionRequest DotfilePolicy(const string& home)
 Result<const struct group*> LookupUserGroup(gid_t id, const char* user, ContextInterface& context)
 {
     errno = 0;
-    const auto* group = getgrgid(id);
+    const auto* group = context.GetGroupById(id);
     if (nullptr == group)
     {
         const int code = errno ? errno : ENOENT;

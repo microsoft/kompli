@@ -243,7 +243,7 @@ static Result<Status> AuditFilePermissionsImpl(const FilePermissionsParams& para
     struct stat statbuf;
     if (nullptr != pin)
     {
-        auto observed = pin->Inspect(fdinfoByteCap);
+        auto observed = pin->Stat(fdinfoByteCap);
         if (!observed.HasValue())
         {
             return std::move(observed).Error();
@@ -457,7 +457,7 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
     struct stat statbuf;
     if (nullptr != pin)
     {
-        auto observed = pin->Inspect(fdinfoByteCap);
+        auto observed = pin->Stat(fdinfoByteCap);
         if (!observed.HasValue())
         {
             return std::move(observed).Error();
@@ -586,7 +586,7 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
         // path string, so the change cannot be redirected to a different file via a symlink swap.
         if (nullptr != pin && requireUnique)
         {
-            auto fresh = pin->Inspect(fdinfoByteCap);
+            auto fresh = pin->Stat(fdinfoByteCap);
             if (!fresh.HasValue())
             {
                 return std::move(fresh).Error();
@@ -638,7 +638,7 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
         // pins (verified above not to be a symlink), so it is not subject to a symlink race.
         if (nullptr != pin && requireUnique)
         {
-            auto fresh = pin->Inspect(fdinfoByteCap);
+            auto fresh = pin->Stat(fdinfoByteCap);
             if (!fresh.HasValue())
             {
                 return std::move(fresh).Error();

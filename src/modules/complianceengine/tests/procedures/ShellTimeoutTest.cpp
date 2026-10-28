@@ -223,7 +223,8 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, ExistingNonRegularSourceIsAnEr
 
 TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateStopsWithoutReadingTail)
 {
-    const auto path = mContext.MakeTempfile("TMOUT=100\nTMOUT=200\nunread tail\n");
+    const string lines = "TMOUT=100\nTMOUT=200\n";
+    const auto path = mContext.MakeTempfile(lines + string(8192 - lines.size(), 'x'));
     mContext.SetSpecialFilePath("/etc/bashrc", path);
     int reads = 0;
     int closes = 0;

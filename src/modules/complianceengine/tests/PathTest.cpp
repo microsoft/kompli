@@ -4,20 +4,28 @@
 #include <MockContext.h>
 #include <algorithm>
 #include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
 #include <filesystem/Handle.hpp>
 #include <filesystem/Path.hpp>
 #include <filesystem/PathInternal.hpp>
+#include <filesystem/ReadableFile.hpp>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
 #include <linux/magic.h>
+#include <sched.h>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
+#include <sys/utsname.h>
+#include <sys/wait.h>
 #include <type_traits>
 #include <unistd.h>
 #include <utility>
@@ -99,6 +107,175 @@ bool IsProcfsHelper(int descriptor)
 {
     struct statfs filesystem = {};
     return (0 == ::fstatfs(descriptor, &filesystem)) && (PROC_SUPER_MAGIC == filesystem.f_type);
+}
+
+// Only constructed in the forked, private mount namespace. Unmount before
+// MockContext removes its unique fixture directory.
+class ScopedBindMount
+{
+public:
+    explicit ScopedBindMount(std::string target)
+        : mTarget(std::move(target))
+    {
+    }
+    ~ScopedBindMount()
+    {
+        if (mMounted)
+        {
+            EXPECT_EQ(0, ::umount(mTarget.c_str())) << mTarget << ": " << std::strerror(errno);
+        }
+    }
+    bool Bind(const std::string& source)
+    {
+        if (0 != ::mount(source.c_str(), mTarget.c_str(), nullptr, MS_BIND, nullptr))
+        {
+            return false;
+        }
+        mMounted = true;
+        return true;
+    }
+
+private:
+    std::string mTarget;
+    bool mMounted = false;
+};
+
+// Reserved for unavailable namespace/mount capability during optional local
+// runs. CI explicitly requires this test and treats this status as a failure.
+const int unavailableMountCapability = 77;
+
+int MountSetupFailure(const char* operation)
+{
+    const int error = errno;
+    std::fprintf(stderr, "%s: %s (%d)\n", operation, std::strerror(error), error);
+    if ((EPERM == error) || (EACCES == error))
+    {
+        return unavailableMountCapability;
+    }
+    return 1;
+}
+
+ComplianceEngine::Result<std::uint64_t> KernelMountId(int descriptor)
+{
+    std::ifstream info("/proc/self/fdinfo/" + std::to_string(descriptor));
+    if (!info.is_open())
+    {
+        return ComplianceEngine::Error("Cannot open kernel fdinfo", errno);
+    }
+    const std::string contents(std::istreambuf_iterator<char>{info}, std::istreambuf_iterator<char>{});
+    if (info.bad())
+    {
+        return ComplianceEngine::Error("Cannot read kernel fdinfo", EIO);
+    }
+    return ParseMountId(contents);
+}
+
+void CheckRealBindMounts(const NiceMock<MockContext>& context, const std::string& accepted)
+{
+    const ResolverLimits limits{{4096, 100, 100000, 256, 262144, 4096}, 4096, 8, 128};
+    // Authorize the selected root mount separately; only descendants stay.
+    auto opened = Path::AcquireRoot(context, accepted, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+
+    const std::string crossing = accepted + "/cross";
+    OwnedTestDescriptor outer(::open(context.GetTempdirPath().c_str(), O_PATH | O_DIRECTORY | O_CLOEXEC));
+    OwnedTestDescriptor root(::open(accepted.c_str(), O_PATH | O_DIRECTORY | O_CLOEXEC));
+    OwnedTestDescriptor child(::open(crossing.c_str(), O_PATH | O_DIRECTORY | O_CLOEXEC));
+    ASSERT_GE(outer.Get(), 0);
+    ASSERT_GE(root.Get(), 0);
+    ASSERT_GE(child.Get(), 0);
+    struct stat rootStat = {}, childStat = {};
+    ASSERT_EQ(0, ::fstat(root.Get(), &rootStat));
+    ASSERT_EQ(0, ::fstat(child.Get(), &childStat));
+    EXPECT_EQ(rootStat.st_dev, childStat.st_dev);
+    auto outerId = KernelMountId(outer.Get());
+    auto rootId = KernelMountId(root.Get());
+    auto childId = KernelMountId(child.Get());
+    ASSERT_TRUE(outerId.HasValue()) << outerId.Error().message;
+    ASSERT_TRUE(rootId.HasValue()) << rootId.Error().message;
+    ASSERT_TRUE(childId.HasValue()) << childId.Error().message;
+    EXPECT_NE(outerId.Value(), rootId.Value()); // The accepted root is itself a mount.
+    EXPECT_NE(rootId.Value(), childId.Value()); // Bind mounts can share st_dev.
+    auto pinnedRootId = path.Root().MountIdentity(limits.shared.fdinfoBytes);
+    ASSERT_TRUE(pinnedRootId.HasValue()) << pinnedRootId.Error().message;
+    EXPECT_EQ(rootId.Value(), pinnedRootId.Value());
+
+    const ExtensionPolicy stay{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    const ExtensionPolicy allow{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit};
+    auto inside = path.Push("inside", stay);
+    ASSERT_TRUE(inside.HasValue()) << inside.Error().message;
+    ASSERT_TRUE(path.Pop().HasValue());
+    auto denied = path.Push("cross", stay);
+    ASSERT_FALSE(denied.HasValue());
+    EXPECT_EQ(EXDEV, denied.Error().code);
+    EXPECT_EQ("Component crosses accepted root mount", denied.Error().message);
+    EXPECT_EQ(1U, path.Size());
+    auto allowed = path.Push("cross", allow);
+    ASSERT_TRUE(allowed.HasValue()) << allowed.Error().message;
+    auto pinnedChildId = path.Leaf().MountIdentity(limits.shared.fdinfoBytes);
+    ASSERT_TRUE(pinnedChildId.HasValue()) << pinnedChildId.Error().message;
+    EXPECT_EQ(childId.Value(), pinnedChildId.Value());
+    auto file = path.Push("payload", allow);
+    ASSERT_TRUE(file.HasValue()) << file.Error().message;
+    auto readable = path.Leaf().OpenReadOnly(limits.shared.fdinfoBytes);
+    ASSERT_TRUE(readable.HasValue()) << readable.Error().message;
+    std::size_t remainingInterruptRetries = 1;
+    auto data = readable.Value().Read(32, remainingInterruptRetries);
+    ASSERT_TRUE(data.HasValue()) << data.Error().message;
+    ASSERT_TRUE(data.Value().HasValue());
+    EXPECT_EQ("bound", data.Value().Value());
+}
+
+int RunIsolatedBindMountRegression()
+{
+    if (0 != ::unshare(CLONE_NEWNS))
+    {
+        return MountSetupFailure("unshare(CLONE_NEWNS)");
+    }
+    // This must precede all fixture mounts: inherited shared propagation
+    // must not send child-namespace mounts back to the parent or host.
+    if (0 != ::mount(nullptr, "/", nullptr, MS_REC | MS_PRIVATE, nullptr))
+    {
+        return MountSetupFailure("make child mount propagation private");
+    }
+
+    NiceMock<MockContext> context;
+    const std::string base = context.GetTempdirPath();
+    const std::string source = base + "/source";
+    const std::string accepted = base + "/accepted";
+    const std::string other = base + "/other";
+    if ((0 != ::mkdir(source.c_str(), 0700)) || (0 != ::mkdir(accepted.c_str(), 0700)) || (0 != ::mkdir(other.c_str(), 0700)) ||
+        (0 != ::mkdir((source + "/cross").c_str(), 0700)))
+    {
+        ADD_FAILURE() << "Cannot create isolated fixture: " << std::strerror(errno);
+        return 1;
+    }
+    {
+        std::ofstream inside(source + "/inside");
+        std::ofstream payload(other + "/payload");
+        inside << "inside";
+        payload << "bound";
+        inside.close();
+        payload.close();
+        if (!inside || !payload)
+        {
+            ADD_FAILURE() << "Cannot write isolated fixture files";
+            return 1;
+        }
+    }
+    ScopedBindMount root(accepted);
+    if (!root.Bind(source))
+    {
+        return MountSetupFailure("bind accepted root");
+    }
+    ScopedBindMount crossing(accepted + "/cross");
+    if (!crossing.Bind(other))
+    {
+        return MountSetupFailure("bind descendant");
+    }
+    CheckRealBindMounts(context, accepted);
+    return 0;
 }
 } // namespace
 
@@ -268,7 +445,7 @@ TEST_F(PathAliasTest, InspectionAndChildObservationReportHelperCloseFailure)
         }
         return status;
     });
-    auto inspection = path.Root().Inspect(4096);
+    auto inspection = path.Root().Stat(4096);
     ASSERT_FALSE(inspection.HasValue());
     EXPECT_EQ(EIO, inspection.Error().code);
     EXPECT_EQ(before, CountOpenDescriptors());
@@ -467,6 +644,91 @@ TEST(PathTest, ProcfsMountIdRejectsMissingAmbiguousAndMalformedInformation)
     }
 }
 
+TEST(PathKernelIntegrationTest, NativeProcfsAndPinnedOperations)
+{
+    struct utsname kernel = {};
+    ASSERT_EQ(0, ::uname(&kernel));
+    struct statfs procfs = {};
+    ASSERT_EQ(0, ::statfs("/proc/self/fdinfo", &procfs));
+    ASSERT_EQ(PROC_SUPER_MAGIC, procfs.f_type);
+    std::printf("M-71 kernel=%s release=%s procfs=0x%lx\n", kernel.sysname, kernel.release, static_cast<unsigned long>(procfs.f_type));
+
+    NiceMock<MockContext> context;
+    const std::string source = context.MakeTempfile("kernel-procfs");
+    const std::string name = source.substr(source.find_last_of('/') + 1);
+    const ResolverLimits limits{{4096, 100, 100000, 256, 262144, 4096}, 4096, 8, 128};
+    auto opened = Path::AcquireRoot(context, context.GetTempdirPath(), RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+    auto rootId = path.Root().MountIdentity(limits.shared.fdinfoBytes);
+    ASSERT_TRUE(rootId.HasValue()) << rootId.Error().message;
+    auto children = path.Root().OpenChildren(limits.shared.fdinfoBytes);
+    ASSERT_TRUE(children.HasValue()) << children.Error().message;
+    bool found = false;
+    for (;;)
+    {
+        auto entry = children.Value().Next();
+        ASSERT_TRUE(entry.HasValue()) << entry.Error().message;
+        if (!entry.Value().HasValue())
+        {
+            break;
+        }
+        found = found || (name == entry.Value().Value());
+    }
+    EXPECT_TRUE(found);
+    const ExtensionPolicy stay{SymlinkPolicy::Reject, MountPolicy::StayOnRootMount, HardlinkPolicy::Permit};
+    auto pushed = path.Push(name, stay);
+    ASSERT_TRUE(pushed.HasValue()) << pushed.Error().message;
+    auto leafId = path.Leaf().MountIdentity(limits.shared.fdinfoBytes);
+    ASSERT_TRUE(leafId.HasValue()) << leafId.Error().message;
+    EXPECT_EQ(rootId.Value(), leafId.Value());
+    auto metadata = path.Leaf().Stat(limits.shared.fdinfoBytes);
+    ASSERT_TRUE(metadata.HasValue()) << metadata.Error().message;
+    EXPECT_TRUE(S_ISREG(metadata.Value().st_mode));
+    auto readable = path.Leaf().OpenReadOnly(limits.shared.fdinfoBytes);
+    ASSERT_TRUE(readable.HasValue()) << readable.Error().message;
+    std::size_t remainingInterruptRetries = 1;
+    auto read = readable.Value().Read(32, remainingInterruptRetries);
+    ASSERT_TRUE(read.HasValue()) << read.Error().message;
+    ASSERT_TRUE(read.Value().HasValue());
+    EXPECT_EQ("kernel-procfs", read.Value().Value());
+    auto mode = path.Leaf().SetMode(0600, limits.shared.fdinfoBytes);
+    ASSERT_TRUE(mode.HasValue()) << mode.Error().message;
+    auto owner = path.Leaf().SetOwnership(::geteuid(), ::getegid(), limits.shared.fdinfoBytes);
+    ASSERT_TRUE(owner.HasValue()) << owner.Error().message;
+    struct stat changed = {};
+    ASSERT_EQ(0, ::stat(source.c_str(), &changed));
+    EXPECT_EQ(0600, changed.st_mode & 0777);
+    EXPECT_EQ(::geteuid(), changed.st_uid);
+    EXPECT_EQ(::getegid(), changed.st_gid);
+}
+
+TEST(PathKernelIntegrationTest, SameDeviceBindMountBoundaryInPrivateChildNamespace)
+{
+    // Neither unshare nor mount runs in the CTest/GTest process. A failure to
+    // isolate or privatize propagation stops before creating any bind mount.
+    std::fflush(nullptr);
+    const pid_t child = ::fork();
+    ASSERT_GE(child, 0) << std::strerror(errno);
+    if (0 == child)
+    {
+        const int outcome = RunIsolatedBindMountRegression();
+        const int status = testing::Test::HasFailure() ? 1 : outcome;
+        std::fflush(nullptr);
+        ::_exit(status);
+    }
+    int status = 0;
+    ASSERT_EQ(child, ::waitpid(child, &status, 0)) << std::strerror(errno);
+    ASSERT_TRUE(WIFEXITED(status)) << "Mount fixture child was interrupted: " << status;
+    const char* requirement = std::getenv("KOMPLI_REQUIRE_M71_MOUNT");
+    const bool required = (nullptr != requirement) && (0 == std::strcmp("1", requirement));
+    if ((unavailableMountCapability == WEXITSTATUS(status)) && !required)
+    {
+        GTEST_SKIP() << "Private mount namespace/bind mount unavailable locally; CI/VM gate requires KOMPLI_REQUIRE_M71_MOUNT=1";
+    }
+    EXPECT_EQ(0, WEXITSTATUS(status)) << "Child mount regression failed (77 = required kernel capability unavailable)";
+}
+
 TEST_F(PathAliasTest, MoveTransfersOwnershipAndFailedCloseIsNotRetried)
 {
     const std::string source = context.MakeTempfile("contents");
@@ -559,11 +821,11 @@ TEST_F(PathAliasTest, ConfinedResolverFollowsRelativeAndRecognizedAbsoluteLinks)
     {
         auto relative = path.Push("relative", stay);
         ASSERT_TRUE(relative.HasValue()) << relative.Error().message;
-        EXPECT_EQ(original.st_ino, path.Leaf().Snapshot().st_ino);
+        EXPECT_EQ(original.st_ino, path.Leaf().Stat().st_ino);
         ASSERT_TRUE(path.Pop().HasValue());
         auto absolute = path.Push("absolute", follow);
         ASSERT_TRUE(absolute.HasValue()) << absolute.Error().message;
-        EXPECT_EQ(original.st_ino, path.Leaf().Snapshot().st_ino);
+        EXPECT_EQ(original.st_ino, path.Leaf().Stat().st_ino);
         ASSERT_TRUE(path.Pop().HasValue());
         auto outside = path.Push("outside", follow);
         ASSERT_FALSE(outside.HasValue());
@@ -591,7 +853,7 @@ TEST_F(PathAliasTest, ConfinedResolverFollowsRelativeAndRecognizedAbsoluteLinks)
         Path allowed = std::move(two).Value();
         auto exactlyTwo = allowed.Push("double", follow);
         ASSERT_TRUE(exactlyTwo.HasValue()) << exactlyTwo.Error().message;
-        EXPECT_EQ(original.st_ino, allowed.Leaf().Snapshot().st_ino);
+        EXPECT_EQ(original.st_ino, allowed.Leaf().Stat().st_ino);
         auto trailing = path.Push("trailing", follow);
         ASSERT_FALSE(trailing.HasValue());
         EXPECT_EQ(ENOTDIR, trailing.Error().code);
@@ -626,7 +888,7 @@ TEST_F(PathAliasTest, ResolverUsesPinnedLinkWhenNameChangesDuringInspection)
     EXPECT_TRUE(replaced);
     struct stat expected = {};
     ASSERT_EQ(0, ::stat((rootPath + "/inside").c_str(), &expected));
-    EXPECT_EQ(expected.st_ino, path.Leaf().Snapshot().st_ino);
+    EXPECT_EQ(expected.st_ino, path.Leaf().Stat().st_ino);
     EXPECT_GT(CountOpenDescriptors(), before);
 }
 
@@ -646,7 +908,7 @@ TEST_F(PathAliasTest, RelativeParentIsBoundedByAcceptedRoot)
     ASSERT_TRUE(resolved.HasValue()) << resolved.Error().message;
     struct stat expected = {};
     ASSERT_EQ(0, ::stat((rootPath + "/inside").c_str(), &expected));
-    EXPECT_EQ(expected.st_ino, path.Leaf().Snapshot().st_ino);
+    EXPECT_EQ(expected.st_ino, path.Leaf().Stat().st_ino);
 }
 
 TEST_F(PathAliasTest, LinkExpansionKeepsPhysicalLineageForContinuation)
@@ -669,16 +931,16 @@ TEST_F(PathAliasTest, LinkExpansionKeepsPhysicalLineageForContinuation)
     ASSERT_TRUE(shortcut.HasValue()) << shortcut.Error().message;
     struct stat second = {};
     ASSERT_EQ(0, ::stat((rootPath + "/second").c_str(), &second));
-    EXPECT_EQ(second.st_ino, path.Leaf().Snapshot().st_ino);
+    EXPECT_EQ(second.st_ino, path.Leaf().Stat().st_ino);
     auto child = path.Push("child", follow);
     ASSERT_TRUE(child.HasValue()) << child.Error().message;
     struct stat expected = {};
     ASSERT_EQ(0, ::stat((rootPath + "/second/child").c_str(), &expected));
-    EXPECT_EQ(expected.st_ino, path.Leaf().Snapshot().st_ino);
+    EXPECT_EQ(expected.st_ino, path.Leaf().Stat().st_ino);
     ASSERT_TRUE(path.Pop().HasValue());
     auto up = path.Push("up", follow);
     ASSERT_TRUE(up.HasValue()) << up.Error().message;
-    EXPECT_EQ(path.Root().Snapshot().st_ino, path.Leaf().Snapshot().st_ino);
+    EXPECT_EQ(path.Root().Stat().st_ino, path.Leaf().Stat().st_ino);
 }
 
 TEST_F(PathAliasTest, ResolverBudgetsFailAtOneBeyondAndLeavePinsAlive)
@@ -743,12 +1005,12 @@ TEST_F(PathAliasTest, PublicRootAndPushKeepOriginalPinsAndSeparatePolicies)
         Path path = std::move(opened).Value();
         ASSERT_EQ(1U, path.Size());
         const Handle& rootBorrow = path.Root();
-        EXPECT_EQ(rootBorrow.Snapshot().st_ino, path.Leaf().Snapshot().st_ino);
+        EXPECT_EQ(rootBorrow.Stat().st_ino, path.Leaf().Stat().st_ino);
         auto denied = path.Push("outside", follow);
         ASSERT_FALSE(denied.HasValue());
         EXPECT_EQ(EXDEV, denied.Error().code);
         EXPECT_EQ(1U, path.Size());
-        EXPECT_EQ(rootBorrow.Snapshot().st_ino, path.Root().Snapshot().st_ino);
+        EXPECT_EQ(rootBorrow.Stat().st_ino, path.Root().Stat().st_ino);
         auto noLinks = path.Push("allowed", strict);
         ASSERT_FALSE(noLinks.HasValue());
         EXPECT_EQ(ELOOP, noLinks.Error().code);
@@ -756,7 +1018,7 @@ TEST_F(PathAliasTest, PublicRootAndPushKeepOriginalPinsAndSeparatePolicies)
         ASSERT_TRUE(success.HasValue()) << success.Error().message;
         EXPECT_EQ(2U, path.Size());
         EXPECT_EQ(Handle::Type::RegularFile, path.Leaf().AcquiredType());
-        EXPECT_EQ(rootBorrow.Snapshot().st_ino, path.Root().Snapshot().st_ino);
+        EXPECT_EQ(rootBorrow.Stat().st_ino, path.Root().Stat().st_ino);
         auto notDirectory = path.Push("inside", strict);
         ASSERT_FALSE(notDirectory.HasValue());
         EXPECT_EQ(ENOTDIR, notDirectory.Error().code);
@@ -777,10 +1039,10 @@ TEST_F(PathAliasTest, ExplicitAdministrativeRootLinkAndMovedPath)
     auto approved = Path::AcquireRoot(context, rootLink, RootPolicy{SymlinkPolicy::FollowWithinRoot, MountPolicy::AllowCrossing}, limits);
     ASSERT_TRUE(approved.HasValue()) << approved.Error().message;
     Path original = std::move(approved).Value();
-    const std::size_t inode = original.Root().Snapshot().st_ino;
+    const std::size_t inode = original.Root().Stat().st_ino;
     Path moved = std::move(original);
     EXPECT_EQ(1U, moved.Size());
-    EXPECT_EQ(inode, moved.Root().Snapshot().st_ino);
+    EXPECT_EQ(inode, moved.Root().Stat().st_ino);
     auto noRoot = original.Push("anything", ExtensionPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
     ASSERT_FALSE(noRoot.HasValue());
     EXPECT_EQ(EINVAL, noRoot.Error().code);
@@ -813,22 +1075,22 @@ TEST_F(PathAliasTest, EndInsertionKeepsBorrowsStableAndFailedPushDoesNotChangeSt
         {
             first = &path.Leaf();
         }
-        EXPECT_EQ(rootBorrow.Snapshot().st_ino, path.Root().Snapshot().st_ino);
+        EXPECT_EQ(rootBorrow.Stat().st_ino, path.Root().Stat().st_ino);
     }
     ASSERT_NE(nullptr, first);
     EXPECT_EQ(73U, path.Size());
     EXPECT_EQ("d", first->Component());
-    const std::size_t stableInode = first->Snapshot().st_ino;
+    const std::size_t stableInode = first->Stat().st_ino;
     auto invalid = path.Push("../escape", strict);
     ASSERT_FALSE(invalid.HasValue());
     EXPECT_EQ(EINVAL, invalid.Error().code);
     EXPECT_EQ(73U, path.Size());
-    EXPECT_EQ(stableInode, first->Snapshot().st_ino);
+    EXPECT_EQ(stableInode, first->Stat().st_ino);
     for (int index = 0; index < 71; ++index)
     {
         ASSERT_TRUE(path.Pop().HasValue());
         EXPECT_EQ(&rootBorrow, &path.Root());
-        EXPECT_EQ(stableInode, first->Snapshot().st_ino);
+        EXPECT_EQ(stableInode, first->Stat().st_ino);
     }
     EXPECT_EQ(2U, path.Size());
     EXPECT_EQ(first, &path.Leaf());
@@ -893,17 +1155,17 @@ TEST_F(PathAliasTest, PopTransfersLeafAndPreservesSurvivingBorrows)
         ASSERT_TRUE(path.Push("one", strict).HasValue());
         const Handle& one = path.Leaf();
         ASSERT_TRUE(path.Push("two", strict).HasValue());
-        const std::size_t twoInode = path.Leaf().Snapshot().st_ino;
+        const std::size_t twoInode = path.Leaf().Stat().st_ino;
         auto detached = path.Pop();
         ASSERT_TRUE(detached.HasValue()) << detached.Error().message;
         EXPECT_EQ(2U, path.Size());
         EXPECT_EQ(&root, &path.Root());
         EXPECT_EQ(&one, &path.Leaf());
         EXPECT_EQ("one", one.Component());
-        EXPECT_EQ(twoInode, detached.Value().Snapshot().st_ino);
+        EXPECT_EQ(twoInode, detached.Value().Stat().st_ino);
         const std::size_t afterPop = CountOpenDescriptors();
         ASSERT_TRUE(path.Push("two", strict).HasValue());
-        EXPECT_EQ(twoInode, path.Leaf().Snapshot().st_ino);
+        EXPECT_EQ(twoInode, path.Leaf().Stat().st_ino);
         // The old pin remains independently owned despite a new name lookup.
         EXPECT_GT(CountOpenDescriptors(), afterPop);
         auto again = path.Pop();
@@ -977,14 +1239,14 @@ TEST_F(PathAliasTest, DetachedRootAndFileRemainPinnedAfterPathDestruction)
         }();
         ASSERT_TRUE(detached.HasValue());
         EXPECT_EQ(before + 1, CountOpenDescriptors());
-        const std::size_t oldInode = detached.Value().Snapshot().st_ino;
+        const std::size_t oldInode = detached.Value().Stat().st_ino;
         ASSERT_EQ(0, ::rename((rootPath + "/file").c_str(), (rootPath + "/former").c_str()));
         ASSERT_EQ(0, ::mkfifo((rootPath + "/file").c_str(), 0600));
-        auto activated = detached.Value().Inspect(limits.shared.fdinfoBytes);
+        auto activated = detached.Value().Stat(limits.shared.fdinfoBytes);
         ASSERT_TRUE(activated.HasValue()) << activated.Error().message;
         EXPECT_EQ(oldInode, activated.Value().st_ino);
         ASSERT_EQ(0, ::unlink((rootPath + "/former").c_str()));
-        auto again = detached.Value().Inspect(limits.shared.fdinfoBytes);
+        auto again = detached.Value().Stat(limits.shared.fdinfoBytes);
         ASSERT_TRUE(again.HasValue()) << again.Error().message;
         EXPECT_EQ(oldInode, again.Value().st_ino);
     }
@@ -1003,9 +1265,9 @@ TEST_F(PathAliasTest, DetachedRootAndFileRemainPinnedAfterPathDestruction)
         EXPECT_EQ(before + 1, CountOpenDescriptors());
         ASSERT_EQ(0, ::rename(rootPath.c_str(), (rootPath + ".former").c_str()));
         ASSERT_EQ(0, ::mkdir(rootPath.c_str(), 0700));
-        auto active = detachedRoot.Value().Inspect(limits.shared.fdinfoBytes);
+        auto active = detachedRoot.Value().Stat(limits.shared.fdinfoBytes);
         ASSERT_TRUE(active.HasValue()) << active.Error().message;
-        EXPECT_EQ(detachedRoot.Value().Snapshot().st_ino, active.Value().st_ino);
+        EXPECT_EQ(detachedRoot.Value().Stat().st_ino, active.Value().st_ino);
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }
@@ -1056,7 +1318,7 @@ TEST_F(PathAliasTest, PopRestoresPinnedPhysicalLineageThroughDirectoryLink)
         ASSERT_TRUE(path.Push("shortcut", follow).HasValue());
         const Handle& directory = path.Leaf();
         ASSERT_TRUE(path.Push("child", strict).HasValue());
-        const std::size_t originalInode = path.Leaf().Snapshot().st_ino;
+        const std::size_t originalInode = path.Leaf().Stat().st_ino;
         auto detached = path.Pop();
         ASSERT_TRUE(detached.HasValue());
         EXPECT_EQ(&directory, &path.Leaf());
@@ -1064,8 +1326,8 @@ TEST_F(PathAliasTest, PopRestoresPinnedPhysicalLineageThroughDirectoryLink)
         ASSERT_EQ(0, ::mkdir((rootPath + "/actual").c_str(), 0700));
         auto next = path.Push("child", strict);
         ASSERT_TRUE(next.HasValue()) << next.Error().message;
-        EXPECT_EQ(originalInode, path.Leaf().Snapshot().st_ino);
-        EXPECT_EQ(originalInode, detached.Value().Snapshot().st_ino);
+        EXPECT_EQ(originalInode, path.Leaf().Stat().st_ino);
+        EXPECT_EQ(originalInode, detached.Value().Stat().st_ino);
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }
@@ -1204,9 +1466,11 @@ TEST_F(PathAliasTest, PoppedFileRootKeepsHiddenPinsForCheckedPathClose)
     EXPECT_EQ(before - attempts, CountOpenDescriptors());
     auto activated = leaf.OpenReadOnly(4096);
     ASSERT_TRUE(activated.HasValue());
-    auto chunk = activated.Value().Read(32);
+    std::size_t remainingInterruptRetries = 1;
+    auto chunk = activated.Value().Read(32, remainingInterruptRetries);
     ASSERT_TRUE(chunk.HasValue());
-    EXPECT_EQ("still readable", chunk.Value());
+    ASSERT_TRUE(chunk.Value().HasValue());
+    EXPECT_EQ("still readable", chunk.Value().Value());
     EXPECT_TRUE(activated.Value().Close().HasValue());
     EXPECT_TRUE(leaf.Close().HasValue());
     EXPECT_EQ(0U, path.RetainedDescriptors());
@@ -1260,7 +1524,11 @@ TEST_F(PathAliasTest, PoppedDescendantRetainsHiddenPinsUntilCheckedRelease)
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
     auto activated = leaf.OpenReadOnly(4096);
     ASSERT_TRUE(activated.HasValue());
-    EXPECT_EQ("descendant", activated.Value().Read(32).Value());
+    std::size_t remainingInterruptRetries = 1;
+    auto chunk = activated.Value().Read(32, remainingInterruptRetries);
+    ASSERT_TRUE(chunk.HasValue());
+    ASSERT_TRUE(chunk.Value().HasValue());
+    EXPECT_EQ("descendant", chunk.Value().Value());
     EXPECT_TRUE(activated.Value().Close().HasValue());
     EXPECT_TRUE(leaf.Close().HasValue());
     EXPECT_EQ(0U, path.RetainedDescriptors());
@@ -1496,24 +1764,24 @@ TEST_F(PathAliasTest, FreshMetadataAndModeStayOnUnlinkedUnreadablePin)
         ASSERT_TRUE(path.Push("target", strict).HasValue());
         const std::string extraLink = rootPath + "/other-link";
         ASSERT_EQ(0, ::link((rootPath + "/target").c_str(), extraLink.c_str()));
-        auto observed = path.Leaf().Inspect(4096);
+        auto observed = path.Leaf().Stat(4096);
         ASSERT_TRUE(observed.HasValue()) << observed.Error().message;
         EXPECT_EQ(2U, observed.Value().st_nlink);
         ASSERT_EQ(0, ::unlink(extraLink.c_str()));
-        auto changed = path.Leaf().Inspect(4096);
+        auto changed = path.Leaf().Stat(4096);
         ASSERT_TRUE(changed.HasValue());
         EXPECT_EQ(1U, changed.Value().st_nlink);
         auto removed = path.Pop();
         ASSERT_TRUE(removed.HasValue());
         Handle detached = std::move(removed).Value();
-        const ino_t originalInode = detached.Snapshot().st_ino;
+        const ino_t originalInode = detached.Stat().st_ino;
         ASSERT_EQ(0, ::chmod((rootPath + "/target").c_str(), 0000));
         ASSERT_EQ(0, ::rename((rootPath + "/target").c_str(), (rootPath + "/former").c_str()));
         ASSERT_EQ(0, ::mkfifo((rootPath + "/target").c_str(), 0600));
         // No content-read activation is required to restore an owned 000 file.
         auto restored = detached.SetMode(0640, 4096);
         ASSERT_TRUE(restored.HasValue()) << restored.Error().message;
-        auto fresh = detached.Inspect(4096);
+        auto fresh = detached.Stat(4096);
         ASSERT_TRUE(fresh.HasValue()) << fresh.Error().message;
         EXPECT_EQ(originalInode, fresh.Value().st_ino);
         EXPECT_EQ(0640, fresh.Value().st_mode & 07777);
@@ -1523,7 +1791,7 @@ TEST_F(PathAliasTest, FreshMetadataAndModeStayOnUnlinkedUnreadablePin)
         EXPECT_EQ(0600, replacement.st_mode & 07777);
         ASSERT_EQ(0, ::unlink((rootPath + "/former").c_str()));
         ASSERT_TRUE(detached.SetMode(0600, 4096).HasValue());
-        auto unlinked = detached.Inspect(4096);
+        auto unlinked = detached.Stat(4096);
         ASSERT_TRUE(unlinked.HasValue());
         EXPECT_EQ(0U, unlinked.Value().st_nlink);
         EXPECT_EQ(originalInode, unlinked.Value().st_ino);
@@ -1558,7 +1826,7 @@ TEST_F(PathAliasTest, DetachedOwnershipUsesPinWithoutChangingHostAccounts)
         }();
         ASSERT_TRUE(detached.HasValue()) << detached.Error().message;
         EXPECT_EQ(before + 1, CountOpenDescriptors());
-        const auto original = detached.Value().Inspect(4096);
+        const auto original = detached.Value().Stat(4096);
         ASSERT_TRUE(original.HasValue());
         ASSERT_EQ(0, ::rename((rootPath + "/target").c_str(), (rootPath + "/former").c_str()));
         ASSERT_EQ(0, ::mkfifo((rootPath + "/target").c_str(), 0600));
@@ -1566,7 +1834,7 @@ TEST_F(PathAliasTest, DetachedOwnershipUsesPinWithoutChangingHostAccounts)
         // host account is changed by this test.
         auto owned = detached.Value().SetOwnership(static_cast<uid_t>(-1), static_cast<gid_t>(-1), 4096);
         ASSERT_TRUE(owned.HasValue()) << owned.Error().message;
-        auto updated = detached.Value().Inspect(4096);
+        auto updated = detached.Value().Stat(4096);
         ASSERT_TRUE(updated.HasValue());
         EXPECT_EQ(original.Value().st_uid, updated.Value().st_uid);
         EXPECT_EQ(original.Value().st_gid, updated.Value().st_gid);
@@ -1600,7 +1868,7 @@ TEST_F(PathAliasTest, DetachedDirectoryModeDoesNotChangeReplacementRoot)
         ASSERT_EQ(0, ::mkdir(rootPath.c_str(), 0700));
         auto changed = detached.Value().SetMode(0750, 4096);
         ASSERT_TRUE(changed.HasValue()) << changed.Error().message;
-        auto held = detached.Value().Inspect(4096);
+        auto held = detached.Value().Stat(4096);
         ASSERT_TRUE(held.HasValue());
         EXPECT_TRUE(S_ISDIR(held.Value().st_mode));
         EXPECT_EQ(0750, held.Value().st_mode & 07777);
@@ -1737,7 +2005,7 @@ TEST_F(PathAliasTest, DeniedOwnershipAndModeSyscallsLeaveHeldAndReplacementObjec
         EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
         EXPECT_EQ(heldDescriptors, CountOpenDescriptors());
 
-        auto stillPinned = path.Leaf().Inspect(4096);
+        auto stillPinned = path.Leaf().Stat(4096);
         ASSERT_TRUE(stillPinned.HasValue()) << stillPinned.Error().message;
         EXPECT_EQ(held.st_ino, stillPinned.Value().st_ino);
         EXPECT_EQ(held.st_uid, stillPinned.Value().st_uid);
@@ -1979,14 +2247,14 @@ TEST_F(PathAliasTest, AcceptedRootRecognitionUsesHeldIdentityNotCandidateName)
         auto matching = Path::AcquireRoot(context, rootName, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
         ASSERT_TRUE(accepted.HasValue());
         ASSERT_TRUE(matching.HasValue());
-        EXPECT_EQ(accepted.Value().Root().Snapshot().st_ino, matching.Value().Root().Snapshot().st_ino);
+        EXPECT_EQ(accepted.Value().Root().Stat().st_ino, matching.Value().Root().Stat().st_ino);
 
         ASSERT_EQ(0, ::rename(rootName.c_str(), (rootName + ".former").c_str()));
         ASSERT_EQ(0, ::mkdir(rootName.c_str(), 0700));
         auto replacement = Path::AcquireRoot(context, rootName, RootPolicy{SymlinkPolicy::Reject, MountPolicy::AllowCrossing}, limits);
         ASSERT_TRUE(replacement.HasValue());
-        EXPECT_NE(accepted.Value().Root().Snapshot().st_ino, replacement.Value().Root().Snapshot().st_ino);
-        EXPECT_EQ(accepted.Value().Root().Snapshot().st_ino, matching.Value().Root().Snapshot().st_ino);
+        EXPECT_NE(accepted.Value().Root().Stat().st_ino, replacement.Value().Root().Stat().st_ino);
+        EXPECT_EQ(accepted.Value().Root().Stat().st_ino, matching.Value().Root().Stat().st_ino);
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }

@@ -25,7 +25,9 @@ namespace FileReader
 // range remains alive and unmoved; Close invalidates them. A range is a
 // move-only, single-pass resource owner. Only the first begin traverses it.
 // Close before EOF (or destruction) releases handles without verifying unread
-// input; reaching EOF verifies the entire file but does not close handles.
+// input; reaching EOF checks size and before/after descriptor metadata but
+// cannot prove an atomic or consistently unchanged read. EOF does not close
+// handles.
 // maxBytes bounds acquisition (including delimiters); no entire-file buffer
 // is retained by the reader. Every yielded string excludes only its
 // terminating LF, if present; an unterminated final line is unchanged.
@@ -92,9 +94,10 @@ public:
         return {};
     }
 
-    // Idempotent, including failures: the data descriptor is attempted once.
-    // Failed closes log the source path and descriptor error once, even when
-    // Close is called again. Destruction also closes and logs if needed;
+    // The data descriptor is attempted once. The first call returns its native
+    // close failure, if any; subsequent calls succeed without another attempt.
+    // Failed closes log the source path and descriptor error once.
+    // Destruction also closes and logs if needed;
     // the context (and its log handle) must outlive the range.
     // Success means closure succeeded, not that an early-stopped read verified EOF.
     ComplianceEngine::Result<bool> Close();

@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <dirent.h>
+#include <grp.h>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -58,6 +59,9 @@ public:
     virtual int CloseDirectory(DIR* directory) const;
     virtual int StatPath(const char* path, struct stat* metadata) const;
     virtual int LstatPath(const char* path, struct stat* metadata) const;
+    // Native account lookup forward; callers distinguish absent groups from
+    // lookup failures using errno immediately after a null result.
+    virtual struct group* GetGroupById(gid_t id) const;
 
     virtual Telemetry& GetTelemetry() = 0;
 

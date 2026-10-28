@@ -10,7 +10,6 @@
 #include <fcntl.h>
 #include <limits>
 #include <linux/magic.h>
-#include <new>
 #include <stdexcept>
 #include <sys/statfs.h>
 #include <unistd.h>
@@ -31,31 +30,33 @@ namespace Detail
 {
 Result<LinkTarget> ReadPinnedLink(const ContextInterface& context, int linkPin, std::size_t targetByteCap, std::size_t fdinfoByteCap)
 {
-    if ((0 > linkPin) || (0 == targetByteCap) || (targetByteCap >= std::vector<char>().max_size() - 1) ||
-        (targetByteCap >= static_cast<std::size_t>(std::numeric_limits<ssize_t>::max())) || (0 == fdinfoByteCap))
+    if ((linkPin < 0) || (targetByteCap == 0) || (targetByteCap >= std::vector<char>().max_size() - 1) ||
+        (targetByteCap >= static_cast<std::size_t>(std::numeric_limits<ssize_t>::max())) || (fdinfoByteCap == 0))
     {
         return Error("Invalid pinned link or byte cap", EINVAL);
     }
     const int flags = ::fcntl(linkPin, F_GETFL);
-    if (0 > flags)
+    if (flags < 0)
     {
         return Error("Cannot inspect pinned link flags", SavedError());
     }
     const int descriptorFlags = ::fcntl(linkPin, F_GETFD);
-    if (0 > descriptorFlags)
+    if (descriptorFlags < 0)
     {
         return Error("Cannot inspect pinned link flags", SavedError());
     }
-    if ((0 == (flags & O_PATH)) || (0 == (descriptorFlags & FD_CLOEXEC)))
+
+    if (((flags & O_PATH) == 0) || ((descriptorFlags & FD_CLOEXEC) == 0))
     {
         return Error("Pinned link must be a close-on-exec O_PATH descriptor", EINVAL);
     }
     struct stat before = {}, after = {};
     struct statfs filesystem = {};
-    if ((0 != context.StatFileDescriptor(linkPin, &before)) || (0 != ::fstatfs(linkPin, &filesystem)))
+    if ((context.StatFileDescriptor(linkPin, &before) != 0) || (::fstatfs(linkPin, &filesystem) != 0))
     {
         return Error("Cannot inspect pinned link", SavedError());
     }
+
     if (!S_ISLNK(before.st_mode) || (PROC_SUPER_MAGIC == filesystem.f_type))
     {
         return Error("Not an ordinary filesystem symlink", ELOOP);
@@ -72,56 +73,53 @@ Result<LinkTarget> ReadPinnedLink(const ContextInterface& context, int linkPin, 
         {
             return std::move(mount).Error();
         }
-        try
+        std::vector<char> buffer(targetByteCap + 1);
+        const ssize_t count = ::readlinkat(linkPin, "", buffer.data(), buffer.size());
+        if (count < 0)
         {
-            std::vector<char> buffer(targetByteCap + 1);
-            const ssize_t count = ::readlinkat(linkPin, "", buffer.data(), buffer.size());
-            if (0 > count)
-            {
-                return Error("Cannot read pinned symlink target", SavedError());
-            }
-            if ((0 == count) || (static_cast<std::size_t>(count) > targetByteCap))
-            {
-                return Error("Pinned symlink target exceeds byte cap or is empty", E2BIG);
-            }
-            if (0 != context.StatFileDescriptor(linkPin, &after))
-            {
-                return Error("Cannot recheck pinned symlink", SavedError());
-            }
-            if (!SameIdentity(before, after))
-            {
-                return Error("Pinned symlink identity changed", EAGAIN);
-            }
-            auto retainedMount = MountId(context, procfs.fdinfo.Get(), linkPin, fdinfoByteCap);
-            if (!retainedMount.HasValue())
-            {
-                return std::move(retainedMount).Error();
-            }
-            if (mount.Value() != retainedMount.Value())
-            {
-                return Error("Pinned symlink mount changed", EAGAIN);
-            }
-            LinkTarget target;
-            target.text.assign(buffer.data(), static_cast<std::size_t>(count));
-            if (std::string::npos != target.text.find('\0'))
-            {
-                return Error("Pinned symlink contains NUL", EINVAL);
-            }
-            target.mountId = mount.Value();
-            return target;
+            return Error("Cannot read pinned symlink target", SavedError());
         }
-        catch (const std::bad_alloc&)
+
+        if ((count == 0) || (static_cast<std::size_t>(count) > targetByteCap))
         {
-            return Error("Unable to allocate bounded symlink target", ENOMEM);
+            return Error("Pinned symlink target exceeds byte cap or is empty", E2BIG);
         }
+
+        if (context.StatFileDescriptor(linkPin, &after) != 0)
+        {
+            return Error("Cannot recheck pinned symlink", SavedError());
+        }
+
+        if (!SameIdentity(before, after))
+        {
+            return Error("Pinned symlink identity changed", EAGAIN);
+        }
+        auto retainedMount = MountId(context, procfs.fdinfo.Get(), linkPin, fdinfoByteCap);
+        if (!retainedMount.HasValue())
+        {
+            return std::move(retainedMount).Error();
+        }
+
+        if (mount.Value() != retainedMount.Value())
+        {
+            return Error("Pinned symlink mount changed", EAGAIN);
+        }
+        LinkTarget target;
+        target.text.assign(buffer.data(), static_cast<std::size_t>(count));
+        if (target.text.find('\0') != std::string::npos)
+        {
+            return Error("Pinned symlink contains NUL", EINVAL);
+        }
+        target.mountId = mount.Value();
+        return target;
     }();
     return procfs.Finish(std::move(inspected));
 }
 
 bool IsSingleChildComponent(const std::string& component) noexcept
 {
-    return !component.empty() && ("." != component) && (".." != component) && (std::string::npos == component.find('/')) &&
-           (std::string::npos == component.find('\0'));
+    return !component.empty() && (component != ".") && (component != "..") && (component.find('/') == std::string::npos) &&
+           (component.find('\0') == std::string::npos);
 }
 } // namespace Detail
 
@@ -129,7 +127,7 @@ namespace Detail
 {
 const Handle& ResolvedPath::Leaf() const
 {
-    return (nullptr != mForwardedLeaf) ? *mForwardedLeaf : (mOwnsLeaf ? mPins.at(mOwnedLeaf) : *mBorrowedLeaf);
+    return (mForwardedLeaf != nullptr) ? *mForwardedLeaf : (mOwnsLeaf ? mPins.at(mOwnedLeaf) : *mBorrowedLeaf);
 }
 
 Handle ResolvedPath::TakeOwnedLeaf()
@@ -162,7 +160,7 @@ std::vector<const Handle*> ResolvedPath::DirectoryLineage() const
     lineage.reserve(mFrames.size());
     for (const auto& frame : mFrames)
     {
-        lineage.push_back(frame.owned ? (((nullptr != mForwardedLeaf) && (frame.ownedIndex == mOwnedLeaf)) ? mForwardedLeaf : &mPins.at(frame.ownedIndex)) :
+        lineage.push_back(frame.owned ? (((mForwardedLeaf != nullptr) && (frame.ownedIndex == mOwnedLeaf)) ? mForwardedLeaf : &mPins.at(frame.ownedIndex)) :
                                         frame.borrowed);
     }
     return lineage;
@@ -187,13 +185,14 @@ public:
     Result<Detail::ResolvedPath> Run(std::string component)
     {
         if (!Detail::IsSingleChildComponent(component) || mRootLineage.empty() || mParentLineage.empty() ||
-            (MountPolicy::AllowCrossing != mMounts && MountPolicy::StayOnRootMount != mMounts) || (0 == mLimits.linkTargetBytes) ||
-            (0 == mLimits.linkExpansions) || (0 == mLimits.depth) || (0 == mLimits.shared.targetBytes) || (0 == mLimits.shared.components) ||
-            (0 == mLimits.shared.work) || (0 == mLimits.shared.liveDescriptors) || (0 == mLimits.shared.retainedBytes) ||
-            (0 == mLimits.shared.fdinfoBytes) || (mRootLineage.back() != mParentLineage.front()))
+            (mMounts != MountPolicy::AllowCrossing && mMounts != MountPolicy::StayOnRootMount) || (mLimits.linkTargetBytes == 0) ||
+            (mLimits.linkExpansions == 0) || (mLimits.depth == 0) || (mLimits.shared.targetBytes == 0) || (mLimits.shared.components == 0) ||
+            (mLimits.shared.work == 0) || (mLimits.shared.liveDescriptors == 0) || (mLimits.shared.retainedBytes == 0) ||
+            (mLimits.shared.fdinfoBytes == 0) || (mRootLineage.back() != mParentLineage.front()))
         {
             return Error("Invalid confined resolver input or mandatory limits", EINVAL);
         }
+
         for (const Handle* pin : mRootLineage)
         {
             if (!AddInput(pin))
@@ -209,10 +208,12 @@ public:
                 return Error("Invalid or over-budget parent lineage", E2BIG);
             }
         }
+
         if ((mParentLineage.size() > mLimits.depth) || (mInputPins > mLimits.shared.liveDescriptors) || (mLimits.shared.liveDescriptors - mInputPins < 7))
         {
             return Error("Initial depth or descriptor budget exhausted", EMFILE);
         }
+
         if (!Charge())
         {
             return Error("Resolver work budget exhausted", E2BIG);
@@ -239,10 +240,11 @@ public:
 private:
     bool AddInput(const Handle* pin)
     {
-        if ((nullptr == pin) || (!pin->mPin) || (Handle::Type::Directory != pin->mType) || (0 > pin->mDescriptor))
+        if ((pin == nullptr) || (!pin->mPin) || (pin->mType != Handle::Type::Directory) || (pin->mDescriptor < 0))
         {
             return false;
         }
+
         for (const Handle* already : mSeen)
         {
             if (pin == already)
@@ -273,13 +275,13 @@ private:
         }
         const std::size_t cost = 128 + 4 * chunks;
         if ((mSpent > mLimits.shared.work) || (cost > mLimits.shared.work - mSpent) ||
-            ((nullptr != mLedger) && ((*mLedger > mLimits.shared.work) || (cost > mLimits.shared.work - *mLedger))))
+            ((mLedger != nullptr) && ((*mLedger > mLimits.shared.work) || (cost > mLimits.shared.work - *mLedger))))
         {
             return false;
         }
         ++mSteps;
         mSpent += cost;
-        if (nullptr != mLedger)
+        if (mLedger != nullptr)
         {
             *mLedger += cost;
         }
@@ -330,9 +332,10 @@ private:
                 {
                     continue;
                 }
+
                 if (".." == name)
                 {
-                    if (1 == directories.size())
+                    if (directories.size() == 1)
                     {
                         return Error("Symlink target escapes the accepted root", EXDEV);
                     }
@@ -340,6 +343,7 @@ private:
                     last = directories.back();
                     continue;
                 }
+
                 if (!Detail::IsSingleChildComponent(name) || (mInputPins + resolved.mPins.size() > mLimits.shared.liveDescriptors - 7))
                 {
                     return Error("Invalid component or insufficient descriptor budget", E2BIG);
@@ -349,18 +353,18 @@ private:
                 // ever causing an operational open of a substituted special file.
                 const int baseFlags = O_PATH | O_NOFOLLOW | O_CLOEXEC;
                 int descriptor = mContext.OpenNativeAt(directories.back()->mDescriptor, name.c_str(), baseFlags | (pending.empty() ? 0 : O_DIRECTORY));
-                if ((0 > descriptor) && (ENOTDIR == errno) && !pending.empty())
+                if ((descriptor < 0) && (errno == ENOTDIR) && !pending.empty())
                 {
                     descriptor = mContext.OpenNativeAt(directories.back()->mDescriptor, name.c_str(), baseFlags);
                 }
                 ScopedDescriptor acquired(mContext, descriptor);
                 auto step = [&]() -> Result<bool> {
-                    if (0 > acquired.Get())
+                    if (acquired.Get() < 0)
                     {
                         return Error("Cannot pin confined component", SavedError());
                     }
                     struct stat snapshot = {};
-                    if (0 != mContext.StatFileDescriptor(acquired.Get(), &snapshot))
+                    if (mContext.StatFileDescriptor(acquired.Get(), &snapshot) != 0)
                     {
                         return Error("Cannot inspect confined component", SavedError());
                     }
@@ -369,16 +373,19 @@ private:
                     {
                         return std::move(mount).Error();
                     }
-                    if ((MountPolicy::StayOnRootMount == mMounts) && (mount.Value() != mBaseline))
+
+                    if ((mMounts == MountPolicy::StayOnRootMount) && (mount.Value() != mBaseline))
                     {
                         return Error("Component crosses accepted root mount", EXDEV);
                     }
+
                     if (S_ISLNK(snapshot.st_mode))
                     {
                         if (!mFollowLinks)
                         {
                             return Error("Descendant symlink following is disabled", ELOOP);
                         }
+
                         if (++expansions > mLimits.linkExpansions)
                         {
                             return Error("Symlink expansion budget exhausted", ELOOP);
@@ -388,23 +395,26 @@ private:
                         {
                             return std::move(target).Error();
                         }
+
                         if (firstComponent)
                         {
                             resolved.mInitialLinkMetadata = snapshot;
                         }
+
                         if ((target.Value().mountId != mount.Value()) || !CanRetain(target.Value().text.size()))
                         {
                             return Error("Symlink changed mount or exhausted retained-memory budget", E2BIG);
                         }
                         mRetained += target.Value().text.size();
                         std::string text = std::move(target).Value().text;
-                        if (('/' == text.back()) && pending.empty())
+                        if ((text.back() == '/') && pending.empty())
                         {
                             finalDirectoryRequired = true;
                         }
-                        if ('/' == text.front())
+
+                        if (text.front() == '/')
                         {
-                            const std::size_t remaining = mLimits.shared.work - ((nullptr != mLedger) ? *mLedger : mSpent);
+                            const std::size_t remaining = mLimits.shared.work - ((mLedger != nullptr) ? *mLedger : mSpent);
                             PrefixLimits prefix = mLimits.shared;
                             prefix.work = remaining;
                             // The prefix walk also charges the committed work budget.
@@ -427,7 +437,7 @@ private:
                             prefix.retainedBytes = mLimits.shared.retainedBytes - mRetained;
                             auto suffix = Handle::ValidateAbsolutePrefix(mContext, mRootLineage, text, prefix);
                             mSpent += mRootLineage.size() * cost;
-                            if (nullptr != mLedger)
+                            if (mLedger != nullptr)
                             {
                                 *mLedger += mRootLineage.size() * cost;
                             }
@@ -445,7 +455,7 @@ private:
                         while (start < text.size())
                         {
                             const std::size_t slash = text.find('/', start);
-                            const std::size_t end = (std::string::npos == slash) ? text.size() : slash;
+                            const std::size_t end = (slash == std::string::npos) ? text.size() : slash;
                             if (end != start)
                             {
                                 if (!CanRetain(sizeof(std::string) + end - start))
@@ -457,6 +467,7 @@ private:
                             }
                             start = end + 1;
                         }
+
                         while (!pending.empty())
                         {
                             expanded.emplace_back(std::move(pending.front()));
@@ -471,6 +482,7 @@ private:
                     {
                         return Error("Unsupported confined object type", EOPNOTSUPP);
                     }
+
                     if ((!pending.empty()) && !S_ISDIR(snapshot.st_mode))
                     {
                         return Error("Intermediate component is not a directory", ENOTDIR);
@@ -502,10 +514,12 @@ private:
                     return std::move(finalized).Error();
                 }
             }
-            if (finalDirectoryRequired && (Handle::Type::Directory != last->AcquiredType()))
+
+            if (finalDirectoryRequired && (last->AcquiredType() != Handle::Type::Directory))
             {
                 return Error("Trailing slash requires a directory", ENOTDIR);
             }
+
             for (const Handle* directory : directories)
             {
                 Detail::ResolvedPath::Frame frame;
@@ -518,12 +532,14 @@ private:
                         break;
                     }
                 }
+
                 if (!frame.owned)
                 {
                     frame.borrowed = directory;
                 }
                 resolved.mFrames.emplace_back(frame);
             }
+
             for (std::size_t index = 0; index < resolved.mPins.size(); ++index)
             {
                 if (&resolved.mPins[index] == last)
@@ -533,6 +549,7 @@ private:
                     break;
                 }
             }
+
             if (!resolved.mOwnsLeaf)
             {
                 resolved.mBorrowedLeaf = last;
@@ -572,14 +589,7 @@ Result<Detail::ResolvedPath> Path::ResolveChild(const ContextInterface& context,
     const std::vector<const Handle*>& parentLineage, std::string component, bool followSymlinks, MountPolicy mounts, const ResolverLimits& limits,
     std::size_t* ledger)
 {
-    try
-    {
-        return Resolver(context, rootLineage, parentLineage, followSymlinks, mounts, limits, ledger).Run(std::move(component));
-    }
-    catch (const std::bad_alloc&)
-    {
-        return Error("Unable to allocate bounded confined resolution", ENOMEM);
-    }
+    return Resolver(context, rootLineage, parentLineage, followSymlinks, mounts, limits, ledger).Run(std::move(component));
 }
 
 Path::Path(const ContextInterface& context, ResolverLimits limits)
@@ -649,7 +659,8 @@ Path::~Path() noexcept
         {
             // The release already relinquished ownership before native calls.
         }
-        if (0 != mCloseError)
+
+        if (mCloseError != 0)
         {
             try
             {
@@ -667,7 +678,7 @@ Result<bool> Path::Close()
 {
     if (mCloseAttempted)
     {
-        if (0 != mCloseError)
+        if (mCloseError != 0)
         {
             return Error("Cannot close acquired filesystem path", mCloseError);
         }
@@ -680,9 +691,9 @@ Result<bool> Path::Close()
     mCurrentLineage.clear();
     auto release = [this](Handle& pin) {
         const int error = pin.CloseOnce();
-        if (0 != error)
+        if (error != 0)
         {
-            if (0 == mCloseError)
+            if (mCloseError == 0)
             {
                 mCloseError = error;
             }
@@ -706,6 +717,7 @@ Result<bool> Path::Close()
             release(*pin);
         }
     }
+
     for (auto stage = mRetiredStages.rbegin(); stage != mRetiredStages.rend(); ++stage)
     {
         for (auto pin = stage->mPins.rbegin(); pin != stage->mPins.rend(); ++pin)
@@ -713,6 +725,7 @@ Result<bool> Path::Close()
             release(*pin);
         }
     }
+
     for (auto stage = mRootStages.rbegin(); stage != mRootStages.rend(); ++stage)
     {
         for (auto pin = stage->mPins.rbegin(); pin != stage->mPins.rend(); ++pin)
@@ -720,10 +733,12 @@ Result<bool> Path::Close()
             release(*pin);
         }
     }
+
     for (auto pin = mComponents.rbegin(); pin != mComponents.rend(); ++pin)
     {
         release(*pin);
     }
+
     if (mProcessRoot)
     {
         release(*mProcessRoot);
@@ -734,7 +749,7 @@ Result<bool> Path::Close()
     mComponents.clear();
     mProcessRoot.reset();
     mStoredMemory = 0;
-    if (0 != mCloseError)
+    if (mCloseError != 0)
     {
         return Error("Cannot close acquired filesystem path", mCloseError);
     }
@@ -759,15 +774,17 @@ bool Path::ChargeWork() noexcept
 
 std::size_t Path::HeldDescriptors() const noexcept
 {
-    std::size_t count = mComponents.size() + ((nullptr != mProcessRoot) ? 1 : 0) + (mDetachedResources ? mDetachedResources->descriptors : 0);
+    std::size_t count = mComponents.size() + ((mProcessRoot != nullptr) ? 1 : 0) + (mDetachedResources ? mDetachedResources->descriptors : 0);
     for (const auto& stage : mRootStages)
     {
         count += stage.OwnedDescriptors();
     }
+
     for (const auto& stage : mStages)
     {
         count += stage.OwnedDescriptors();
     }
+
     for (const auto& stage : mRetiredStages)
     {
         count += stage.OwnedDescriptors();
@@ -794,22 +811,23 @@ Result<Handle> Path::RetainLeaf(Detail::ResolvedPath& stage, const std::string& 
     }
     const Handle& source = stage.Leaf();
     const std::size_t held = HeldDescriptors();
-    if ((nullptr == source.mContext) || (0 > source.mDescriptor) || (Handle::Type::Directory != source.mType) || (held > mLimits.shared.liveDescriptors) ||
+    if ((source.mContext == nullptr) || (source.mDescriptor < 0) || (source.mType != Handle::Type::Directory) || (held > mLimits.shared.liveDescriptors) ||
         (stage.OwnedDescriptors() > mLimits.shared.liveDescriptors - held) || (mLimits.shared.liveDescriptors - held - stage.OwnedDescriptors() < 7))
     {
         return Error("Cannot retain borrowed directory without descriptor budget", EMFILE);
     }
     ScopedDescriptor duplicate(*mContext, ::fcntl(source.mDescriptor, F_DUPFD_CLOEXEC, 0));
     auto retained = [&]() -> Result<Handle> {
-        if (0 > duplicate.Get())
+        if (duplicate.Get() < 0)
         {
             return Error("Cannot retain pinned directory", SavedError());
         }
         struct stat snapshot = {};
-        if (0 != mContext->StatFileDescriptor(duplicate.Get(), &snapshot))
+        if (mContext->StatFileDescriptor(duplicate.Get(), &snapshot) != 0)
         {
             return Error("Cannot inspect retained directory pin", SavedError());
         }
+
         if (!SameIdentity(source.mSnapshot, snapshot) || !S_ISDIR(snapshot.st_mode))
         {
             return Error("Retained directory identity changed", EAGAIN);
@@ -827,6 +845,7 @@ Result<Handle> Path::RetainLeaf(Detail::ResolvedPath& stage, const std::string& 
             }
             return primary;
         }
+
         if (!matched.Value())
         {
             const Error primary("Retained directory mount differs from its source", EAGAIN);
@@ -844,161 +863,160 @@ Result<Handle> Path::RetainLeaf(Detail::ResolvedPath& stage, const std::string& 
 
 Result<Path> Path::AcquireRoot(const ContextInterface& context, std::string absoluteRoot, RootPolicy policy, ResolverLimits limits, bool regularFileRoot)
 {
-    if ((absoluteRoot.empty()) || ('/' != absoluteRoot.front()) || (std::string::npos != absoluteRoot.find('\0')) || (0 == limits.shared.work) ||
-        (0 == limits.shared.components) || (0 == limits.shared.liveDescriptors) || (0 == limits.shared.retainedBytes) ||
-        (0 == limits.shared.targetBytes) || (0 == limits.shared.fdinfoBytes) || (0 == limits.linkTargetBytes) || (0 == limits.linkExpansions) ||
-        (0 == limits.depth) || (absoluteRoot.size() > limits.shared.retainedBytes) || (8 > limits.shared.liveDescriptors) ||
-        ((SymlinkPolicy::Reject != policy.symlinks) && (SymlinkPolicy::FollowWithinRoot != policy.symlinks)) ||
-        ((MountPolicy::AllowCrossing != policy.mounts) && (MountPolicy::StayOnRootMount != policy.mounts)))
+    if ((absoluteRoot.empty()) || (absoluteRoot.front() != '/') || (absoluteRoot.find('\0') != std::string::npos) || (limits.shared.work == 0) ||
+        (limits.shared.components == 0) || (limits.shared.liveDescriptors == 0) || (limits.shared.retainedBytes == 0) ||
+        (limits.shared.targetBytes == 0) || (limits.shared.fdinfoBytes == 0) || (limits.linkTargetBytes == 0) || (limits.linkExpansions == 0) ||
+        (limits.depth == 0) || (absoluteRoot.size() > limits.shared.retainedBytes) || (limits.shared.liveDescriptors < 8) ||
+        ((policy.symlinks != SymlinkPolicy::Reject) && (policy.symlinks != SymlinkPolicy::FollowWithinRoot)) ||
+        ((policy.mounts != MountPolicy::AllowCrossing) && (policy.mounts != MountPolicy::StayOnRootMount)))
     {
         return Error("An absolute authorized directory, policy and positive budgets are required", EINVAL);
     }
-    try
-    {
-        Path path(context, limits);
-        auto acquired = [&]() -> Result<bool> {
-            if (!path.ChargeWork())
-            {
-                return Error("Root acquisition work budget exhausted", E2BIG);
-            }
-            auto process = Handle::PinProcessRoot(context);
-            if (!process.HasValue())
-            {
-                return std::move(process).Error();
-            }
-            if (("/" == absoluteRoot) && regularFileRoot)
-            {
-                return Error("Expected a regular file root", EISDIR);
-            }
-            if ("/" == absoluteRoot)
-            {
-                path.mComponents.emplace_back(std::move(process).Value());
-                path.mRootLineage.push_back(&path.mComponents.front());
-                path.mCurrentLineage = path.mRootLineage;
-                path.mStoredMemory = sizeof(Handle) + 1;
-            }
-            else
-            {
-                path.mProcessRoot.reset(new Handle(std::move(process).Value()));
-                path.mRootLineage.push_back(path.mProcessRoot.get());
-                std::vector<const Handle*> parent = path.mRootLineage;
-                for (std::size_t position = 1; position < absoluteRoot.size();)
-                {
-                    const std::size_t slash = absoluteRoot.find('/', position);
-                    const std::size_t end = (std::string::npos == slash) ? absoluteRoot.size() : slash;
-                    const std::string component = absoluteRoot.substr(position, end - position);
-                    if (!Detail::IsSingleChildComponent(component))
-                    {
-                        return Error("Root contains an invalid component", EINVAL);
-                    }
-                    if ((path.HeldDescriptors() > limits.shared.liveDescriptors - 7) || (path.mStoredMemory >= limits.shared.retainedBytes))
-                    {
-                        return Error("Root lineage exceeds resource budget", E2BIG);
-                    }
-                    ResolverLimits available = limits;
-                    available.shared.liveDescriptors -= path.HeldDescriptors() - 1;
-                    available.shared.retainedBytes -= path.mStoredMemory;
-                    auto next = ResolveChild(context, path.mRootLineage, parent, component, SymlinkPolicy::FollowWithinRoot == policy.symlinks,
-                        policy.mounts, available, &path.mWorkSpent);
-                    if (!next.HasValue())
-                    {
-                        return std::move(next).Error();
-                    }
-                    const bool finalComponent = (std::string::npos == slash);
-                    if ((Handle::Type::Directory != next.Value().Leaf().AcquiredType()) &&
-                        !(regularFileRoot && finalComponent && (Handle::Type::RegularFile == next.Value().Leaf().AcquiredType())))
-                    {
-                        return Error("Configured root component is not a directory", ENOTDIR);
-                    }
-                    const std::size_t bytes = next.Value().AccountedBytes();
-                    if (bytes > limits.shared.retainedBytes - path.mStoredMemory)
-                    {
-                        return Error("Root lineage exceeds retained-memory budget", E2BIG);
-                    }
-                    path.mStoredMemory += bytes;
-                    path.mRootStages.emplace_back(std::move(next).Value());
-                    parent = path.mRootStages.back().DirectoryLineage();
-                    position = (std::string::npos == slash) ? absoluteRoot.size() : slash + 1;
-                }
-                if (path.mRootStages.empty())
-                {
-                    return Error("Configured root needs a directory component", EINVAL);
-                }
-                const std::string rootName = path.mRootStages.back().Leaf().Component();
-                auto ownedRoot = path.RetainLeaf(path.mRootStages.back(), rootName);
-                if (!ownedRoot.HasValue())
-                {
-                    return std::move(ownedRoot).Error();
-                }
-                path.mComponents.emplace_back(std::move(ownedRoot).Value());
-                path.mRootStages.back().ForwardLeaf(path.mComponents.front());
-                path.mRootLineage = path.mRootStages.back().DirectoryLineage();
-                path.mRootLineage.back() = &path.mComponents.front();
-                path.mCurrentLineage.assign(1, &path.mComponents.front());
-            }
-            if (!path.ChargeWork())
-            {
-                return Error("Root mount-inspection work budget exhausted", E2BIG);
-            }
-            auto mount = path.RootMountId();
-            if (!mount.HasValue())
-            {
-                return std::move(mount).Error();
-            }
-            path.mRootMountId = mount.Value();
-            if (regularFileRoot && (Handle::Type::RegularFile != path.Root().AcquiredType()))
-            {
-                return Error("Expected a regular file root", EISDIR);
-            }
-            if (!regularFileRoot && (Handle::Type::Directory != path.Root().AcquiredType()))
-            {
-                return Error("Expected a directory root", ENOTDIR);
-            }
-            return true;
-        }();
-        if (!acquired.HasValue())
+    Path path(context, limits);
+    auto acquired = [&]() -> Result<bool> {
+        if (!path.ChargeWork())
         {
-            auto primary = std::move(acquired).Error();
-            auto closed = path.Close();
-            if (!closed.HasValue())
-            {
-                (void)Detail::FinalizeResult(context, Result<bool>(primary), closed.Error().code);
-            }
-            return primary;
+            return Error("Root acquisition work budget exhausted", E2BIG);
         }
-        return std::move(path);
-    }
-    catch (const std::bad_alloc&)
+        auto process = Handle::PinProcessRoot(context);
+        if (!process.HasValue())
+        {
+            return std::move(process).Error();
+        }
+
+        if (("/" == absoluteRoot) && regularFileRoot)
+        {
+            return Error("Expected a regular file root", EISDIR);
+        }
+
+        if ("/" == absoluteRoot)
+        {
+            path.mComponents.emplace_back(std::move(process).Value());
+            path.mRootLineage.push_back(&path.mComponents.front());
+            path.mCurrentLineage = path.mRootLineage;
+            path.mStoredMemory = sizeof(Handle) + 1;
+        }
+        else
+        {
+            path.mProcessRoot.reset(new Handle(std::move(process).Value()));
+            path.mRootLineage.push_back(path.mProcessRoot.get());
+            std::vector<const Handle*> parent = path.mRootLineage;
+            for (std::size_t position = 1; position < absoluteRoot.size();)
+            {
+                const std::size_t slash = absoluteRoot.find('/', position);
+                const std::size_t end = (slash == std::string::npos) ? absoluteRoot.size() : slash;
+                const std::string component = absoluteRoot.substr(position, end - position);
+                if (!Detail::IsSingleChildComponent(component))
+                {
+                    return Error("Root contains an invalid component", EINVAL);
+                }
+
+                if ((path.HeldDescriptors() > limits.shared.liveDescriptors - 7) || (path.mStoredMemory >= limits.shared.retainedBytes))
+                {
+                    return Error("Root lineage exceeds resource budget", E2BIG);
+                }
+                ResolverLimits available = limits;
+                available.shared.liveDescriptors -= path.HeldDescriptors() - 1;
+                available.shared.retainedBytes -= path.mStoredMemory;
+                auto next = ResolveChild(context, path.mRootLineage, parent, component, policy.symlinks == SymlinkPolicy::FollowWithinRoot,
+                    policy.mounts, available, &path.mWorkSpent);
+                if (!next.HasValue())
+                {
+                    return std::move(next).Error();
+                }
+                const bool finalComponent = (slash == std::string::npos);
+                if ((next.Value().Leaf().AcquiredType() != Handle::Type::Directory) &&
+                    !(regularFileRoot && finalComponent && (next.Value().Leaf().AcquiredType() == Handle::Type::RegularFile)))
+                {
+                    return Error("Configured root component is not a directory", ENOTDIR);
+                }
+                const std::size_t bytes = next.Value().AccountedBytes();
+                if (bytes > limits.shared.retainedBytes - path.mStoredMemory)
+                {
+                    return Error("Root lineage exceeds retained-memory budget", E2BIG);
+                }
+                path.mStoredMemory += bytes;
+                path.mRootStages.emplace_back(std::move(next).Value());
+                parent = path.mRootStages.back().DirectoryLineage();
+                position = (slash == std::string::npos) ? absoluteRoot.size() : slash + 1;
+            }
+
+            if (path.mRootStages.empty())
+            {
+                return Error("Configured root needs a directory component", EINVAL);
+            }
+            const std::string rootName = path.mRootStages.back().Leaf().Component();
+            auto ownedRoot = path.RetainLeaf(path.mRootStages.back(), rootName);
+            if (!ownedRoot.HasValue())
+            {
+                return std::move(ownedRoot).Error();
+            }
+            path.mComponents.emplace_back(std::move(ownedRoot).Value());
+            path.mRootStages.back().ForwardLeaf(path.mComponents.front());
+            path.mRootLineage = path.mRootStages.back().DirectoryLineage();
+            path.mRootLineage.back() = &path.mComponents.front();
+            path.mCurrentLineage.assign(1, &path.mComponents.front());
+        }
+
+        if (!path.ChargeWork())
+        {
+            return Error("Root mount-inspection work budget exhausted", E2BIG);
+        }
+        auto mount = path.RootMountId();
+        if (!mount.HasValue())
+        {
+            return std::move(mount).Error();
+        }
+        path.mRootMountId = mount.Value();
+        if (regularFileRoot && (path.Root().AcquiredType() != Handle::Type::RegularFile))
+        {
+            return Error("Expected a regular file root", EISDIR);
+        }
+
+        if (!regularFileRoot && (path.Root().AcquiredType() != Handle::Type::Directory))
+        {
+            return Error("Expected a directory root", ENOTDIR);
+        }
+        return true;
+    }();
+    if (!acquired.HasValue())
     {
-        return Error("Unable to allocate bounded root acquisition", ENOMEM);
+        auto primary = std::move(acquired).Error();
+        auto closed = path.Close();
+        if (!closed.HasValue())
+        {
+            (void)Detail::FinalizeResult(context, Result<bool>(primary), closed.Error().code);
+        }
+        return primary;
     }
+    return std::move(path);
 }
 
 Result<Optional<Path::ChildObservation>> Path::ObserveChild(const std::string& component, std::size_t fdinfoByteCap) const
 {
-    if (mComponents.empty() || (Handle::Type::Directory != Leaf().AcquiredType()) || !Detail::IsSingleChildComponent(component))
+    if (mComponents.empty() || (Leaf().AcquiredType() != Handle::Type::Directory) || !Detail::IsSingleChildComponent(component))
     {
         return Error("A live directory and one child name are required", EINVAL);
     }
     // Verify the parent through the same trusted-procfs route as all pinned
     // operations before observing its child. A failed procfs check is fatal.
-    auto parent = Leaf().Inspect(fdinfoByteCap);
+    auto parent = Leaf().Stat(fdinfoByteCap);
     if (!parent.HasValue())
     {
         return std::move(parent).Error();
     }
     ScopedDescriptor child(*mContext, mContext->OpenNativeAt(Leaf().mDescriptor, component.c_str(), O_PATH | O_NOFOLLOW | O_CLOEXEC));
     auto observedResult = [&]() -> Result<Optional<ChildObservation>> {
-        if (0 > child.Get())
+        if (child.Get() < 0)
         {
-            if (ENOENT == errno)
+            if (errno == ENOENT)
             {
                 return Optional<ChildObservation>();
             }
             return Error("Cannot observe pinned directory child", SavedError());
         }
         ChildObservation observed;
-        if (0 != mContext->StatFileDescriptor(child.Get(), &observed.metadata))
+        if (mContext->StatFileDescriptor(child.Get(), &observed.metadata) != 0)
         {
             return Error("Cannot inspect pinned directory child", SavedError());
         }
@@ -1035,23 +1053,28 @@ Result<bool> Path::Push(std::string component, ExtensionPolicy policy)
     {
         return Error("Path has no accepted root", EINVAL);
     }
-    if (!Detail::IsSingleChildComponent(component) || (SymlinkPolicy::Reject != policy.symlinks && SymlinkPolicy::FollowWithinRoot != policy.symlinks) ||
-        (MountPolicy::AllowCrossing != policy.mounts && MountPolicy::StayOnRootMount != policy.mounts))
+
+    if (!Detail::IsSingleChildComponent(component) || (policy.symlinks != SymlinkPolicy::Reject && policy.symlinks != SymlinkPolicy::FollowWithinRoot) ||
+        (policy.mounts != MountPolicy::AllowCrossing && policy.mounts != MountPolicy::StayOnRootMount))
     {
         return Error("Invalid child component or extension policy", EINVAL);
     }
-    if (HardlinkPolicy::RequireUnique == policy.hardlinks)
+
+    if (policy.hardlinks == HardlinkPolicy::RequireUnique)
     {
         return Error("Hardlink inspection timing is not yet specified", ENOTSUP);
     }
-    if (HardlinkPolicy::Permit != policy.hardlinks)
+
+    if (policy.hardlinks != HardlinkPolicy::Permit)
     {
         return Error("Invalid hardlink policy", EINVAL);
     }
-    if (Handle::Type::Directory != mComponents.back().AcquiredType())
+
+    if (mComponents.back().AcquiredType() != Handle::Type::Directory)
     {
         return Error("Cannot extend a regular-file leaf", ENOTDIR);
     }
+
     if (!ChargeWork())
     {
         return Error("Path work budget exhausted", E2BIG);
@@ -1061,6 +1084,7 @@ Result<bool> Path::Push(std::string component, ExtensionPolicy policy)
     {
         return std::move(baseline).Error();
     }
+
     if (mRootMountId != baseline.Value())
     {
         return Error("Accepted root mount identity changed", EAGAIN);
@@ -1070,66 +1094,60 @@ Result<bool> Path::Push(std::string component, ExtensionPolicy policy)
     {
         return Error("Path descriptor budget exhausted", EMFILE);
     }
+
     if ((mStoredMemory > mLimits.shared.retainedBytes) || (mDetachedResources->bytes >= mLimits.shared.retainedBytes - mStoredMemory))
     {
         return Error("Path retained-memory budget exhausted", E2BIG);
     }
+    ResolverLimits available = mLimits;
+    std::vector<const Handle*> unique = mRootLineage;
+    for (const Handle* pin : mCurrentLineage)
+    {
+        if (unique.end() == std::find(unique.begin(), unique.end(), pin))
+        {
+            unique.push_back(pin);
+        }
+    }
+    available.shared.liveDescriptors -= held - unique.size();
+    available.shared.retainedBytes -= mStoredMemory + mDetachedResources->bytes;
+    auto resolved = ResolveChild(*mContext, mRootLineage, mCurrentLineage, std::move(component), policy.symlinks == SymlinkPolicy::FollowWithinRoot,
+        policy.mounts, available, &mWorkSpent);
+    if (!resolved.HasValue())
+    {
+        return std::move(resolved).Error();
+    }
+    const std::size_t bytes = resolved.Value().AccountedBytes();
+    if (bytes > mLimits.shared.retainedBytes - mStoredMemory - mDetachedResources->bytes)
+    {
+        return Error("Path retained-memory budget exhausted", E2BIG);
+    }
+    const std::string name = resolved.Value().Leaf().Component();
+    auto leaf = RetainLeaf(resolved.Value(), name);
+    if (!leaf.HasValue())
+    {
+        return std::move(leaf).Error();
+    }
+    mComponents.emplace_back(std::move(leaf).Value());
+    bool stageAdded = false;
     try
     {
-        ResolverLimits available = mLimits;
-        std::vector<const Handle*> unique = mRootLineage;
-        for (const Handle* pin : mCurrentLineage)
-        {
-            if (unique.end() == std::find(unique.begin(), unique.end(), pin))
-            {
-                unique.push_back(pin);
-            }
-        }
-        available.shared.liveDescriptors -= held - unique.size();
-        available.shared.retainedBytes -= mStoredMemory + mDetachedResources->bytes;
-        auto resolved = ResolveChild(*mContext, mRootLineage, mCurrentLineage, std::move(component), SymlinkPolicy::FollowWithinRoot == policy.symlinks,
-            policy.mounts, available, &mWorkSpent);
-        if (!resolved.HasValue())
-        {
-            return std::move(resolved).Error();
-        }
-        const std::size_t bytes = resolved.Value().AccountedBytes();
-        if (bytes > mLimits.shared.retainedBytes - mStoredMemory - mDetachedResources->bytes)
-        {
-            return Error("Path retained-memory budget exhausted", E2BIG);
-        }
-        const std::string name = resolved.Value().Leaf().Component();
-        auto leaf = RetainLeaf(resolved.Value(), name);
-        if (!leaf.HasValue())
-        {
-            return std::move(leaf).Error();
-        }
-        mComponents.emplace_back(std::move(leaf).Value());
-        bool stageAdded = false;
-        try
-        {
-            resolved.Value().ForwardLeaf(mComponents.back());
-            mStages.emplace_back(std::move(resolved).Value());
-            stageAdded = true;
-            auto physical = mStages.back().DirectoryLineage();
-            mCurrentLineage.swap(physical);
-        }
-        catch (...)
-        {
-            if (stageAdded)
-            {
-                mStages.pop_back();
-            }
-            mComponents.pop_back();
-            throw;
-        }
-        mStoredMemory += bytes;
-        return true;
+        resolved.Value().ForwardLeaf(mComponents.back());
+        mStages.emplace_back(std::move(resolved).Value());
+        stageAdded = true;
+        auto physical = mStages.back().DirectoryLineage();
+        mCurrentLineage.swap(physical);
     }
-    catch (const std::bad_alloc&)
+    catch (...)
     {
-        return Error("Unable to allocate bounded path extension", ENOMEM);
+        if (stageAdded)
+        {
+            mStages.pop_back();
+        }
+        mComponents.pop_back();
+        throw;
     }
+    mStoredMemory += bytes;
+    return true;
 }
 
 Result<Handle> Path::Pop()
@@ -1141,35 +1159,21 @@ Result<Handle> Path::Pop()
     // Prepare the surviving physical lineage before transferring ownership:
     // allocation failure must leave the stack and every borrow unchanged.
     std::vector<const Handle*> surviving;
-    try
+    if (mComponents.size() > 2)
     {
-        if (mComponents.size() > 2)
-        {
-            surviving = mStages[mStages.size() - 2].DirectoryLineage();
-        }
-        else if (mComponents.size() == 2)
-        {
-            surviving.push_back(&mComponents.front());
-        }
+        surviving = mStages[mStages.size() - 2].DirectoryLineage();
     }
-    catch (const std::bad_alloc&)
+    else if (mComponents.size() == 2)
     {
-        return Error("Unable to restore surviving path lineage", ENOMEM);
+        surviving.push_back(&mComponents.front());
     }
 
     const bool retainStage = mComponents.size() > 1 && mStages.back().OwnedDescriptors() != 0;
     if (retainStage)
     {
-        try
-        {
-            // Allocate before transferring the leaf; failure leaves the
-            // existing path and all its borrows intact.
-            mRetiredStages.emplace_back(std::move(mStages.back()));
-        }
-        catch (const std::bad_alloc&)
-        {
-            return Error("Unable to retain popped acquisition stage", ENOMEM);
-        }
+        // Allocate before transferring the leaf; failure leaves the
+        // existing path and all its borrows intact.
+        mRetiredStages.emplace_back(std::move(mStages.back()));
         mStages.pop_back();
         auto& retired = mRetiredStages.back();
         retired.mFrames.clear();

@@ -187,11 +187,11 @@ TEST(FilesystemCollectionTest, OwnedLiveEntryOutlivesRangeButCollectedSnapshotHa
         ASSERT_NE(entry, opened->end());
         ASSERT_TRUE(entry->HasValue());
         ASSERT_NE(nullptr, entry->Value().LiveHandle());
-        inode = entry->Value().LiveHandle()->Snapshot().st_ino;
+        inode = entry->Value().LiveHandle()->Stat().st_ino;
         ASSERT_TRUE(opened->Close().HasValue());
     }
     ASSERT_EQ(0, unlink(tree.Path("file").c_str()));
-    auto inspected = entry->Value().LiveHandle()->Inspect(FilesystemCollectionLimits{}.fullPathBytes);
+    auto inspected = entry->Value().LiveHandle()->Stat(FilesystemCollectionLimits{}.fullPathBytes);
     ASSERT_TRUE(inspected.HasValue()) << inspected.Error().message;
     EXPECT_EQ(inode, inspected.Value().st_ino);
 }
@@ -1587,7 +1587,7 @@ TEST(FilesystemCollectionTest, FactoryAcquiresRootButReadsDescendantsOnePullAtAT
     ASSERT_TRUE(entry->HasValue());
     EXPECT_EQ(tree.Path("root"), entry->Value().path);
     ASSERT_NE(nullptr, entry->Value().LiveHandle());
-    auto rootIdentity = entry->Value().LiveHandle()->Inspect(FilesystemCollectionLimits{}.fullPathBytes);
+    auto rootIdentity = entry->Value().LiveHandle()->Stat(FilesystemCollectionLimits{}.fullPathBytes);
     ASSERT_TRUE(rootIdentity.HasValue()) << rootIdentity.Error().message;
     EXPECT_EQ(1u, stats);
     EXPECT_EQ(0u, reads);
@@ -1631,9 +1631,9 @@ TEST(FilesystemCollectionTest, RangeForRetainsEachRegularFilePinWithoutReacquiri
         ASSERT_TRUE(item.HasValue()) << item.Error().message;
         const auto& entry = item.Value();
         ASSERT_NE(nullptr, entry.LiveHandle());
-        const auto inode = entry.LiveHandle()->Snapshot().st_ino;
+        const auto inode = entry.LiveHandle()->Stat().st_ino;
         ASSERT_EQ(0, unlink(entry.path.c_str()));
-        auto inspected = entry.LiveHandle()->Inspect(FilesystemCollectionLimits{}.fullPathBytes);
+        auto inspected = entry.LiveHandle()->Stat(FilesystemCollectionLimits{}.fullPathBytes);
         ASSERT_TRUE(inspected.HasValue()) << inspected.Error().message;
         EXPECT_EQ(inode, inspected.Value().st_ino);
         seen.push_back(entry.path);
@@ -1846,7 +1846,7 @@ TEST(FilesystemCollectionTest, DescendantOpenFailureIsDeferredUntilAfterItsEntry
     ASSERT_TRUE(entry->HasValue());
     EXPECT_EQ(tree.Path("root/child"), entry->Value().path);
     ASSERT_NE(nullptr, entry->Value().LiveHandle());
-    const auto childInode = entry->Value().LiveHandle()->Snapshot().st_ino;
+    const auto childInode = entry->Value().LiveHandle()->Stat().st_ino;
     EXPECT_EQ(expectedChild.st_ino, childInode);
     ++entry;
     ASSERT_NE(entry, files.end());

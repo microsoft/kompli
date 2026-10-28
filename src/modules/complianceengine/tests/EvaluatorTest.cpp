@@ -837,6 +837,32 @@ TEST(UserDotFilePermissionsErrorsTest, MissingGroupIgnoresStaleErrnoInAudit)
     EXPECT_NE(std::string::npos, result.Error().message.find("No such file or directory"));
 }
 
+TEST(UserDotFilePermissionsErrorsTest, GroupLookupEIOPropagatesInAudit)
+{
+    MockContext context;
+    context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    const gid_t groupId = 23456;
+    const std::string home = context.GetTempdirPath() + "/unopened-home";
+    const std::string passwd =
+        context.MakeTempfile("fixture:x:" + std::to_string(getuid()) + ":" + std::to_string(groupId) + "::" + home + ":/bin/sh\n");
+
+    EXPECT_CALL(context, GetGroupById(groupId)).Times(1).WillRepeatedly([](gid_t) -> struct group* {
+        errno = EIO;
+        return nullptr;
+    });
+    EXPECT_CALL(context, ChownPinnedFileDescriptor(testing::_, testing::_, testing::_)).Times(0);
+    EXPECT_CALL(context, ChmodPinnedAlias(testing::_, testing::_, testing::_)).Times(0);
+
+    ComplianceEngine::IndicatorsTree indicators;
+    indicators.Push("UserDotFilePermissions");
+    const auto result = ComplianceEngine::AuditUserDotFilePermissionsWithPasswdFile(indicators, context, passwd);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EIO, result.Error().code);
+    EXPECT_NE(std::string::npos, result.Error().message.find("Failed to get group for user"));
+    EXPECT_NE(std::string::npos, result.Error().message.find("Input/output error"));
+    EXPECT_TRUE(indicators.Back().indicators.empty());
+}
+
 TEST(UserDotFilePermissionsErrorsTest, ForbiddenDotFileRemainsOrdinaryVerdict)
 {
     MockContext context;
@@ -901,6 +927,7 @@ TEST(UserDotFilePermissionsErrorsTest, RemediationIsDisabledBeforeOpeningPasswdF
     MockContext context;
     ComplianceEngine::IndicatorsTree indicators;
     indicators.Push("UserDotFilePermissions");
+    EXPECT_CALL(context, GetGroupById(testing::_)).Times(0);
     EXPECT_CALL(context, OpenNativePath(testing::_, testing::_)).Times(0);
     EXPECT_CALL(context, ChownPinnedFileDescriptor(testing::_, testing::_, testing::_)).Times(0);
     EXPECT_CALL(context, ChmodPinnedAlias(testing::_, testing::_, testing::_)).Times(0);

@@ -33,6 +33,7 @@ struct MockContext : public ComplianceEngine::ContextInterface
     MOCK_METHOD(int, CloseDirectory, (DIR * directory), (const, override));
     MOCK_METHOD(int, StatPath, (const char* path, struct stat* metadata), (const, override));
     MOCK_METHOD(int, LstatPath, (const char* path, struct stat* metadata), (const, override));
+    MOCK_METHOD(struct group*, GetGroupById, (gid_t id), (const, override));
     MOCK_METHOD(ComplianceEngine::Result<std::vector<ComplianceEngine::InterfaceInfo>>, GetNetworkInterfaces, (), (const, override));
 
     ComplianceEngine::Result<std::string> GetRunningKernelRelease() const override
@@ -99,6 +100,7 @@ struct MockContext : public ComplianceEngine::ContextInterface
         ON_CALL(*this, LstatPath(testing::_, testing::_)).WillByDefault([this](const char* path, struct stat* metadata) {
             return ContextInterface::LstatPath(path, metadata);
         });
+        ON_CALL(*this, GetGroupById(testing::_)).WillByDefault([this](gid_t id) { return ContextInterface::GetGroupById(id); });
         mTempRootDir = mTempdir + "/rootfs";
         ::mkdir(mTempRootDir.c_str(), 0755);
 

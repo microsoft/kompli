@@ -60,12 +60,13 @@ struct VerifiedProcfs
 template <typename T>
 Result<T> FinalizeResult(const ContextInterface& context, Result<T> result, int closeError)
 {
-    if (0 != closeError)
+    if (closeError != 0)
     {
         if (result.HasValue())
         {
             return Error("Cannot close internal filesystem descriptor", closeError);
         }
+
         try
         {
             OsConfigLogError(context.GetLogHandle(), "Secondary filesystem helper close failure: %d", closeError);

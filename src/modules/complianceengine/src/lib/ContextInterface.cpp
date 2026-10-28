@@ -82,4 +82,9 @@ int ContextInterface::LstatPath(const char* path, struct stat* metadata) const
 {
     return ::lstat(path, metadata);
 }
+
+struct group* ContextInterface::GetGroupById(gid_t id) const
+{
+    return ::getgrgid(id);
+}
 } // namespace ComplianceEngine

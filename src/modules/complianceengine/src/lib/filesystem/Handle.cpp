@@ -6,6 +6,7 @@
 #include "ContextInterface.h"
 #include "Optional.h"
 #include "PathInternal.hpp"
+#include "ReadableFile.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -14,7 +15,6 @@
 #include <fcntl.h>
 #include <limits>
 #include <linux/magic.h>
-#include <new>
 #include <stdexcept>
 #include <sys/statfs.h>
 #include <unistd.h>
@@ -29,7 +29,7 @@ namespace Detail
 {
 int SavedError() noexcept
 {
-    return (0 != errno) ? errno : EIO;
+    return (errno != 0) ? errno : EIO;
 }
 
 // Temporary procfs and operational descriptors never escape the internal
@@ -42,7 +42,7 @@ ScopedDescriptor::ScopedDescriptor(const ContextInterface& context, int descript
 ScopedDescriptor::~ScopedDescriptor() noexcept
 {
     const int error = CloseOnce();
-    if (0 != error)
+    if (error != 0)
     {
         try
         {
@@ -55,7 +55,7 @@ ScopedDescriptor::~ScopedDescriptor() noexcept
 }
 int ScopedDescriptor::CloseOnce() noexcept
 {
-    if (0 > mDescriptor)
+    if (mDescriptor < 0)
     {
         return 0;
     }
@@ -64,7 +64,7 @@ int ScopedDescriptor::CloseOnce() noexcept
     int error = 0;
     try
     {
-        if (0 != mContext.CloseFileDescriptor(descriptor))
+        if (mContext.CloseFileDescriptor(descriptor) != 0)
         {
             error = SavedError();
         }
@@ -95,7 +95,7 @@ static bool IsProcfsDirectory(int descriptor)
 {
     struct statfs filesystem = {};
     struct stat metadata = {};
-    return (0 == ::fstatfs(descriptor, &filesystem)) && (PROC_SUPER_MAGIC == filesystem.f_type) && (0 == ::fstat(descriptor, &metadata)) &&
+    return (::fstatfs(descriptor, &filesystem) == 0) && (filesystem.f_type == PROC_SUPER_MAGIC) && (::fstat(descriptor, &metadata) == 0) &&
            S_ISDIR(metadata.st_mode);
 }
 
@@ -117,36 +117,36 @@ VerifiedProcfs::VerifiedProcfs(const ContextInterface& context)
 Result<bool> VerifiedProcfs::Open()
 {
     auto opened = [&]() -> Result<bool> {
-        if (0 <= proc.Get())
+        if (proc.Get() >= 0)
         {
             return Error("Procfs directory verification was already attempted", EINVAL);
         }
         proc.Set(proc.Context().OpenNativePath("/proc", O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
-        if ((0 > proc.Get()) || !IsProcfsDirectory(proc.Get()))
+        if ((proc.Get() < 0) || !IsProcfsDirectory(proc.Get()))
         {
-            return Error("Trusted procfs directory is unavailable", (0 > proc.Get()) ? SavedError() : EPROTO);
+            return Error("Trusted procfs directory is unavailable", (proc.Get() < 0) ? SavedError() : EPROTO);
         }
         self.Set(proc.Context().OpenNativeAt(proc.Get(), "self", O_PATH | O_DIRECTORY | O_CLOEXEC));
-        if (0 > self.Get())
+        if (self.Get() < 0)
         {
             return Error("Procfs self directory cannot be verified", SavedError());
         }
         pid.Set(proc.Context().OpenNativeAt(proc.Get(), std::to_string(::getpid()).c_str(), O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
         struct stat selfStat = {}, pidStat = {};
-        if ((0 > self.Get()) || (0 > pid.Get()) || !IsProcfsDirectory(self.Get()) || !IsProcfsDirectory(pid.Get()) ||
-            (0 != ::fstat(self.Get(), &selfStat)) || (0 != ::fstat(pid.Get(), &pidStat)) || !SameIdentity(selfStat, pidStat))
+        if ((self.Get() < 0) || (pid.Get() < 0) || !IsProcfsDirectory(self.Get()) || !IsProcfsDirectory(pid.Get()) ||
+            (::fstat(self.Get(), &selfStat) != 0) || (::fstat(pid.Get(), &pidStat) != 0) || !SameIdentity(selfStat, pidStat))
         {
-            return Error("Procfs self directory cannot be verified", (0 > pid.Get()) ? SavedError() : EPROTO);
+            return Error("Procfs self directory cannot be verified", (pid.Get() < 0) ? SavedError() : EPROTO);
         }
         fd.Set(proc.Context().OpenNativeAt(self.Get(), "fd", O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
-        if (0 > fd.Get())
+        if (fd.Get() < 0)
         {
             return Error("Procfs descriptor directories cannot be verified", SavedError());
         }
         fdinfo.Set(proc.Context().OpenNativeAt(self.Get(), "fdinfo", O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
-        if ((0 > fd.Get()) || (0 > fdinfo.Get()) || !IsProcfsDirectory(fd.Get()) || !IsProcfsDirectory(fdinfo.Get()))
+        if ((fd.Get() < 0) || (fdinfo.Get() < 0) || !IsProcfsDirectory(fd.Get()) || !IsProcfsDirectory(fdinfo.Get()))
         {
-            return Error("Procfs descriptor directories cannot be verified", (0 > fdinfo.Get()) ? SavedError() : EPROTO);
+            return Error("Procfs descriptor directories cannot be verified", (fdinfo.Get() < 0) ? SavedError() : EPROTO);
         }
         return true;
     }();
@@ -160,9 +160,9 @@ int VerifiedProcfs::CloseOnce() noexcept
     for (ScopedDescriptor* resource : resources)
     {
         const int error = resource->CloseOnce();
-        if (0 != error)
+        if (error != 0)
         {
-            if (0 == firstError)
+            if (firstError == 0)
             {
                 firstError = error;
             }
@@ -183,7 +183,7 @@ int VerifiedProcfs::CloseOnce() noexcept
 
 static Result<std::uint64_t> ParseMountIdImpl(const std::string& fdinfo)
 {
-    if (std::string::npos != fdinfo.find('\0'))
+    if (fdinfo.find('\0') != std::string::npos)
     {
         return Error("Malformed procfs descriptor information", EPROTO);
     }
@@ -193,11 +193,12 @@ static Result<std::uint64_t> ParseMountIdImpl(const std::string& fdinfo)
     while (lineStart < fdinfo.size())
     {
         const std::size_t end = fdinfo.find('\n', lineStart);
-        if (std::string::npos == end)
+        if (end == std::string::npos)
         {
             return Error("Truncated procfs descriptor information", EPROTO);
         }
-        if (0 == fdinfo.compare(lineStart, 7, "mnt_id:"))
+
+        if (fdinfo.compare(lineStart, 7, "mnt_id:") == 0)
         {
             if (found)
             {
@@ -205,30 +206,34 @@ static Result<std::uint64_t> ParseMountIdImpl(const std::string& fdinfo)
             }
             found = true;
             std::size_t position = lineStart + 7;
-            while ((position < end) && ((' ' == fdinfo[position]) || ('\t' == fdinfo[position])))
+            while ((position < end) && ((fdinfo[position] == ' ') || (fdinfo[position] == '\t')))
             {
                 ++position;
             }
+
             if (position == end)
             {
                 return Error("Empty procfs descriptor mount ID", EPROTO);
             }
+
             for (; position < end; ++position)
             {
                 const char digit = fdinfo[position];
-                if (('0' > digit) || ('9' < digit) || (mountId > (std::numeric_limits<std::uint64_t>::max() - static_cast<unsigned>(digit - '0')) / 10))
+                if ((digit < '0') || (digit > '9') || (mountId > (std::numeric_limits<std::uint64_t>::max() - static_cast<unsigned>(digit - '0')) / 10))
                 {
                     return Error("Invalid procfs descriptor mount ID", EPROTO);
                 }
                 mountId = (mountId * 10) + static_cast<unsigned>(digit - '0');
             }
-            if (0 == mountId)
+
+            if (mountId == 0)
             {
                 return Error("Invalid procfs descriptor mount ID", EPROTO);
             }
         }
         lineStart = end + 1;
     }
+
     if (!found)
     {
         return Error("Missing procfs descriptor mount ID", EPROTO);
@@ -238,14 +243,14 @@ static Result<std::uint64_t> ParseMountIdImpl(const std::string& fdinfo)
 
 Result<std::uint64_t> MountId(const ContextInterface& context, int fdinfoDirectory, int descriptor, std::size_t byteCap)
 {
-    if ((0 == byteCap) || (byteCap >= std::string().max_size()))
+    if ((byteCap == 0) || (byteCap >= std::string().max_size()))
     {
         return Error("Invalid procfs descriptor information byte cap", EINVAL);
     }
     const std::string number = std::to_string(descriptor);
     ScopedDescriptor info(context, context.OpenNativeAt(fdinfoDirectory, number.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW));
     auto read = [&]() -> Result<std::uint64_t> {
-        if (0 > info.Get())
+        if (info.Get() < 0)
         {
             return Error("Cannot open procfs descriptor information", SavedError());
         }
@@ -255,18 +260,21 @@ Result<std::uint64_t> MountId(const ContextInterface& context, int fdinfoDirecto
         {
             const std::size_t request = std::min(sizeof(buffer), byteCap - bytes.size() + 1);
             const ssize_t count = context.ReadFileDescriptor(info.Get(), buffer, request);
-            if (0 > count)
+            if (count < 0)
             {
                 return Error("Cannot read procfs descriptor information", SavedError());
             }
-            if (0 == count)
+
+            if (count == 0)
             {
                 break;
             }
+
             if (static_cast<std::size_t>(count) > request)
             {
                 return Error("Procfs descriptor information returned more bytes than requested", EIO);
             }
+
             if (static_cast<std::size_t>(count) > byteCap - bytes.size())
             {
                 return Error("Procfs descriptor information exceeds byte cap", E2BIG);
@@ -312,10 +320,10 @@ ReadOnlyActivation& ReadOnlyActivation::operator=(ReadOnlyActivation&& other) no
 
 ReadOnlyActivation::~ReadOnlyActivation() noexcept
 {
-    if (0 <= mDescriptor)
+    if (mDescriptor >= 0)
     {
         const int error = CloseOnce();
-        if (0 != error)
+        if (error != 0)
         {
             try
             {
@@ -329,7 +337,7 @@ ReadOnlyActivation::~ReadOnlyActivation() noexcept
 }
 int ReadOnlyActivation::CloseOnce() noexcept
 {
-    if (0 > mDescriptor)
+    if (mDescriptor < 0)
     {
         return 0;
     }
@@ -356,38 +364,42 @@ int ReadOnlyActivation::Transfer() noexcept
 
 Result<ReadOnlyActivation> ActivateReadOnly(const ContextInterface& context, int pin, const struct stat& snapshot, bool directory, std::size_t fdinfoByteCap)
 {
-    if (0 > pin)
+    if (pin < 0)
     {
         return Error("Read-only activation requires a live pin", EINVAL);
     }
-    if ((0 == fdinfoByteCap) || (fdinfoByteCap >= std::string().max_size()))
+
+    if ((fdinfoByteCap == 0) || (fdinfoByteCap >= std::string().max_size()))
     {
         return Error("Invalid procfs descriptor information byte cap", EINVAL);
     }
     struct stat before = {};
-    if (0 != context.StatFileDescriptor(pin, &before))
+    if (context.StatFileDescriptor(pin, &before) != 0)
     {
         return Error("Cannot inspect pinned object", SavedError());
     }
+
     if (!SameIdentity(before, snapshot))
     {
         return Error("Pinned object identity changed", EAGAIN);
     }
+
     if ((directory && !S_ISDIR(before.st_mode)) || (!directory && !S_ISREG(before.st_mode)))
     {
         return Error("Pinned object has an unsupported type", EINVAL);
     }
     const int pinFlags = ::fcntl(pin, F_GETFL);
-    if (0 > pinFlags)
+    if (pinFlags < 0)
     {
         return Error("Cannot inspect pinned descriptor flags", SavedError());
     }
     const int pinDescriptorFlags = ::fcntl(pin, F_GETFD);
-    if (0 > pinDescriptorFlags)
+    if (pinDescriptorFlags < 0)
     {
         return Error("Cannot inspect pinned descriptor flags", SavedError());
     }
-    if ((0 == (pinFlags & O_PATH)) || (0 == (pinDescriptorFlags & FD_CLOEXEC)))
+
+    if (((pinFlags & O_PATH) == 0) || ((pinDescriptorFlags & FD_CLOEXEC) == 0))
     {
         return Error("Pinned object is not a close-on-exec O_PATH descriptor", EINVAL);
     }
@@ -410,15 +422,16 @@ Result<ReadOnlyActivation> ActivateReadOnly(const ContextInterface& context, int
         const std::string alias = std::to_string(pin);
         const int flags = O_RDONLY | O_CLOEXEC | (directory ? O_DIRECTORY : 0);
         operational.Set(context.OpenNativeAt(procfs.fd.Get(), alias.c_str(), flags));
-        if (0 > operational.Get())
+        if (operational.Get() < 0)
         {
             return Error("Cannot open pinned descriptor alias for reading", SavedError());
         }
         struct stat activated = {}, stillPinned = {};
-        if ((0 != context.StatFileDescriptor(operational.Get(), &activated)) || (0 != context.StatFileDescriptor(pin, &stillPinned)))
+        if ((context.StatFileDescriptor(operational.Get(), &activated) != 0) || (context.StatFileDescriptor(pin, &stillPinned) != 0))
         {
             return Error("Cannot inspect activated object and pin", SavedError());
         }
+
         if (!SameIdentity(before, activated) || !SameIdentity(before, stillPinned))
         {
             return Error("Activated object does not match live pin", EAGAIN);
@@ -433,6 +446,7 @@ Result<ReadOnlyActivation> ActivateReadOnly(const ContextInterface& context, int
         {
             return std::move(retainedMount).Error();
         }
+
         if ((pinnedMount.Value() != activatedMount.Value()) || (pinnedMount.Value() != retainedMount.Value()))
         {
             return Error("Activated object mount does not match live pin", EAGAIN);
@@ -463,169 +477,38 @@ using Detail::SavedError;
 using Detail::ScopedDescriptor;
 using Detail::VerifiedProcfs;
 
-ReadableFile::ReadableFile(const ContextInterface& context, int descriptor) noexcept
-    : mContext(&context),
-      mDescriptor(descriptor)
-{
-}
-
-ReadableFile::ReadableFile(ReadableFile&& other) noexcept
-    : mContext(other.mContext),
-      mDescriptor(other.mDescriptor),
-      mCloseError(other.mCloseError)
-{
-    other.mContext = nullptr;
-    other.mDescriptor = -1;
-    other.mCloseError = 0;
-}
-
-ReadableFile& ReadableFile::operator=(ReadableFile&& other) noexcept
-{
-    if (this != &other)
-    {
-        // Destruction of the previous ownership retains its nonthrowing
-        // close/log contract, including on an injected close failure.
-        ReadableFile incoming(std::move(other));
-        using std::swap;
-        swap(mContext, incoming.mContext);
-        swap(mDescriptor, incoming.mDescriptor);
-        swap(mCloseError, incoming.mCloseError);
-    }
-    return *this;
-}
-
-ReadableFile::~ReadableFile() noexcept
-{
-    if (0 <= mDescriptor)
-    {
-        auto closed = Close();
-        if (!closed.HasValue())
-        {
-            try
-            {
-                OsConfigLogError(mContext->GetLogHandle(), "Failed to close readable filesystem descriptor: %d", closed.Error().code);
-            }
-            catch (...)
-            {
-                // Cleanup and diagnostic failure cannot terminate destruction.
-            }
-        }
-    }
-}
-
-Result<std::string> ReadableFile::Read(std::size_t maxBytes) const
-{
-    if ((nullptr == mContext) || (0 > mDescriptor))
-    {
-        return Error("Readable file is closed", EBADF);
-    }
-    if ((0 == maxBytes) || (maxBytes > static_cast<std::size_t>(std::numeric_limits<ssize_t>::max())))
-    {
-        return Error("Readable file chunk size must be positive and fit a native read", EINVAL);
-    }
-    if (maxBytes > std::string().max_size())
-    {
-        return Error("Readable file chunk size is not representable", EOVERFLOW);
-    }
-    try
-    {
-        std::string chunk(maxBytes, '\0');
-        const ssize_t bytes = mContext->ReadFileDescriptor(mDescriptor, &chunk[0], maxBytes);
-        if (0 > bytes)
-        {
-            return Error("Cannot read acquired file", SavedError());
-        }
-        if (static_cast<std::size_t>(bytes) > maxBytes)
-        {
-            return Error("Readable file returned more bytes than requested", EIO);
-        }
-        chunk.resize(static_cast<std::size_t>(bytes));
-        return std::move(chunk);
-    }
-    catch (const std::bad_alloc&)
-    {
-        return Error("Unable to allocate readable file chunk", ENOMEM);
-    }
-    catch (const std::length_error&)
-    {
-        return Error("Readable file chunk size is not representable", EOVERFLOW);
-    }
-}
-
-Result<struct stat> ReadableFile::Inspect() const
-{
-    if ((nullptr == mContext) || (0 > mDescriptor))
-    {
-        return Error("Readable file is closed", EBADF);
-    }
-    struct stat metadata = {};
-    if (0 != mContext->StatFileDescriptor(mDescriptor, &metadata))
-    {
-        return Error("Cannot inspect readable file", SavedError());
-    }
-    return metadata;
-}
-
-Result<bool> ReadableFile::Close()
-{
-    if (0 > mDescriptor)
-    {
-        if (0 != mCloseError)
-        {
-            return Error("Cannot close readable file", mCloseError);
-        }
-        return true;
-    }
-    const int descriptor = mDescriptor;
-    mDescriptor = -1;
-    try
-    {
-        if (0 != mContext->CloseFileDescriptor(descriptor))
-        {
-            mCloseError = SavedError();
-        }
-    }
-    catch (...)
-    {
-        // Never retry close: Linux may already have reused this fd number.
-        mCloseError = EIO;
-    }
-    if (0 != mCloseError)
-    {
-        return Error("Cannot close readable file", mCloseError);
-    }
-    return true;
-}
-
 Result<Handle> Handle::AcquireChild(const ContextInterface& context, int parentDirectory, std::string component, bool directory)
 {
     if (!Detail::IsSingleChildComponent(component))
     {
         return Error("Expected one child component", EINVAL);
     }
-    if (0 > parentDirectory)
+
+    if (parentDirectory < 0)
     {
         return Error("Invalid parent directory descriptor", EBADF);
     }
     const int parentFlags = ::fcntl(parentDirectory, F_GETFL);
-    if (0 > parentFlags)
+    if (parentFlags < 0)
     {
         return Error("Cannot inspect parent directory descriptor", SavedError());
     }
     const int parentDescriptorFlags = ::fcntl(parentDirectory, F_GETFD);
-    if (0 > parentDescriptorFlags)
+    if (parentDescriptorFlags < 0)
     {
         return Error("Cannot inspect parent directory descriptor", SavedError());
     }
-    if ((0 == (parentFlags & O_PATH)) || (0 == (parentDescriptorFlags & FD_CLOEXEC)))
+
+    if (((parentFlags & O_PATH) == 0) || ((parentDescriptorFlags & FD_CLOEXEC) == 0))
     {
         return Error("A held close-on-exec directory pin is required", EINVAL);
     }
     struct stat parent = {};
-    if (0 != context.StatFileDescriptor(parentDirectory, &parent))
+    if (context.StatFileDescriptor(parentDirectory, &parent) != 0)
     {
         return Error("Cannot inspect held parent directory", SavedError());
     }
+
     if (!S_ISDIR(parent.st_mode))
     {
         return Error("Parent is not a directory", ENOTDIR);
@@ -633,19 +516,21 @@ Result<Handle> Handle::AcquireChild(const ContextInterface& context, int parentD
     const int flags = O_PATH | O_NOFOLLOW | O_CLOEXEC | (directory ? O_DIRECTORY : 0);
     ScopedDescriptor acquired(context, context.OpenNativeAt(parentDirectory, component.c_str(), flags));
     auto pinned = [&]() -> Result<Handle> {
-        if (0 > acquired.Get())
+        if (acquired.Get() < 0)
         {
             return Error("Cannot pin filesystem component", SavedError());
         }
         struct stat snapshot = {};
-        if (0 != context.StatFileDescriptor(acquired.Get(), &snapshot))
+        if (context.StatFileDescriptor(acquired.Get(), &snapshot) != 0)
         {
             return Error("Cannot inspect pinned filesystem component", SavedError());
         }
+
         if (S_ISLNK(snapshot.st_mode))
         {
             return Error("Symlink component is not allowed", ELOOP);
         }
+
         if ((directory && !S_ISDIR(snapshot.st_mode)) || (!directory && !S_ISREG(snapshot.st_mode)))
         {
             return Error("Unsupported filesystem component type", EINVAL);
@@ -663,15 +548,16 @@ Result<Handle> Handle::PinProcessRoot(const ContextInterface& context)
 {
     ScopedDescriptor acquired(context, context.OpenNativePath("/", O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
     auto pinned = [&]() -> Result<Handle> {
-        if (0 > acquired.Get())
+        if (acquired.Get() < 0)
         {
             return Error("Cannot pin process root for absolute-prefix validation", SavedError());
         }
         struct stat snapshot = {};
-        if (0 != context.StatFileDescriptor(acquired.Get(), &snapshot))
+        if (context.StatFileDescriptor(acquired.Get(), &snapshot) != 0)
         {
             return Error("Cannot inspect process root pin", SavedError());
         }
+
         if (!S_ISDIR(snapshot.st_mode))
         {
             return Error("Process root is not a directory", ENOTDIR);
@@ -685,7 +571,7 @@ Result<Handle> Handle::PinProcessRoot(const ContextInterface& context)
 
 Result<Handle> Handle::AcquireChild(const Handle& parent, std::string component, bool directory)
 {
-    if ((!parent.mPin) || (Handle::Type::Directory != parent.mType) || (nullptr == parent.mContext))
+    if ((!parent.mPin) || (parent.mType != Handle::Type::Directory) || (parent.mContext == nullptr))
     {
         return Error("A live directory pin is required", EINVAL);
     }
@@ -694,21 +580,24 @@ Result<Handle> Handle::AcquireChild(const Handle& parent, std::string component,
 
 Result<bool> Handle::RecognizeAcceptedRoot(const Handle& acceptedRoot, const Handle& candidate, std::size_t fdinfoByteCap)
 {
-    if ((!acceptedRoot.mPin) || (!candidate.mPin) || (Handle::Type::Directory != acceptedRoot.mType) || (Handle::Type::Directory != candidate.mType) ||
-        (nullptr == acceptedRoot.mContext) || (nullptr == candidate.mContext) || (0 > acceptedRoot.mDescriptor) || (0 > candidate.mDescriptor) || (0 == fdinfoByteCap))
+    if ((!acceptedRoot.mPin) || (!candidate.mPin) || (acceptedRoot.mType != Handle::Type::Directory) || (candidate.mType != Handle::Type::Directory) ||
+        (acceptedRoot.mContext == nullptr) || (candidate.mContext == nullptr) || (acceptedRoot.mDescriptor < 0) || (candidate.mDescriptor < 0) ||
+        (fdinfoByteCap == 0))
     {
         return Error("Two live directory pins and a positive fdinfo cap are required", EINVAL);
     }
     struct stat root = {}, observed = {};
-    if ((0 != acceptedRoot.mContext->StatFileDescriptor(acceptedRoot.mDescriptor, &root)) ||
-        (0 != candidate.mContext->StatFileDescriptor(candidate.mDescriptor, &observed)))
+    if ((acceptedRoot.mContext->StatFileDescriptor(acceptedRoot.mDescriptor, &root) != 0) ||
+        (candidate.mContext->StatFileDescriptor(candidate.mDescriptor, &observed) != 0))
     {
         return Error("Cannot inspect accepted root and candidate pins", SavedError());
     }
+
     if (!SameIdentity(root, acceptedRoot.mSnapshot) || !SameIdentity(observed, candidate.mSnapshot) || !S_ISDIR(root.st_mode) || !S_ISDIR(observed.st_mode))
     {
         return Error("Root or candidate pin identity changed", EAGAIN);
     }
+
     if (!SameIdentity(root, observed))
     {
         return false;
@@ -731,11 +620,12 @@ Result<bool> Handle::RecognizeAcceptedRoot(const Handle& acceptedRoot, const Han
             return std::move(candidateMount).Error();
         }
         struct stat retainedRoot = {}, retainedCandidate = {};
-        if ((0 != acceptedRoot.mContext->StatFileDescriptor(acceptedRoot.mDescriptor, &retainedRoot)) ||
-            (0 != candidate.mContext->StatFileDescriptor(candidate.mDescriptor, &retainedCandidate)))
+        if ((acceptedRoot.mContext->StatFileDescriptor(acceptedRoot.mDescriptor, &retainedRoot) != 0) ||
+            (candidate.mContext->StatFileDescriptor(candidate.mDescriptor, &retainedCandidate) != 0))
         {
             return Error("Cannot recheck accepted root and candidate pins", SavedError());
         }
+
         if (!SameIdentity(root, retainedRoot) || !SameIdentity(observed, retainedCandidate))
         {
             return Error("Root or candidate pin changed during comparison", EAGAIN);
@@ -748,8 +638,8 @@ Result<bool> Handle::RecognizeAcceptedRoot(const Handle& acceptedRoot, const Han
 Result<std::string> Handle::ValidateAbsolutePrefix(const ContextInterface& context, const std::vector<const Handle*>& heldLineage,
     const std::string& target, const PrefixLimits& limits)
 {
-    if ((target.empty()) || ('/' != target[0]) || (std::string::npos != target.find('\0')) || (0 == limits.targetBytes) || (0 == limits.components) ||
-        (0 == limits.work) || (0 == limits.liveDescriptors) || (0 == limits.retainedBytes) || (0 == limits.fdinfoBytes) ||
+    if ((target.empty()) || (target[0] != '/') || (target.find('\0') != std::string::npos) || (limits.targetBytes == 0) || (limits.components == 0) ||
+        (limits.work == 0) || (limits.liveDescriptors == 0) || (limits.retainedBytes == 0) || (limits.fdinfoBytes == 0) ||
         (target.size() > limits.targetBytes) || heldLineage.empty() || (heldLineage.size() - 1 > limits.components))
     {
         return Error("Invalid absolute candidate or explicit prefix limits", EINVAL);
@@ -760,9 +650,10 @@ Result<std::string> Handle::ValidateAbsolutePrefix(const ContextInterface& conte
     {
         return Error("Insufficient live-descriptor budget for prefix verification", EMFILE);
     }
+
     for (const Handle* held : heldLineage)
     {
-        if ((nullptr == held) || (!held->mPin) || (Handle::Type::Directory != held->mType) || (0 > held->mDescriptor))
+        if ((held == nullptr) || (!held->mPin) || (held->mType != Handle::Type::Directory) || (held->mDescriptor < 0))
         {
             return Error("A complete live directory-pin lineage is required", EINVAL);
         }
@@ -789,7 +680,8 @@ Result<std::string> Handle::ValidateAbsolutePrefix(const ContextInterface& conte
         }
         retained += sizeof(Handle) + held->mComponent.size();
     }
-    if ((retained > limits.retainedBytes) || (sizeof(Handle) + 1 > limits.retainedBytes - retained))
+
+    if ((retained > limits.retainedBytes) || (limits.retainedBytes - retained < sizeof(Handle) + 1))
     {
         return Error("Process-root candidate exceeds retained-memory budget", E2BIG);
     }
@@ -819,6 +711,7 @@ Result<std::string> Handle::ValidateAbsolutePrefix(const ContextInterface& conte
         {
             return std::move(matchedSlash).Error();
         }
+
         if (!matchedSlash.Value())
         {
             return Error("Absolute candidate has another process root", EXDEV);
@@ -826,16 +719,17 @@ Result<std::string> Handle::ValidateAbsolutePrefix(const ContextInterface& conte
         std::size_t position = 1;
         for (std::size_t index = 1; index < heldLineage.size(); ++index)
         {
-            while ((position < target.size()) && ('/' == target[position]))
+            while ((position < target.size()) && (target[position] == '/'))
             {
                 ++position;
             }
             const std::size_t end = target.find('/', position);
-            const std::size_t stop = (std::string::npos == end) ? target.size() : end;
+            const std::size_t stop = (end == std::string::npos) ? target.size() : end;
             if ((position == stop) || (stop - position > limits.targetBytes))
             {
                 return Error("Absolute candidate ends before the accepted root", EACCES);
             }
+
             if (candidate.size() > limits.liveDescriptors - 7 - heldLineage.size())
             {
                 return Error("Absolute candidate exceeds live-descriptor budget", EMFILE);
@@ -845,10 +739,12 @@ Result<std::string> Handle::ValidateAbsolutePrefix(const ContextInterface& conte
             {
                 return Error("Dot components before the accepted root are unsupported", EACCES);
             }
+
             if (!spend())
             {
                 return Error("Absolute prefix exceeds work budget", E2BIG);
             }
+
             if ((retained > limits.retainedBytes) || (component.size() > limits.retainedBytes - retained) ||
                 (sizeof(Handle) > limits.retainedBytes - retained - component.size()))
             {
@@ -866,13 +762,15 @@ Result<std::string> Handle::ValidateAbsolutePrefix(const ContextInterface& conte
             {
                 return std::move(match).Error();
             }
+
             if (!match.Value())
             {
                 return Error("Absolute candidate prefix differs from held root lineage", EXDEV);
             }
             position = stop;
         }
-        while ((position < target.size()) && ('/' == target[position]))
+
+        while ((position < target.size()) && (target[position] == '/'))
         {
             ++position;
         }
@@ -928,10 +826,10 @@ Handle& Handle::operator=(Handle&& other) noexcept
 
 Handle::~Handle() noexcept
 {
-    if (0 <= mDescriptor)
+    if (mDescriptor >= 0)
     {
         const int error = CloseOnce();
-        if (0 != error)
+        if (error != 0)
         {
             try
             {
@@ -955,37 +853,39 @@ const std::string& Handle::Component() const noexcept
     return mComponent;
 }
 
-const struct stat& Handle::Snapshot() const noexcept
+const struct stat& Handle::Stat() const noexcept
 {
     return mSnapshot;
 }
 
 Result<struct stat> Handle::InspectWithProcfs(int fdinfoDirectory, std::size_t fdinfoByteCap, std::uint64_t& mountId) const
 {
-    if ((!mPin) || (nullptr == mContext) || (0 > mDescriptor) || (0 == fdinfoByteCap) || (fdinfoByteCap >= std::string().max_size()))
+    if ((!mPin) || (mContext == nullptr) || (mDescriptor < 0) || (fdinfoByteCap == 0) || (fdinfoByteCap >= std::string().max_size()))
     {
         return Error("Metadata inspection requires a live pin and a positive fdinfo cap", EINVAL);
     }
     const int flags = ::fcntl(mDescriptor, F_GETFL);
-    if (0 > flags)
+    if (flags < 0)
     {
         return Error("Cannot inspect pinned descriptor flags", SavedError());
     }
     const int descriptorFlags = ::fcntl(mDescriptor, F_GETFD);
-    if (0 > descriptorFlags)
+    if (descriptorFlags < 0)
     {
         return Error("Cannot inspect pinned descriptor flags", SavedError());
     }
-    if ((0 == (flags & O_PATH)) || (0 == (descriptorFlags & FD_CLOEXEC)))
+
+    if (((flags & O_PATH) == 0) || ((descriptorFlags & FD_CLOEXEC) == 0))
     {
         return Error("Metadata operation requires a close-on-exec O_PATH pin", EINVAL);
     }
     struct stat before = {}, after = {};
-    if (0 != mContext->StatFileDescriptor(mDescriptor, &before))
+    if (mContext->StatFileDescriptor(mDescriptor, &before) != 0)
     {
         return Error("Cannot inspect pinned metadata", SavedError());
     }
-    if (!SameIdentity(before, mSnapshot) || ((Type::RegularFile == mType) && !S_ISREG(before.st_mode)) || ((Type::Directory == mType) && !S_ISDIR(before.st_mode)))
+
+    if (!SameIdentity(before, mSnapshot) || ((mType == Type::RegularFile) && !S_ISREG(before.st_mode)) || ((mType == Type::Directory) && !S_ISDIR(before.st_mode)))
     {
         return Error("Pinned metadata has an unexpected identity or type", EAGAIN);
     }
@@ -994,10 +894,12 @@ Result<struct stat> Handle::InspectWithProcfs(int fdinfoDirectory, std::size_t f
     {
         return std::move(observedMount).Error();
     }
-    if (0 != mContext->StatFileDescriptor(mDescriptor, &after))
+
+    if (mContext->StatFileDescriptor(mDescriptor, &after) != 0)
     {
         return Error("Cannot recheck pinned metadata", SavedError());
     }
+
     if (!SameIdentity(before, after))
     {
         return Error("Pinned metadata identity changed", EAGAIN);
@@ -1007,6 +909,7 @@ Result<struct stat> Handle::InspectWithProcfs(int fdinfoDirectory, std::size_t f
     {
         return std::move(retainedMount).Error();
     }
+
     if (observedMount.Value() != retainedMount.Value())
     {
         return Error("Pinned metadata mount changed", EAGAIN);
@@ -1015,32 +918,25 @@ Result<struct stat> Handle::InspectWithProcfs(int fdinfoDirectory, std::size_t f
     return after;
 }
 
-Result<struct stat> Handle::Inspect(std::size_t fdinfoByteCap) const
+Result<struct stat> Handle::Stat(std::size_t fdinfoByteCap) const
 {
-    if ((!mPin) || (nullptr == mContext) || (0 > mDescriptor) || (0 == fdinfoByteCap) || (fdinfoByteCap >= std::string().max_size()))
+    if ((!mPin) || (mContext == nullptr) || (mDescriptor < 0) || (fdinfoByteCap == 0) || (fdinfoByteCap >= std::string().max_size()))
     {
         return Error("Fresh inspection requires a live pin and a positive fdinfo cap", EINVAL);
     }
-    try
+    VerifiedProcfs procfs(*mContext);
+    auto opened = procfs.Open();
+    if (!opened.HasValue())
     {
-        VerifiedProcfs procfs(*mContext);
-        auto opened = procfs.Open();
-        if (!opened.HasValue())
-        {
-            return std::move(opened).Error();
-        }
-        std::uint64_t mount = 0;
-        return procfs.Finish(InspectWithProcfs(procfs.fdinfo.Get(), fdinfoByteCap, mount));
+        return std::move(opened).Error();
     }
-    catch (const std::bad_alloc&)
-    {
-        return Error("Unable to inspect bounded pinned metadata", ENOMEM);
-    }
+    std::uint64_t mount = 0;
+    return procfs.Finish(InspectWithProcfs(procfs.fdinfo.Get(), fdinfoByteCap, mount));
 }
 
 Result<std::uint64_t> Handle::MountIdentity(std::size_t fdinfoByteCap) const
 {
-    if ((!mPin) || (nullptr == mContext) || (0 > mDescriptor) || (0 == fdinfoByteCap))
+    if ((!mPin) || (mContext == nullptr) || (mDescriptor < 0) || (fdinfoByteCap == 0))
     {
         return Error("Mount inspection requires a live pin and positive fdinfo cap", EINVAL);
     }
@@ -1061,137 +957,128 @@ Result<std::uint64_t> Handle::MountIdentity(std::size_t fdinfoByteCap) const
 
 Result<bool> Handle::SetOwnership(uid_t owner, gid_t group, std::size_t fdinfoByteCap) const
 {
-    if ((!mPin) || (nullptr == mContext) || (0 > mDescriptor) || (0 == fdinfoByteCap) || (fdinfoByteCap >= std::string().max_size()))
+    if ((!mPin) || (mContext == nullptr) || (mDescriptor < 0) || (fdinfoByteCap == 0) || (fdinfoByteCap >= std::string().max_size()))
     {
         return Error("Ownership change requires a live pin and a positive fdinfo cap", EINVAL);
     }
-    try
+    VerifiedProcfs procfs(*mContext);
+    auto opened = procfs.Open();
+    if (!opened.HasValue())
     {
-        VerifiedProcfs procfs(*mContext);
-        auto opened = procfs.Open();
-        if (!opened.HasValue())
+        return std::move(opened).Error();
+    }
+    auto changed = [&]() -> Result<bool> {
+        std::uint64_t mount = 0;
+        auto before = InspectWithProcfs(procfs.fdinfo.Get(), fdinfoByteCap, mount);
+        if (!before.HasValue())
         {
-            return std::move(opened).Error();
+            return std::move(before).Error();
         }
-        auto changed = [&]() -> Result<bool> {
-            std::uint64_t mount = 0;
-            auto before = InspectWithProcfs(procfs.fdinfo.Get(), fdinfoByteCap, mount);
-            if (!before.HasValue())
+        // AT_EMPTY_PATH acts on the O_PATH pin itself. No alias or target
+        // pathname is needed, including for an unreadable regular file.
+        if (mContext->ChownPinnedFileDescriptor(mDescriptor, owner, group) != 0)
+        {
+            return Error("Cannot change pinned ownership", SavedError());
+        }
+        std::uint64_t afterMount = 0;
+        auto after = InspectWithProcfs(procfs.fdinfo.Get(), fdinfoByteCap, afterMount);
+        if (!after.HasValue())
+        {
+            return std::move(after).Error(); // The ownership syscall may already have succeeded.
+        }
+
+        if (mount != afterMount)
+        {
+            return Error("Pinned mount changed after ownership mutation", EAGAIN);
+        }
+        return true;
+    }();
+    return procfs.Finish(std::move(changed));
+}
+
+Result<bool> Handle::SetMode(mode_t mode, std::size_t fdinfoByteCap) const
+{
+    if ((!mPin) || (mContext == nullptr) || (mDescriptor < 0) || (fdinfoByteCap == 0) || (fdinfoByteCap >= std::string().max_size()))
+    {
+        return Error("Mode change requires a live pin and a positive fdinfo cap", EINVAL);
+    }
+    VerifiedProcfs procfs(*mContext);
+    auto opened = procfs.Open();
+    if (!opened.HasValue())
+    {
+        return std::move(opened).Error();
+    }
+    auto changed = [&]() -> Result<bool> {
+        std::uint64_t mount = 0;
+        auto before = InspectWithProcfs(procfs.fdinfo.Get(), fdinfoByteCap, mount);
+        if (!before.HasValue())
+        {
+            return std::move(before).Error();
+        }
+        // Only this verified procfs descriptor alias is followed. Opening it
+        // with O_PATH validates the alias without requiring content-read
+        // permission or triggering special-file open effects.
+        const std::string alias = std::to_string(mDescriptor);
+        const int flags = O_PATH | O_CLOEXEC | ((mType == Type::Directory) ? O_DIRECTORY : 0);
+        ScopedDescriptor candidate(*mContext, mContext->OpenNativeAt(procfs.fd.Get(), alias.c_str(), flags));
+        auto checked = [&]() -> Result<bool> {
+            if (candidate.Get() < 0)
             {
-                return std::move(before).Error();
+                return Error("Cannot inspect pinned mode alias", SavedError());
             }
-            // AT_EMPTY_PATH acts on the O_PATH pin itself. No alias or target
-            // pathname is needed, including for an unreadable regular file.
-            if (0 != mContext->ChownPinnedFileDescriptor(mDescriptor, owner, group))
+            struct stat target = {};
+            if (mContext->StatFileDescriptor(candidate.Get(), &target) != 0)
             {
-                return Error("Cannot change pinned ownership", SavedError());
+                return Error("Cannot inspect pinned mode target", SavedError());
+            }
+
+            if (!SameIdentity(before.Value(), target))
+            {
+                return Error("Pinned mode alias identity differs", EAGAIN);
+            }
+            auto targetMount = MountId(*mContext, procfs.fdinfo.Get(), candidate.Get(), fdinfoByteCap);
+            if (!targetMount.HasValue())
+            {
+                return std::move(targetMount).Error();
+            }
+
+            if (mount != targetMount.Value())
+            {
+                return Error("Pinned mode alias mount differs", EAGAIN);
+            }
+            std::uint64_t retainedMount = 0;
+            auto retained = InspectWithProcfs(procfs.fdinfo.Get(), fdinfoByteCap, retainedMount);
+            if (!retained.HasValue())
+            {
+                return std::move(retained).Error();
+            }
+
+            if (mount != retainedMount)
+            {
+                return Error("Pinned mount changed before mode mutation", EAGAIN);
+            }
+            // Linux's baseline fchmodat follows the procfd magic link, rather
+            // than attempting fchmod on O_PATH or requiring a readable fd.
+            if (mContext->ChmodPinnedAlias(procfs.fd.Get(), alias.c_str(), mode) != 0)
+            {
+                return Error("Cannot change pinned mode", SavedError());
             }
             std::uint64_t afterMount = 0;
             auto after = InspectWithProcfs(procfs.fdinfo.Get(), fdinfoByteCap, afterMount);
             if (!after.HasValue())
             {
-                return std::move(after).Error(); // The ownership syscall may already have succeeded.
+                return std::move(after).Error(); // The chmod syscall may already have succeeded.
             }
+
             if (mount != afterMount)
             {
-                return Error("Pinned mount changed after ownership mutation", EAGAIN);
+                return Error("Pinned mount changed after mode mutation", EAGAIN);
             }
             return true;
         }();
-        return procfs.Finish(std::move(changed));
-    }
-    catch (const std::bad_alloc&)
-    {
-        return Error("Unable to verify bounded pinned ownership mutation", ENOMEM);
-    }
-}
-
-Result<bool> Handle::SetMode(mode_t mode, std::size_t fdinfoByteCap) const
-{
-    if ((!mPin) || (nullptr == mContext) || (0 > mDescriptor) || (0 == fdinfoByteCap) || (fdinfoByteCap >= std::string().max_size()))
-    {
-        return Error("Mode change requires a live pin and a positive fdinfo cap", EINVAL);
-    }
-    try
-    {
-        VerifiedProcfs procfs(*mContext);
-        auto opened = procfs.Open();
-        if (!opened.HasValue())
-        {
-            return std::move(opened).Error();
-        }
-        auto changed = [&]() -> Result<bool> {
-            std::uint64_t mount = 0;
-            auto before = InspectWithProcfs(procfs.fdinfo.Get(), fdinfoByteCap, mount);
-            if (!before.HasValue())
-            {
-                return std::move(before).Error();
-            }
-            // Only this verified procfs descriptor alias is followed. Opening it
-            // with O_PATH validates the alias without requiring content-read
-            // permission or triggering special-file open effects.
-            const std::string alias = std::to_string(mDescriptor);
-            const int flags = O_PATH | O_CLOEXEC | ((Type::Directory == mType) ? O_DIRECTORY : 0);
-            ScopedDescriptor candidate(*mContext, mContext->OpenNativeAt(procfs.fd.Get(), alias.c_str(), flags));
-            auto checked = [&]() -> Result<bool> {
-                if (0 > candidate.Get())
-                {
-                    return Error("Cannot inspect pinned mode alias", SavedError());
-                }
-                struct stat target = {};
-                if (0 != mContext->StatFileDescriptor(candidate.Get(), &target))
-                {
-                    return Error("Cannot inspect pinned mode target", SavedError());
-                }
-                if (!SameIdentity(before.Value(), target))
-                {
-                    return Error("Pinned mode alias identity differs", EAGAIN);
-                }
-                auto targetMount = MountId(*mContext, procfs.fdinfo.Get(), candidate.Get(), fdinfoByteCap);
-                if (!targetMount.HasValue())
-                {
-                    return std::move(targetMount).Error();
-                }
-                if (mount != targetMount.Value())
-                {
-                    return Error("Pinned mode alias mount differs", EAGAIN);
-                }
-                std::uint64_t retainedMount = 0;
-                auto retained = InspectWithProcfs(procfs.fdinfo.Get(), fdinfoByteCap, retainedMount);
-                if (!retained.HasValue())
-                {
-                    return std::move(retained).Error();
-                }
-                if (mount != retainedMount)
-                {
-                    return Error("Pinned mount changed before mode mutation", EAGAIN);
-                }
-                // Linux's baseline fchmodat follows the procfd magic link, rather
-                // than attempting fchmod on O_PATH or requiring a readable fd.
-                if (0 != mContext->ChmodPinnedAlias(procfs.fd.Get(), alias.c_str(), mode))
-                {
-                    return Error("Cannot change pinned mode", SavedError());
-                }
-                std::uint64_t afterMount = 0;
-                auto after = InspectWithProcfs(procfs.fdinfo.Get(), fdinfoByteCap, afterMount);
-                if (!after.HasValue())
-                {
-                    return std::move(after).Error(); // The chmod syscall may already have succeeded.
-                }
-                if (mount != afterMount)
-                {
-                    return Error("Pinned mount changed after mode mutation", EAGAIN);
-                }
-                return true;
-            }();
-            return candidate.Finish(std::move(checked));
-        }();
-        return procfs.Finish(std::move(changed));
-    }
-    catch (const std::bad_alloc&)
-    {
-        return Error("Unable to verify bounded pinned mode mutation", ENOMEM);
-    }
+        return candidate.Finish(std::move(checked));
+    }();
+    return procfs.Finish(std::move(changed));
 }
 
 DirectoryCursor::DirectoryCursor(const ContextInterface& context, DIR* stream)
@@ -1257,13 +1144,13 @@ Result<bool> DirectoryCursor::Close()
 {
     if (!mStream)
     {
-        return (0 == mCloseError) ? Result<bool>(true) : Result<bool>(Error("Cannot close pinned directory", mCloseError));
+        return (mCloseError == 0) ? Result<bool>(true) : Result<bool>(Error("Cannot close pinned directory", mCloseError));
     }
     DIR* stream = mStream;
     mStream = nullptr;
     try
     {
-        if (0 != mContext->CloseDirectory(stream))
+        if (mContext->CloseDirectory(stream) != 0)
         {
             mCloseError = SavedError();
         }
@@ -1272,7 +1159,8 @@ Result<bool> DirectoryCursor::Close()
     {
         mCloseError = EIO;
     }
-    if (0 != mCloseError)
+
+    if (mCloseError != 0)
     {
         return Error("Cannot close pinned directory", mCloseError);
     }
@@ -1286,6 +1174,7 @@ Result<Optional<std::string>> DirectoryCursor::Next()
     {
         return std::move(next).Error();
     }
+
     if (!next.Value().HasValue())
     {
         return Optional<std::string>();
@@ -1299,13 +1188,14 @@ Result<Optional<DirectoryChild>> DirectoryCursor::NextEntry()
     {
         return Error("Cannot read closed pinned directory", EBADF);
     }
+
     for (;;)
     {
         errno = 0;
         const struct dirent* entry = mContext->ReadDirectory(mStream);
         if (!entry)
         {
-            if (0 != errno)
+            if (errno != 0)
             {
                 return Error("Cannot read pinned directory", SavedError());
             }
@@ -1316,6 +1206,7 @@ Result<Optional<DirectoryChild>> DirectoryCursor::NextEntry()
         {
             continue;
         }
+
         if (!Detail::IsSingleChildComponent(name))
         {
             return Error("Pinned directory returned an invalid child name", EINVAL);
@@ -1329,81 +1220,68 @@ Result<Optional<DirectoryChild>> DirectoryCursor::NextEntry()
 
 Result<ReadableFile> Handle::OpenReadOnly(std::size_t fdinfoByteCap) const
 {
-    if ((!mPin) || (nullptr == mContext) || (0 > mDescriptor))
+    if ((!mPin) || (mContext == nullptr) || (mDescriptor < 0))
     {
         return Error("Read-only activation requires a live file pin", EBADF);
     }
-    if (Type::RegularFile != mType)
+
+    if (mType != Type::RegularFile)
     {
         return Error("Read-only activation requires a regular file", EINVAL);
     }
-    try
+    auto activated = Detail::ActivateReadOnly(*mContext, mDescriptor, mSnapshot, false, fdinfoByteCap);
+    if (!activated.HasValue())
     {
-        auto activated = Detail::ActivateReadOnly(*mContext, mDescriptor, mSnapshot, false, fdinfoByteCap);
-        if (!activated.HasValue())
-        {
-            return std::move(activated).Error();
-        }
-        return ReadableFile(*mContext, activated.Value().Transfer());
+        return std::move(activated).Error();
     }
-    catch (const std::bad_alloc&)
-    {
-        return Error("Unable to activate bounded readable file", ENOMEM);
-    }
+    return ReadableFile(*mContext, activated.Value().Transfer());
 }
 
 Result<DirectoryCursor> Handle::OpenChildren(std::size_t fdinfoByteCap) const
 {
-    if ((!mPin) || (nullptr == mContext) || (0 > mDescriptor) || (Type::Directory != mType) || (0 == fdinfoByteCap))
+    if ((!mPin) || (mContext == nullptr) || (mDescriptor < 0) || (mType != Type::Directory) || (fdinfoByteCap == 0))
     {
         return Error("Directory enumeration requires a live directory pin and positive fdinfo cap", EINVAL);
     }
-    try
+    auto activated = Detail::ActivateReadOnly(*mContext, mDescriptor, mSnapshot, true, fdinfoByteCap);
+    if (!activated.HasValue())
     {
-        auto activated = Detail::ActivateReadOnly(*mContext, mDescriptor, mSnapshot, true, fdinfoByteCap);
-        if (!activated.HasValue())
-        {
-            return std::move(activated).Error();
-        }
-        // fdopendir consumes its argument. Keep the independently verified
-        // operational descriptor live until the directory stream is closed.
-        ScopedDescriptor streamDescriptor(*mContext, ::fcntl(activated.Value().Descriptor(), F_DUPFD_CLOEXEC, 0));
-        auto cursor = [&]() -> Result<DirectoryCursor> {
-            if (0 > streamDescriptor.Get())
-            {
-                return Error("Cannot duplicate pinned directory activation", SavedError());
-            }
-            DIR* stream = ::fdopendir(streamDescriptor.Get());
-            if (nullptr == stream)
-            {
-                return Error("Cannot enumerate pinned directory", SavedError());
-            }
-            (void)streamDescriptor.Transfer();
-            DirectoryCursor directory(*mContext, stream);
-            const int activationError = activated.Value().CloseOnce();
-            if (0 != activationError)
-            {
-                auto closed = directory.Close();
-                if (!closed.HasValue())
-                {
-                    (void)Detail::FinalizeResult(*mContext, Result<bool>(Error("Cannot close directory activation", activationError)), closed.Error().code);
-                }
-                return Error("Cannot close directory activation", activationError);
-            }
-            return std::move(directory);
-        }();
-        auto finalized = streamDescriptor.Finish(std::move(cursor));
-        if (!finalized.HasValue())
-        {
-            const int error = activated.Value().CloseOnce();
-            return Detail::FinalizeResult(*mContext, std::move(finalized), error);
-        }
-        return finalized;
+        return std::move(activated).Error();
     }
-    catch (const std::bad_alloc&)
+    // fdopendir consumes its argument. Keep the independently verified
+    // operational descriptor live until the directory stream is closed.
+    ScopedDescriptor streamDescriptor(*mContext, ::fcntl(activated.Value().Descriptor(), F_DUPFD_CLOEXEC, 0));
+    auto cursor = [&]() -> Result<DirectoryCursor> {
+        if (streamDescriptor.Get() < 0)
+        {
+            return Error("Cannot duplicate pinned directory activation", SavedError());
+        }
+        DIR* stream = ::fdopendir(streamDescriptor.Get());
+        if (stream == nullptr)
+        {
+            return Error("Cannot enumerate pinned directory", SavedError());
+        }
+        (void)streamDescriptor.Transfer();
+        DirectoryCursor directory(*mContext, stream);
+        const int activationError = activated.Value().CloseOnce();
+        if (activationError != 0)
+        {
+            auto closed = directory.Close();
+            if (!closed.HasValue())
+            {
+                (void)Detail::FinalizeResult(*mContext, Result<bool>(Error("Cannot close directory activation", activationError)), closed.Error().code);
+            }
+            return Error("Cannot close directory activation", activationError);
+        }
+        return std::move(directory);
+    }();
+    auto finalized = streamDescriptor.Finish(std::move(cursor));
+    if (!finalized.HasValue())
     {
-        return Error("Unable to allocate bounded directory enumeration", ENOMEM);
+        const int error = activated.Value().CloseOnce();
+        return Detail::FinalizeResult(*mContext, std::move(finalized), error);
     }
+    return finalized;
 }
 
 void Handle::Swap(Handle& other) noexcept
@@ -1422,7 +1300,7 @@ void Handle::Swap(Handle& other) noexcept
 
 int Handle::CloseOnce() noexcept
 {
-    if (-1 == mDescriptor)
+    if (mDescriptor == -1)
     {
         return mCloseError;
     }
@@ -1437,7 +1315,7 @@ int Handle::CloseOnce() noexcept
     }
     try
     {
-        if (0 != mContext->CloseFileDescriptor(descriptor))
+        if (mContext->CloseFileDescriptor(descriptor) != 0)
         {
             mCloseError = SavedError();
         }
@@ -1454,7 +1332,7 @@ int Handle::CloseOnce() noexcept
 Result<bool> Handle::Close()
 {
     const int error = CloseOnce();
-    if (0 != error)
+    if (error != 0)
     {
         return Error("Cannot close pinned filesystem descriptor", error);
     }

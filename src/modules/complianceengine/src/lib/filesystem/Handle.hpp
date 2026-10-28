@@ -25,36 +25,7 @@ namespace Filesystem
 class Path;
 struct PrefixLimits;
 class Handle;
-// Owns a separate read-only descriptor verified against a live regular-file
-// Handle. The context must outlive this resource. No descriptor escapes.
-class ReadableFile
-{
-public:
-    ReadableFile(const ReadableFile&) = delete;
-    ReadableFile& operator=(const ReadableFile&) = delete;
-    ReadableFile(ReadableFile&& other) noexcept;
-    ReadableFile& operator=(ReadableFile&& other) noexcept;
-    ~ReadableFile() noexcept;
-
-    // One native read of at most maxBytes, without retries or byte policy.
-    // Callers supply a positive bounded chunk size. An empty successful
-    // string means EOF; bytes (including NUL) are returned unchanged.
-    // Native failures (including EINTR) retain errno.
-    Result<std::string> Read(std::size_t maxBytes) const;
-    // Fresh fstat of the readable descriptor, not the original pin or name.
-    Result<struct stat> Inspect() const;
-    // Attempt close once, even on failure. Subsequent calls return the same
-    // result without touching a possibly reused descriptor number. Destruction
-    // closes and logs failures only if no explicit close was attempted.
-    Result<bool> Close();
-
-private:
-    friend class Handle;
-    ReadableFile(const ContextInterface& context, int descriptor) noexcept;
-    const ContextInterface* mContext = nullptr;
-    int mDescriptor = -1;
-    int mCloseError = 0;
-};
+class ReadableFile;
 struct DirectoryChild
 {
     std::string name;
@@ -110,12 +81,16 @@ public:
 
     Type AcquiredType() const noexcept;
     const std::string& Component() const noexcept;
-    const struct stat& Snapshot() const noexcept;
-    // Fresh observation of the held inode, not its original name. In
-    // particular, st_nlink is current at inspection time, not an exclusive
-    // hardlink-membership guarantee. All operations require a positive,
-    // caller-supplied fdinfo byte cap and trusted procfs.
-    Result<struct stat> Inspect(std::size_t fdinfoByteCap) const;
+    // Cached stat observed during acquisition, not current metadata. The
+    // held identity does not freeze content or metadata.
+    const struct stat& Stat() const noexcept;
+    // Fresh stat of the held object, without resolving its former pathname.
+    // It may immediately be stale: neither this observation nor matching
+    // before/after stats prove an atomic content snapshot, absence of
+    // concurrent writes, race-free authorization or exclusive hardlink
+    // membership. Requires a positive, caller-supplied fdinfo byte cap and
+    // trusted procfs.
+    Result<struct stat> Stat(std::size_t fdinfoByteCap) const;
     // Mount identity of this held descriptor, verified with its inode/type.
     // Unlike st_dev, this distinguishes a same-device bind mount.
     Result<std::uint64_t> MountIdentity(std::size_t fdinfoByteCap) const;

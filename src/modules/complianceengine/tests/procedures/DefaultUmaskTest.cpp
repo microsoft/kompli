@@ -117,7 +117,8 @@ TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, CrBeforeLfRemainsPartOfLine)
 
 TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, CorrectValueStopsWithoutReadingTail)
 {
-    const auto path = mContext.MakeTempfile("umask 027\nunread tail\n");
+    const string line = "umask 027\n";
+    const auto path = mContext.MakeTempfile(line + string(8192 - line.size(), 'x'));
     mContext.SetSpecialFilePath("/etc/bashrc", path);
     int reads = 0;
     int closes = 0;

@@ -6,6 +6,7 @@
 #include "ContextInterface.h"
 #include "Optional.h"
 #include "filesystem/Path.hpp"
+#include "filesystem/ReadableFile.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -60,7 +61,8 @@ struct LinesRange::State
         : context(context),
           path(std::move(path)),
           policy(std::move(policy)),
-          data(std::move(data))
+          data(std::move(data)),
+          interruptRetriesRemaining(this->policy.limits.maxInterruptedReads)
     {
     }
 
@@ -86,7 +88,7 @@ struct LinesRange::State
     struct stat before = {};
     std::string buffer;
     std::size_t position = 0, consumed = 0;
-    std::size_t interrupts = 0;
+    std::size_t interruptRetriesRemaining;
     std::string pending;
     bool finished = false;
     bool closed = false;
@@ -153,11 +155,11 @@ struct LinesRange::State
         if (!opened.HasValue())
             return fail(std::move(opened).Error());
         state.reset(new State(context, std::move(path), std::move(policy), std::move(opened).Value()));
-        auto inspected = state->data.Inspect();
+        auto inspected = state->data.Stat();
         if (!inspected.HasValue())
             return fail(std::move(inspected).Error());
         state->before = inspected.Value();
-        const auto held = pins.Leaf().Snapshot();
+        const auto held = pins.Leaf().Stat();
         if (held.st_dev != state->before.st_dev || held.st_ino != state->before.st_ino || !S_ISREG(state->before.st_mode))
             return fail(Error("Pinned file identity changed", EAGAIN));
         auto closed = pins.Close();
@@ -173,7 +175,7 @@ struct LinesRange::State
     {
         if (before.st_size > 0 && static_cast<unsigned long long>(before.st_size) != consumed)
             return Error("File ended before its stable size", EIO);
-        auto after = data.Inspect();
+        auto after = data.Stat();
         if (!after.HasValue())
             return Error("Failed to verify data descriptor", after.Error().code);
         if (!SameFile(before, after.Value()))
@@ -187,30 +189,23 @@ struct LinesRange::State
     // EOF without storing or charging any excess byte.
     Result<bool> Refill()
     {
-        while (true)
+        const std::size_t remaining = policy.limits.maxBytes - consumed;
+        const std::size_t requested = std::min(ReadChunkBytes, remaining ? remaining : std::size_t(1));
+        auto chunk = data.Read(requested, interruptRetriesRemaining);
+        if (!chunk.HasValue())
         {
-            const std::size_t remaining = policy.limits.maxBytes - consumed;
-            const std::size_t requested = std::min(ReadChunkBytes, remaining ? remaining : std::size_t(1));
-            auto chunk = data.Read(requested);
-            if (!chunk.HasValue())
-            {
-                const int error = chunk.Error().code;
-                if (error == EINTR)
-                {
-                    if (interrupts++ < policy.limits.maxInterruptedReads)
-                        continue;
-                    return Error("File read interrupt retry limit exceeded", E2BIG);
-                }
-                return Error("Failed to read file bytes", error);
-            }
-            if (chunk.Value().empty())
-                return false;
-            if (chunk.Value().size() > remaining)
-                return Error("File byte limit exceeded", E2BIG);
-            buffer = std::move(chunk).Value();
-            position = 0;
-            return true;
+            const int error = chunk.Error().code;
+            if (error == EINTR)
+                return Error("File read interrupt retry limit exceeded", E2BIG);
+            return Error("Failed to read file bytes", error);
         }
+        if (!chunk.Value().HasValue())
+            return false;
+        if (chunk.Value().Value().size() > remaining)
+            return Error("File byte limit exceeded", E2BIG);
+        buffer = std::move(chunk).Value().Value();
+        position = 0;
+        return true;
     }
 
     Result<Optional<std::string>> Next()
