@@ -45,13 +45,14 @@ std::string MakeDoc(const std::string& rulesArray)
                        R"("metadata":{"name":"cis_ubuntu_22.04_2.0.0",)"
                        R"("labels":{"framework":"cis","distribution":"ubuntu","distributionVersion":"22.04"},)"
                        R"("annotations":{"benchmarkVersion":"v2.0.0"}},)"
-                       R"("spec":{"rules":)") +
+                       R"("spec":{"version":"1.0.0","rules":)") +
            rulesArray + "}}";
 }
 
 std::string MakeDocWithMetadata(const std::string& metadataObject, const std::string& rulesArray)
 {
-    return std::string(R"({"apiVersion":"v1","kind":"BenchmarkDefinition","metadata":)") + metadataObject + R"(,"spec":{"rules":)" + rulesArray + "}}";
+    return std::string(R"({"apiVersion":"v1","kind":"BenchmarkDefinition","metadata":)") + metadataObject + R"(,"spec":{"version":"1.0.0","rules":)" +
+           rulesArray + "}}";
 }
 
 std::string OneRuleDoc()
@@ -75,12 +76,16 @@ TEST(BenchmarkDefinitionParserTest, ParsesValidDocument)
 {
     auto result = ParseString(OneRuleDoc(), nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    EXPECT_EQ(result.Value().name, "cis_ubuntu_22.04_2.0.0");
-    EXPECT_EQ(result.Value().benchmarkInfo.framework, "cis");
-    EXPECT_EQ(result.Value().benchmarkInfo.distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
-    EXPECT_EQ(result.Value().benchmarkInfo.version, "22.04");
-    EXPECT_EQ(result.Value().benchmarkInfo.benchmarkVersion, "v2.0.0");
-    ASSERT_EQ(result.Value().resources.size(), 1u);
+    const auto& doc = result.Value();
+    EXPECT_EQ(doc.name, "cis_ubuntu_22.04_2.0.0");
+    EXPECT_EQ(doc.version.major, "1");
+    EXPECT_EQ(doc.version.minor, "0");
+    EXPECT_EQ(doc.version.patch, "0");
+    EXPECT_EQ(doc.benchmarkInfo.framework, "cis");
+    EXPECT_EQ(doc.benchmarkInfo.distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
+    EXPECT_EQ(doc.benchmarkInfo.version, "22.04");
+    EXPECT_EQ(doc.benchmarkInfo.benchmarkVersion, "v2.0.0");
+    ASSERT_EQ(doc.resources.size(), 1u);
 
     const Resource& res = result.Value().resources[0];
     EXPECT_EQ(res.resourceID, "1.1.1.1 Ensure cramfs kernel module is not available");
@@ -116,6 +121,52 @@ TEST(BenchmarkDefinitionParserTest, ParsesMultipleRulesInOrder)
     ASSERT_EQ(result.Value().resources.size(), 2u);
     EXPECT_EQ(result.Value().resources[0].id, "1.1.1.1");
     EXPECT_EQ(result.Value().resources[1].id, "1.1.1.2");
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsMissingOrMalformedContentVersion)
+{
+    for (const std::string invalid : {"", "1.0", "1.0.0.0", "01.0.0", "1.00.0", "1.0.00", "-1.0.0", "1.0.x", "1.0.0-beta", R"(1.0.0\u0000)"})
+    {
+        std::string doc = OneRuleDoc();
+        ReplaceOnce(doc, R"("version":"1.0.0")", R"("version":")" + invalid + R"(")");
+        EXPECT_FALSE(ParseString(doc, nullptr).HasValue()) << invalid;
+    }
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("version":"1.0.0",)", "");
+    auto missing = ParseString(doc, nullptr);
+    ASSERT_FALSE(missing.HasValue());
+    EXPECT_NE(missing.Error().message.find("version"), std::string::npos);
+    ReplaceOnce(doc, R"("rules":)", R"("version":null,"rules":)");
+    EXPECT_FALSE(ParseString(doc, nullptr).HasValue());
+
+    // Hoisted identity is not required for legacy rules, but a content
+    // version is required for both identity shapes.
+    const std::string legacyRule = R"({"section":"1.1.1.1","payloadKey":"/cis/ubuntu/22.04/v2.0.0/1/1/1/1",)"
+                                   R"("ruleId":"rule-id","ruleName":"R","title":"t","tags":[],"metadata":{},"payload":{"audit":{},"parameters":{}}})";
+    std::string legacy = MakeDocWithMetadata(R"({"name":"legacy"})", "[" + legacyRule + "]");
+    ReplaceOnce(legacy, R"("version":"1.0.0",)", "");
+    EXPECT_FALSE(ParseString(legacy, nullptr).HasValue());
+}
+
+TEST(BenchmarkDefinitionParserTest, ParsesArbitrarilyLargeDecimalComponents)
+{
+    std::string doc = OneRuleDoc();
+    ReplaceOnce(doc, R"("version":"1.0.0")", R"("version":"184467440737095516160.999999999999999999999.0")");
+    auto result = ParseString(doc, nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().version.major, "184467440737095516160");
+    EXPECT_EQ(result.Value().version.minor, "999999999999999999999");
+}
+
+TEST(BenchmarkDefinitionParserTest, ComparesDecimalComponentsWithoutIntegerConversion)
+{
+    auto earlier = ComplianceEngine::ParseContentVersion("1.99999999999999999999.9");
+    auto later = ComplianceEngine::ParseContentVersion("1.100000000000000000000.0");
+    ASSERT_TRUE(earlier.HasValue());
+    ASSERT_TRUE(later.HasValue());
+    EXPECT_LT(ComplianceEngine::CompareContentVersion(earlier.Value(), later.Value()), 0);
+    EXPECT_GT(ComplianceEngine::CompareContentVersion(later.Value(), earlier.Value()), 0);
+    EXPECT_EQ(ComplianceEngine::ContentVersionToString(later.Value()), "1.100000000000000000000.0");
 }
 
 TEST(BenchmarkDefinitionParserTest, RejectsEmptyRulesArrayWithHoistedIdentity)
@@ -196,6 +247,161 @@ TEST(BenchmarkDefinitionParserTest, ParsesLegacyDocumentWithoutHoistedIdentity)
     EXPECT_EQ(result.Value().benchmarkInfo.version, "22.04");
     EXPECT_EQ(result.Value().benchmarkInfo.benchmarkVersion, "v2.0.0");
     EXPECT_TRUE(result.Value().benchmarkInfo.section.empty());
+}
+
+TEST(BenchmarkDefinitionParserTest, RuleWithNoParameterMetadataYieldsEmptyMap)
+{
+    auto result = ParseString(OneRuleDoc(), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_TRUE(result.Value().resources[0].parameterMetadata.empty());
+}
+
+TEST(BenchmarkDefinitionParserTest, ParsesParameterMetadataFields)
+{
+    const char* const ruleWithParams = R"({
+        "ruleName": "EnsureMountPoint",
+        "title": "1.1.2.1.1 Ensure mount point",
+        "id": "1.1.2.1.1",
+        "ruleId": "rule-id",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {"X": {}}, "parameters": {"mountPoint": "/tmp"}},
+        "parameterMetadata": {
+            "mountPoint": {
+                "type": "string",
+                "default": "/tmp",
+                "displayName": "Mount Point",
+                "validationRegex": "^/[a-zA-Z0-9/_.-]+$",
+                "validationFailedMessage": "Must be an absolute path.",
+                "mandatory": true
+            }
+        }
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    const auto& metadata = result.Value().resources[0].parameterMetadata;
+    ASSERT_EQ(metadata.count("mountPoint"), 1u);
+    const auto& mountPoint = metadata.at("mountPoint");
+    EXPECT_EQ(mountPoint.type, "string");
+    EXPECT_EQ(mountPoint.defaultValue, "/tmp");
+    ASSERT_TRUE(mountPoint.displayName.HasValue());
+    EXPECT_EQ(mountPoint.displayName.Value(), "Mount Point");
+    ASSERT_TRUE(mountPoint.validationRegex.HasValue());
+    EXPECT_EQ(mountPoint.validationRegex.Value(), "^/[a-zA-Z0-9/_.-]+$");
+    ASSERT_TRUE(mountPoint.validationFailedMessage.HasValue());
+    EXPECT_EQ(mountPoint.validationFailedMessage.Value(), "Must be an absolute path.");
+    EXPECT_TRUE(mountPoint.mandatory);
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsNonBooleanMandatoryParameterMetadata)
+{
+    const std::string ruleWithParams = R"({
+        "ruleName": "EnsureMountPoint",
+        "title": "Ensure mount point",
+        "id": "1.1.2.1.1",
+        "ruleId": "rule-id",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {"X": {}}, "parameters": {"mountPoint": "/tmp"}},
+        "parameterMetadata": {
+            "mountPoint": {
+                "type": "string",
+                "default": "/tmp",
+                "mandatory": INVALID_MANDATORY
+            }
+        }
+    })";
+
+    for (const char* const invalidValue : {R"("true")", "1"})
+    {
+        std::string invalidRule = ruleWithParams;
+        ReplaceOnce(invalidRule, "INVALID_MANDATORY", invalidValue);
+        auto result = ParseString(MakeDoc("[" + invalidRule + "]"), nullptr);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_NE(result.Error().message.find("'mandatory' field that is not a boolean"), std::string::npos);
+    }
+}
+
+TEST(BenchmarkDefinitionParserTest, ParsesMultipleParameterMetadataEntries)
+{
+    const char* const ruleWithParams = R"({
+        "ruleName": "EnsureMountPoint",
+        "title": "1.1.2.1.2 Ensure mount point options",
+        "id": "1.1.2.1.2",
+        "ruleId": "rule-id",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {"X": {}}, "parameters": {"mountPoint": "/tmp", "requiredMountOptions": "nodev"}},
+        "parameterMetadata": {
+            "mountPoint": {"type": "string", "default": "/tmp"},
+            "requiredMountOptions": {"type": "string", "default": "nodev"}
+        }
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().resources[0].parameterMetadata.size(), 2u);
+}
+
+TEST(BenchmarkDefinitionParserTest, AcceptsEmptyParameterMetadataDefault)
+{
+    const char* const ruleWithParams = R"({
+        "ruleName": "EnsureOptionalValue",
+        "title": "Optional value",
+        "id": "1.1.2.1.3",
+        "ruleId": "rule-id",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {"X": {}}, "parameters": {"optionalValue": ""}},
+        "parameterMetadata": {
+            "optionalValue": {"type": "string", "default": ""}
+        }
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(result.Value().resources[0].parameterMetadata.at("optionalValue").defaultValue, "");
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsUnsupportedParameterMetadataType)
+{
+    const char* const ruleWithParams = R"({
+        "ruleName": "EnsureOptionalValue",
+        "title": "Optional value",
+        "id": "1.1.2.1.3",
+        "ruleId": "rule-id",
+        "tags": [],
+        "metadata": {"description": "d", "rationale": "r", "fixtext": "f", "severity": "Warning", "references": "x"},
+        "payload": {"audit": {"X": {}}, "parameters": {"optionalValue": ""}},
+        "parameterMetadata": {
+            "optionalValue": {"type": "integer", "default": ""}
+        }
+    })";
+    auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("only 'string' is supported"), std::string::npos);
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsInvalidParameterMetadata)
+{
+    const char* const notObject = R"({
+        "ruleName": "R", "title": "t", "id": "1", "ruleId": "rule-id", "tags": [],
+        "metadata": {}, "payload": {"audit": {}, "parameters": {}},
+        "parameterMetadata": "not-an-object"
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + notObject + "]"), nullptr).HasValue());
+
+    const char* const missingDefault = R"({
+        "ruleName": "R", "title": "t", "id": "1", "ruleId": "rule-id", "tags": [],
+        "metadata": {}, "payload": {"audit": {}, "parameters": {}},
+        "parameterMetadata": {"mountPoint": {"type": "string"}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + missingDefault + "]"), nullptr).HasValue());
+
+    const char* const entryNotObject = R"({
+        "ruleName": "R", "title": "t", "id": "1", "ruleId": "rule-id", "tags": [],
+        "metadata": {}, "payload": {"audit": {}, "parameters": {}},
+        "parameterMetadata": {"mountPoint": "not-an-object"}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + entryNotObject + "]"), nullptr).HasValue());
 }
 
 // ---------------------------------------------------------------------------

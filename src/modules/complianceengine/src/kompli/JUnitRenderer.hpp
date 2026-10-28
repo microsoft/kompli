@@ -11,7 +11,7 @@ namespace ComplianceEngine
 {
 namespace Kompli
 {
-// Renders a canonical kompli result JSON (as emitted by `audit` / `remediate`)
+// Renders a canonical kompli result JSON (as emitted by `run`)
 // into a JUnit XML document.
 //
 // - one <testcase classname=<id> name=<title>> per rule (`ruleName`, the
@@ -29,10 +29,9 @@ namespace Kompli
 // - older results without `title` use `ruleName` as the testcase name;
 //   malformed tags, invalid UTF-8 and invalid XML 1.0 characters are errors.
 //
-// `id` is used verbatim as the classname; it is framework-agnostic (a
-// dotted CIS number or a STIG id), so the renderer makes no CIS-specific
-// assumptions. `suiteName` names the <testsuite>; the CLI does not know
-// which benchmark package it came from, so the caller supplies it.
+// When benchmark provenance is present, the classname combines its identity
+// with `id` using length-prefixed components. Older results use `id` verbatim.
+// `suiteName` names the <testsuite>.
 Result<std::string> RenderJUnit(const std::string& canonicalJson, const std::string& suiteName);
 
 } // namespace Kompli
