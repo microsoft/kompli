@@ -94,6 +94,10 @@ jobs:
           container: ${{ steps.container.outputs.id }}
           working-directory: ${{ env.MOUNT }}/build
           cmd: |
+            # The existing full CTest run must fail, not skip, when the
+            # private-namespace bind-mount regression lacks CI capability.
+            export KOMPLI_REQUIRE_M71_MOUNT=1
+            uname -a
             if ! jobs=$(nproc) || [[ ! "$jobs" =~ ^[1-9][0-9]*$ ]]; then
               echo "Cannot determine a positive CTest job count from nproc" >&2
               exit 1

@@ -10,6 +10,7 @@
 #include <StringTools.h>
 #include <array>
 #include <dirent.h>
+#include <filesystem/Lines.hpp>
 #include <fstream>
 #include <iterator>
 #include <pwd.h>
@@ -51,17 +52,25 @@ struct MatchResult
 Result<MatchResult> MultilineMatch(const std::string& filename, const regex& valuePattern, const regex& readonlyPattern, const regex& exportPattern,
     ContextInterface& context)
 {
-    ifstream input(filename);
-    if (!input.is_open())
+    auto opened = Filesystem::Lines::Open(context, filename);
+    if (!opened.HasValue())
     {
-        return Error("Failed to open file: " + filename, errno);
+        OsConfigLogError(context.GetLogHandle(), "Failed to open %s: %s", filename.c_str(), opened.Error().message.c_str());
+        return std::move(opened).Error();
     }
 
+    auto& range = opened.Value();
     int lineNumber = 0;
     MatchResult result;
-    string line;
-    while (getline(input, line))
+    for (const auto& item : range)
     {
+        if (!item.HasValue())
+        {
+            OsConfigLogError(context.GetLogHandle(), "Failed to read %s: %s", filename.c_str(), item.Error().message.c_str());
+            return item.Error();
+        }
+
+        const string& line = item.Value();
         lineNumber++;
         smatch match;
 
@@ -73,7 +82,8 @@ Result<MatchResult> MultilineMatch(const std::string& filename, const regex& val
             if (result.found)
             {
                 result.multiple = true;
-                return result;
+                // A duplicate is sufficient; Close must still be checked without draining the tail.
+                break;
             }
             result.found = true;
 
@@ -107,6 +117,11 @@ Result<MatchResult> MultilineMatch(const std::string& filename, const regex& val
         }
     }
 
+    auto closed = range.Close();
+    if (!closed.HasValue())
+    {
+        return std::move(closed).Error();
+    }
     return result;
 }
 

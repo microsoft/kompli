@@ -25,17 +25,23 @@ ComplianceEngine::Result<Status> Evaluate(const std::string& contents, Nameserve
 }
 } // namespace
 
-TEST(NameserverCountTest, RequiresTwoDistinctNameserverCaptures)
+TEST(NameserverCountTest, RequiresTwoDistinctValidAddressSpellings)
 {
-    auto result = Evaluate("nameserver one\n");
+    auto result = Evaluate("nameserver 192.0.2.1\n");
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(Status::NonCompliant, result.Value());
 
-    result = Evaluate("nameserver one\nnameserver one\n");
+    result = Evaluate("nameserver 192.0.2.1\nnameserver 192.0.2.1\n");
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(Status::NonCompliant, result.Value());
 
-    result = Evaluate("nameserver one\nnameserver two\n");
+    result = Evaluate("nameserver 192.0.2.1\nnameserver 2001:db8::1\n");
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+
+    // Both IPv6 tokens decode to the same address, but the existing Unique
+    // range compares original strings, not canonical address bytes.
+    result = Evaluate("nameserver 2001:0db8::1\nnameserver 2001:db8::1\n");
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(Status::Compliant, result.Value());
 }
@@ -56,9 +62,35 @@ TEST(NameserverCountTest, ZeroCapturesAndReadFailuresAreErrors)
     EXPECT_EQ(ENOENT, result.Error().code);
 }
 
-TEST(NameserverCountTest, PreservesGreedySourceWhitespaceSemantics)
+TEST(NameserverCountTest, MalformedNameserverEvidenceCannotBecomeACompliantPrefix)
 {
-    const auto result = Evaluate("nameserver \n one\nnameserver two\n");
+    for (const auto& contents : {"nameserver \n 192.0.2.1\nnameserver 2001:db8::1\n", "nameserver one\nnameserver two\n",
+             "nameserver 192.0.2.1\nnameserver 2001:db8::1\nnameserver invalid\n", "nameserver 192.0.2.1#inline\nnameserver 2001:db8::1\n"})
+    {
+        const auto result = Evaluate(contents);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EBADMSG, result.Error().code);
+    }
+}
+
+TEST(NameserverCountTest, MalformedUnrelatedRecordsFailButUnknownRecordsDoNot)
+{
+    for (const auto& unrelated : {"options ndots:bad\n", "sortlist invalid\n"})
+    {
+        const auto result = Evaluate(std::string("nameserver 192.0.2.1\n") + unrelated + "nameserver 2001:db8::1\n");
+        ASSERT_FALSE(result.HasValue()) << unrelated;
+        EXPECT_EQ(EBADMSG, result.Error().code);
+    }
+    const auto unknown = Evaluate("mystery anything\noptions vendor-option\nnameserver 192.0.2.1\nnameserver 2001:db8::1\n");
+    ASSERT_TRUE(unknown.HasValue());
+    EXPECT_EQ(Status::Compliant, unknown.Value());
+}
+
+TEST(NameserverCountTest, GlibcLexingIgnoresUnmatchedAndTrailingNameserverText)
+{
+    const auto result = Evaluate(
+        " nameserver invalid\nnameserver\nnameserver 192.0.2.1 #ignored\n"
+        "nameserver 2001:db8::1 ;ignored\n");
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(Status::Compliant, result.Value());
 }
@@ -102,7 +134,7 @@ TEST(NameserverCountTest, RejectsInvalidPathsAndUnknownArguments)
 TEST(NameserverCountTest, SerializedProcedureExecutesTheProductionPipeline)
 {
     MockContext context;
-    const auto path = context.MakeTempfile("nameserver one\nnameserver two\n");
+    const auto path = context.MakeTempfile("nameserver 192.0.2.1\nnameserver 2001:db8::1\n");
     context.SetSpecialFilePath("/etc/resolv.conf", path);
     auto json = ComplianceEngine::JsonWrapper::FromString(R"({"NameserverCount":{"path":"/etc/resolv.conf"}})");
     ASSERT_TRUE(json.HasValue());
@@ -119,7 +151,7 @@ TEST(NameserverCountTest, SerializedProcedureExecutesTheProductionPipeline)
 TEST(NameserverCountTest, SerializedProcedureUsesDefaultPathWhenOmitted)
 {
     MockContext context;
-    context.SetSpecialFilePath("/etc/resolv.conf", context.MakeTempfile("nameserver one\nnameserver two\n"));
+    context.SetSpecialFilePath("/etc/resolv.conf", context.MakeTempfile("nameserver 192.0.2.1\nnameserver 2001:db8::1\n"));
     auto json = ComplianceEngine::JsonWrapper::FromString(R"({"NameserverCount":{}})");
     ASSERT_TRUE(json.HasValue());
     ComplianceEngine::ParameterMap parameters;
@@ -135,7 +167,7 @@ TEST(NameserverCountTest, SerializedProcedureUsesDefaultPathWhenOmitted)
 TEST(NameserverCountTest, SerializedProcedureUsesExplicitCustomPath)
 {
     MockContext context;
-    const auto path = context.MakeTempfile("nameserver one\nnameserver two\n");
+    const auto path = context.MakeTempfile("nameserver 192.0.2.1\nnameserver 2001:db8::1\n");
     auto json = ComplianceEngine::JsonWrapper::FromString(R"({"NameserverCount":{"path":")" + path + R"("}})");
     ASSERT_TRUE(json.HasValue());
     ComplianceEngine::ParameterMap parameters;
@@ -151,7 +183,7 @@ TEST(NameserverCountTest, SerializedProcedureUsesExplicitCustomPath)
 TEST(NameserverCountTest, SerializedProcedureResolvesCustomPathParameter)
 {
     MockContext context;
-    const auto path = context.MakeTempfile("nameserver one\nnameserver two\n");
+    const auto path = context.MakeTempfile("nameserver 192.0.2.1\nnameserver 2001:db8::1\n");
     auto json = ComplianceEngine::JsonWrapper::FromString(R"({"NameserverCount":{"path":"$source"}})");
     ASSERT_TRUE(json.HasValue());
     ComplianceEngine::ParameterMap parameters{{"source", path}};

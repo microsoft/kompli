@@ -8,6 +8,9 @@ endif()
 
 # Find Lua via vcpkg
 find_package(Lua REQUIRED)
+# The C++ sources include lua.h directly and require Lua's C++ exception
+# runtime. vcpkg's LUA_LIBRARIES includes both C and C++ archives, which
+# contain duplicate Lua definitions.
 if(TARGET lua-cpp)
     set(LUA_CPP_TARGET lua-cpp)
 elseif(TARGET unofficial::lua::lua-cpp)
@@ -182,7 +185,12 @@ add_library(complianceenginelib STATIC
     Engine.cpp
     Evaluator.cpp
     FileObjectCollector.cpp
-    FileTreeWalk.cpp
+    filesystem/Lines.cpp
+    filesystem/FilesystemCollection.cpp
+    filesystem/Handle.cpp
+    filesystem/Path.cpp
+    filesystem/ReadableFile.cpp
+    filesystem/Descriptor.cpp
     GuestConfigurationContext.cpp
     FilesystemScanner.cpp
     GroupsIterator.cpp
@@ -197,6 +205,7 @@ add_library(complianceenginelib STATIC
     parsers/LoginDefs.cpp
     PasswordCreditUnionEvidence.cpp
     parsers/NameserverSelection.cpp
+    parsers/ResolvConf.cpp
     Pattern.cpp
     Procedure.cpp
     ProcedureMap.cpp

@@ -7,21 +7,20 @@
 #include <Result.h>
 #include <VariableResolver.h>
 #include <cstddef>
+#include <filesystem/FilesystemPolicy.hpp>
 #include <string>
 
 namespace ComplianceEngine
 {
 class ContextInterface;
 
-enum class RootSymlinkPolicy
-{
-    FollowRegular,
-    Reject,
-};
-
 struct FileCollectionPolicy
 {
-    RootSymlinkPolicy rootSymlinks = RootSymlinkPolicy::FollowRegular;
+    // Applies to every path component, as in Filesystem::Lines::Policy.
+    Filesystem::SymlinkFollowing symlinks = Filesystem::SymlinkFollowing::Follow;
+    // Acquisition bytes include LF; the parser independently caps entry
+    // length, aggregate entry bytes/count, tokens and diagnostics. The next
+    // four limits bound selected valid address tokens, not raw line captures.
     std::size_t contentBytes = 1024 * 1024;
     std::size_t occurrences = 16384;
     std::size_t captureBytes = 65536;

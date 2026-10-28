@@ -306,6 +306,7 @@ int ComplianceEngineMmiGet(MMI_HANDLE clientSession, const char* componentName, 
     try
     {
         auto result = engine.MmiGet(objectName);
+        std::string payloadString;
         if (!result.HasValue())
         {
             if (g_criticalErrors.find(result.Error().code) != g_criticalErrors.end())
@@ -318,14 +319,16 @@ int ComplianceEngineMmiGet(MMI_HANDLE clientSession, const char* componentName, 
             {
                 OsConfigLogError(engine.Log(), "ComplianceEngineMmiGet failed with a non-critical error: %s (errno: %d)",
                     result.Error().message.c_str(), result.Error().code);
-                result = ComplianceEngine::AuditResult(Status::NonCompliant, "Audit failed with a non-critical error: " + result.Error().message);
+                payloadString = "Audit failed with a non-critical error: " + result.Error().message;
             }
         }
-
-        auto payloadString = result.Value().payload;
-        if ((result.Value().status == Status::Compliant) || (result.Value().status == Status::NotApplicable))
+        else
         {
-            payloadString = "PASS" + payloadString;
+            payloadString = result.Value().payload;
+            if ((result.Value().status == Status::Compliant) || (result.Value().status == Status::NotApplicable))
+            {
+                payloadString = "PASS" + payloadString;
+            }
         }
 
         auto json = JsonWrapper::FromJsonString(payloadString);
@@ -378,6 +381,11 @@ int ComplianceEngineMmiSet(MMI_HANDLE clientSession, const char* componentName, 
     try
     {
         std::string payloadStr(payload, payloadSizeBytes);
+        if (payloadStr.find('\0') != std::string::npos)
+        {
+            OsConfigLogError(engine.Log(), "ComplianceEngineMmiSet failed: payload contains embedded NUL");
+            return EINVAL;
+        }
         auto json = JsonWrapper::FromString(payloadStr.c_str());
         if (!json.HasValue())
         {
@@ -393,7 +401,14 @@ int ComplianceEngineMmiSet(MMI_HANDLE clientSession, const char* componentName, 
         std::string realPayload;
         if (json_value_get_type(json->get()) == JSONString)
         {
-            realPayload = json_value_get_string(json->get());
+            const char* decoded = json_value_get_string(json->get());
+            const std::size_t decodedLength = json_value_get_string_len(json->get());
+            if (nullptr != std::memchr(decoded, '\0', decodedLength))
+            {
+                OsConfigLogError(engine.Log(), "ComplianceEngineMmiSet failed: decoded payload contains embedded NUL");
+                return EINVAL;
+            }
+            realPayload.assign(decoded, decodedLength);
         }
         else
         {

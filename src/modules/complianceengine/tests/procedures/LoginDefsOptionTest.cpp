@@ -795,7 +795,7 @@ TEST_F(LoginDefsOptionTest, NumericOverflowReturnsErrorWithoutIndicator)
     params.option = "PASS_MAX_DAYS";
     params.value = "5";
     params.comparison = ComparisonOperation::Equal;
-    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    auto result = AuditLoginDefsOption(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, EBADMSG);
     EXPECT_EQ(result.Error().message, "/etc/login.defs:1:15: invalid PASS_MAX_DAYS value: Integer value out of range: 2147483648");
@@ -823,7 +823,7 @@ TEST_F(LoginDefsOptionTest, MalformedNumericTargetReturnsError)
     params.option = "PASS_MAX_DAYS";
     params.value = "5junk";
     params.comparison = ComparisonOperation::Equal;
-    const auto result = AuditLoginDefsOption(params, mIndicators, mContext);
+    auto result = AuditLoginDefsOption(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, EINVAL);
     EXPECT_EQ(result.Error().message, "Invalid PASS_MAX_DAYS comparison target: Invalid integer value: 5junk");

@@ -34,7 +34,7 @@ Result<std::vector<std::string>> GetAllMatches(ContextInterface& context)
         auto fileContent = context.GetFileContents(currentFile);
         if (!fileContent.HasValue())
         {
-            continue;
+            return Error("Failed to read SSH daemon configuration '" + currentFile + "': " + fileContent.Error().message, fileContent.Error().code);
         }
 
         std::istringstream fileStream(fileContent.Value());

@@ -6,6 +6,7 @@
 #include "GuestConfigurationContext.h"
 #include "MockContext.h"
 
+#include <cerrno>
 #include <fstream>
 #include <gtest/gtest.h>
 
@@ -51,7 +52,8 @@ TEST_F(CommonContextTest, GetFileContents_NotFound)
 {
     ComplianceEngine::CommonContext ctx(nullptr, mContext.GetStatePath());
     auto result = ctx.GetFileContents("/non_existent_file");
-    EXPECT_FALSE(result);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.Error().code, ENOENT);
 }
 
 TEST_F(CommonContextTest, GetFileContents_ExistingFile)
@@ -63,6 +65,28 @@ TEST_F(CommonContextTest, GetFileContents_ExistingFile)
     auto result = ctx.GetFileContents(filePath);
     EXPECT_TRUE(result);
     EXPECT_EQ(result.Value(), expectedContent);
+}
+
+TEST_F(CommonContextTest, GetFileContents_EmptyFile)
+{
+    ComplianceEngine::CommonContext ctx(nullptr, mContext.GetStatePath());
+    const std::string filePath = mContext.MakeTempfile("");
+
+    auto result = ctx.GetFileContents(filePath);
+
+    ASSERT_TRUE(result);
+    EXPECT_TRUE(result.Value().empty());
+}
+
+TEST_F(CommonContextTest, GetFileContents_RejectsEmbeddedNul)
+{
+    ComplianceEngine::CommonContext ctx(nullptr, mContext.GetStatePath());
+    const std::string filePath = mContext.MakeTempfile(std::string("a\0b", 3));
+
+    auto result = ctx.GetFileContents(filePath);
+
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.Error().code, EBADMSG);
 }
 
 TEST_F(CommonContextTest, GuestConfigurationContext_StatePath)

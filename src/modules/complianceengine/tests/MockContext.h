@@ -21,9 +21,19 @@ struct MockContext : public ComplianceEngine::ContextInterface
     MOCK_METHOD(ComplianceEngine::Result<std::string>, ExecuteCommand, (const std::string& cmd), (const, override));
     MOCK_METHOD(ComplianceEngine::Result<std::string>, GetFileContents, (const std::string& filePath), (const, override));
     MOCK_METHOD(int, OpenExistingFile, (const char* path, int flags), (const, override));
+    MOCK_METHOD(int, OpenNativePath, (const char* path, int flags), (const, override));
+    MOCK_METHOD(int, OpenNativeAt, (int directory, const char* path, int flags), (const, override));
     MOCK_METHOD(int, StatFileDescriptor, (int descriptor, struct stat* metadata), (const, override));
     MOCK_METHOD(ssize_t, ReadFileDescriptor, (int descriptor, void* buffer, std::size_t size), (const, override));
     MOCK_METHOD(int, CloseFileDescriptor, (int descriptor), (const, override));
+    MOCK_METHOD(int, ChownPinnedFileDescriptor, (int descriptor, uid_t owner, gid_t group), (const, override));
+    MOCK_METHOD(int, ChmodPinnedAlias, (int procfsDirectory, const char* decimalAlias, mode_t mode), (const, override));
+    MOCK_METHOD(DIR*, OpenDirectory, (const char* path), (const, override));
+    MOCK_METHOD(struct dirent*, ReadDirectory, (DIR * directory), (const, override));
+    MOCK_METHOD(int, CloseDirectory, (DIR * directory), (const, override));
+    MOCK_METHOD(int, StatPath, (const char* path, struct stat* metadata), (const, override));
+    MOCK_METHOD(int, LstatPath, (const char* path, struct stat* metadata), (const, override));
+    MOCK_METHOD(struct group*, GetGroupById, (gid_t id), (const, override));
     MOCK_METHOD(ComplianceEngine::Result<std::vector<ComplianceEngine::InterfaceInfo>>, GetNetworkInterfaces, (), (const, override));
 
     ComplianceEngine::Result<std::string> GetRunningKernelRelease() const override
@@ -60,6 +70,12 @@ struct MockContext : public ComplianceEngine::ContextInterface
         ON_CALL(*this, OpenExistingFile(testing::_, testing::_)).WillByDefault([this](const char* path, int flags) {
             return ContextInterface::OpenExistingFile(path, flags);
         });
+        ON_CALL(*this, OpenNativePath(testing::_, testing::_)).WillByDefault([this](const char* path, int flags) {
+            return ContextInterface::OpenNativePath(path, flags);
+        });
+        ON_CALL(*this, OpenNativeAt(testing::_, testing::_, testing::_)).WillByDefault([this](int directory, const char* path, int flags) {
+            return ContextInterface::OpenNativeAt(directory, path, flags);
+        });
         ON_CALL(*this, StatFileDescriptor(testing::_, testing::_)).WillByDefault([this](int descriptor, struct stat* metadata) {
             return ContextInterface::StatFileDescriptor(descriptor, metadata);
         });
@@ -69,6 +85,22 @@ struct MockContext : public ComplianceEngine::ContextInterface
         ON_CALL(*this, CloseFileDescriptor(testing::_)).WillByDefault([this](int descriptor) {
             return ContextInterface::CloseFileDescriptor(descriptor);
         });
+        ON_CALL(*this, ChownPinnedFileDescriptor(testing::_, testing::_, testing::_)).WillByDefault([this](int descriptor, uid_t owner, gid_t group) {
+            return ContextInterface::ChownPinnedFileDescriptor(descriptor, owner, group);
+        });
+        ON_CALL(*this, ChmodPinnedAlias(testing::_, testing::_, testing::_)).WillByDefault([this](int procfsDirectory, const char* decimalAlias, mode_t mode) {
+            return ContextInterface::ChmodPinnedAlias(procfsDirectory, decimalAlias, mode);
+        });
+        ON_CALL(*this, OpenDirectory(testing::_)).WillByDefault([this](const char* path) { return ContextInterface::OpenDirectory(path); });
+        ON_CALL(*this, ReadDirectory(testing::_)).WillByDefault([this](DIR* directory) { return ContextInterface::ReadDirectory(directory); });
+        ON_CALL(*this, CloseDirectory(testing::_)).WillByDefault([this](DIR* directory) { return ContextInterface::CloseDirectory(directory); });
+        ON_CALL(*this, StatPath(testing::_, testing::_)).WillByDefault([this](const char* path, struct stat* metadata) {
+            return ContextInterface::StatPath(path, metadata);
+        });
+        ON_CALL(*this, LstatPath(testing::_, testing::_)).WillByDefault([this](const char* path, struct stat* metadata) {
+            return ContextInterface::LstatPath(path, metadata);
+        });
+        ON_CALL(*this, GetGroupById(testing::_)).WillByDefault([this](gid_t id) { return ContextInterface::GetGroupById(id); });
         mTempRootDir = mTempdir + "/rootfs";
         ::mkdir(mTempRootDir.c_str(), 0755);
 

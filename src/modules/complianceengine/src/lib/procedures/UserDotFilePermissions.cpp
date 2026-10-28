@@ -2,12 +2,13 @@
 // Licensed under the MIT License.
 #include <Evaluator.h>
 #include <FilePermissions.h>
-#include <FileTreeWalk.h>
 #include <ListValidShells.h>
 #include <Result.h>
 #include <UserDotFilePermissions.h>
+#include <UserPermissionsTestSeams.h>
 #include <UsersIterator.h>
 #include <fcntl.h>
+#include <filesystem/FilesystemCollection.hpp>
 #include <fstream>
 #include <grp.h>
 #include <pwd.h>
@@ -20,12 +21,63 @@ namespace ComplianceEngine
 using std::map;
 using std::string;
 
-// NOTE: This procedure enumerates real accounts via UsersRange::Make() (hardcoded /etc/passwd)
-// and resolves groups and home directories through libc (getgrgid) and the live filesystem, with
-// no injection seam. The ".rhosts"/".forward" NonCompliant detection path therefore cannot be
-// exercised by a deterministic unit test without first refactoring the account/group/home-directory
-// lookups to accept caller-supplied sources.
+namespace
+{
+using Filesystem::FilesystemCollectionEntry;
+using Filesystem::FilesystemCollectionLimits;
+using Filesystem::FilesystemCollectionRequest;
+using Filesystem::FilesystemDepthAction;
+using Filesystem::FilesystemDirection;
+using Filesystem::FilesystemRootKind;
+using Filesystem::FilesystemScope;
+using Filesystem::FilesystemYieldType;
+using Filesystem::SymlinkFollowing;
+
+FilesystemCollectionRequest DotfilePolicy(const string& home)
+{
+    FilesystemCollectionRequest policy(home, FilesystemRootKind::Directory);
+    policy.direction = FilesystemDirection::Down;
+    policy.maxDepth = 32;
+    policy.depthAction = FilesystemDepthAction::Error;
+    policy.scope = FilesystemScope::All;
+    policy.rootFileLinkAction = SymlinkFollowing::Follow;
+    policy.rootDirectoryLinkAction = SymlinkFollowing::Follow;
+    policy.childFileLinkAction = SymlinkFollowing::DoNotFollow;
+    policy.childDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
+    policy.yieldType = FilesystemYieldType::RegularFiles;
+    return policy;
+}
+
+Result<const struct group*> LookupUserGroup(gid_t id, const char* user, ContextInterface& context)
+{
+    errno = 0;
+    const auto* group = context.GetGroupById(id);
+    if (nullptr == group)
+    {
+        const int code = errno ? errno : ENOENT;
+        OsConfigLogError(context.GetLogHandle(), "Failed to get group for user '%s': %s", user, strerror(code));
+        return Error(string("Failed to get group for user: ") + strerror(code), code);
+    }
+    return group;
+}
+
+Result<Status> CloseAfterError(const Error& primary, Filesystem::FTW::FileRange& files, ContextInterface& context)
+{
+    const auto cleanup = files.Close();
+    if (!cleanup.HasValue() && (cleanup.Error().code != primary.code || cleanup.Error().message != primary.message))
+    {
+        OsConfigLogError(context.GetLogHandle(), "Dotfile range cleanup failed after primary error: %s", cleanup.Error().message.c_str());
+    }
+    return primary;
+}
+} // namespace
+
 Result<Status> AuditUserDotFilePermissions(IndicatorsTree& indicators, ContextInterface& context)
+{
+    return AuditUserDotFilePermissionsWithPasswdFile(indicators, context, "/etc/passwd");
+}
+
+Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicators, ContextInterface& context, const string& passwdPath)
 {
     const auto validShells = ListValidShells(context);
     if (!validShells.HasValue())
@@ -35,7 +87,7 @@ Result<Status> AuditUserDotFilePermissions(IndicatorsTree& indicators, ContextIn
     }
 
     auto status = Status::Compliant;
-    auto users = UsersRange::Make(context.GetLogHandle());
+    auto users = UsersRange::Make(passwdPath, context.GetLogHandle());
     if (!users.HasValue())
     {
         return users.Error();
@@ -51,20 +103,17 @@ Result<Status> AuditUserDotFilePermissions(IndicatorsTree& indicators, ContextIn
             continue;
         }
 
-        const auto* group = getgrgid(pwd.pw_gid);
-        if (nullptr == group)
+        const auto groupResult = LookupUserGroup(pwd.pw_gid, pwd.pw_name, context);
+        if (!groupResult.HasValue())
         {
-            OsConfigLogError(context.GetLogHandle(), "Failed to get group for user '%s': %s", pwd.pw_name, strerror(errno));
-            return Error(string("Failed to get group for user: ") + strerror(errno), errno);
+            return groupResult.Error();
         }
+        const auto* group = groupResult.Value();
 
-        auto ftwCallback = [pwd, group, &indicators, &context](const string& directory, const std::string& filename, const struct stat& st) -> Result<Status> {
-            if (!S_ISREG(st.st_mode))
-            {
-                OsConfigLogDebug(context.GetLogHandle(), "Skipping non-regular file '%s'", filename.c_str());
-                return Status::Compliant;
-            }
-
+        auto processFile = [pwd, group, &indicators, &context](const FilesystemCollectionEntry& entry) -> Result<Status> {
+            const auto& path = entry.path;
+            const std::size_t separator = path.find_last_of('/');
+            const string filename = path.substr(separator + 1);
             if (filename.find(".") != 0)
             {
                 OsConfigLogDebug(context.GetLogHandle(), "Skipping entry '%s' as its name doesn't start with '.'", filename.c_str());
@@ -77,10 +126,8 @@ Result<Status> AuditUserDotFilePermissions(IndicatorsTree& indicators, ContextIn
             }
 
             Result<Status> result = Status::Compliant;
-            const auto path = directory + "/" + filename;
-
             // Performs a file permissions check and updates the result in case of error or non-compliance
-            auto checkFile = [pwd, group, &path, &indicators, &context, &result](const mode_t mask) {
+            auto checkFile = [pwd, group, &path, &entry, &indicators, &context, &result](const mode_t mask) {
                 auto groupPattern = Pattern::Make(group->gr_name);
                 if (!groupPattern.HasValue())
                 {
@@ -101,7 +148,7 @@ Result<Status> AuditUserDotFilePermissions(IndicatorsTree& indicators, ContextIn
                 params.group = {{std::move(groupPattern.Value())}};
                 params.mask = mask;
                 indicators.Push("AuditFilePermissions");
-                auto subResult = AuditFilePermissions(params, indicators, context);
+                auto subResult = CheckPinnedFilePermissions(params, *entry.LiveHandle(), FilesystemCollectionLimits{}.fullPathBytes, indicators, context);
                 if (!subResult.HasValue())
                 {
                     OsConfigLogError(context.GetLogHandle(), "Failed to check permissions for file '%s': %s", path.c_str(), subResult.Error().message.c_str());
@@ -135,8 +182,40 @@ Result<Status> AuditUserDotFilePermissions(IndicatorsTree& indicators, ContextIn
             return result;
         };
 
-        auto result = FileTreeWalk(pwd.pw_dir, ftwCallback, BreakOnNonCompliant::True, context);
-        if (!result.HasValue() || result.Value() == Status::NonCompliant)
+        const auto policy = DotfilePolicy(pwd.pw_dir);
+        // The selected home is the accepted root; only live pins, not
+        // diagnostic paths, authorize checks or remediation.
+        auto opened = Filesystem::FTW::Files(policy, context);
+        if (!opened.HasValue())
+        {
+            OsConfigLogError(context.GetLogHandle(), "Directory validation for user '%s' failed: %s", pwd.pw_name, opened.Error().message.c_str());
+            return opened.Error();
+        }
+        auto& files = opened.Value();
+        Status verdict = Status::Compliant;
+        for (const auto& entry : files)
+        {
+            if (!entry.HasValue())
+            {
+                return CloseAfterError(entry.Error(), files, context);
+            }
+            const auto result = processFile(entry.Value());
+            if (!result.HasValue())
+            {
+                return CloseAfterError(result.Error(), files, context);
+            }
+            if (result.Value() == Status::NonCompliant)
+            {
+                verdict = Status::NonCompliant;
+                break;
+            }
+        }
+        const auto closed = files.Close();
+        if (!closed.HasValue())
+        {
+            return closed.Error();
+        }
+        if (verdict == Status::NonCompliant)
         {
             OsConfigLogDebug(context.GetLogHandle(), "Directory validation for user %s id %d returned NonCompliant, but continuing", pwd.pw_name, pwd.pw_uid);
             status = Status::NonCompliant;
@@ -148,132 +227,14 @@ Result<Status> AuditUserDotFilePermissions(IndicatorsTree& indicators, ContextIn
 
 Result<Status> RemediateUserDotFilePermissions(IndicatorsTree& indicators, ContextInterface& context)
 {
-    const auto validShells = ListValidShells(context);
-    if (!validShells.HasValue())
-    {
-        OsConfigLogError(context.GetLogHandle(), "Failed to get valid shells: %s", validShells.Error().message.c_str());
-        return validShells.Error();
-    }
+    return RemediateUserDotFilePermissionsWithPasswdFile(indicators, context, "/etc/passwd");
+}
 
-    auto status = Status::Compliant;
-    auto users = UsersRange::Make(context.GetLogHandle());
-    if (!users.HasValue())
-    {
-        return users.Error();
-    }
-
-    for (const auto& user : users.Value())
-    {
-        const auto shell = string(user.pw_shell);
-        const auto it = validShells->find(shell);
-        if (it == validShells->end())
-        {
-            OsConfigLogDebug(context.GetLogHandle(), "User '%s' has shell '%s' not listed in valid shells", user.pw_name, user.pw_shell);
-            continue;
-        }
-
-        const auto* group = getgrgid(user.pw_gid);
-        if (nullptr == group)
-        {
-            OsConfigLogError(context.GetLogHandle(), "Failed to get group for user '%s': %s", user.pw_name, strerror(errno));
-            status = Status::NonCompliant;
-        }
-
-        auto ftwCallback = [user, group, &indicators, &context](const string& directory, const std::string& filename, const struct stat& st) -> Result<Status> {
-            if (!S_ISREG(st.st_mode))
-            {
-                OsConfigLogDebug(context.GetLogHandle(), "Skipping non-regular file '%s'", filename.c_str());
-                return Status::Compliant;
-            }
-
-            if (filename.find(".") != 0)
-            {
-                OsConfigLogDebug(context.GetLogHandle(), "Skipping entry '%s' as its name doesn't start with '.'", filename.c_str());
-                return Status::Compliant;
-            }
-
-            // Refuse to remediate a dot-file that has more than one hard link. This directory is
-            // owned and writable by the (unprivileged) user, so a multiply-linked entry here may
-            // share its inode with a sensitive root-owned file (e.g. a hard link to /etc/shadow).
-            // Since a hard link is an ordinary regular file, it passes the S_ISREG check above and
-            // is not caught by symlink protection; remediating it would change the linked file's
-            // ownership and mode too, which is a privilege-escalation vector when this runs as root.
-            if (st.st_nlink > 1)
-            {
-                OsConfigLogError(context.GetLogHandle(), "Refusing to remediate '%s/%s': file has %lu hard links", directory.c_str(), filename.c_str(),
-                    static_cast<unsigned long>(st.st_nlink));
-                return indicators.NonCompliant("Refusing to remediate hard-linked file '" + filename + "' in home directory '" + user.pw_dir + "'");
-            }
-
-            if (filename == ".forward" || filename == ".rhosts")
-            {
-                // We don't want to remove user files, the remediation will always fail here.
-                return indicators.NonCompliant("'" + filename + "' exists in home directory '" + user.pw_dir + "'");
-            }
-
-            Result<Status> result = Status::Compliant;
-            const auto path = directory + "/" + filename;
-
-            // Performs a file permissions check and updates the result in case of error or non-compliance
-            auto remediateFile = [user, group, &path, &indicators, &context, &result](const mode_t mask) {
-                auto pwdPattern = Pattern::Make(user.pw_name);
-                if (!pwdPattern.HasValue())
-                {
-                    result = pwdPattern.Error();
-                    return;
-                }
-                auto groupPattern = Pattern::Make(group->gr_name);
-                if (!groupPattern.HasValue())
-                {
-                    result = groupPattern.Error();
-                    return;
-                }
-                FilePermissionsParams params;
-                params.path = path;
-                params.owner = {{pwdPattern.Value()}};
-                params.group = {{groupPattern.Value()}};
-                params.mask = mask;
-                indicators.Push("RemediateFilePermissions");
-                auto subResult = RemediateFilePermissions(params, indicators, context);
-                if (!subResult.HasValue())
-                {
-                    OsConfigLogError(context.GetLogHandle(), "Failed to remediate permissions for file '%s': %s", path.c_str(),
-                        subResult.Error().message.c_str());
-                    result = subResult.Error();
-                    return;
-                }
-                indicators.Back().status = subResult.Value();
-                indicators.Pop();
-
-                if (subResult.Value() == Status::NonCompliant)
-                {
-                    result = subResult.Value();
-                }
-            };
-
-            if (result.HasValue() && (filename == ".netrc" || filename == ".bash_history"))
-            {
-                remediateFile(0177);
-            }
-
-            if (result.HasValue())
-            {
-                // Ths file starts with a dot, so we need to check the permissions
-                remediateFile(0133);
-            }
-
-            return result;
-        };
-
-        auto result = FileTreeWalk(user.pw_dir, ftwCallback, BreakOnNonCompliant::False, context);
-        if (!result.HasValue() || result.Value() == Status::NonCompliant)
-        {
-            OsConfigLogError(context.GetLogHandle(), "Directory validation for user %s id %d returned NonCompliant, but continuing", user.pw_name, user.pw_uid);
-            status = Status::NonCompliant;
-        }
-    }
-
-    return status;
+Result<Status> RemediateUserDotFilePermissionsWithPasswdFile(IndicatorsTree&, ContextInterface&, const string&)
+{
+    // A null remediation handler falls back to audit, potentially claiming
+    // success without fixing the file. Keep this explicit disabled handler.
+    return Error("UserDotFilePermissions remediation is disabled", ENOTSUP);
 }
 
 } // namespace ComplianceEngine

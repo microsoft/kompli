@@ -1,0 +1,6 @@
+ nameserver ignored
+nameserver 192.0.2.1 # trailing words ignored
+domain example.org # trailing words ignored
+search one # two; three
+sortlist 192.0.2.0&255.255.255.0; ignored
+options rotate#suffix ndots:2 # timeout:3

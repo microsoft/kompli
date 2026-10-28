@@ -20,6 +20,7 @@ def main():
         "-Isrc/modules/inc",
         "-Isrc/common/commonutils",
         "-Isrc/modules/complianceengine/src/lib",
+        "-Isrc/modules/complianceengine/src/lib/procedures",
     ]
 
 

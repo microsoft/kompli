@@ -6,6 +6,7 @@
 #include <FilePermissions.h>
 #include <Regex.h>
 #include <fcntl.h>
+#include <filesystem/Handle.hpp>
 #include <fnmatch.h>
 #include <fts.h>
 #include <grp.h>
@@ -230,7 +231,8 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
     }
 }
 
-Result<Status> AuditFilePermissions(const FilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
+static Result<Status> AuditFilePermissionsImpl(const FilePermissionsParams& params, const Filesystem::Handle* pin, std::size_t fdinfoByteCap,
+    IndicatorsTree& indicators, ContextInterface& context)
 {
     assert(params.behavior.HasValue());
     if (params.groupId.HasValue() && (params.group.HasValue() || params.groupId.Value() < 0))
@@ -239,7 +241,16 @@ Result<Status> AuditFilePermissions(const FilePermissionsParams& params, Indicat
     }
     auto log = context.GetLogHandle();
     struct stat statbuf;
-    if (0 != stat(params.path.c_str(), &statbuf))
+    if (nullptr != pin)
+    {
+        auto observed = pin->Stat(fdinfoByteCap);
+        if (!observed.HasValue())
+        {
+            return std::move(observed).Error();
+        }
+        statbuf = observed.Value();
+    }
+    else if (0 != stat(params.path.c_str(), &statbuf))
     {
         const int status = errno;
         if (ENOENT == status)
@@ -377,7 +388,24 @@ Result<Status> AuditFilePermissions(const FilePermissionsParams& params, Indicat
     return indicators.Compliant("File '" + params.path + "' has correct permissions and ownership as expected");
 }
 
-Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
+Result<Status> AuditFilePermissions(const FilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
+{
+    return AuditFilePermissionsImpl(params, nullptr, 0, indicators, context);
+}
+
+Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, std::size_t fdinfoByteCap,
+    IndicatorsTree& indicators, ContextInterface& context)
+{
+    return AuditFilePermissionsImpl(params, &handle, fdinfoByteCap, indicators, context);
+}
+
+namespace
+{
+// Shared remediation body. The pinned caller borrows its already acquired
+// target; the compatibility path caller opens once and may additionally check
+// a historical identity. Only the pinned caller preserves collector continuity.
+Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params, const Optional<FileIdentity>& expectedIdentity,
+    const Filesystem::Handle* pin, std::size_t fdinfoByteCap, bool requireUnique, IndicatorsTree& indicators, ContextInterface& context)
 {
     if (params.groupId.HasValue() && (params.group.HasValue() || params.groupId.Value() < 0))
     {
@@ -391,26 +419,26 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
 
     // Open the target without following a final-component symlink and keep the descriptor open for
     // the whole remediation. Every subsequent metadata read and change is performed through this
-    // descriptor (fstat, and chown/chmod via the /proc/self/fd magic link), so the path is resolved
-    // exactly once and all operations act on the same pinned inode. This closes a symlink/TOCTOU
-    // privilege-escalation race: this remediation runs as root and is driven across user-owned
-    // directories (e.g. each user's home in RemediateUserDotFilePermissions), so re-resolving the
-    // path string for stat, then chown, then chmod would let an unprivileged owner of the containing
-    // directory swap the entry for a symlink to a sensitive file (e.g. /etc/shadow) between the
-    // check and the change and have root chown/chmod that file. O_PATH is used so the open works for
-    // any file type, never blocks (e.g. on a FIFO) and needs no read permission on the target.
-    int fd = open(params.path.c_str(), O_PATH | O_NOFOLLOW | O_CLOEXEC);
-    if (fd < 0)
+    // descriptor (fstat, and chown/chmod via the /proc/self/fd magic link).
+    // The pinned path already has its leaf from a confined acquisition; this
+    // compatibility route is used only when no handle was provided. O_PATH
+    // does not block on special files or require content-read permission.
+    int fd = -1;
+    if (nullptr == pin)
     {
-        const int status = errno;
-        if (ENOENT == status)
+        fd = open(params.path.c_str(), O_PATH | O_NOFOLLOW | O_CLOEXEC);
+        if (fd < 0)
         {
-            OsConfigLogDebug(log, "File '%s' does not exist", params.path.c_str());
-            return indicators.NonCompliant("File '" + params.path + "' does not exist");
-        }
+            const int status = errno;
+            if (ENOENT == status)
+            {
+                OsConfigLogDebug(log, "File '%s' does not exist", params.path.c_str());
+                return indicators.NonCompliant("File '" + params.path + "' does not exist");
+            }
 
-        OsConfigLogError(log, "Open error %s (%d)", strerror(status), status);
-        return Error("Open error '" + std::string(strerror(status)) + "'", status);
+            OsConfigLogError(log, "Open error %s (%d)", strerror(status), status);
+            return Error("Open error '" + std::string(strerror(status)) + "'", status);
+        }
     }
     // RAII: ensure the descriptor is closed on every return path below.
     struct FdGuard
@@ -427,7 +455,16 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
     const std::string fdPath = "/proc/self/fd/" + std::to_string(fd);
 
     struct stat statbuf;
-    if (fstat(fd, &statbuf) < 0)
+    if (nullptr != pin)
+    {
+        auto observed = pin->Stat(fdinfoByteCap);
+        if (!observed.HasValue())
+        {
+            return std::move(observed).Error();
+        }
+        statbuf = observed.Value();
+    }
+    else if (fstat(fd, &statbuf) < 0)
     {
         const int status = errno;
         OsConfigLogError(log, "Stat error %s (%d)", strerror(status), status);
@@ -442,6 +479,24 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
     {
         OsConfigLogError(log, "Refusing to remediate '%s': it is a symbolic link", params.path.c_str());
         return indicators.NonCompliant("Refusing to remediate symbolic link '" + params.path + "'");
+    }
+
+    // Historical identity checking belongs only to the compatibility path.
+    // A mismatch detects a changed target, but a match is not a continuous
+    // pin from an earlier traversal. Unique-link observation is repeated on
+    // the live pin before each mutation for the dotfile caller below.
+    if (expectedIdentity.HasValue() || requireUnique)
+    {
+        if (expectedIdentity.HasValue() && ((statbuf.st_dev != expectedIdentity.Value().device) || (statbuf.st_ino != expectedIdentity.Value().inode)))
+        {
+            OsConfigLogError(log, "Refusing to remediate '%s': it no longer refers to the originally observed file", params.path.c_str());
+            return indicators.NonCompliant("Refusing to remediate '" + params.path + "': path no longer refers to the originally observed file");
+        }
+        if (statbuf.st_nlink > 1)
+        {
+            OsConfigLogError(log, "Refusing to remediate '%s': file has %lu hard links", params.path.c_str(), static_cast<unsigned long>(statbuf.st_nlink));
+            return indicators.NonCompliant("Refusing to remediate hard-linked file '" + params.path + "'");
+        }
     }
 
     uid_t uid = statbuf.st_uid;
@@ -529,7 +584,27 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
         OsConfigLogInfo(log, "Changing owner of '%s' from %d:%d to %d:%d", params.path.c_str(), statbuf.st_uid, statbuf.st_gid, uid, gid);
         // Operate on the already-opened inode through /proc/self/fd rather than re-resolving the
         // path string, so the change cannot be redirected to a different file via a symlink swap.
-        if (0 != chown(fdPath.c_str(), uid, gid))
+        if (nullptr != pin && requireUnique)
+        {
+            auto fresh = pin->Stat(fdinfoByteCap);
+            if (!fresh.HasValue())
+            {
+                return std::move(fresh).Error();
+            }
+            if (fresh.Value().st_nlink > 1)
+            {
+                return indicators.NonCompliant("Refusing to remediate hard-linked file '" + params.path + "'");
+            }
+        }
+        if (nullptr != pin)
+        {
+            auto changed = pin->SetOwnership(uid, gid, fdinfoByteCap);
+            if (!changed.HasValue())
+            {
+                return std::move(changed).Error();
+            }
+        }
+        else if (0 != chown(fdPath.c_str(), uid, gid))
         {
             int status = errno;
             OsConfigLogError(log, "Chown error %s (%d)", strerror(status), status);
@@ -561,7 +636,27 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
         // Operate on the already-opened inode through /proc/self/fd. fchmod() does not work on an
         // O_PATH descriptor, but chmod() through the magic link applies to the inode the descriptor
         // pins (verified above not to be a symlink), so it is not subject to a symlink race.
-        if (chmod(fdPath.c_str(), new_perms) < 0)
+        if (nullptr != pin && requireUnique)
+        {
+            auto fresh = pin->Stat(fdinfoByteCap);
+            if (!fresh.HasValue())
+            {
+                return std::move(fresh).Error();
+            }
+            if (fresh.Value().st_nlink > 1)
+            {
+                return indicators.NonCompliant("Refusing to remediate hard-linked file '" + params.path + "'");
+            }
+        }
+        if (nullptr != pin)
+        {
+            auto changed = pin->SetMode(new_perms, fdinfoByteCap);
+            if (!changed.HasValue())
+            {
+                return std::move(changed).Error();
+            }
+        }
+        else if (chmod(fdPath.c_str(), new_perms) < 0)
         {
             int status = errno;
             OsConfigLogError(log, "Chmod error %s (%d)", strerror(status), status);
@@ -573,6 +668,24 @@ Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, Ind
 
     OsConfigLogDebug(log, "File '%s' remediation succeeded", params.path.c_str());
     return Status::Compliant;
+}
+} // namespace
+
+Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
+{
+    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(), nullptr, 0, false, indicators, context);
+}
+
+Result<Status> EnforceFilePermissionsAtIdentity(const FilePermissionsParams& params, const FileIdentity& expectedIdentity, IndicatorsTree& indicators,
+    ContextInterface& context)
+{
+    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(expectedIdentity), nullptr, 0, false, indicators, context);
+}
+
+Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, std::size_t fdinfoByteCap,
+    bool requireUnique, IndicatorsTree& indicators, ContextInterface& context)
+{
+    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(), &handle, fdinfoByteCap, requireUnique, indicators, context);
 }
 
 Result<Status> AuditFilePermissionsCollection(const FilePermissionsCollectionParams& params, IndicatorsTree& indicators, ContextInterface& context)

@@ -482,7 +482,7 @@ TEST(BenchmarkDefinitionParserTest, RejectsEscapedNulInApiVersion)
     ReplaceOnce(doc, R"("apiVersion":"v1")", R"("apiVersion":"v1\u0000")");
     auto result = ParseString(doc, nullptr);
     ASSERT_FALSE(result.HasValue());
-    EXPECT_NE(result.Error().message.find("embedded NUL in 'apiVersion'"), std::string::npos);
+    EXPECT_EQ(result.Error().message, "Failed to parse benchmark definition JSON: JSON input contains embedded NUL");
 }
 
 TEST(BenchmarkDefinitionParserTest, DoesNotEchoUnsupportedApiVersionInError)

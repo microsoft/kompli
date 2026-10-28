@@ -1,0 +1,18 @@
+{
+  "source": {
+    "benchmark": "U_CAN_Ubuntu_22-04_LTS_V2R5_STIG_SCAP_1-3_Benchmark.xml",
+    "benchmarkSha256": "6e135dc2128d7cfa08bdacf7820313c4ef75de87934bc789a02938878b9d8694",
+    "rule": "xccdf_mil.disa.stig_rule_SV-260578r1015021_rule",
+    "test": "oval:mil.disa.stig.ind:tst:23823300"
+  },
+  "capture": {
+    "captureId": "M-55-corrected",
+    "augmentation": "none",
+    "augmentationEngineRevision": "5ea5c4d96a7b358d8ecf6b1d2368e3f09b64e990",
+    "parsePySha256": "4e8afd8228df381ae52fc3b2dda10ce5b6dca7a435666616000cc0f2d7ba7229",
+    "rulePySha256": "10b1da0dd72473bffb5959f19733918590c6a514ec932ac3d4996e9ca10b3877",
+    "utilsPySha256": "625c1665e8220b70c5e5382f2e95f19822a38dd273674ba7a903f23a4aaaed4b",
+    "payloadSha256": "becb40b38a4d90b8cb15dd5e1f9ee8a70290162f23ea7cfffb49842e7e5c723f"
+  },
+  "canonicalPayload": "{\"FileRegexMatch\":{\"allMatches\":\"True\",\"behavior\":\"at_least_one_exists\",\"filenamePattern\":\"pam_pkcs11.conf\",\"matchOperation\":\"pattern match\",\"matchPattern\":\"^[ \\\\t]*cert_policy[ \\\\t]+=[ \\\\t]+([a-zA-Z0-9_\\\\,\\\"' ]+);[ \\\\t]*$\",\"path\":\"/etc/pam_pkcs11\",\"stateOperation\":\"pattern match\",\"statePattern\":\"(?:^[\\\"']*crl_auto[\\\"']*$|^[\\\"']*crl_auto[\\\"', \\\\t]|[\\\"', \\\\t]crl_auto[\\\"', \\\\t]|[\\\"', \\\\t]crl_auto[\\\"']*$)|(?:^[\\\"']*crl_offline[\\\"']*$|^[\\\"']*crl_offline[\\\"', \\\\t]|[\\\"', \\\\t]crl_offline[\\\"', \\\\t]|[\\\"', \\\\t]crl_offline[\\\"']*$)\"}}"
+}

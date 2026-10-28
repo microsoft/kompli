@@ -4,11 +4,11 @@
 #include <Bindings.h>
 #include <Evaluator.h>
 #include <FilePermissions.h>
-#include <FileTreeWalk.h>
 #include <ListValidShells.h>
 #include <LogFilePermissions.h>
 #include <Result.h>
 #include <UsersIterator.h>
+#include <filesystem/FilesystemCollection.hpp>
 #include <fnmatch.h>
 #include <map>
 #include <pwd.h>
@@ -20,6 +20,16 @@ namespace ComplianceEngine
 {
 namespace
 {
+using Filesystem::FilesystemCollectionEntry;
+using Filesystem::FilesystemCollectionLimits;
+using Filesystem::FilesystemCollectionRequest;
+using Filesystem::FilesystemDepthAction;
+using Filesystem::FilesystemDirection;
+using Filesystem::FilesystemMissingChildAction;
+using Filesystem::FilesystemRootKind;
+using Filesystem::FilesystemScope;
+using Filesystem::FilesystemYieldType;
+using Filesystem::SymlinkFollowing;
 
 // Global map of fnmatch patterns to file permission arguments
 // Pattern -> {args}
@@ -127,9 +137,24 @@ FilePermissionsParams GetFilePermissionArgs(const std::string& filename, const s
     return GetDefaultFilePermissionArgs(fullPath, statInfo, daemonUids, remediate);
 }
 
-Result<Status> ProcessLogfile(const std::string& path, const std::string& filename, const struct stat& statInfo, const DaemonUidSet& daemonUids,
-    IndicatorsTree& indicators, ContextInterface& context, bool remediate)
+Result<Status> ProcessLogfile(const FilesystemCollectionEntry& entry, const DaemonUidSet& daemonUids, IndicatorsTree& indicators, ContextInterface& context, bool remediate)
 {
+    const struct stat& statInfo = entry.linkMetadata;
+    const std::string& fullPath = entry.path;
+    const std::size_t separator = fullPath.find_last_of('/');
+    const std::string path = fullPath.substr(0, separator);
+    const std::string filename = fullPath.substr(separator + 1);
+    if (entry.missing)
+    {
+        // A DT_REG name vanished between enumeration and acquisition. This
+        // carries no file metadata or pin; emit the old missing-file verdict
+        // without ever opening the spelled name for mutation or inspection.
+        indicators.Push("FilePermissionsCheck for " + fullPath);
+        const auto verdict = indicators.NonCompliant("File '" + fullPath + (remediate ? "' does not exist" : "' does not exist but it should"));
+        indicators.Back().status = verdict;
+        indicators.Pop();
+        return verdict;
+    }
     if (S_ISDIR(statInfo.st_mode))
     {
         return Status::Compliant;
@@ -146,14 +171,17 @@ Result<Status> ProcessLogfile(const std::string& path, const std::string& filena
         return Status::Compliant;
     }
 
-    const std::string fullPath = path + "/" + filename;
     const auto params = GetFilePermissionArgs(filename, fullPath, statInfo, daemonUids, remediate);
 
     OsConfigLogDebug(context.GetLogHandle(), "Processing logfile: %s with pattern-matched permissions", fullPath.c_str());
 
     indicators.Push("FilePermissionsCheck for " + fullPath);
 
-    Result<Status> result = remediate ? RemediateFilePermissions(params, indicators, context) : AuditFilePermissions(params, indicators, context);
+    // The path is diagnostic/argument provenance only. Both operations use
+    // the live file pin supplied by Files, never a pathname re-open.
+    Result<Status> result =
+        remediate ? EnforcePinnedFilePermissions(params, *entry.LiveHandle(), FilesystemCollectionLimits{}.fullPathBytes, false, indicators, context) :
+                    CheckPinnedFilePermissions(params, *entry.LiveHandle(), FilesystemCollectionLimits{}.fullPathBytes, indicators, context);
     if (!result.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to %s permissions for logfile '%s': %s", remediate ? "remediate" : "audit", fullPath.c_str(),
@@ -172,6 +200,51 @@ Result<Status> ProcessLogfile(const std::string& path, const std::string& filena
     return result.Value();
 }
 
+Result<Status> WalkLogfiles(const std::string& path, const DaemonUidSet& daemonUids, IndicatorsTree& indicators, ContextInterface& context, bool remediate)
+{
+    FilesystemCollectionRequest policy(path, FilesystemRootKind::Directory);
+    policy.direction = FilesystemDirection::Down;
+    policy.maxDepth = 32;
+    policy.depthAction = FilesystemDepthAction::Error;
+    policy.scope = FilesystemScope::All;
+    policy.rootFileLinkAction = SymlinkFollowing::Follow;
+    policy.rootDirectoryLinkAction = SymlinkFollowing::Follow;
+    policy.childFileLinkAction = SymlinkFollowing::DoNotFollow;
+    policy.childDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
+    policy.yieldType = FilesystemYieldType::RegularFiles;
+    policy.missingChildAction = FilesystemMissingChildAction::ReportRegularFile;
+
+    auto opened = Filesystem::FTW::Files(policy, context);
+    if (!opened.HasValue())
+    {
+        return opened.Error();
+    }
+    auto& files = opened.Value();
+    Status verdict = Status::Compliant;
+    for (const auto& entry : files)
+    {
+        if (!entry.HasValue())
+        {
+            return entry.Error();
+        }
+        const auto result = ProcessLogfile(entry.Value(), daemonUids, indicators, context, remediate);
+        if (!result.HasValue())
+        {
+            return result.Error();
+        }
+        if (Status::Compliant != result.Value())
+        {
+            verdict = Status::NonCompliant;
+        }
+    }
+    const auto closed = files.Close();
+    if (!closed.HasValue())
+    {
+        return closed.Error();
+    }
+    return verdict;
+}
+
 } // anonymous namespace
 
 Result<Status> AuditLogFilePermissions(const LogFilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
@@ -185,11 +258,7 @@ Result<Status> AuditLogFilePermissions(const LogFilePermissionsParams& params, I
         return daemonUids.Error();
     }
 
-    auto callback = [&daemonUids, &indicators, &context](const std::string& dirPath, const std::string& filename, const struct stat& statInfo) -> Result<Status> {
-        return ProcessLogfile(dirPath, filename, statInfo, daemonUids.Value(), indicators, context, false);
-    };
-
-    auto result = FileTreeWalk(params.path.Value(), callback, BreakOnNonCompliant::False, context);
+    auto result = WalkLogfiles(params.path.Value(), daemonUids.Value(), indicators, context, false);
 
     if (!result.HasValue())
     {
@@ -218,11 +287,7 @@ Result<Status> RemediateLogFilePermissions(const LogFilePermissionsParams& param
         return daemonUids.Error();
     }
 
-    auto callback = [&daemonUids, &indicators, &context](const std::string& dirPath, const std::string& filename, const struct stat& statInfo) -> Result<Status> {
-        return ProcessLogfile(dirPath, filename, statInfo, daemonUids.Value(), indicators, context, true);
-    };
-
-    auto result = FileTreeWalk(params.path.Value(), callback, BreakOnNonCompliant::False, context);
+    auto result = WalkLogfiles(params.path.Value(), daemonUids.Value(), indicators, context, true);
 
     if (!result.HasValue())
     {

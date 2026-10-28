@@ -1,0 +1,2 @@
+search a#literal b;literal
+nameserver 192.0.2.1 # trailing text

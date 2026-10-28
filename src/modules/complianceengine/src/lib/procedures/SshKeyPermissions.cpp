@@ -4,20 +4,25 @@
 #include <CommonUtils.h>
 #include <Evaluator.h>
 #include <FilePermissions.h>
-#include <FileTreeWalk.h>
 #include <SshKeyPermissions.h>
+#include <filesystem/FilesystemCollection.hpp>
 #include <sstream>
 
 namespace ComplianceEngine
 {
 namespace
 {
+using Filesystem::FilesystemCollectionRequest;
+using Filesystem::FilesystemDepthAction;
+using Filesystem::FilesystemDirection;
+using Filesystem::FilesystemRootKind;
+using Filesystem::FilesystemScope;
+using Filesystem::FilesystemYieldType;
+using Filesystem::SymlinkFollowing;
 // Helper routine shared by audit and remediation for SSH key permission checks.
 // When isRemediation == true it will remediate permissions/ownership, otherwise only audit.
 Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTree& indicators, ContextInterface& context)
 {
-    (void)context; // log handle not needed currently
-
     const std::string baseDir = context.GetSpecialFilePath("/etc/ssh");
 
     // Prepare static args map passed to existing file permission helpers.
@@ -30,17 +35,11 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
     //  - pass mask for private keys too if semantics is to forbid bits (private keys should typically be 0600). However user explicitly said 'permissions 0137'. That suggests we want to CLEAR these bits. In helper logic supplying 'permissions' would require those bits to be present which is opposite. Thus we pass it as 'mask'.
     // So: treat provided numbers as masks of forbidden bits.
 
-    auto processFile = [&](const std::string& dir, const std::string& name, const struct stat& sb) -> Result<Status> {
-        if (!S_ISREG(sb.st_mode))
-        {
-            return Status::Compliant; // ignore non-regular
-        }
-        std::string fullPath = dir + "/" + name;
-
+    auto processFile = [&](const std::string& fullPath) -> Result<Status> {
         auto content = context.GetFileContents(fullPath);
         if (!content.HasValue())
         {
-            return Status::Compliant; // ignore unreadable
+            return content.Error();
         }
         std::istringstream iss(content.Value());
         std::string firstLine;
@@ -113,12 +112,50 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
         return result.Value();
     };
 
-    auto walkResult = FileTreeWalk(baseDir, processFile, BreakOnNonCompliant::True, context);
-    if (!walkResult.HasValue())
+    FilesystemCollectionRequest policy(baseDir, FilesystemRootKind::Directory);
+    policy.direction = FilesystemDirection::Down;
+    policy.maxDepth = 32;
+    policy.depthAction = FilesystemDepthAction::Error;
+    policy.scope = FilesystemScope::All;
+    policy.rootFileLinkAction = SymlinkFollowing::Follow;
+    policy.rootDirectoryLinkAction = SymlinkFollowing::Follow;
+    policy.childDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
+    policy.childFileLinkAction = SymlinkFollowing::DoNotFollow;
+    policy.yieldType = FilesystemYieldType::RegularFiles;
+    auto opened = Filesystem::FTW::Files(policy, context);
+    if (!opened.HasValue())
     {
-        return walkResult.Error();
+        return opened.Error();
     }
-    return walkResult.Value();
+    auto& files = opened.Value();
+    if (!files.RootExists())
+    {
+        return Status::Compliant;
+    }
+    Status verdict = Status::Compliant;
+    for (const auto& entry : files)
+    {
+        if (!entry.HasValue())
+        {
+            return entry.Error();
+        }
+        const auto result = processFile(entry.Value().path);
+        if (!result.HasValue())
+        {
+            return result.Error();
+        }
+        if (Status::Compliant != result.Value())
+        {
+            verdict = Status::NonCompliant;
+            break;
+        }
+    }
+    const auto closed = files.Close();
+    if (!closed.HasValue())
+    {
+        return closed.Error();
+    }
+    return verdict;
 }
 } // anonymous namespace
 

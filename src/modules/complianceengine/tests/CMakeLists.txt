@@ -7,6 +7,8 @@ project(compliancetests)
 
 include(GoogleTest)
 find_package(GTest CONFIG REQUIRED)
+set(VCPKG_PACKAGES_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+find_package(OpenSSL REQUIRED NO_DEFAULT_PATH PATHS ${VCPKG_PACKAGES_DIR})
 
 set(PROCEDURES
     procedures/AideAttributesTest.cpp
@@ -46,6 +48,7 @@ set(PROCEDURES
     procedures/XdmcpDisabledTest.cpp
     procedures/CommandOutputMatchTest.cpp
     procedures/FileRegexMatchTest.cpp
+    procedures/FileRegexMatchErrorsTest.cpp
     procedures/PackageInstalledTest.cpp
     procedures/SystemdConfigTest.cpp
     procedures/SystemdUnitStateTest.cpp
@@ -75,7 +78,13 @@ add_executable(complianceenginetests
     EngineTest.cpp
     EvaluatorTest.cpp
     FileObjectCollectorTest.cpp
+    LinesTest.cpp
+    FilesystemCollectionTest.cpp
+    PathTest.cpp
+    ReadableFileTest.cpp
     FilesystemScannerTest.cpp
+    JsonWrapperTest.cpp
+    ListValidShellsTest.cpp
     LuaEvaluatorTest.cpp
     LuaProceduresTest.cpp
     NetworkToolsTest.cpp
@@ -85,10 +94,13 @@ add_executable(complianceenginetests
     VariableResolverTest.cpp
     parsers/LoginDefsTest.cpp
     parsers/NameserverSelectionTest.cpp
+    parsers/ResolvConfTest.cpp
     RegexFallbackTest.cpp
     RegexTest.cpp
     ResultTest.cpp
     ResultEvidenceTest.cpp
+    StigTextPatternLoweringTest.cpp
+    StigTextQuantifierSemanticsTest.cpp
     StringToolsTest.cpp
     TemporaryDirectoryTest.cpp
     UsersIteratorTest.cpp
@@ -99,6 +111,7 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR}/../src/lib)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/../src/lib/procedures)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(complianceenginetests
+    OpenSSL::Crypto
     GTest::gtest
     GTest::gtest_main
     GTest::gmock
@@ -109,6 +122,25 @@ target_link_libraries(complianceenginetests
     commonutils
     parsonlib
 )
+
+# A separate process links a test-instrumented copy of the real resolver.
+# The linker-wrapped allocator cannot affect the normal test executable.
+add_executable(filesystem-collection-allocation-test
+    FilesystemCollectionAllocationTest.cpp
+    ../src/lib/filesystem/FilesystemCollection.cpp
+)
+target_compile_definitions(filesystem-collection-allocation-test PRIVATE KOMPLI_TEST_ROOT_COPY_ALLOCATION=1)
+target_link_options(filesystem-collection-allocation-test PRIVATE "LINKER:--wrap=_Znwm")
+target_link_libraries(filesystem-collection-allocation-test PRIVATE
+    OpenSSL::Crypto
+    GTest::gtest_main
+    GTest::gmock
+    complianceenginelib
+    logging
+    commonutils
+    parsonlib
+)
+gtest_discover_tests(filesystem-collection-allocation-test XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR})
 
 add_library(file_regex_match_fallback_compile OBJECT ../src/lib/procedures/FileRegexMatch.cpp)
 target_compile_definitions(file_regex_match_fallback_compile PRIVATE USE_REGEX_FALLBACK=1)
