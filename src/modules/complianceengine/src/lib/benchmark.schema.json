@@ -187,13 +187,13 @@
           "type": "string",
           "minLength": 1,
           "pattern": "^[^\\u0000]*$",
-          "description": "PascalCase ComplianceEngine rule name."
+          "description": "ComplianceEngine procedure-dispatch name. Generated definitions encode a terminal filename-token hyphen as 'Dash'; the name is not guaranteed unique and is not a rule identity."
         },
         "title": {
           "type": "string",
           "minLength": 1,
           "pattern": "^[^\\u0000]*$",
-          "description": "Human-readable rule title (id prefix + rule name)."
+          "description": "Human-readable, non-unique display title. Newly generated definitions retain the source title without adding an id prefix; existing and user-authored titles, including prefixed ones, are preserved verbatim."
         },
         "section": {
           "type": "string",
