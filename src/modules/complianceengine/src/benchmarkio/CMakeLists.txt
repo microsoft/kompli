@@ -9,7 +9,9 @@ project(benchmarkio)
 
 add_library(benchmarkio STATIC
     BenchmarkDefinition.cpp
+    ContentVersion.cpp
     InputSecurity.cpp
+    RuleResult.cpp
 )
 
 target_include_directories(benchmarkio PUBLIC

@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 #include <BenchmarkFormatter.hpp>
+#include <RuleResult.hpp>
 #include <cerrno>
 #include <cstdlib>
 #include <iomanip>
@@ -33,7 +34,7 @@ BenchmarkFormatter::BenchmarkFormatter(DistributionInfo distributionInfo)
 {
 }
 
-Result<BenchmarkFormatter> BenchmarkFormatter::Begin(DistributionInfo distributionInfo, const Action action)
+Result<BenchmarkFormatter> BenchmarkFormatter::Begin(DistributionInfo distributionInfo)
 {
     BenchmarkFormatter formatter(std::move(distributionInfo));
 
@@ -55,11 +56,6 @@ Result<BenchmarkFormatter> BenchmarkFormatter::Begin(DistributionInfo distributi
     if (JSONSuccess != json_object_set_string(object, "timestamp", ToISODatetime(system_clock::now()).c_str()))
     {
         return Error("Failed to set timestamp", ENOMEM);
-    }
-
-    if (JSONSuccess != json_object_set_string(object, "action", action == Action::Audit ? "Audit" : "Remediation"))
-    {
-        return Error("Failed to set action", ENOMEM);
     }
 
     const auto arch = std::to_string(formatter.mDistributionInfo.architecture);
@@ -98,161 +94,29 @@ Result<BenchmarkFormatter> BenchmarkFormatter::Begin(DistributionInfo distributi
 }
 
 Optional<Error> BenchmarkFormatter::AddEntry(const BenchmarkIO::Resource& entry, const Status status, const string& payload,
-    const std::map<std::string, std::string>& parameters) &
+    const std::map<std::string, std::string>& parameters, const Action action) &
 {
-    auto resultWrapper = JsonWrapper::MakeObject();
+    auto resultWrapper = BenchmarkIO::BuildRuleResultJson(entry, status, payload, parameters, action);
     if (!resultWrapper.HasValue())
     {
-        return Error("Failed to initialize JSON object", ENOMEM);
+        return resultWrapper.Error();
     }
-    auto result = std::move(resultWrapper.Value());
-    auto* object = json_value_get_object(result.get());
-    if (nullptr == object)
-    {
-        return Error("Failed to get JSON object", ENOMEM);
-    }
+    return AppendRuleJson(std::move(resultWrapper.Value()));
+}
 
-    auto* indicatorsValue = json_parse_string(payload.c_str());
-    if (nullptr == indicatorsValue)
+Optional<Error> BenchmarkFormatter::AddSkippedEntry(const BenchmarkIO::Resource& entry, const std::map<std::string, std::string>& parameters) &
+{
+    auto resultWrapper = BenchmarkIO::BuildSkippedRuleResultJson(entry, parameters);
+    if (!resultWrapper.HasValue())
     {
-        return Error("Failed to parse JSON payload", ENOMEM);
+        return resultWrapper.Error();
     }
-    if (json_value_get_type(indicatorsValue) != JSONArray)
-    {
-        json_value_free(indicatorsValue);
-        return Error("Invalid JSON payload", EINVAL);
-    }
+    return AppendRuleJson(std::move(resultWrapper.Value()));
+}
 
-    if (JSONSuccess != json_object_set_value(object, "indicators", indicatorsValue))
-    {
-        json_value_free(indicatorsValue);
-        return Error("Failed to set JSON payload", ENOMEM);
-    }
-
-    if (JSONSuccess != json_object_set_string(object, "title", entry.resourceID.c_str()))
-    {
-        return Error("Failed to set JSON title", ENOMEM);
-    }
-
-    if (JSONSuccess != json_object_set_string(object, "id", entry.id.c_str()))
-    {
-        return Error("Failed to set JSON id", ENOMEM);
-    }
-
-    if (JSONSuccess != json_object_set_string(object, "ruleId", entry.ruleId.c_str()))
-    {
-        return Error("Failed to set JSON ruleId", ENOMEM);
-    }
-
-    if (JSONSuccess != json_object_set_string(object, "ruleName", entry.ruleName.c_str()))
-    {
-        return Error("Failed to set JSON ruleName", ENOMEM);
-    }
-
-    if (JSONSuccess != json_object_set_string(object, "status", std::to_string(status).c_str()))
-    {
-        return Error("Failed to set JSON status", ENOMEM);
-    }
-
-    auto* tagsValue = json_value_init_array();
-    if (nullptr == tagsValue)
-    {
-        return Error("Failed to initialize tags JSON array", ENOMEM);
-    }
-    auto* tagsArray = json_value_get_array(tagsValue);
-    for (const auto& tag : entry.tags)
-    {
-        if (JSONSuccess != json_array_append_string(tagsArray, tag.c_str()))
-        {
-            json_value_free(tagsValue);
-            return Error("Failed to append tag value", ENOMEM);
-        }
-    }
-    if (JSONSuccess != json_object_set_value(object, "tags", tagsValue))
-    {
-        json_value_free(tagsValue);
-        return Error("Failed to set tags", ENOMEM);
-    }
-
-    auto* metadataValue = json_value_init_object();
-    if (nullptr == metadataValue)
-    {
-        return Error("Failed to initialize metadata JSON object", ENOMEM);
-    }
-    auto* metadataObject = json_value_get_object(metadataValue);
-    if (nullptr == metadataObject)
-    {
-        json_value_free(metadataValue);
-        return Error("Failed to get metadata JSON object", ENOMEM);
-    }
-    auto setField = [metadataObject](const char* key, const Optional<string>& value) -> Optional<Error> {
-        if (value.HasValue() && string::npos != value.Value().find('\0'))
-        {
-            return Error("Failed to set metadata field '" + string(key) + "'", EINVAL);
-        }
-        if (value.HasValue() && JSONSuccess != json_object_set_string_with_len(metadataObject, key, value.Value().c_str(), value.Value().size()))
-        {
-            return Error("Failed to set metadata field '" + string(key) + "'", ENOMEM);
-        }
-        return {};
-    };
-    for (const auto& field : {std::pair<const char*, const Optional<string>*>("description", &entry.metadata.description), {"rationale", &entry.metadata.rationale},
-             {"fixtext", &entry.metadata.fixtext}, {"severity", &entry.metadata.severity}, {"references", &entry.metadata.references}})
-    {
-        if (auto error = setField(field.first, *field.second))
-        {
-            json_value_free(metadataValue);
-            return error.Value();
-        }
-    }
-    for (const auto& field : entry.metadata.additional)
-    {
-        if (string::npos != field.first.find('\0') || string::npos != field.second.find('\0') || field.first == "description" ||
-            field.first == "rationale" || field.first == "fixtext" || field.first == "severity" || field.first == "references")
-        {
-            json_value_free(metadataValue);
-            return Error("Failed to set additional metadata field '" + field.first + "'", EINVAL);
-        }
-        if (JSONSuccess != json_object_set_string_with_len(metadataObject, field.first.c_str(), field.second.c_str(), field.second.size()))
-        {
-            json_value_free(metadataValue);
-            return Error("Failed to set additional metadata field '" + field.first + "'", ENOMEM);
-        }
-    }
-    if (JSONSuccess != json_object_set_value(object, "metadata", metadataValue))
-    {
-        json_value_free(metadataValue);
-        return Error("Failed to set metadata", ENOMEM);
-    }
-
-    // Surface the effective parameters (payload defaults merged with any user
-    // overrides) so renderers can show them without decoding the procedure blob.
-    auto* parametersValue = json_value_init_object();
-    if (nullptr == parametersValue)
-    {
-        return Error("Failed to initialize parameters JSON object", ENOMEM);
-    }
-    auto* parametersObject = json_value_get_object(parametersValue);
-    if (nullptr == parametersObject)
-    {
-        json_value_free(parametersValue);
-        return Error("Failed to get parameters JSON object", ENOMEM);
-    }
-    for (const auto& parameter : parameters)
-    {
-        if (JSONSuccess != json_object_set_string(parametersObject, parameter.first.c_str(), parameter.second.c_str()))
-        {
-            json_value_free(parametersValue);
-            return Error("Failed to set parameter value", ENOMEM);
-        }
-    }
-    if (JSONSuccess != json_object_set_value(object, "parameters", parametersValue))
-    {
-        json_value_free(parametersValue);
-        return Error("Failed to set parameters", ENOMEM);
-    }
-
-    object = json_value_get_object(mJson.get());
+Optional<Error> BenchmarkFormatter::AppendRuleJson(JsonWrapper rule) &
+{
+    auto* object = json_value_get_object(mJson.get());
     if (nullptr == object)
     {
         return Error("Failed to get JSON object", ENOMEM);
@@ -263,10 +127,11 @@ Optional<Error> BenchmarkFormatter::AddEntry(const BenchmarkIO::Resource& entry,
         return Error("Failed to get JSON array", ENOMEM);
     }
 
-    if (JSONSuccess != json_array_append_value(array, result.release()))
+    if (JSONSuccess != json_array_append_value(array, rule.get()))
     {
         return Error("Failed to append JSON value", ENOMEM);
     }
+    rule.release();
 
     return Optional<Error>();
 }

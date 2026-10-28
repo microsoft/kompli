@@ -8,11 +8,11 @@ input format, the input-hardening posture, or the trust boundary changes.
 
 The tool runs **as root** on Linux endpoints to perform CIS benchmark audit and
 remediation. The trust boundary is the invoking operator: the input
-benchmark-definition file, the log-file path, and command-line arguments are
-operator-supplied — trusted to be benign in *intent*, but not trusted to be free
-of bugs or accidental hostile content. The hardening below defends the root
-process against a malformed, tampered, or swapped input rather than against the
-operator.
+plan file, referenced benchmark-definition files, the log-file path, and
+command-line arguments are operator-supplied — trusted to be benign in
+*intent*, but not trusted to be free of bugs or accidental hostile content.
+The hardening below defends the root process against a malformed, tampered, or
+swapped input rather than against the operator.
 
 ### Why input integrity is security-critical
 
@@ -43,11 +43,11 @@ The parser (`BenchmarkDefinition`) is strict:
   choke point, the NUL rejection and every other guard are attested by the
   fuzzer. Extend the corpus when changing the format.
 
-## Input file integrity (positional filename)
+## Input file integrity
 
-Definition input **must** be a verified on-disk file, supplied as the positional
-filename argument (`audit|remediate <file>`). The parser owns the file and
-applies, in order:
+Plan and definition inputs **must** be verified on-disk files. `run` receives
+the plan as its positional filename; each plan block names a definition file.
+Both parsers use the shared verified-input checks below before reading:
 
 1. **Parent directory (stat):** must be root-owned and not writable by group or
    others. A writable directory enables a rename-swap attack: an attacker could
@@ -77,13 +77,17 @@ applies, in order:
    is concurrently renamed or unlinked. Both the total input size and the rule
    count (`kMaxRules`) are bounded inside the parser.
 
-### stdin is not supported for definitions
+The plan parser separately caps the plan at 8 MiB and rejects duplicate paths,
+duplicate benchmark identities, malformed rule maps, and unsupported modes
+before executing any rule.
 
-`audit` / `remediate` **require** a positional benchmark-definition file
-argument; a missing path or `-` is a hard error. stdin is deliberately
-unsupported so the integrity checks above can never be bypassed by piping data
-into the root process. (The root-free `render` subcommand, which only reformats
-a result JSON and performs none of these checks, still accepts stdin.)
+### stdin is not supported for plans or definitions
+
+`run` requires an on-disk plan, and `plan`/`list` require on-disk definitions;
+a missing path or `-` is a hard error. stdin is deliberately unsupported so
+the integrity checks above cannot be bypassed by piping data into the root
+process. The root-free `render` subcommand, which only reformats a result JSON
+and performs none of these checks, still accepts stdin.
 
 ## Other process hardening
 

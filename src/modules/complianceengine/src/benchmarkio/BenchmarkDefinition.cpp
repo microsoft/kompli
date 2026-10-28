@@ -107,6 +107,17 @@ Result<string> RequiredString(const JSON_Object* object, const char* key, const 
     return value;
 }
 
+Result<string> RequiredStringAllowEmpty(const JSON_Object* object, const char* key, const string& context)
+{
+    const JSON_Value* jsonValue = json_object_get_value(object, key);
+    if (nullptr == jsonValue || JSONString != json_value_get_type(jsonValue))
+    {
+        return Error("Benchmark definition " + context + " is missing required string field '" + string(key) + "'", EINVAL);
+    }
+
+    return ReadStringValue(jsonValue, key, context);
+}
+
 Result<Optional<string>> OptionalString(const JSON_Object* object, const char* key, const string& context)
 {
     const JSON_Value* jsonValue = json_object_get_value(object, key);
@@ -150,6 +161,90 @@ Result<string> SerializeProcedure(const JSON_Object* ruleObject, const string& c
     string procedure(serialized);
     json_free_serialized_string(serialized);
     return procedure;
+}
+
+Result<std::map<string, BenchmarkIO::ParameterMetadata>> ParseParameterMetadata(const JSON_Object* ruleObject, const string& context)
+{
+    std::map<string, BenchmarkIO::ParameterMetadata> result;
+    const JSON_Value* value = json_object_get_value(ruleObject, "parameterMetadata");
+    if (nullptr == value)
+    {
+        return result;
+    }
+
+    if (json_value_get_type(value) != JSONObject)
+    {
+        return Error("Benchmark definition " + context + " has a 'parameterMetadata' field that is not a JSON object", EINVAL);
+    }
+
+    const JSON_Object* metadataObject = json_value_get_object(value);
+    const size_t count = json_object_get_count(metadataObject);
+    for (size_t i = 0; i < count; ++i)
+    {
+        const char* name = json_object_get_name(metadataObject, i);
+        if (nullptr == name || name[0] == '\0')
+        {
+            return Error("Benchmark definition " + context + " has a 'parameterMetadata' entry with an empty name", EINVAL);
+        }
+
+        const string entryContext = context + ".parameterMetadata." + string(name);
+        const JSON_Value* entryValue = json_object_get_value_at(metadataObject, i);
+        const JSON_Object* entryObject = (nullptr != entryValue) ? json_value_get_object(entryValue) : nullptr;
+        if (nullptr == entryObject)
+        {
+            return Error("Benchmark definition " + entryContext + " is not a JSON object", EINVAL);
+        }
+
+        auto defaultValue = RequiredStringAllowEmpty(entryObject, "default", entryContext);
+        if (!defaultValue.HasValue())
+        {
+            return defaultValue.Error();
+        }
+
+        auto type = RequiredString(entryObject, "type", entryContext);
+        if (!type.HasValue())
+        {
+            return type.Error();
+        }
+        if (type.Value() != "string")
+        {
+            return Error("Benchmark definition " + entryContext + " has unsupported type '" + type.Value() + "'; only 'string' is supported", EINVAL);
+        }
+
+        BenchmarkIO::ParameterMetadata metadata;
+        metadata.defaultValue = std::move(defaultValue.Value());
+        metadata.type = std::move(type.Value());
+
+        auto displayName = OptionalString(entryObject, "displayName", entryContext);
+        if (!displayName.HasValue())
+        {
+            return displayName.Error();
+        }
+        metadata.displayName = std::move(displayName.Value());
+
+        auto validationRegex = OptionalString(entryObject, "validationRegex", entryContext);
+        if (!validationRegex.HasValue())
+        {
+            return validationRegex.Error();
+        }
+        metadata.validationRegex = std::move(validationRegex.Value());
+
+        auto validationFailedMessage = OptionalString(entryObject, "validationFailedMessage", entryContext);
+        if (!validationFailedMessage.HasValue())
+        {
+            return validationFailedMessage.Error();
+        }
+        metadata.validationFailedMessage = std::move(validationFailedMessage.Value());
+        const JSON_Value* mandatoryValue = json_object_get_value(entryObject, "mandatory");
+        if (nullptr != mandatoryValue && JSONBoolean != json_value_get_type(mandatoryValue))
+        {
+            return Error("Benchmark definition " + entryContext + " has a 'mandatory' field that is not a boolean", EINVAL);
+        }
+        metadata.mandatory = (nullptr != mandatoryValue && 1 == json_value_get_boolean(mandatoryValue));
+        result[name] = std::move(metadata);
+    }
+
+    return result;
 }
 
 string BenchmarkVersionWithoutOptionalPrefix(const string& version)
@@ -318,6 +413,12 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index, const Be
         return procedure.Error();
     }
 
+    auto parameterMetadata = ParseParameterMetadata(ruleObject, context);
+    if (!parameterMetadata.HasValue())
+    {
+        return parameterMetadata.Error();
+    }
+
     const bool hasId = json_object_has_value(ruleObject, "id") == 1;
     const bool hasSection = json_object_has_value(ruleObject, "section") == 1;
     const bool hasPayloadKey = json_object_has_value(ruleObject, "payloadKey") == 1;
@@ -394,6 +495,7 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index, const Be
     }
 
     Resource resource;
+    resource.benchmarkInfo = documentInfo;
     resource.resourceID = std::move(title.Value());
     resource.id = std::move(id);
     resource.ruleId = std::move(ruleId.Value());
@@ -401,6 +503,7 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index, const Be
     resource.ruleName = std::move(ruleName.Value());
     resource.tags = std::move(tags.Value());
     resource.metadata = std::move(metadata.Value());
+    resource.parameterMetadata = std::move(parameterMetadata.Value());
     // Every rule carries an init object.
     resource.hasInitAudit = true;
     // Definitions carry no desired object value; the payload is modelled as
@@ -464,6 +567,17 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
     if (nullptr == spec)
     {
         return Error("Benchmark definition is missing the 'spec' object", EINVAL);
+    }
+
+    auto versionText = RequiredString(spec, "version", "spec");
+    if (!versionText.HasValue())
+    {
+        return versionText.Error();
+    }
+    auto version = ParseContentVersion(versionText.Value());
+    if (!version.HasValue())
+    {
+        return version.Error();
     }
 
     auto* rules = json_object_get_array(spec, "rules");
@@ -573,8 +687,11 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
 
     BenchmarkDocument result;
     result.name = std::move(name.Value());
+    result.version = std::move(version.Value());
     result.benchmarkInfo = std::move(documentInfo);
     result.resources.reserve(ruleCount);
+    // Plan/run key rules by id; reject duplicate ids rather than selecting
+    // an ambiguous rule.
     std::set<string> seenIds;
     for (size_t i = 0; i < ruleCount; ++i)
     {

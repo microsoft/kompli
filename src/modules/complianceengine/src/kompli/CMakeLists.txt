@@ -25,6 +25,7 @@ set(LIB_SOURCES
     BenchmarkFormatter.cpp
     JUnitRenderer.cpp
     TextRenderers.cpp
+    Plan.cpp
 )
 
 add_library(${lib_name} STATIC ${LIB_SOURCES})
