@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "Lines.hpp"
+#include "LinesRange.hpp"
 
 #include "ContextInterface.h"
 #include "filesystem/Path.hpp"
@@ -50,7 +50,7 @@ Filesystem::ResolverLimits AcquisitionLimits()
 }
 } // namespace
 
-Lines::Lines(ReadableFile&& data, Policy policy, const struct stat& before) noexcept
+LinesRange::LinesRange(ReadableFile&& data, Policy policy, const struct stat& before) noexcept
     : mPolicy(std::move(policy)),
       mData(std::move(data)),
       mBefore(before),
@@ -58,7 +58,7 @@ Lines::Lines(ReadableFile&& data, Policy policy, const struct stat& before) noex
 {
 }
 
-Result<Optional<std::string>> Lines::Complete()
+Result<Optional<std::string>> LinesRange::Complete()
 {
     if (mBefore.st_size > 0 && static_cast<unsigned long long>(mBefore.st_size) != mConsumed)
         return Error("File ended before its stable size", EIO);
@@ -74,7 +74,7 @@ Result<Optional<std::string>> Lines::Complete()
 
 // Refill only when exhausted. A one-byte read at the cap proves exact
 // EOF without storing or charging any excess byte.
-Result<bool> Lines::Refill()
+Result<bool> LinesRange::Refill()
 {
     const std::size_t remaining = mPolicy.limits.maxBytes - mConsumed;
     const std::size_t requested = std::min(ReadChunkBytes, remaining ? remaining : std::size_t(1));
@@ -95,7 +95,7 @@ Result<bool> Lines::Refill()
     return true;
 }
 
-Result<Optional<std::string>> Lines::Next()
+Result<Optional<std::string>> LinesRange::Next()
 {
     if (mFinished || mClosed)
         return Optional<std::string>();
@@ -132,22 +132,22 @@ Result<Optional<std::string>> Lines::Next()
     }
 }
 
-Lines::Iterator::Iterator() = default;
+LinesRange::Iterator::Iterator() = default;
 
-Lines::Iterator::Iterator(Lines* range)
+LinesRange::Iterator::Iterator(LinesRange* range)
     : mRange(range)
 {
     Next();
 }
 
-Lines::Iterator::Iterator(Iterator&& other) noexcept
+LinesRange::Iterator::Iterator(Iterator&& other) noexcept
     : mRange(other.mRange),
       mCurrent(std::move(other.mCurrent))
 {
     other.mRange = nullptr;
 }
 
-Lines::Iterator& Lines::Iterator::operator=(Iterator&& other) noexcept
+LinesRange::Iterator& LinesRange::Iterator::operator=(Iterator&& other) noexcept
 {
     if (this != &other)
     {
@@ -158,27 +158,27 @@ Lines::Iterator& Lines::Iterator::operator=(Iterator&& other) noexcept
     return *this;
 }
 
-Lines::Iterator::~Iterator() = default;
+LinesRange::Iterator::~Iterator() = default;
 
-Lines::Iterator::reference Lines::Iterator::operator*() const
+LinesRange::Iterator::reference LinesRange::Iterator::operator*() const
 {
     assert(mRange && !mRange->mClosed && mCurrent.HasValue());
     return mCurrent.Value();
 }
 
-Lines::Iterator::pointer Lines::Iterator::operator->() const
+LinesRange::Iterator::pointer LinesRange::Iterator::operator->() const
 {
     return &**this;
 }
 
-Lines::Iterator& Lines::Iterator::operator++()
+LinesRange::Iterator& LinesRange::Iterator::operator++()
 {
     assert(mRange && !mRange->mClosed && mCurrent.HasValue());
     Next();
     return *this;
 }
 
-void Lines::Iterator::Next()
+void LinesRange::Iterator::Next()
 {
     mCurrent.Reset();
     auto next = mRange->Next();
@@ -192,14 +192,14 @@ void Lines::Iterator::Next()
         mCurrent = Result<std::string>(std::move(line).Value());
 }
 
-bool Lines::Iterator::operator!=(const Iterator& other) const
+bool LinesRange::Iterator::operator!=(const Iterator& other) const
 {
     const bool active = mRange && !mRange->mClosed && mCurrent.HasValue();
     const bool otherActive = other.mRange && !other.mRange->mClosed && other.mCurrent.HasValue();
     return active != otherActive || (active && mRange != other.mRange);
 }
 
-Lines::Lines(Lines&& other) noexcept
+LinesRange::LinesRange(LinesRange&& other) noexcept
     : mPolicy(std::move(other.mPolicy)),
       mData(std::move(other.mData)),
       mBefore(other.mBefore),
@@ -216,7 +216,7 @@ Lines::Lines(Lines&& other) noexcept
     other.mFinished = true;
 }
 
-Lines& Lines::operator=(Lines&& other) noexcept
+LinesRange& LinesRange::operator=(LinesRange&& other) noexcept
 {
     if (this != &other)
     {
@@ -239,9 +239,9 @@ Lines& Lines::operator=(Lines&& other) noexcept
     return *this;
 }
 
-Lines::~Lines() = default;
+LinesRange::~LinesRange() = default;
 
-Lines::Iterator Lines::begin() // NOLINT(*-identifier-naming)
+LinesRange::Iterator LinesRange::begin() // NOLINT(*-identifier-naming)
 {
     if (mStarted || mClosed)
         return {};
@@ -249,19 +249,19 @@ Lines::Iterator Lines::begin() // NOLINT(*-identifier-naming)
     return Iterator(this);
 }
 
-Result<bool> Lines::Close()
+Result<bool> LinesRange::Close()
 {
     mClosed = true;
     mFinished = true;
     return mData.Close();
 }
 
-Result<Lines> Lines::Open(const ContextInterface& context, std::string path)
+Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string path)
 {
-    return Open(context, std::move(path), Policy{});
+    return Make(context, std::move(path), Policy{});
 }
 
-Result<Lines> Lines::Open(const ContextInterface& context, std::string path, Policy policy)
+Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string path, Policy policy)
 {
     if (path.empty() || path.front() != '/' || path.find('\0') != std::string::npos)
         return Error("A NUL-free absolute file path is required", EINVAL);
@@ -279,7 +279,7 @@ Result<Lines> Lines::Open(const ContextInterface& context, std::string path, Pol
     // A primary acquisition/activation error wins over cleanup failures.
     // Close still attempts every hidden acquisition pin and reports its
     // first failure; log it when another error already owns the result.
-    auto fail = [&](Error primary) -> Result<Lines> {
+    auto fail = [&](Error primary) -> Result<LinesRange> {
         auto closed = pins.Close();
         if (!closed.HasValue())
         {
@@ -326,7 +326,7 @@ Result<Lines> Lines::Open(const ContextInterface& context, std::string path, Pol
     auto closed = pins.Close();
     if (!closed.HasValue())
         return Error("Failed to close pinned descriptor", closed.Error().code);
-    return Lines(std::move(data), std::move(policy), before);
+    return LinesRange(std::move(data), std::move(policy), before);
 }
 } // namespace Filesystem
 } // namespace ComplianceEngine

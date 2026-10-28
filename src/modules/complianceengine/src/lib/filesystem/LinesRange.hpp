@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_LINES_HPP
-#define COMPLIANCEENGINE_LINES_HPP
+#ifndef COMPLIANCEENGINE_LINESRANGE_HPP
+#define COMPLIANCEENGINE_LINESRANGE_HPP
 
 #include "Optional.h"
 #include "Result.h"
@@ -20,7 +20,7 @@ class ContextInterface;
 namespace Filesystem
 {
 // The context must outlive the lines. Iterators are valid only while their
-// owner remains alive and unmoved; Close invalidates them. Lines is a
+// owner remains alive and unmoved; Close invalidates them. LinesRange is a
 // move-only, single-pass resource owner. Only the first begin traverses it.
 // Close before EOF (or destruction) releases handles without verifying unread
 // input; reaching EOF checks size and before/after descriptor metadata but
@@ -33,7 +33,7 @@ namespace Filesystem
 // CR and non-ASCII bytes are preserved; embedded NUL is rejected with EBADMSG
 // before the affected line can be yielded. Read and EOF-verification failures
 // appear as one error item, followed by end; Close invalidates any held item.
-class Lines
+class LinesRange
 {
 public:
     struct Limits
@@ -71,29 +71,29 @@ public:
         bool operator!=(const Iterator& other) const;
 
     private:
-        explicit Iterator(Lines* range);
+        explicit Iterator(LinesRange* range);
         void Next();
 
-        Lines* mRange = nullptr;
+        LinesRange* mRange = nullptr;
         ComplianceEngine::Optional<value_type> mCurrent;
 
-        friend class Lines;
+        friend class LinesRange;
     };
 
-    Lines(Lines&&) noexcept;
-    Lines& operator=(Lines&&) noexcept;
-    Lines(const Lines&) = delete;
-    Lines& operator=(const Lines&) = delete;
-    ~Lines();
+    LinesRange(LinesRange&&) noexcept;
+    LinesRange& operator=(LinesRange&&) noexcept;
+    LinesRange(const LinesRange&) = delete;
+    LinesRange& operator=(const LinesRange&) = delete;
+    ~LinesRange();
 
     // Acquires an absolute path from the filesystem root with bounded, checked
     // descriptor-backed resolution. Policy controls every component's links;
     // Follow permits intermediate and final links. Mount crossing remains allowed.
     // Activates a readable file from the final pin, verifies identity, then
     // checks release of all acquisition pins before returning. Reads no content
-    // bytes. Lines owns only the independently activated readable file.
-    static ComplianceEngine::Result<Lines> Open(const ComplianceEngine::ContextInterface& context, std::string path);
-    static ComplianceEngine::Result<Lines> Open(const ComplianceEngine::ContextInterface& context, std::string path, Policy policy);
+    // bytes. LinesRange owns only the independently activated readable file.
+    static ComplianceEngine::Result<LinesRange> Make(const ComplianceEngine::ContextInterface& context, std::string path);
+    static ComplianceEngine::Result<LinesRange> Make(const ComplianceEngine::ContextInterface& context, std::string path, Policy policy);
 
     Iterator begin();    // NOLINT(*-identifier-naming)
     Iterator end() const // NOLINT(*-identifier-naming)
@@ -105,12 +105,12 @@ public:
     // close failure, if any; subsequent calls succeed without another attempt.
     // Failed closes log the descriptor diagnostic and native error once.
     // Destruction also closes and logs if needed;
-    // the context (and its log handle) must outlive Lines.
+    // the context (and its log handle) must outlive LinesRange.
     // Success means closure succeeded, not that an early-stopped read verified EOF.
     ComplianceEngine::Result<bool> Close();
 
 private:
-    Lines(ReadableFile&& data, Policy policy, const struct stat& before) noexcept;
+    LinesRange(ReadableFile&& data, Policy policy, const struct stat& before) noexcept;
     ComplianceEngine::Result<ComplianceEngine::Optional<std::string>> Next();
     ComplianceEngine::Result<bool> Refill();
     ComplianceEngine::Result<ComplianceEngine::Optional<std::string>> Complete();
@@ -129,4 +129,4 @@ private:
 } // namespace Filesystem
 } // namespace ComplianceEngine
 
-#endif // COMPLIANCEENGINE_LINES_HPP
+#endif // COMPLIANCEENGINE_LINESRANGE_HPP

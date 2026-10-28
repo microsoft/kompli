@@ -78,7 +78,7 @@ add_executable(complianceenginetests
     EngineTest.cpp
     EvaluatorTest.cpp
     FileObjectCollectorTest.cpp
-    LinesTest.cpp
+    LinesRangeTest.cpp
     FilesystemCollectionTest.cpp
     PathTest.cpp
     ReadableFileTest.cpp
