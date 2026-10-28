@@ -43,17 +43,17 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
         return Error("A NUL-free absolute path is required", EINVAL);
     if (!policy.contentBytes || !policy.occurrences || !policy.captureBytes || !policy.capturedBytes || !policy.values || !policy.readRetries)
         return Error("File collection limits must be positive", EINVAL);
-    if (policy.symlinks != SymlinkFollowing::Follow && policy.symlinks != SymlinkFollowing::DoNotFollow)
+    if (policy.symlinks != Filesystem::SymlinkFollowing::Follow && policy.symlinks != Filesystem::SymlinkFollowing::DoNotFollow)
         return Error("Invalid symlink policy", EINVAL);
 
-    FileReader::Policy readerPolicy;
+    Filesystem::FileReader::Policy readerPolicy;
     readerPolicy.symlinks = policy.symlinks;
     readerPolicy.limits.maxBytes = policy.contentBytes;
     readerPolicy.limits.maxInterruptedReads = policy.readRetries;
     VariableResolution::ObjectCollection collection;
     std::size_t capturedBytes = 0;
     Result<bool> selected(true);
-    auto opened = FileReader::Lines(context, path, readerPolicy);
+    auto opened = Filesystem::FileReader::Lines(context, path, readerPolicy);
     if (!opened.HasValue())
         return std::move(opened).Error();
     ResolvConf::Parser parser(path);

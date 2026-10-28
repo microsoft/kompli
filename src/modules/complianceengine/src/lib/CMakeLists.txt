@@ -190,6 +190,7 @@ add_library(complianceenginelib STATIC
     filesystem/Handle.cpp
     filesystem/Path.cpp
     filesystem/ReadableFile.cpp
+    filesystem/Descriptor.cpp
     GuestConfigurationContext.cpp
     FilesystemScanner.cpp
     GroupsIterator.cpp

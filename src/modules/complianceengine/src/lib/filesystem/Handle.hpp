@@ -4,6 +4,7 @@
 #ifndef COMPLIANCEENGINE_FILESYSTEM_HANDLE_HPP
 #define COMPLIANCEENGINE_FILESYSTEM_HANDLE_HPP
 
+#include "Descriptor.hpp"
 #include "Optional.h"
 #include "Result.h"
 
@@ -116,7 +117,7 @@ private:
     // Path owns composition and detached-resource accounting. The checked
     // acquisition methods below are private: no consumer can supply an fd.
     friend class Path;
-    Handle(const ContextInterface& context, int descriptor, Type type, std::string component, const struct stat& snapshot);
+    Handle(Detail::Descriptor&& descriptor, Type type, std::string component, const struct stat& snapshot);
     static Result<Handle> AcquireChild(const ContextInterface& context, int parentDirectory, std::string component, bool directory);
     static Result<Handle> AcquireChild(const Handle& parent, std::string component, bool directory);
     static Result<Handle> PinProcessRoot(const ContextInterface& context);
@@ -128,7 +129,7 @@ private:
     int CloseOnce() noexcept;
 
     const ContextInterface* mContext = nullptr;
-    int mDescriptor = -1;
+    Detail::Descriptor mDescriptor;
     Type mType = Type::Directory;
     std::string mComponent;
     struct stat mSnapshot = {};

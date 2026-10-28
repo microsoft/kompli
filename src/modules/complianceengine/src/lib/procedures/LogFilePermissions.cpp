@@ -20,6 +20,16 @@ namespace ComplianceEngine
 {
 namespace
 {
+using Filesystem::FilesystemCollectionEntry;
+using Filesystem::FilesystemCollectionLimits;
+using Filesystem::FilesystemCollectionRequest;
+using Filesystem::FilesystemDepthAction;
+using Filesystem::FilesystemDirection;
+using Filesystem::FilesystemMissingChildAction;
+using Filesystem::FilesystemRootKind;
+using Filesystem::FilesystemScope;
+using Filesystem::FilesystemYieldType;
+using Filesystem::SymlinkFollowing;
 
 // Global map of fnmatch patterns to file permission arguments
 // Pattern -> {args}
@@ -204,7 +214,7 @@ Result<Status> WalkLogfiles(const std::string& path, const DaemonUidSet& daemonU
     policy.yieldType = FilesystemYieldType::RegularFiles;
     policy.missingChildAction = FilesystemMissingChildAction::ReportRegularFile;
 
-    auto opened = FTW::Files(policy, context);
+    auto opened = Filesystem::FTW::Files(policy, context);
     if (!opened.HasValue())
     {
         return opened.Error();

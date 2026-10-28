@@ -17,6 +17,12 @@
 extern "C" void ArmFilesystemCollectionRootCopy(std::size_t bytes) noexcept;
 extern "C" void DisarmFilesystemCollectionRootCopy() noexcept;
 
+namespace ComplianceEngine
+{
+namespace Filesystem
+{
+namespace
+{
 class ScopedRootCopyAllocationFault
 {
 public:
@@ -35,9 +41,14 @@ public:
         DisarmFilesystemCollectionRootCopy();
     }
 };
+} // namespace
+} // namespace Filesystem
+} // namespace ComplianceEngine
 #endif
 
 namespace ComplianceEngine
+{
+namespace Filesystem
 {
 namespace
 {
@@ -1018,4 +1029,5 @@ Result<FilesystemCollectionResult> CollectFilesystem(const FilesystemCollectionR
     }
     return files.StopVisitor();
 }
+} // namespace Filesystem
 } // namespace ComplianceEngine

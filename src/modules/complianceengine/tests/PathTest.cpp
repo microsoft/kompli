@@ -36,12 +36,13 @@ using ComplianceEngine::Filesystem::HardlinkPolicy;
 using ComplianceEngine::Filesystem::Path;
 using ComplianceEngine::Filesystem::RootPolicy;
 using ComplianceEngine::Filesystem::SymlinkPolicy;
+using ComplianceEngine::Filesystem::Detail::Descriptor;
 using ComplianceEngine::Filesystem::Detail::IsSingleChildComponent;
 using ComplianceEngine::Filesystem::Detail::MountPolicy;
 using ComplianceEngine::Filesystem::Detail::ParseMountId;
 using ComplianceEngine::Filesystem::Detail::ReadPinnedLink;
 using ComplianceEngine::Filesystem::Detail::ResolverLimits;
-using ComplianceEngine::Filesystem::Detail::ScopedDescriptor;
+using ComplianceEngine::Filesystem::Detail::VerifiedProcfs;
 using testing::_;
 using testing::NiceMock;
 
@@ -95,6 +96,33 @@ protected:
     {
         return ResolverLimits{{4096, 100, 100000, 256, 262144, 4096}, 4096, 8, 128};
     }
+};
+// Exercise ownership on a descriptor adopted by the production procfs
+// verifier; tests must not have direct access to native adoption.
+ComplianceEngine::Result<Descriptor> VerifiedTestDescriptor(const ComplianceEngine::ContextInterface& context)
+{
+    VerifiedProcfs procfs(context);
+    auto opened = procfs.Open();
+    if (!opened.HasValue())
+    {
+        return std::move(opened).Error();
+    }
+    Descriptor owned(std::move(procfs.proc));
+    auto closed = procfs.Close();
+    if (!closed.HasValue())
+    {
+        return std::move(closed).Error();
+    }
+    return owned;
+}
+template <typename T>
+struct HasPublicNativeAdoption
+{
+    template <typename U>
+    static auto Check(int) -> decltype(U::Take(std::declval<const ComplianceEngine::ContextInterface&>(), 0), std::true_type{});
+    template <typename>
+    static std::false_type Check(...);
+    static constexpr bool value = decltype(Check<T>(0))::value;
 };
 std::string DescriptorTarget(int descriptor)
 {
@@ -346,20 +374,150 @@ TEST_F(PathAliasTest, ProcfsHelpersCloseCheckedOnceAndFirstFailureWins)
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
+TEST_F(PathAliasTest, VerifiedProcfsCloseAttemptsEveryOwnerAndDoesNotRetry)
+{
+    const auto before = CountOpenDescriptors();
+    ComplianceEngine::Filesystem::Detail::VerifiedProcfs procfs(context);
+    ASSERT_TRUE(procfs.Open().HasValue());
+    std::size_t attempted = 0;
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(5).WillRepeatedly([&](int descriptor) {
+        EXPECT_EQ(0, ::close(descriptor));
+        if (attempted++ < 2)
+        {
+            errno = (attempted == 1) ? EACCES : EIO;
+            return -1;
+        }
+        return 0;
+    });
+    auto closed = procfs.Close();
+    ASSERT_FALSE(closed.HasValue());
+    EXPECT_EQ(EACCES, closed.Error().code);
+    EXPECT_EQ(5U, attempted);
+    EXPECT_TRUE(procfs.Close().Value());
+    EXPECT_EQ(EBADF, procfs.fdinfo.Get().Error().code);
+    EXPECT_EQ(EBADF, procfs.proc.Get().Error().code);
+    EXPECT_EQ(before, CountOpenDescriptors());
+}
+
 TEST_F(PathAliasTest, TemporaryCloseFailureIsNotRetriedAfterDescriptorReuse)
 {
-    const int descriptor = ::open("/proc", O_PATH | O_DIRECTORY | O_CLOEXEC);
-    ASSERT_GE(descriptor, 0);
+    auto acquired = VerifiedTestDescriptor(context);
+    ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
+    Descriptor helper = std::move(acquired).Value();
+    const int descriptor = helper.Get().Value();
     EXPECT_CALL(context, CloseFileDescriptor(descriptor)).Times(1).WillOnce([](int owned) {
         EXPECT_EQ(0, ::close(owned));
         errno = EIO;
         return -1;
     });
+    auto first = helper.Close();
+    ASSERT_FALSE(first.HasValue());
+    EXPECT_EQ(EIO, first.Error().code);
+    EXPECT_TRUE(helper.Close().HasValue());
+    EXPECT_EQ(EBADF, helper.Get().Error().code);
+}
+
+TEST_F(PathAliasTest, DescriptorEmptyAfterMoveOrClose)
+{
+    VerifiedProcfs procfs(context);
+    EXPECT_EQ(EBADF, procfs.proc.Get().Error().code); // failed-native sentinel
+    ASSERT_TRUE(procfs.Open().HasValue());
+    Descriptor owner(std::move(procfs.proc));
+    EXPECT_EQ(EBADF, procfs.proc.Get().Error().code);
+    EXPECT_TRUE(owner.Close().HasValue());
+    EXPECT_EQ(EBADF, owner.Get().Error().code);
+    EXPECT_TRUE(owner.Close().HasValue());
+    EXPECT_TRUE(procfs.Close().HasValue());
+}
+
+TEST_F(PathAliasTest, DescriptorReplacementAndEmptyMoveCloseOnlyOnce)
+{
+    const auto before = CountOpenDescriptors();
+    auto firstResult = VerifiedTestDescriptor(context);
+    ASSERT_TRUE(firstResult.HasValue()) << firstResult.Error().message;
+    Descriptor owner = std::move(firstResult).Value();
+    const int first = owner.Get().Value();
     {
-        ScopedDescriptor helper(context, descriptor);
-        EXPECT_EQ(EIO, helper.CloseOnce());
-        EXPECT_EQ(0, helper.CloseOnce());
+        auto secondResult = VerifiedTestDescriptor(context);
+        ASSERT_TRUE(secondResult.HasValue()) << secondResult.Error().message;
+        Descriptor secondOwner = std::move(secondResult).Value();
+        const int second = secondOwner.Get().Value();
+        EXPECT_CALL(context, CloseFileDescriptor(first)).Times(1).WillOnce([](int owned) { return ::close(owned); });
+        EXPECT_CALL(context, CloseFileDescriptor(second)).Times(1).WillOnce([](int owned) { return ::close(owned); });
+        owner = std::move(secondOwner);
+        EXPECT_EQ(second, owner.Get().Value());
+        EXPECT_EQ(&context, &owner.Context());
+        EXPECT_EQ(-1, ::fcntl(first, F_GETFD));
+        owner = std::move(secondOwner);
+        EXPECT_EQ(EBADF, owner.Get().Error().code);
+        EXPECT_EQ(-1, ::fcntl(second, F_GETFD));
+        EXPECT_TRUE(owner.Close().Value());
     }
+    EXPECT_EQ(before, CountOpenDescriptors());
+}
+
+TEST_F(PathAliasTest, DescriptorReleaseTransfersOnceAndEmptyReleaseIsChecked)
+{
+    const auto before = CountOpenDescriptors();
+    auto acquired = VerifiedTestDescriptor(context);
+    ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
+    Descriptor owner = std::move(acquired).Value();
+    const int native = owner.Get().Value();
+    EXPECT_CALL(context, CloseFileDescriptor(native)).Times(0);
+    {
+        auto released = owner.Release();
+        ASSERT_TRUE(released.HasValue());
+        EXPECT_EQ(native, released.Value());
+        EXPECT_EQ(EBADF, owner.Get().Error().code);
+        EXPECT_EQ(EBADF, owner.Release().Error().code);
+        EXPECT_TRUE(owner.Close().Value());
+    }
+    EXPECT_EQ(0, ::close(native));
+    EXPECT_EQ(before, CountOpenDescriptors());
+}
+
+TEST_F(PathAliasTest, DescriptorMovesOwnershipWithoutDoubleClose)
+{
+    static_assert(!std::is_copy_constructible<Descriptor>::value, "Native descriptors cannot be copied");
+    static_assert(!std::is_constructible<Descriptor, const ComplianceEngine::ContextInterface&, int>::value, "Native adoption requires Take");
+    static_assert(std::is_nothrow_move_constructible<Descriptor>::value, "Moving ownership cannot throw");
+    static_assert(std::is_nothrow_move_assignable<Descriptor>::value, "Replacing ownership cannot throw");
+    NiceMock<MockContext> foreignContext;
+    const auto before = CountOpenDescriptors();
+    auto firstResult = VerifiedTestDescriptor(context);
+    ASSERT_TRUE(firstResult.HasValue()) << firstResult.Error().message;
+    Descriptor owner = std::move(firstResult).Value();
+    const int first = owner.Get().Value();
+    auto replacementResult = VerifiedTestDescriptor(context);
+    ASSERT_TRUE(replacementResult.HasValue()) << replacementResult.Error().message;
+    Descriptor replacementOwner = std::move(replacementResult).Value();
+    const int replacement = replacementOwner.Get().Value();
+    auto incomingResult = VerifiedTestDescriptor(foreignContext);
+    ASSERT_TRUE(incomingResult.HasValue()) << incomingResult.Error().message;
+    Descriptor source = std::move(incomingResult).Value();
+    const int incoming = source.Get().Value();
+    EXPECT_CALL(context, CloseFileDescriptor(first)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
+    EXPECT_CALL(context, CloseFileDescriptor(replacement)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
+    EXPECT_CALL(foreignContext, CloseFileDescriptor(incoming)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
+    {
+        owner = std::move(replacementOwner);
+        EXPECT_EQ(EBADF, replacementOwner.Get().Error().code);
+        EXPECT_EQ(replacement, owner.Get().Value());
+        EXPECT_EQ(-1, ::fcntl(first, F_GETFD));
+        owner = std::move(source);
+        EXPECT_EQ(EBADF, source.Get().Error().code);
+        EXPECT_EQ(incoming, owner.Get().Value());
+        EXPECT_EQ(&foreignContext, &owner.Context());
+        EXPECT_EQ(-1, ::fcntl(replacement, F_GETFD));
+        Descriptor transferred(std::move(owner));
+        EXPECT_EQ(EBADF, owner.Get().Error().code);
+        EXPECT_EQ(incoming, transferred.Get().Value());
+        EXPECT_EQ(&foreignContext, &transferred.Context());
+        Descriptor& sameOwner = transferred;
+        transferred = std::move(sameOwner);
+        EXPECT_EQ(incoming, transferred.Get().Value());
+    }
+    EXPECT_EQ(before, CountOpenDescriptors());
 }
 
 TEST_F(PathAliasTest, PrimaryFdinfoReadErrorOutranksHelperCloseFailure)
@@ -620,6 +778,7 @@ TEST(PathTest, RejectsNonChildComponentsBeforeAnyAcquisition)
 
 TEST(PathTest, DoesNotOfferUncheckedDescriptorConstructionOrCopy)
 {
+    static_assert(!HasPublicNativeAdoption<Descriptor>::value, "Native adoption is private to acquisition owners");
     static_assert(!std::is_default_constructible<Handle>::value, "A handle requires a checked acquisition");
     static_assert(!std::is_constructible<Handle, int>::value, "A raw fd cannot construct a handle");
     static_assert(!std::is_copy_constructible<Handle>::value, "A pinned descriptor cannot be copied");
@@ -2068,7 +2227,7 @@ TEST_F(PathAliasTest, AliasStaysOnPinnedFileAfterNameReplacementAndUnlink)
         EXPECT_EQ(original.st_ino, active.Value().Snapshot().st_ino);
         EXPECT_EQ(original.st_dev, active.Value().Snapshot().st_dev);
         char bytes[15] = {};
-        ASSERT_EQ(14, ::read(active.Value().Descriptor(), bytes, 14));
+        ASSERT_EQ(14, ::read(active.Value().Descriptor().Value(), bytes, 14));
         EXPECT_EQ("original bytes", std::string(bytes, 14));
 
         ASSERT_EQ(0, ::unlink((source + ".former").c_str()));
@@ -2094,6 +2253,34 @@ TEST_F(PathAliasTest, DirectoryAliasAndMovesRetainSingleOwnership)
         EXPECT_EQ(original.st_ino, active.Value().Snapshot().st_ino);
         ComplianceEngine::Filesystem::Detail::ReadOnlyActivation transferred = std::move(active).Value();
         EXPECT_EQ(original.st_ino, transferred.Snapshot().st_ino);
+    }
+    EXPECT_EQ(before, CountOpenDescriptors());
+}
+
+TEST_F(PathAliasTest, ActivationHandsOffOwnerWithoutRetryingFailedClose)
+{
+    const std::string file = context.MakeTempfile("activation");
+    OwnedTestDescriptor pin(::open(file.c_str(), O_PATH | O_NOFOLLOW | O_CLOEXEC));
+    ASSERT_GE(pin.Get(), 0);
+    struct stat snapshot = {};
+    ASSERT_EQ(0, ::fstat(pin.Get(), &snapshot));
+    const auto before = CountOpenDescriptors();
+    {
+        auto activated = ComplianceEngine::Filesystem::Detail::ActivateReadOnly(context, pin.Get(), snapshot, false, 4096);
+        ASSERT_TRUE(activated.HasValue()) << activated.Error().message;
+        const int native = activated.Value().Descriptor().Value();
+        EXPECT_CALL(context, CloseFileDescriptor(native)).Times(1).WillOnce([](int descriptor) {
+            EXPECT_EQ(0, ::close(descriptor));
+            errno = EIO;
+            return -1;
+        });
+        Descriptor owner = activated.Value().TakeDescriptor();
+        EXPECT_EQ(EBADF, activated.Value().Descriptor().Error().code);
+        EXPECT_EQ(native, owner.Get().Value());
+        auto closed = owner.Close();
+        ASSERT_FALSE(closed.HasValue());
+        EXPECT_EQ(EIO, closed.Error().code);
+        EXPECT_TRUE(owner.Close().Value());
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }

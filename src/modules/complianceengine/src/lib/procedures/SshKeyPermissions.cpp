@@ -12,6 +12,13 @@ namespace ComplianceEngine
 {
 namespace
 {
+using Filesystem::FilesystemCollectionRequest;
+using Filesystem::FilesystemDepthAction;
+using Filesystem::FilesystemDirection;
+using Filesystem::FilesystemRootKind;
+using Filesystem::FilesystemScope;
+using Filesystem::FilesystemYieldType;
+using Filesystem::SymlinkFollowing;
 // Helper routine shared by audit and remediation for SSH key permission checks.
 // When isRemediation == true it will remediate permissions/ownership, otherwise only audit.
 Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTree& indicators, ContextInterface& context)
@@ -115,7 +122,7 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
     policy.childDirectoryLinkAction = SymlinkFollowing::DoNotFollow;
     policy.childFileLinkAction = SymlinkFollowing::DoNotFollow;
     policy.yieldType = FilesystemYieldType::RegularFiles;
-    auto opened = FTW::Files(policy, context);
+    auto opened = Filesystem::FTW::Files(policy, context);
     if (!opened.HasValue())
     {
         return opened.Error();

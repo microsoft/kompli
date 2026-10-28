@@ -23,6 +23,16 @@ using std::string;
 
 namespace
 {
+using Filesystem::FilesystemCollectionEntry;
+using Filesystem::FilesystemCollectionLimits;
+using Filesystem::FilesystemCollectionRequest;
+using Filesystem::FilesystemDepthAction;
+using Filesystem::FilesystemDirection;
+using Filesystem::FilesystemRootKind;
+using Filesystem::FilesystemScope;
+using Filesystem::FilesystemYieldType;
+using Filesystem::SymlinkFollowing;
+
 FilesystemCollectionRequest DotfilePolicy(const string& home)
 {
     FilesystemCollectionRequest policy(home, FilesystemRootKind::Directory);
@@ -51,7 +61,7 @@ Result<const struct group*> LookupUserGroup(gid_t id, const char* user, ContextI
     return group;
 }
 
-Result<Status> CloseAfterError(const Error& primary, FTW::FileRange& files, ContextInterface& context)
+Result<Status> CloseAfterError(const Error& primary, Filesystem::FTW::FileRange& files, ContextInterface& context)
 {
     const auto cleanup = files.Close();
     if (!cleanup.HasValue() && (cleanup.Error().code != primary.code || cleanup.Error().message != primary.message))
@@ -175,7 +185,7 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
         const auto policy = DotfilePolicy(pwd.pw_dir);
         // The selected home is the accepted root; only live pins, not
         // diagnostic paths, authorize checks or remediation.
-        auto opened = FTW::Files(policy, context);
+        auto opened = Filesystem::FTW::Files(policy, context);
         if (!opened.HasValue())
         {
             OsConfigLogError(context.GetLogHandle(), "Directory validation for user '%s' failed: %s", pwd.pw_name, opened.Error().message.c_str());

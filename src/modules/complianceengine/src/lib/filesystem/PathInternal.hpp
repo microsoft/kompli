@@ -6,10 +6,8 @@
 
 // Implementation and focused foundation tests only. Consumers include
 // Handle.hpp or Path.hpp.
-#include "ContextInterface.h"
+#include "Descriptor.hpp"
 #include "Path.hpp"
-
-#include <utility>
 
 namespace ComplianceEngine
 {
@@ -20,75 +18,16 @@ namespace Detail
 // Implementation-only helpers shared by Path acquisition and Handle
 // inspection. Descriptors are never exposed by the public headers.
 int SavedError() noexcept;
+// Diagnostics only: callers decide whether a failed close is primary.
+void LogSecondaryClose(const ContextInterface& context, int error) noexcept;
 bool SameIdentity(const struct stat& first, const struct stat& second) noexcept;
-class ScopedDescriptor
-{
-public:
-    ScopedDescriptor(const ContextInterface& context, int descriptor);
-    ScopedDescriptor(const ScopedDescriptor&) = delete;
-    ScopedDescriptor& operator=(const ScopedDescriptor&) = delete;
-    ~ScopedDescriptor() noexcept;
-    int Get() const noexcept;
-    void Set(int descriptor) noexcept;
-    int Transfer() noexcept;
-    const ContextInterface& Context() const noexcept
-    {
-        return mContext;
-    }
-    // Relinquish ownership before the syscall. A failed close is never
-    // retried, even if the kernel has already recycled its fd number.
-    int CloseOnce() noexcept;
-    template <typename T>
-    Result<T> Finish(Result<T> result);
-
-private:
-    const ContextInterface& mContext;
-    int mDescriptor;
-};
 struct VerifiedProcfs
 {
     explicit VerifiedProcfs(const ContextInterface& context);
     Result<bool> Open();
-    int CloseOnce() noexcept;
-    template <typename T>
-    Result<T> Finish(Result<T> result);
-    ScopedDescriptor proc, self, pid, fd, fdinfo;
+    Result<bool> Close();
+    Descriptor proc, self, pid, fd, fdinfo;
 };
-// Keep the operation error; report a cleanup failure only when no earlier
-// error exists. Every Finish attempts all owned descriptors and logs
-// secondary failures. Called on normal returns; destructors remain fallback.
-template <typename T>
-Result<T> FinalizeResult(const ContextInterface& context, Result<T> result, int closeError)
-{
-    if (closeError != 0)
-    {
-        if (result.HasValue())
-        {
-            return Error("Cannot close internal filesystem descriptor", closeError);
-        }
-
-        try
-        {
-            OsConfigLogError(context.GetLogHandle(), "Secondary filesystem helper close failure: %d", closeError);
-        }
-        catch (...)
-        {
-        }
-    }
-    return result;
-}
-template <typename T>
-Result<T> ScopedDescriptor::Finish(Result<T> result)
-{
-    return FinalizeResult(mContext, std::move(result), CloseOnce());
-}
-template <typename T>
-Result<T> VerifiedProcfs::Finish(Result<T> result)
-{
-    // The first failing close in release order wins; each later failure is
-    // logged, including when the operation itself had already failed.
-    return FinalizeResult(proc.Context(), std::move(result), CloseOnce());
-}
 Result<std::uint64_t> MountId(const ContextInterface& context, int fdinfoDirectory, int descriptor, std::size_t byteCap);
 
 // Keep popped handles charged to their originating Path while any pin lives.
@@ -121,18 +60,17 @@ public:
     ReadOnlyActivation& operator=(ReadOnlyActivation&& other) noexcept;
     ReadOnlyActivation(const ReadOnlyActivation&) = delete;
     ReadOnlyActivation& operator=(const ReadOnlyActivation&) = delete;
-    ~ReadOnlyActivation() noexcept;
+    ~ReadOnlyActivation() noexcept = default;
     const struct stat& Snapshot() const noexcept;
-    int Descriptor() const noexcept;
+    Result<int> Descriptor() const;
     // Internal ownership handoff to an opaque public resource.
-    int Transfer() noexcept;
-    int CloseOnce() noexcept;
+    Detail::Descriptor TakeDescriptor() noexcept;
+    Result<bool> Close();
 
 private:
     friend Result<ReadOnlyActivation> ActivateReadOnly(const ContextInterface&, int, const struct stat&, bool, std::size_t);
-    ReadOnlyActivation(const ContextInterface& context, int descriptor, const struct stat& snapshot) noexcept;
-    const ContextInterface* mContext;
-    int mDescriptor;
+    ReadOnlyActivation(Detail::Descriptor&& descriptor, const struct stat& snapshot) noexcept;
+    Detail::Descriptor mDescriptor;
     struct stat mSnapshot;
 };
 Result<ReadOnlyActivation> ActivateReadOnly(const ContextInterface& context, int pin, const struct stat& snapshot, bool directory, std::size_t fdinfoByteCap);

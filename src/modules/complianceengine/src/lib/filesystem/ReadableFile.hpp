@@ -4,6 +4,7 @@
 #ifndef COMPLIANCEENGINE_FILESYSTEM_READABLEFILE_HPP
 #define COMPLIANCEENGINE_FILESYSTEM_READABLEFILE_HPP
 
+#include "Descriptor.hpp"
 #include "Optional.h"
 #include "Result.h"
 
@@ -19,18 +20,18 @@ namespace Filesystem
 {
 class Handle;
 // Owns a separate read-only descriptor verified against a live regular-file
-// Handle. The context must outlive this resource, including after a move or
-// close; only the descriptor becomes invalid. No descriptor escapes.
+// Handle. Each bound context must outlive operations and cleanup that use it,
+// including cleanup of replaced ownership during a move. No descriptor escapes.
 class ReadableFile
 {
 public:
     ReadableFile(const ReadableFile&) = delete;
     ReadableFile& operator=(const ReadableFile&) = delete;
-    ReadableFile(ReadableFile&& other) noexcept;
-    // Different-context assignment aborts before either ownership state
-    // changes, even when either descriptor is already disengaged.
-    ReadableFile& operator=(ReadableFile&& other) noexcept;
-    ~ReadableFile() noexcept;
+    ReadableFile(ReadableFile&& other) noexcept = default;
+    // Replaces the old descriptor through its original context, then adopts
+    // the incoming descriptor and its context (which may be different).
+    ReadableFile& operator=(ReadableFile&& other) noexcept = default;
+    ~ReadableFile() noexcept = default;
 
     // Callers supply a positive, representable maxBytes. Fill that many bytes
     // across positive short native reads, or stop at native EOF. Each attempt
@@ -48,9 +49,10 @@ public:
     // True only after a native read returned zero, including after partial
     // progress. This sticky observation is not a prediction from a short
     // positive read or stat, and does not guarantee the file cannot later grow.
-    // Known EOF avoids further native reads; Close and moved-from state reset
-    // it, while moves transfer it with the descriptor. Not an open-validity
-    // test: Read on a closed descriptor still reports EBADF.
+    // Known EOF avoids further native reads; Close resets it, and moves
+    // transfer it with the descriptor. A moved-from source has no observable
+    // EOF even if its internal flag remains set. Not an open-validity test:
+    // Read on a closed descriptor still reports EBADF.
     bool AtEnd() const noexcept;
 
     // Fresh stat of this readable descriptor: the held object, not a reopened
@@ -67,9 +69,8 @@ public:
 
 private:
     friend class Handle;
-    ReadableFile(const ContextInterface& context, int descriptor) noexcept;
-    const ContextInterface& mContext;
-    Optional<int> mDescriptor;
+    explicit ReadableFile(Detail::Descriptor&& descriptor) noexcept;
+    Optional<Detail::Descriptor> mDescriptor;
     // Read advances the native descriptor offset and updates observed EOF.
     bool mAtEnd = false;
 };

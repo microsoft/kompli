@@ -20,7 +20,7 @@
 #include <vector>
 
 using ComplianceEngine::FileCollectionPolicy;
-using ComplianceEngine::SymlinkFollowing;
+using ComplianceEngine::Filesystem::SymlinkFollowing;
 using testing::_;
 using testing::NiceMock;
 namespace VariableResolution = ComplianceEngine::VariableResolution;
@@ -770,8 +770,8 @@ TEST(FileObjectCollectorTest, PinCloseFailureStopsBeforeReadAndLaterReadFailureF
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);
     const auto text = ReadLog(logPath);
-    ExpectLoggedOnce(text, "Failed to close pinned descriptors for " + path + ": " + std::to_string(EIO));
-    const auto dataEntry = "Failed to close data descriptor for " + path + ": " + std::to_string(EBADF);
+    ExpectLoggedOnce(text, "Failed to close internal filesystem descriptor: " + std::to_string(EIO));
+    const auto dataEntry = "Failed to close directory activation: " + std::to_string(EBADF);
     const auto first = text.find(dataEntry);
     ASSERT_NE(std::string::npos, first);
     const auto second = text.find(dataEntry, first + dataEntry.size());
@@ -909,7 +909,7 @@ TEST(FileObjectCollectorTest, ReportsCleanupFailuresOnEveryAcquiredFailureExit)
         if (dataCloses)
             ExpectLoggedOnce(text, failure == FailurePoint::DataStat || failure == FailurePoint::Identity ?
                                        "Secondary filesystem helper close failure: " + std::to_string(EBADF) :
-                                       "Failed to close data descriptor for " + path + ": " + std::to_string(EBADF));
+                                       "Failed to close directory activation: " + std::to_string(EBADF));
     }
 }
 
@@ -945,7 +945,7 @@ TEST(FileObjectCollectorTest, DataCloseFailureAfterSuccessfulPinCloseIsAnError)
     EXPECT_EQ(1, pinCloses);
     EXPECT_EQ(1, dataCloses);
     const auto text = ReadLog(logPath);
-    ExpectLoggedOnce(text, "Failed to close data descriptor for " + path + ": " + std::to_string(EBADF));
+    ExpectLoggedOnce(text, "Failed to close directory activation: " + std::to_string(EBADF));
     EXPECT_EQ(std::string::npos, text.find("Failed to close pinned descriptor"));
 }
 
@@ -992,8 +992,8 @@ TEST(FileObjectCollectorTest, PinAndDataCloseFailuresAreIndependentOfReadErrors)
         EXPECT_EQ(failingPin ? 0 : 1, reads);
         EXPECT_EQ(failingPin ? "Failed to close pinned descriptor" : "Failed to read file bytes", result.Error().message);
         const auto text = ReadLog(logPath);
-        ExpectLoggedOnce(text, failingPin ? "Failed to close pinned descriptors for " + path + ": " + std::to_string(EIO) :
-                                            "Failed to close data descriptor for " + path + ": " + std::to_string(EBADF));
+        ExpectLoggedOnce(text, failingPin ? "Failed to close internal filesystem descriptor: " + std::to_string(EIO) :
+                                            "Failed to close directory activation: " + std::to_string(EBADF));
     }
 }
 
@@ -1031,7 +1031,7 @@ TEST(FileObjectCollectorTest, ReadFailureSurvivesThrowingDataClose)
     EXPECT_EQ(1, dataCloses);
     EXPECT_EQ(1, pinCloses);
     const auto text = ReadLog(logPath);
-    ExpectLoggedOnce(text, "Failed to close data descriptor for " + path + ": " + std::to_string(EIO));
+    ExpectLoggedOnce(text, "Failed to close directory activation: " + std::to_string(EIO));
     EXPECT_EQ(std::string::npos, text.find("Failed to close pinned descriptor"));
 }
 

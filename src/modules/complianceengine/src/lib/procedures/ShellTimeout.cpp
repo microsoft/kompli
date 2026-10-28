@@ -52,7 +52,7 @@ struct MatchResult
 Result<MatchResult> MultilineMatch(const std::string& filename, const regex& valuePattern, const regex& readonlyPattern, const regex& exportPattern,
     ContextInterface& context)
 {
-    auto opened = FileReader::Lines(context, filename);
+    auto opened = Filesystem::FileReader::Lines(context, filename);
     if (!opened.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to open %s: %s", filename.c_str(), opened.Error().message.c_str());

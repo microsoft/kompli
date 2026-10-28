@@ -19,8 +19,8 @@
 #include <utility>
 #include <vector>
 
-using namespace FileReader;
-using ComplianceEngine::SymlinkFollowing;
+using namespace ComplianceEngine::Filesystem::FileReader;
+using ComplianceEngine::Filesystem::SymlinkFollowing;
 using testing::_;
 using testing::NiceMock;
 
@@ -630,7 +630,7 @@ TEST_F(PathFile, RepeatedFailedCloseSucceedsWithoutRetry)
     EXPECT_EQ(1, closes);
 }
 
-TEST_F(PathFile, FailedExplicitCloseLogsPathAndBothErrorsOnlyOnce)
+TEST_F(PathFile, FailedExplicitCloseLogsDescriptorErrorOnlyOnce)
 {
     Write("a\n");
     const std::string logPath = context.GetTempdirPath() + "/reader-close.log";
@@ -670,7 +670,7 @@ TEST_F(PathFile, FailedExplicitCloseLogsPathAndBothErrorsOnlyOnce)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto expected = "Failed to close data descriptor for " + path + ": " + std::to_string(EBADF);
+    const auto expected = "Failed to close directory activation: " + std::to_string(EBADF);
     const auto firstOccurrence = text.find(expected);
     ASSERT_NE(std::string::npos, firstOccurrence);
     EXPECT_EQ(std::string::npos, text.find(expected, firstOccurrence + expected.size()));
@@ -711,7 +711,7 @@ TEST_F(PathFile, DestructionAndMoveAssignmentLogDataFailureOncePerRange)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto expected = "Failed to close data descriptor for " + path + ": " + std::to_string(EBADF);
+    const auto expected = "Failed to close directory activation: " + std::to_string(EBADF);
     const auto firstOccurrence = text.find(expected);
     ASSERT_NE(std::string::npos, firstOccurrence);
     const auto secondOccurrence = text.find(expected, firstOccurrence + expected.size());
@@ -747,7 +747,7 @@ TEST_F(PathFile, DestructorSuppressesThrowingDataCloseAndLogsOnce)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto expected = "Failed to close data descriptor for " + path + ": " + std::to_string(EIO);
+    const auto expected = "Failed to close directory activation: " + std::to_string(EIO);
     const auto occurrence = text.find(expected);
     ASSERT_NE(std::string::npos, occurrence);
     EXPECT_EQ(std::string::npos, text.find(expected, occurrence + expected.size()));
@@ -963,11 +963,9 @@ TEST_F(PathFile, FailedPinCloseIsPrimaryAndStillLogsDataCleanupFailure)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto expected = "Failed to close pinned descriptors for " + path + ": " + std::to_string(EACCES);
-    const auto occurrence = text.find(expected);
-    ASSERT_NE(std::string::npos, occurrence);
-    EXPECT_EQ(std::string::npos, text.find(expected, occurrence + expected.size()));
-    const auto dataError = "Failed to close data descriptor for " + path + ": " + std::to_string(EBADF);
+    EXPECT_NE(std::string::npos, text.find("Failed to close internal filesystem descriptor: " + std::to_string(EACCES)));
+    EXPECT_EQ(std::string::npos, text.find("Failed to close pinned descriptors for " + path + ": " + std::to_string(EACCES)));
+    const auto dataError = "Failed to close directory activation: " + std::to_string(EBADF);
     const auto dataOccurrence = text.find(dataError);
     ASSERT_NE(std::string::npos, dataOccurrence);
     EXPECT_EQ(std::string::npos, text.find(dataError, dataOccurrence + dataError.size()));
@@ -1011,7 +1009,7 @@ TEST_F(PathFile, CheckedAcquisitionReleaseAttemptsAllPinsAndLogsSecondaryFailure
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
     EXPECT_NE(std::string::npos, text.find("Secondary filesystem pin close failure: " + std::to_string(EIO)));
-    EXPECT_NE(std::string::npos, text.find("Failed to close pinned descriptors for " + path + ": " + std::to_string(EACCES)));
+    EXPECT_NE(std::string::npos, text.find("Failed to close internal filesystem descriptor: " + std::to_string(EACCES)));
 }
 
 TEST_F(PathFile, ThrowingAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)

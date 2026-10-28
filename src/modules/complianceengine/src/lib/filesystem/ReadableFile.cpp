@@ -3,11 +3,9 @@
 
 #include "ReadableFile.hpp"
 
-#include "ContextInterface.h"
 #include "PathInternal.hpp"
 
 #include <cerrno>
-#include <cstdlib>
 #include <limits>
 #include <utility>
 
@@ -16,64 +14,9 @@ namespace ComplianceEngine
 namespace Filesystem
 {
 using std::string;
-using std::swap;
-
-ReadableFile::ReadableFile(const ContextInterface& context, int descriptor) noexcept
-    : mContext(context),
-      mDescriptor(descriptor)
+ReadableFile::ReadableFile(Detail::Descriptor&& descriptor) noexcept
+    : mDescriptor(std::move(descriptor))
 {
-}
-
-ReadableFile::ReadableFile(ReadableFile&& other) noexcept
-    : mContext(other.mContext),
-      mDescriptor(std::move(other.mDescriptor)),
-      mAtEnd(other.mAtEnd)
-{
-    other.mDescriptor.Reset();
-    other.mAtEnd = false;
-}
-
-ReadableFile& ReadableFile::operator=(ReadableFile&& other) noexcept
-{
-    if (this == &other)
-    {
-        return *this;
-    }
-
-    if (&mContext != &other.mContext)
-    {
-        std::abort();
-    }
-
-    // Destruction of the previous ownership retains its nonthrowing
-    // close/log contract, including on an injected close failure.
-    ReadableFile incoming(std::move(other));
-    swap(mDescriptor, incoming.mDescriptor);
-    swap(mAtEnd, incoming.mAtEnd);
-
-    return *this;
-}
-
-ReadableFile::~ReadableFile() noexcept
-{
-    if (!mDescriptor.HasValue())
-    {
-        return;
-    }
-
-    try
-    {
-        auto closed = Close();
-        if (!closed.HasValue())
-        {
-            OsConfigLogError(mContext.GetLogHandle(), "Failed to close readable filesystem descriptor: %d", closed.Error().code);
-        }
-    }
-    catch (...)
-    {
-        // Close relinquishes ownership before its native attempt; neither a
-        // failed result nor a logging failure may retry it during destruction.
-    }
 }
 
 Result<Optional<string>> ReadableFile::Read(std::size_t maxBytes, std::size_t& remainingInterruptRetries)
@@ -103,7 +46,12 @@ Result<Optional<string>> ReadableFile::Read(std::size_t maxBytes, std::size_t& r
     while (filled < maxBytes)
     {
         const std::size_t remaining = maxBytes - filled;
-        const ssize_t bytes = mContext.ReadFileDescriptor(mDescriptor.Value(), &chunk[filled], remaining);
+        auto descriptor = mDescriptor->Get();
+        if (!descriptor.HasValue())
+        {
+            return std::move(descriptor).Error();
+        }
+        const ssize_t bytes = mDescriptor->Context().ReadFileDescriptor(descriptor.Value(), &chunk[filled], remaining);
         if (bytes < 0)
         {
             const int error = Detail::SavedError();
@@ -139,7 +87,7 @@ Result<Optional<string>> ReadableFile::Read(std::size_t maxBytes, std::size_t& r
 
 bool ReadableFile::AtEnd() const noexcept
 {
-    return mAtEnd;
+    return mDescriptor.HasValue() && mAtEnd;
 }
 
 Result<struct stat> ReadableFile::Stat() const
@@ -150,7 +98,12 @@ Result<struct stat> ReadableFile::Stat() const
     }
 
     struct stat metadata = {};
-    if (mContext.StatFileDescriptor(mDescriptor.Value(), &metadata) != 0)
+    auto descriptor = mDescriptor->Get();
+    if (!descriptor.HasValue())
+    {
+        return std::move(descriptor).Error();
+    }
+    if (mDescriptor->Context().StatFileDescriptor(descriptor.Value(), &metadata) != 0)
     {
         return Error("Cannot inspect readable file", Detail::SavedError());
     }
@@ -164,26 +117,13 @@ Result<bool> ReadableFile::Close()
         return true;
     }
 
-    const int descriptor = mDescriptor.Value();
+    Detail::Descriptor owned(std::move(mDescriptor.Value()));
     mDescriptor.Reset();
     mAtEnd = false;
-    int closeError = 0;
-    try
+    auto closed = owned.Close();
+    if (!closed.HasValue())
     {
-        if (mContext.CloseFileDescriptor(descriptor) != 0)
-        {
-            closeError = Detail::SavedError();
-        }
-    }
-    catch (...)
-    {
-        // Never retry close: Linux may already have reused this fd number.
-        closeError = EIO;
-    }
-
-    if (closeError != 0)
-    {
-        return Error("Cannot close readable file", closeError);
+        return Error("Cannot close readable file", closed.Error().code);
     }
     return true;
 }

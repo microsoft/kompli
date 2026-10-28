@@ -21,6 +21,8 @@
 
 namespace ComplianceEngine
 {
+namespace Filesystem
+{
 enum class FilesystemRootKind
 {
     File,
@@ -154,15 +156,15 @@ struct FilesystemCollectionEntry
     // regular-file pin is owned by this entry and can outlive the range.
     // Snapshot adapters deliberately leave both empty. Paths/stat snapshots
     // are never mutation authority.
-    const Filesystem::Handle* LiveHandle() const noexcept
+    const Handle* LiveHandle() const noexcept
     {
         return mOwnedHandle.HasValue() ? &mOwnedHandle.Value() : mBorrowedHandle;
     }
-    void OwnHandle(Filesystem::Handle handle)
+    void OwnHandle(Handle handle)
     {
         mOwnedHandle = std::move(handle);
     }
-    void BorrowHandle(const Filesystem::Handle& handle) noexcept
+    void BorrowHandle(const Handle& handle) noexcept
     {
         mBorrowedHandle = &handle;
     }
@@ -177,8 +179,8 @@ struct FilesystemCollectionEntry
     }
 
 private:
-    Optional<Filesystem::Handle> mOwnedHandle;
-    const Filesystem::Handle* mBorrowedHandle = nullptr;
+    Optional<Handle> mOwnedHandle;
+    const Handle* mBorrowedHandle = nullptr;
 };
 
 struct FilesystemCollectionExclusion
@@ -243,9 +245,9 @@ public:
 
 private:
     friend Result<FileRange> Files(const FilesystemCollectionRequest&, ContextInterface&);
-    friend auto ::ComplianceEngine::CollectFilesystem(const FilesystemCollectionRequest&, ContextInterface&) -> Result<FilesystemCollectionResult>;
-    friend auto ::ComplianceEngine::StreamFilesystemCollection(const FilesystemCollectionRequest&, const FilesystemCollectionVisitor&, ContextInterface&)
-        -> Result<FilesystemCollectionResult>;
+    friend auto ::ComplianceEngine::Filesystem::CollectFilesystem(const FilesystemCollectionRequest&, ContextInterface&) -> Result<FilesystemCollectionResult>;
+    friend auto ::ComplianceEngine::Filesystem::StreamFilesystemCollection(const FilesystemCollectionRequest&, const FilesystemCollectionVisitor&,
+        ContextInterface&) -> Result<FilesystemCollectionResult>;
     explicit FileRange(std::shared_ptr<State> state);
     Result<FilesystemCollectionResult> StopVisitor();
     void Abort(const Error& error);
@@ -258,6 +260,7 @@ private:
 Result<FileRange> Files(const FilesystemCollectionRequest& policy, ContextInterface& context);
 } // namespace FTW
 
+} // namespace Filesystem
 } // namespace ComplianceEngine
 
 #endif // COMPLIANCEENGINE_FILESYSTEM_COLLECTION_HPP

@@ -56,8 +56,8 @@ extern "C" void* __wrap__Znwm(std::size_t bytes)
 TEST(FilesystemCollectionAllocationTest, RootCopyAllocationFailureReturnsENOMEMBeforeLookup)
 {
     // Longer than the small-string buffer, constructed before fault arming.
-    const ComplianceEngine::FilesystemCollectionRequest request("/" + std::string(128, 'r'), ComplianceEngine::FilesystemRootKind::File);
-    const auto control = ComplianceEngine::ResolveFilesystemCollectionRequest(request);
+    const ComplianceEngine::Filesystem::FilesystemCollectionRequest request("/" + std::string(128, 'r'), ComplianceEngine::Filesystem::FilesystemRootKind::File);
+    const auto control = ComplianceEngine::Filesystem::ResolveFilesystemCollectionRequest(request);
     ASSERT_TRUE(control.HasValue()) << control.Error().message;
     EXPECT_EQ(request.rootPath, control->rootPath);
 
@@ -66,7 +66,7 @@ TEST(FilesystemCollectionAllocationTest, RootCopyAllocationFailureReturnsENOMEMB
     EXPECT_CALL(context, OpenNativePath(testing::_, testing::_)).Times(0);
 
     faultNextCopy = true;
-    const auto opened = ComplianceEngine::FTW::Files(request, context);
+    const auto opened = ComplianceEngine::Filesystem::FTW::Files(request, context);
     EXPECT_FALSE(opened.HasValue());
     if (!opened.HasValue())
     {

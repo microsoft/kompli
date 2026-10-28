@@ -116,7 +116,7 @@ enum class Acquisition
     Incomplete
 };
 
-// Feed LF-stripped physical entries one at a time (e.g. FileReader::Lines
+// Feed LF-stripped physical entries one at a time (e.g. Filesystem::FileReader::Lines
 // values). No reader or whole-file buffer is owned by this parser. Next
 // returns owned, per-entry evidence; callers can consume/discard it promptly.
 // Until Finish succeeds every returned entry is provisional, NOT a completed

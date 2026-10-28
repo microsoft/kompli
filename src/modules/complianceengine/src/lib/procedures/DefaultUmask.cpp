@@ -95,7 +95,7 @@ mode_t ParseSymbolicValue(const std::string& user, const std::string& group, con
 
 Result<MatchResult> MultilineMatch(const std::string& filename, const regex& valuePattern, const regex& pamPattern, ContextInterface& context)
 {
-    auto opened = FileReader::Lines(context, filename);
+    auto opened = Filesystem::FileReader::Lines(context, filename);
     if (!opened.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to open %s: %s", filename.c_str(), opened.Error().message.c_str());

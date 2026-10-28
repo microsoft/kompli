@@ -6,6 +6,7 @@
 #include "ContextInterface.h"
 #include "Optional.h"
 #include "filesystem/Path.hpp"
+#include "filesystem/PathInternal.hpp"
 #include "filesystem/ReadableFile.hpp"
 
 #include <algorithm>
@@ -16,15 +17,14 @@
 #include <sys/stat.h>
 #include <utility>
 
+namespace ComplianceEngine
+{
+namespace Filesystem
+{
 namespace FileReader
 {
 namespace
 {
-using ComplianceEngine::ContextInterface;
-using ComplianceEngine::Error;
-using ComplianceEngine::Optional;
-namespace Filesystem = ComplianceEngine::Filesystem;
-using ComplianceEngine::Result;
 
 constexpr std::size_t ReadChunkBytes = 8192;
 
@@ -76,7 +76,7 @@ struct LinesRange::State
             }
             catch (...)
             {
-                // Cleanup and diagnostic failure cannot terminate destruction.
+                OsConfigLogError(nullptr, "File reader state close or log failure: %d", EIO);
             }
         }
     }
@@ -99,10 +99,7 @@ struct LinesRange::State
         {
             closed = true;
             finished = true;
-            auto result = data.Close();
-            if (!result.HasValue())
-                OsConfigLogError(context.GetLogHandle(), "Failed to close data descriptor for %s: %d", path.c_str(), result.Error().code);
-            return result;
+            return data.Close();
         }
         return data.Close();
     }
@@ -111,7 +108,7 @@ struct LinesRange::State
     {
         if (path.empty() || path.front() != '/' || path.find('\0') != std::string::npos)
             return Error("A NUL-free absolute file path is required", EINVAL);
-        if (policy.symlinks != ComplianceEngine::SymlinkFollowing::Follow && policy.symlinks != ComplianceEngine::SymlinkFollowing::DoNotFollow)
+        if (policy.symlinks != SymlinkFollowing::Follow && policy.symlinks != SymlinkFollowing::DoNotFollow)
             return Error("Invalid symlink policy", EINVAL);
         if (!policy.limits.maxBytes || !policy.limits.maxInterruptedReads)
             return Error("File byte and retry limits must be positive", EINVAL);
@@ -129,8 +126,17 @@ struct LinesRange::State
         auto fail = [&](Error primary) -> Result<std::unique_ptr<State>> {
             auto closed = pins.Close();
             if (!closed.HasValue())
-                OsConfigLogError(context.GetLogHandle(), "Failed to close pinned descriptors for %s: %d", (state ? state->path : path).c_str(),
-                    closed.Error().code);
+            {
+                try
+                {
+                    OsConfigLogError(context.GetLogHandle(), "Failed to close pinned descriptors for %s: %d", (state ? state->path : path).c_str(),
+                        closed.Error().code);
+                }
+                catch (...)
+                {
+                    OsConfigLogError(nullptr, "File reader secondary pin close log failure: %d", closed.Error().code);
+                }
+            }
             return primary;
         };
         for (std::size_t start = 1; start < path.size();)
@@ -140,7 +146,7 @@ struct LinesRange::State
             if (end != start)
             {
                 auto pushed = pins.Push(path.substr(start, end - start),
-                    {policy.symlinks == ComplianceEngine::SymlinkFollowing::DoNotFollow ? Filesystem::SymlinkPolicy::Reject : Filesystem::SymlinkPolicy::FollowWithinRoot,
+                    {policy.symlinks == SymlinkFollowing::DoNotFollow ? Filesystem::SymlinkPolicy::Reject : Filesystem::SymlinkPolicy::FollowWithinRoot,
                         Filesystem::MountPolicy::AllowCrossing, Filesystem::HardlinkPolicy::Permit});
                 if (!pushed.HasValue())
                     return fail(std::move(pushed).Error());
@@ -165,7 +171,6 @@ struct LinesRange::State
         auto closed = pins.Close();
         if (!closed.HasValue())
         {
-            OsConfigLogError(context.GetLogHandle(), "Failed to close pinned descriptors for %s: %d", state->path.c_str(), closed.Error().code);
             return Error("Failed to close pinned descriptor", closed.Error().code);
         }
         return std::move(state);
@@ -345,3 +350,5 @@ Result<LinesRange> Lines(const ContextInterface& context, std::string path, Poli
     return LinesRange(std::move(opened).Value());
 }
 } // namespace FileReader
+} // namespace Filesystem
+} // namespace ComplianceEngine

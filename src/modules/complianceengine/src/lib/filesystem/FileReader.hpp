@@ -16,8 +16,8 @@
 namespace ComplianceEngine
 {
 class ContextInterface;
-}
-
+namespace Filesystem
+{
 namespace FileReader
 {
 
@@ -44,7 +44,7 @@ struct Limits
 struct Policy
 {
     // Applies to every path component; DoNotFollow rejects any link with ELOOP.
-    ComplianceEngine::SymlinkFollowing symlinks = ComplianceEngine::SymlinkFollowing::Follow;
+    SymlinkFollowing symlinks = SymlinkFollowing::Follow;
     Limits limits;
 };
 
@@ -120,5 +120,7 @@ private:
 // owns only the independently activated readable file.
 ComplianceEngine::Result<LinesRange> Lines(const ComplianceEngine::ContextInterface& context, std::string path, Policy policy = Policy{});
 } // namespace FileReader
+} // namespace Filesystem
+} // namespace ComplianceEngine
 
 #endif // COMPLIANCEENGINE_FILE_READER_HPP

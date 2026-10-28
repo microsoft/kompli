@@ -3,14 +3,16 @@
 
 #include <MockContext.h>
 #include <cerrno>
-#include <csignal>
 #include <dirent.h>
 #include <fcntl.h>
 #include <filesystem/Handle.hpp>
 #include <filesystem/Path.hpp>
+#include <filesystem/PathInternal.hpp>
 #include <filesystem/ReadableFile.hpp>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <initializer_list>
+#include <iterator>
 #include <limits>
 #include <linux/magic.h>
 #include <new>
@@ -31,6 +33,8 @@ using ComplianceEngine::Filesystem::ReadableFile;
 using ComplianceEngine::Filesystem::ResolverLimits;
 using ComplianceEngine::Filesystem::RootPolicy;
 using ComplianceEngine::Filesystem::SymlinkPolicy;
+using ComplianceEngine::Filesystem::Detail::Descriptor;
+using ComplianceEngine::Filesystem::Detail::VerifiedProcfs;
 using testing::_;
 using testing::NiceMock;
 
@@ -50,6 +54,23 @@ std::size_t OpenDescriptors()
     }
     ::closedir(directory);
     return count;
+}
+
+ComplianceEngine::Result<Descriptor> VerifiedTestDescriptor(const ComplianceEngine::ContextInterface& context)
+{
+    VerifiedProcfs procfs(context);
+    auto opened = procfs.Open();
+    if (!opened.HasValue())
+    {
+        return std::move(opened).Error();
+    }
+    Descriptor owned(std::move(procfs.proc));
+    auto closed = procfs.Close();
+    if (!closed.HasValue())
+    {
+        return std::move(closed).Error();
+    }
+    return owned;
 }
 
 struct ThrowingLogContext : NiceMock<MockContext>
@@ -108,9 +129,80 @@ TEST_F(ReadableFileTest, IsOpaqueAndMoveOnly)
     static_assert(!std::is_copy_constructible<ReadableFile>::value, "No duplicated ownership");
     static_assert(std::is_move_constructible<ReadableFile>::value, "Transfer ownership");
     static_assert(std::is_move_assignable<ReadableFile>::value, "Transfer ownership");
-    static_assert(std::is_nothrow_move_constructible<ReadableFile>::value, "Binding the source context cannot throw");
-    static_assert(std::is_nothrow_move_assignable<ReadableFile>::value, "Cross-context assignment aborts");
+    static_assert(std::is_nothrow_move_constructible<ReadableFile>::value, "Transferring source context and ownership cannot throw");
+    static_assert(std::is_nothrow_move_assignable<ReadableFile>::value, "Replacing ownership across contexts cannot throw");
     static_assert(std::is_nothrow_destructible<ReadableFile>::value, "Cleanup cannot throw");
+}
+
+TEST_F(ReadableFileTest, DescriptorExplicitCloseLogsNativeErrorOnceWithoutRetryInMoveOrDestruction)
+{
+    const std::string logPath = context.GetTempdirPath() + "/descriptor-close.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    context.SetLogHandle(logHandle);
+    auto acquired = VerifiedTestDescriptor(context);
+    ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
+    Descriptor owner = std::move(acquired).Value();
+    const int fd = owner.Get().Value();
+    {
+        EXPECT_CALL(context, CloseFileDescriptor(fd)).Times(1).WillOnce([](int descriptor) {
+            EXPECT_EQ(0, ::close(descriptor));
+            errno = EACCES;
+            return -1;
+        });
+        auto failed = owner.Close();
+        ASSERT_FALSE(failed.HasValue());
+        EXPECT_EQ(EACCES, failed.Error().code);
+        EXPECT_TRUE(owner.Close().HasValue());
+        Descriptor moved(std::move(owner));
+        moved = std::move(owner);
+        EXPECT_TRUE(moved.Close().HasValue());
+    }
+    CloseLog(&logHandle);
+    context.SetLogHandle(nullptr);
+    std::ifstream log(logPath);
+    ASSERT_TRUE(log.is_open());
+    const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+    const std::string expected = "Failed to close internal filesystem descriptor: " + std::to_string(EACCES);
+    const auto occurrence = text.find(expected);
+    ASSERT_NE(std::string::npos, occurrence);
+    EXPECT_EQ(std::string::npos, text.find(expected, occurrence + expected.size()));
+}
+
+TEST_F(ReadableFileTest, DescriptorMoveReplacementRoutesThrownCloseToOldContextOnce)
+{
+    ThrowingLogContext oldContext;
+    NiceMock<MockContext> incomingContext;
+    auto oldResult = VerifiedTestDescriptor(oldContext);
+    ASSERT_TRUE(oldResult.HasValue()) << oldResult.Error().message;
+    Descriptor old = std::move(oldResult).Value();
+    const int oldFd = old.Get().Value();
+    auto incomingResult = VerifiedTestDescriptor(incomingContext);
+    ASSERT_TRUE(incomingResult.HasValue()) << incomingResult.Error().message;
+    Descriptor incoming = std::move(incomingResult).Value();
+    const int incomingFd = incoming.Get().Value();
+    {
+        EXPECT_CALL(oldContext, CloseFileDescriptor(oldFd)).Times(1).WillOnce([](int descriptor) -> int {
+            EXPECT_EQ(0, ::close(descriptor));
+            throw std::runtime_error("native close fault");
+        });
+        EXPECT_CALL(incomingContext, CloseFileDescriptor(incomingFd)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
+        testing::internal::CaptureStderr();
+        old = std::move(incoming);
+        EXPECT_TRUE(incoming.Close().HasValue());
+        EXPECT_TRUE(old.Close().HasValue());
+        EXPECT_TRUE(old.Close().HasValue());
+        const auto logged = testing::internal::GetCapturedStderr();
+        if (IsConsoleLoggingEnabled() && GetLoggingLevel() >= LoggingLevelError)
+        {
+            const auto expected = "Filesystem descriptor close or log failure: " + std::to_string(EIO);
+            const auto occurrence = logged.find(expected);
+            ASSERT_NE(std::string::npos, occurrence);
+            EXPECT_EQ(std::string::npos, logged.find(expected, occurrence + expected.size()));
+        }
+        EXPECT_EQ(1, oldContext.logHandleRequests);
+    }
+    EXPECT_EQ(1, oldContext.logHandleRequests);
 }
 
 TEST_F(ReadableFileTest, AliasOpenFailureDoesNotReopenNameOrLeak)
@@ -948,13 +1040,19 @@ TEST_F(ReadableFileTest, DestructorContainsThrowingLogAfterFailedNativeClose)
         auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
         ASSERT_TRUE(activated.HasValue());
         pinned = ComplianceEngine::Error("Release pin", EINVAL);
+        testing::internal::CaptureStderr();
         {
             ReadableFile readable = std::move(activated).Value();
             EXPECT_CALL(selectedContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) {
                 EXPECT_EQ(0, ::close(descriptor));
-                errno = EIO;
+                errno = EACCES;
                 return -1;
             });
+        }
+        const auto logged = testing::internal::GetCapturedStderr();
+        if (IsConsoleLoggingEnabled() && GetLoggingLevel() >= LoggingLevelError)
+        {
+            EXPECT_NE(std::string::npos, logged.find("Filesystem descriptor close or log failure: " + std::to_string(EACCES)));
         }
         EXPECT_EQ(1, selectedContext.logHandleRequests);
         EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&selectedContext));
@@ -994,7 +1092,13 @@ TEST_F(ReadableFileTest, MoveAssignmentContainsThrowingLogAndRetainsIncomingOwne
                     EXPECT_EQ(0, result);
                     return result;
                 });
+            testing::internal::CaptureStderr();
             destination = std::move(source);
+            const auto logged = testing::internal::GetCapturedStderr();
+            if (IsConsoleLoggingEnabled() && GetLoggingLevel() >= LoggingLevelError)
+            {
+                EXPECT_NE(std::string::npos, logged.find("Filesystem descriptor close or log failure: " + std::to_string(EIO)));
+            }
             EXPECT_EQ(1, selectedContext.logHandleRequests);
             EXPECT_EQ(EBADF, source.Stat().Error().code);
             EXPECT_TRUE(source.Close().HasValue());
@@ -1078,13 +1182,13 @@ TEST_F(ReadableFileTest, SameContextMoveConstructorAssignmentAndSelfMoveKeepSing
     EXPECT_EQ(before - 2, OpenDescriptors());
 }
 
-TEST_F(ReadableFileTest, CrossContextAssignmentAbortsBeforeClosingLiveClosedOrMovedFromStates)
+TEST_F(ReadableFileTest, CrossContextMoveAssignmentClosesOldOwnerAndRoutesIncomingOperations)
 {
     NiceMock<MockContext> foreignContext;
-    const std::string source = context.MakeTempfile("a");
-    const std::string foreignSource = foreignContext.MakeTempfile("b");
-    auto pinned = Pin(Component(source));
-    auto foreignPin = Pin(foreignContext, Component(foreignSource));
+    const std::string oldPath = context.MakeTempfile("old");
+    const std::string newPath = foreignContext.MakeTempfile("new");
+    auto pinned = Pin(Component(oldPath));
+    auto foreignPin = Pin(foreignContext, Component(newPath));
     ASSERT_TRUE(pinned.HasValue());
     ASSERT_TRUE(foreignPin.HasValue());
     auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
@@ -1095,66 +1199,151 @@ TEST_F(ReadableFileTest, CrossContextAssignmentAbortsBeforeClosingLiveClosedOrMo
     foreignPin = ComplianceEngine::Error("Release pin", EINVAL);
     const std::size_t before = OpenDescriptors();
 
-    ReadableFile readable = std::move(activated).Value();
-    ReadableFile foreign = std::move(foreignActivated).Value();
-    // The attempted assignment runs in a death-test child. A close before
-    // the context check exits with a different status instead of SIGABRT.
-    const auto expectCrossContextAbort = [&](ReadableFile& destination, ReadableFile& source) {
-        EXPECT_EXIT(
-            {
-                EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([](int) {
-                    ::_exit(77);
-                    return -1;
-                });
-                EXPECT_CALL(foreignContext, CloseFileDescriptor(_)).WillRepeatedly([](int) {
-                    ::_exit(77);
-                    return -1;
-                });
-                destination = std::move(source);
-                ::_exit(78); // missing context enforcement
-            },
-            testing::KilledBySignal(SIGABRT), "");
-    };
-    expectCrossContextAbort(readable, foreign);
-    EXPECT_TRUE(readable.Stat().HasValue());
-    EXPECT_TRUE(foreign.Stat().HasValue());
-    auto first = readable.Read(1, interruptRetriesRemaining);
-    auto second = foreign.Read(1, interruptRetriesRemaining);
-    ASSERT_TRUE(first.HasValue());
-    ASSERT_TRUE(second.HasValue());
-    ASSERT_TRUE(first.Value().HasValue());
-    ASSERT_TRUE(second.Value().HasValue());
-    EXPECT_EQ("a", first.Value().Value());
-    EXPECT_EQ("b", second.Value().Value());
-    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&foreignContext));
+    ReadableFile destination = std::move(activated).Value();
+    ReadableFile source = std::move(foreignActivated).Value();
+    int oldDescriptor = -1;
+    int incomingDescriptor = -1;
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([&](int descriptor) {
+        oldDescriptor = descriptor;
+        return ::close(descriptor);
+    });
+    EXPECT_CALL(foreignContext, CloseFileDescriptor(_)).Times(1).WillOnce([&](int descriptor) {
+        EXPECT_EQ(incomingDescriptor, descriptor);
+        return ::close(descriptor);
+    });
+    EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(0);
+    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
+    EXPECT_CALL(foreignContext, StatFileDescriptor(_, _)).Times(1).WillOnce([&](int descriptor, struct stat* metadata) {
+        incomingDescriptor = descriptor;
+        return foreignContext.ContextInterface::StatFileDescriptor(descriptor, metadata);
+    });
+    EXPECT_CALL(foreignContext, ReadFileDescriptor(_, _, _)).Times(1).WillOnce([&](int descriptor, void* buffer, std::size_t size) {
+        EXPECT_EQ(incomingDescriptor, descriptor);
+        return foreignContext.ContextInterface::ReadFileDescriptor(descriptor, buffer, size);
+    });
 
-    ReadableFile moved(std::move(readable));
-    expectCrossContextAbort(readable, foreign);
-    EXPECT_EQ(EBADF, readable.Read(1, interruptRetriesRemaining).Error().code);
-    EXPECT_EQ(EBADF, readable.Stat().Error().code);
-    EXPECT_TRUE(moved.Stat().HasValue());
-    EXPECT_TRUE(foreign.Stat().HasValue());
+    destination = std::move(source);
+    ASSERT_GE(oldDescriptor, 0);
+    EXPECT_EQ(-1, ::fcntl(oldDescriptor, F_GETFD));
+    EXPECT_EQ(EBADF, errno);
+    EXPECT_EQ(EBADF, source.Read(1, interruptRetriesRemaining).Error().code);
+    EXPECT_EQ(EBADF, source.Stat().Error().code);
+    EXPECT_TRUE(source.Close().HasValue());
+    EXPECT_TRUE(destination.Stat().HasValue());
+    ASSERT_GE(incomingDescriptor, 0);
+    EXPECT_NE(oldDescriptor, incomingDescriptor);
+    EXPECT_GE(::fcntl(incomingDescriptor, F_GETFD), 0);
+    auto bytes = destination.Read(3, interruptRetriesRemaining);
+    ASSERT_TRUE(bytes.HasValue());
+    ASSERT_TRUE(bytes.Value().HasValue());
+    EXPECT_EQ("new", bytes.Value().Value());
+    EXPECT_TRUE(destination.Close().HasValue());
+    EXPECT_TRUE(destination.Close().HasValue());
+    EXPECT_EQ(-1, ::fcntl(incomingDescriptor, F_GETFD));
+    EXPECT_EQ(EBADF, errno);
+    EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+    EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&foreignContext));
+    EXPECT_EQ(before - 2, OpenDescriptors());
+}
 
-    EXPECT_CALL(foreignContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) {
+TEST_F(ReadableFileTest, CrossContextMoveReplacementContainsOldOwnerLoggingFault)
+{
+    ThrowingLogContext oldContext;
+    NiceMock<MockContext> newContext;
+    const std::string oldPath = oldContext.MakeTempfile("old");
+    const std::string newPath = newContext.MakeTempfile("new");
+    auto oldPin = Pin(oldContext, Component(oldPath));
+    auto newPin = Pin(newContext, Component(newPath));
+    ASSERT_TRUE(oldPin.HasValue());
+    ASSERT_TRUE(newPin.HasValue());
+    auto oldOpened = oldPin.Value().OpenReadOnly(fdinfoCap);
+    auto newOpened = newPin.Value().OpenReadOnly(fdinfoCap);
+    ASSERT_TRUE(oldOpened.HasValue());
+    ASSERT_TRUE(newOpened.HasValue());
+    oldPin = ComplianceEngine::Error("Release pin", EINVAL);
+    newPin = ComplianceEngine::Error("Release pin", EINVAL);
+    const auto before = OpenDescriptors();
+
+    ReadableFile destination = std::move(oldOpened).Value();
+    ReadableFile source = std::move(newOpened).Value();
+    EXPECT_CALL(oldContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) {
         EXPECT_EQ(0, ::close(descriptor));
         errno = EIO;
         return -1;
     });
-    EXPECT_EQ(EIO, foreign.Close().Error().code);
-    expectCrossContextAbort(moved, foreign); // live destination, failed-closed source
-    EXPECT_TRUE(moved.Stat().HasValue());
-    EXPECT_TRUE(foreign.Close().HasValue());
+    EXPECT_CALL(newContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
+    destination = std::move(source);
+    EXPECT_EQ(1, oldContext.logHandleRequests);
+    EXPECT_FALSE(source.AtEnd());
+    EXPECT_EQ(EBADF, source.Stat().Error().code);
+    auto bytes = destination.Read(3, interruptRetriesRemaining);
+    ASSERT_TRUE(bytes.HasValue());
+    ASSERT_TRUE(bytes.Value().HasValue());
+    EXPECT_EQ("new", bytes.Value().Value());
+    EXPECT_TRUE(destination.Close().HasValue());
+    EXPECT_EQ(before - 2, OpenDescriptors());
+}
+
+TEST_F(ReadableFileTest, CrossContextClosedAndMovedFromAssignmentsTransferEofAndPreserveSelfMove)
+{
+    NiceMock<MockContext> foreignContext;
+    const std::string oldPath = context.MakeTempfile("old");
+    const std::string newPath = foreignContext.MakeTempfile("b");
+    auto pinned = Pin(Component(oldPath));
+    auto foreignPin = Pin(foreignContext, Component(newPath));
+    ASSERT_TRUE(pinned.HasValue());
+    ASSERT_TRUE(foreignPin.HasValue());
+    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto foreignActivated = foreignPin.Value().OpenReadOnly(fdinfoCap);
+    ASSERT_TRUE(activated.HasValue());
+    ASSERT_TRUE(foreignActivated.HasValue());
+    pinned = ComplianceEngine::Error("Release pin", EINVAL);
+    foreignPin = ComplianceEngine::Error("Release pin", EINVAL);
+    const std::size_t before = OpenDescriptors();
+
+    ReadableFile destination = std::move(activated).Value();
+    ReadableFile source = std::move(foreignActivated).Value();
+    auto bytes = source.Read(2, interruptRetriesRemaining);
+    ASSERT_TRUE(bytes.HasValue());
+    ASSERT_TRUE(bytes.Value().HasValue());
+    EXPECT_EQ("b", bytes.Value().Value());
+    EXPECT_TRUE(source.AtEnd());
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
-    EXPECT_TRUE(moved.Close().HasValue());
-    expectCrossContextAbort(moved, foreign);    // both closed
-    expectCrossContextAbort(readable, foreign); // moved-from destination
-    expectCrossContextAbort(foreign, readable); // moved-from source
-    ReadableFile movedForeign(std::move(foreign));
-    expectCrossContextAbort(readable, foreign); // both moved-from
-    EXPECT_TRUE(movedForeign.Close().HasValue());
-    EXPECT_TRUE(foreign.Close().HasValue());
-    EXPECT_TRUE(moved.Close().HasValue());
-    EXPECT_TRUE(readable.Close().HasValue());
+    EXPECT_CALL(foreignContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
+    EXPECT_TRUE(destination.Close().HasValue());
+    EXPECT_FALSE(destination.AtEnd());
+    ReadableFile closedOld(std::move(destination));
+
+    ReadableFile moved(std::move(source));
+    EXPECT_FALSE(source.AtEnd());
+    EXPECT_EQ(EBADF, source.Stat().Error().code);
+    destination = std::move(moved); // closed destination adopts another context
+    EXPECT_FALSE(moved.AtEnd());
+    EXPECT_TRUE(destination.AtEnd());
+    EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(0);
+    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
+    EXPECT_CALL(foreignContext, StatFileDescriptor(_, _)).Times(1);
+    EXPECT_CALL(foreignContext, ReadFileDescriptor(_, _, _)).Times(0); // cached EOF
+    EXPECT_TRUE(destination.Stat().HasValue());
+    auto eof = destination.Read(1, interruptRetriesRemaining);
+    ASSERT_TRUE(eof.HasValue());
+    EXPECT_FALSE(eof.Value().HasValue());
+    ReadableFile& self = destination;
+    destination = std::move(self);
+    EXPECT_TRUE(destination.AtEnd());
+    EXPECT_TRUE(destination.Close().HasValue());
+    EXPECT_FALSE(destination.AtEnd());
+
+    source = std::move(closedOld);      // moved-from foreign destination, closed original-context source
+    closedOld = std::move(destination); // moved-from original destination, closed foreign source
+    destination = std::move(source);    // both closed, across their bound contexts
+    EXPECT_EQ(EBADF, source.Stat().Error().code);
+    EXPECT_EQ(EBADF, closedOld.Stat().Error().code);
+    EXPECT_EQ(EBADF, destination.Stat().Error().code);
+    EXPECT_TRUE(source.Close().HasValue());
+    EXPECT_TRUE(closedOld.Close().HasValue());
+    EXPECT_TRUE(destination.Close().HasValue());
+    EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+    EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&foreignContext));
     EXPECT_EQ(before - 2, OpenDescriptors());
 }

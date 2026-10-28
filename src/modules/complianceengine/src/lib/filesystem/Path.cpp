@@ -20,10 +20,10 @@ namespace ComplianceEngine
 {
 namespace Filesystem
 {
+using Detail::Descriptor;
 using Detail::MountId;
 using Detail::SameIdentity;
 using Detail::SavedError;
-using Detail::ScopedDescriptor;
 using Detail::VerifiedProcfs;
 
 namespace Detail
@@ -68,7 +68,7 @@ Result<LinkTarget> ReadPinnedLink(const ContextInterface& context, int linkPin, 
         return std::move(verified).Error();
     }
     auto inspected = [&]() -> Result<LinkTarget> {
-        auto mount = MountId(context, procfs.fdinfo.Get(), linkPin, fdinfoByteCap);
+        auto mount = MountId(context, procfs.fdinfo.Get().Value(), linkPin, fdinfoByteCap);
         if (!mount.HasValue())
         {
             return std::move(mount).Error();
@@ -94,7 +94,7 @@ Result<LinkTarget> ReadPinnedLink(const ContextInterface& context, int linkPin, 
         {
             return Error("Pinned symlink identity changed", EAGAIN);
         }
-        auto retainedMount = MountId(context, procfs.fdinfo.Get(), linkPin, fdinfoByteCap);
+        auto retainedMount = MountId(context, procfs.fdinfo.Get().Value(), linkPin, fdinfoByteCap);
         if (!retainedMount.HasValue())
         {
             return std::move(retainedMount).Error();
@@ -113,7 +113,16 @@ Result<LinkTarget> ReadPinnedLink(const ContextInterface& context, int linkPin, 
         target.mountId = mount.Value();
         return target;
     }();
-    return procfs.Finish(std::move(inspected));
+    auto closed = procfs.Close();
+    if (!closed.HasValue())
+    {
+        if (inspected.HasValue())
+        {
+            return std::move(closed).Error();
+        }
+        LogSecondaryClose(context, closed.Error().code);
+    }
+    return inspected;
 }
 
 bool IsSingleChildComponent(const std::string& component) noexcept
@@ -225,8 +234,19 @@ public:
             {
                 return std::move(verified).Error();
             }
-            auto baseline = MountId(mContext, procfs.fdinfo.Get(), mRootLineage.back()->mDescriptor, mLimits.shared.fdinfoBytes);
-            baseline = procfs.Finish(std::move(baseline));
+            auto baseline = MountId(mContext, procfs.fdinfo.Get().Value(), mRootLineage.back()->mDescriptor.Get().Value(), mLimits.shared.fdinfoBytes);
+            auto closed = procfs.Close();
+            if (!closed.HasValue())
+            {
+                if (baseline.HasValue())
+                {
+                    baseline = std::move(closed).Error();
+                }
+                else
+                {
+                    Detail::LogSecondaryClose(mContext, closed.Error().code);
+                }
+            }
             if (!baseline.HasValue())
             {
                 return std::move(baseline).Error();
@@ -240,7 +260,7 @@ public:
 private:
     bool AddInput(const Handle* pin)
     {
-        if ((pin == nullptr) || (!pin->mPin) || (pin->mType != Handle::Type::Directory) || (pin->mDescriptor < 0))
+        if ((pin == nullptr) || (!pin->mPin) || (pin->mType != Handle::Type::Directory) || !pin->mDescriptor.HasValue())
         {
             return false;
         }
@@ -301,7 +321,17 @@ private:
         {
             return std::move(verified).Error();
         }
-        return procfs.Finish(MountId(mContext, procfs.fdinfo.Get(), descriptor, mLimits.shared.fdinfoBytes));
+        auto mount = MountId(mContext, procfs.fdinfo.Get().Value(), descriptor, mLimits.shared.fdinfoBytes);
+        auto closed = procfs.Close();
+        if (!closed.HasValue())
+        {
+            if (mount.HasValue())
+            {
+                return std::move(closed).Error();
+            }
+            Detail::LogSecondaryClose(mContext, closed.Error().code);
+        }
+        return mount;
     }
 
     Result<Detail::ResolvedPath> ContinueAfterBaseline(std::string component)
@@ -352,23 +382,25 @@ private:
                 // only as O_PATH|O_NOFOLLOW to inspect a pinned symlink without
                 // ever causing an operational open of a substituted special file.
                 const int baseFlags = O_PATH | O_NOFOLLOW | O_CLOEXEC;
-                int descriptor = mContext.OpenNativeAt(directories.back()->mDescriptor, name.c_str(), baseFlags | (pending.empty() ? 0 : O_DIRECTORY));
+                int descriptor =
+                    mContext.OpenNativeAt(directories.back()->mDescriptor.Get().Value(), name.c_str(), baseFlags | (pending.empty() ? 0 : O_DIRECTORY));
                 if ((descriptor < 0) && (errno == ENOTDIR) && !pending.empty())
                 {
-                    descriptor = mContext.OpenNativeAt(directories.back()->mDescriptor, name.c_str(), baseFlags);
+                    descriptor = mContext.OpenNativeAt(directories.back()->mDescriptor.Get().Value(), name.c_str(), baseFlags);
                 }
-                ScopedDescriptor acquired(mContext, descriptor);
+                const int openError = SavedError();
+                Descriptor acquired = Descriptor::Take(mContext, descriptor);
                 auto step = [&]() -> Result<bool> {
-                    if (acquired.Get() < 0)
+                    if (!acquired.HasValue())
                     {
-                        return Error("Cannot pin confined component", SavedError());
+                        return Error("Cannot pin confined component", openError);
                     }
                     struct stat snapshot = {};
-                    if (mContext.StatFileDescriptor(acquired.Get(), &snapshot) != 0)
+                    if (mContext.StatFileDescriptor(acquired.Get().Value(), &snapshot) != 0)
                     {
                         return Error("Cannot inspect confined component", SavedError());
                     }
-                    auto mount = ObservedMount(acquired.Get());
+                    auto mount = ObservedMount(acquired.Get().Value());
                     if (!mount.HasValue())
                     {
                         return std::move(mount).Error();
@@ -390,7 +422,7 @@ private:
                         {
                             return Error("Symlink expansion budget exhausted", ELOOP);
                         }
-                        auto target = Detail::ReadPinnedLink(mContext, acquired.Get(), mLimits.linkTargetBytes, mLimits.shared.fdinfoBytes);
+                        auto target = Detail::ReadPinnedLink(mContext, acquired.Get().Value(), mLimits.linkTargetBytes, mLimits.shared.fdinfoBytes);
                         if (!target.HasValue())
                         {
                             return std::move(target).Error();
@@ -493,9 +525,7 @@ private:
                         return Error("Confined resolution retained-memory budget exhausted", E2BIG);
                     }
                     mRetained += ownerBytes;
-                    Handle staged(mContext, acquired.Get(), S_ISDIR(snapshot.st_mode) ? Handle::Type::Directory : Handle::Type::RegularFile,
-                        std::move(name), snapshot);
-                    acquired.Transfer();
+                    Handle staged(std::move(acquired), S_ISDIR(snapshot.st_mode) ? Handle::Type::Directory : Handle::Type::RegularFile, std::move(name), snapshot);
                     resolved.mPins.emplace_back(std::move(staged));
                     last = &resolved.mPins.back();
                     if (S_ISDIR(snapshot.st_mode))
@@ -508,10 +538,21 @@ private:
                     }
                     return true;
                 }();
-                auto finalized = acquired.Finish(std::move(step));
-                if (!finalized.HasValue())
+                auto closed = acquired.Close();
+                if (!closed.HasValue())
                 {
-                    return std::move(finalized).Error();
+                    if (step.HasValue())
+                    {
+                        step = std::move(closed).Error();
+                    }
+                    else
+                    {
+                        Detail::LogSecondaryClose(mContext, closed.Error().code);
+                    }
+                }
+                if (!step.HasValue())
+                {
+                    return std::move(step).Error();
                 }
             }
 
@@ -565,7 +606,7 @@ private:
                 auto closed = pin->Close();
                 if (!closed.HasValue())
                 {
-                    (void)Detail::FinalizeResult(mContext, Result<bool>(primary), closed.Error().code);
+                    Detail::LogSecondaryClose(mContext, closed.Error().code);
                 }
             }
             return primary;
@@ -657,7 +698,7 @@ Path::~Path() noexcept
         }
         catch (...)
         {
-            // The release already relinquished ownership before native calls.
+            OsConfigLogError(nullptr, "Acquired path destruction close failure: %d", mCloseError != 0 ? mCloseError : EIO);
         }
 
         if (mCloseError != 0)
@@ -668,7 +709,7 @@ Path::~Path() noexcept
             }
             catch (...)
             {
-                // Destruction must not replace an earlier failure.
+                OsConfigLogError(nullptr, "Acquired path close log failure: %d", mCloseError);
             }
         }
     }
@@ -705,7 +746,7 @@ Result<bool> Path::Close()
                 }
                 catch (...)
                 {
-                    // Diagnostics must not interrupt the remaining closes.
+                    OsConfigLogError(nullptr, "Secondary filesystem pin close log failure: %d", error);
                 }
             }
         }
@@ -800,7 +841,17 @@ Result<std::uint64_t> Path::RootMountId() const
     {
         return std::move(opened).Error();
     }
-    return procfs.Finish(MountId(*mContext, procfs.fdinfo.Get(), mComponents.front().mDescriptor, mLimits.shared.fdinfoBytes));
+    auto mount = MountId(*mContext, procfs.fdinfo.Get().Value(), mComponents.front().mDescriptor.Get().Value(), mLimits.shared.fdinfoBytes);
+    auto closed = procfs.Close();
+    if (!closed.HasValue())
+    {
+        if (mount.HasValue())
+        {
+            return std::move(closed).Error();
+        }
+        Detail::LogSecondaryClose(*mContext, closed.Error().code);
+    }
+    return mount;
 }
 
 Result<Handle> Path::RetainLeaf(Detail::ResolvedPath& stage, const std::string& component)
@@ -811,19 +862,21 @@ Result<Handle> Path::RetainLeaf(Detail::ResolvedPath& stage, const std::string& 
     }
     const Handle& source = stage.Leaf();
     const std::size_t held = HeldDescriptors();
-    if ((source.mContext == nullptr) || (source.mDescriptor < 0) || (source.mType != Handle::Type::Directory) || (held > mLimits.shared.liveDescriptors) ||
+    if ((source.mContext == nullptr) || !source.mDescriptor.HasValue() || (source.mType != Handle::Type::Directory) || (held > mLimits.shared.liveDescriptors) ||
         (stage.OwnedDescriptors() > mLimits.shared.liveDescriptors - held) || (mLimits.shared.liveDescriptors - held - stage.OwnedDescriptors() < 7))
     {
         return Error("Cannot retain borrowed directory without descriptor budget", EMFILE);
     }
-    ScopedDescriptor duplicate(*mContext, ::fcntl(source.mDescriptor, F_DUPFD_CLOEXEC, 0));
+    const int duplicateFd = ::fcntl(source.mDescriptor.Get().Value(), F_DUPFD_CLOEXEC, 0);
+    const int duplicateError = SavedError();
+    Descriptor duplicate = Descriptor::Take(*mContext, duplicateFd);
     auto retained = [&]() -> Result<Handle> {
-        if (duplicate.Get() < 0)
+        if (!duplicate.HasValue())
         {
-            return Error("Cannot retain pinned directory", SavedError());
+            return Error("Cannot retain pinned directory", duplicateError);
         }
         struct stat snapshot = {};
-        if (mContext->StatFileDescriptor(duplicate.Get(), &snapshot) != 0)
+        if (mContext->StatFileDescriptor(duplicate.Get().Value(), &snapshot) != 0)
         {
             return Error("Cannot inspect retained directory pin", SavedError());
         }
@@ -832,8 +885,7 @@ Result<Handle> Path::RetainLeaf(Detail::ResolvedPath& stage, const std::string& 
         {
             return Error("Retained directory identity changed", EAGAIN);
         }
-        Handle candidate(*mContext, duplicate.Get(), Handle::Type::Directory, component, snapshot);
-        duplicate.Transfer();
+        Handle candidate(std::move(duplicate), Handle::Type::Directory, component, snapshot);
         auto matched = Handle::RecognizeAcceptedRoot(source, candidate, mLimits.shared.fdinfoBytes);
         if (!matched.HasValue())
         {
@@ -841,7 +893,7 @@ Result<Handle> Path::RetainLeaf(Detail::ResolvedPath& stage, const std::string& 
             auto closed = candidate.Close();
             if (!closed.HasValue())
             {
-                (void)Detail::FinalizeResult(*mContext, Result<bool>(primary), closed.Error().code);
+                Detail::LogSecondaryClose(*mContext, closed.Error().code);
             }
             return primary;
         }
@@ -852,13 +904,22 @@ Result<Handle> Path::RetainLeaf(Detail::ResolvedPath& stage, const std::string& 
             auto closed = candidate.Close();
             if (!closed.HasValue())
             {
-                (void)Detail::FinalizeResult(*mContext, Result<bool>(primary), closed.Error().code);
+                Detail::LogSecondaryClose(*mContext, closed.Error().code);
             }
             return primary;
         }
         return std::move(candidate);
     }();
-    return duplicate.Finish(std::move(retained));
+    auto closed = duplicate.Close();
+    if (!closed.HasValue())
+    {
+        if (retained.HasValue())
+        {
+            return std::move(closed).Error();
+        }
+        Detail::LogSecondaryClose(*mContext, closed.Error().code);
+    }
+    return retained;
 }
 
 Result<Path> Path::AcquireRoot(const ContextInterface& context, std::string absoluteRoot, RootPolicy policy, ResolverLimits limits, bool regularFileRoot)
@@ -985,7 +1046,7 @@ Result<Path> Path::AcquireRoot(const ContextInterface& context, std::string abso
         auto closed = path.Close();
         if (!closed.HasValue())
         {
-            (void)Detail::FinalizeResult(context, Result<bool>(primary), closed.Error().code);
+            Detail::LogSecondaryClose(context, closed.Error().code);
         }
         return primary;
     }
@@ -1005,18 +1066,20 @@ Result<Optional<Path::ChildObservation>> Path::ObserveChild(const std::string& c
     {
         return std::move(parent).Error();
     }
-    ScopedDescriptor child(*mContext, mContext->OpenNativeAt(Leaf().mDescriptor, component.c_str(), O_PATH | O_NOFOLLOW | O_CLOEXEC));
+    const int childFd = mContext->OpenNativeAt(Leaf().mDescriptor.Get().Value(), component.c_str(), O_PATH | O_NOFOLLOW | O_CLOEXEC);
+    const int openError = SavedError();
+    Descriptor child = Descriptor::Take(*mContext, childFd);
     auto observedResult = [&]() -> Result<Optional<ChildObservation>> {
-        if (child.Get() < 0)
+        if (!child.HasValue())
         {
-            if (errno == ENOENT)
+            if (openError == ENOENT)
             {
                 return Optional<ChildObservation>();
             }
-            return Error("Cannot observe pinned directory child", SavedError());
+            return Error("Cannot observe pinned directory child", openError);
         }
         ChildObservation observed;
-        if (mContext->StatFileDescriptor(child.Get(), &observed.metadata) != 0)
+        if (mContext->StatFileDescriptor(child.Get().Value(), &observed.metadata) != 0)
         {
             return Error("Cannot inspect pinned directory child", SavedError());
         }
@@ -1026,8 +1089,19 @@ Result<Optional<Path::ChildObservation>> Path::ObserveChild(const std::string& c
         {
             return std::move(verified).Error();
         }
-        auto mount = MountId(*mContext, procfs.fdinfo.Get(), child.Get(), fdinfoByteCap);
-        mount = procfs.Finish(std::move(mount));
+        auto mount = MountId(*mContext, procfs.fdinfo.Get().Value(), child.Get().Value(), fdinfoByteCap);
+        auto closed = procfs.Close();
+        if (!closed.HasValue())
+        {
+            if (mount.HasValue())
+            {
+                mount = std::move(closed).Error();
+            }
+            else
+            {
+                Detail::LogSecondaryClose(*mContext, closed.Error().code);
+            }
+        }
         if (!mount.HasValue())
         {
             return std::move(mount).Error();
@@ -1035,7 +1109,16 @@ Result<Optional<Path::ChildObservation>> Path::ObserveChild(const std::string& c
         observed.mountId = mount.Value();
         return Optional<ChildObservation>(std::move(observed));
     }();
-    return child.Finish(std::move(observedResult));
+    auto closed = child.Close();
+    if (!closed.HasValue())
+    {
+        if (observedResult.HasValue())
+        {
+            return std::move(closed).Error();
+        }
+        Detail::LogSecondaryClose(*mContext, closed.Error().code);
+    }
+    return observedResult;
 }
 
 Optional<struct stat> Path::LeafLinkMetadata() const
