@@ -29,6 +29,7 @@ target_link_libraries(kompli-cli-tests
     GTest::gmock
     pthread
     kompli-cli-lib
+    pugixml::pugixml
 )
 
 gtest_discover_tests(kompli-cli-tests XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR})

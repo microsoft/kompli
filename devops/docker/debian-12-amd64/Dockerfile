@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/mirror/docker/library/debian:bookworm@sha256:2c037a04925515fdd6ea85ea14a682d0e79931f5e9f5d07b6dbfc6ba12f9e858
+FROM mcr.microsoft.com/mirror/docker/library/debian:bookworm@sha256:854dd8ab51d62866dbd8f5431d15ce77b12983a2a4a1e1fe43a2395dc7ef9f61
 
 ARG CMAKE_VERSION=v3.30.1
 ARG DEBIAN_FRONTEND=noninteractive

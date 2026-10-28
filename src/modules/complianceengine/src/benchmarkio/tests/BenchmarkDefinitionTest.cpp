@@ -159,7 +159,7 @@ TEST(BenchmarkDefinitionParserTest, ParsesMultipleRulesInOrder)
 
 TEST(BenchmarkDefinitionParserTest, RejectsMissingOrMalformedContentVersion)
 {
-    for (const std::string invalid : {"", "1.0", "1.0.0.0", "01.0.0", "1.00.0", "-1.0.0", "1.0.x", "1.0.0-beta", R"(1.0.0\u0000)"})
+    for (const std::string invalid : {"", "1.0", "1.0.0.0", "01.0.0", "1.00.0", "1.0.00", "-1.0.0", "1.0.x", "1.0.0-beta", R"(1.0.0\u0000)"})
     {
         std::string doc = OneRuleDoc();
         ReplaceOnce(doc, R"("version":"1.0.0")", R"("version":")" + invalid + R"(")");
@@ -307,10 +307,6 @@ TEST(BenchmarkDefinitionParserTest, ParsesLegacyDocumentWithoutHoistedIdentity)
     EXPECT_TRUE(result.Value().benchmarkInfo.section.empty());
 }
 
-// ---------------------------------------------------------------------------
-// parameterMetadata (docs/CLI.md "Parametrization")
-// ---------------------------------------------------------------------------
-
 TEST(BenchmarkDefinitionParserTest, RuleWithNoParameterMetadataYieldsEmptyMap)
 {
     auto result = ParseString(OneRuleDoc(), nullptr);
@@ -341,7 +337,6 @@ TEST(BenchmarkDefinitionParserTest, ParsesParameterMetadataFields)
     })";
     auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
-    ASSERT_EQ(result.Value().resources.size(), 1u);
     const auto& metadata = result.Value().resources[0].parameterMetadata;
     ASSERT_EQ(metadata.count("mountPoint"), 1u);
     const auto& mountPoint = metadata.at("mountPoint");
@@ -441,6 +436,30 @@ TEST(BenchmarkDefinitionParserTest, RejectsUnsupportedParameterMetadataType)
     auto result = ParseString(MakeDoc(std::string("[") + ruleWithParams + "]"), nullptr);
     ASSERT_FALSE(result.HasValue());
     EXPECT_NE(result.Error().message.find("only 'string' is supported"), std::string::npos);
+}
+
+TEST(BenchmarkDefinitionParserTest, RejectsInvalidParameterMetadata)
+{
+    const char* const notObject = R"({
+        "ruleName": "R", "title": "t", "id": "1", "ruleId": "rule-id", "tags": [],
+        "metadata": {}, "payload": {"audit": {}, "parameters": {}},
+        "parameterMetadata": "not-an-object"
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + notObject + "]"), nullptr).HasValue());
+
+    const char* const missingDefault = R"({
+        "ruleName": "R", "title": "t", "id": "1", "ruleId": "rule-id", "tags": [],
+        "metadata": {}, "payload": {"audit": {}, "parameters": {}},
+        "parameterMetadata": {"mountPoint": {"type": "string"}}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + missingDefault + "]"), nullptr).HasValue());
+
+    const char* const entryNotObject = R"({
+        "ruleName": "R", "title": "t", "id": "1", "ruleId": "rule-id", "tags": [],
+        "metadata": {}, "payload": {"audit": {}, "parameters": {}},
+        "parameterMetadata": {"mountPoint": "not-an-object"}
+    })";
+    EXPECT_FALSE(ParseString(MakeDoc(std::string("[") + entryNotObject + "]"), nullptr).HasValue());
 }
 
 TEST(BenchmarkDefinitionParserTest, RejectsParameterMetadataNotAnObject)

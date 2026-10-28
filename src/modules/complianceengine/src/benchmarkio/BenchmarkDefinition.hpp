@@ -37,7 +37,6 @@ struct BenchmarkDocument
 {
     // metadata.name - the benchmark's stable identifier, e.g. "cis_ubuntu24.04".
     std::string name;
-
     // spec.version - the definition's content SemVer, independent of apiVersion.
     // Required and parsed for every input (including legacy identity shape).
     ContentVersion version;
@@ -65,14 +64,15 @@ struct BenchmarkDocument
 
 // Parses a benchmark-definition JSON document. Strict about structure: it
 // requires the resource envelope (apiVersion / kind == "BenchmarkDefinition" /
-// metadata / non-empty spec.rules) and the fixed per-rule fields. Sole-id definitions
+// metadata / valid spec.version / non-empty spec.rules) and the fixed per-rule fields.
+// Rules carry the stable external-correlation `ruleId`. Sole-id definitions
 // require the file-level prefix in metadata.labels and metadata.annotations.
 // A non-empty, all-legacy document may omit those objects; its prefix is
 // derived from the first payload key and every rule must agree. During producer
 // migration, each rule must carry either `id` or the complete legacy `section`
 // plus `payloadKey` identity; legacy sections are normalized into `id`. Rejects
 // a document with a duplicate `id` across its rules (id must be unique within
-// one file), requires a valid spec.version, and rejects malformed input. Consistent with the definition schema
+// one file) and rejects malformed input. Consistent with the definition schema
 // (additionalProperties: true), unknown fields are ignored rather than rejected.
 Result<BenchmarkDocument> ParseString(const std::string& json, OsConfigLogHandle logHandle);
 

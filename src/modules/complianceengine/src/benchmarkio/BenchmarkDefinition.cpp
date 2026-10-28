@@ -262,21 +262,18 @@ Result<std::map<string, BenchmarkIO::ParameterMetadata>> ParseParameterMetadata(
         {
             return displayName.Error();
         }
-
         metadata.displayName = std::move(displayName.Value());
         auto validationRegex = OptionalString(entryObject, "validationRegex", entryContext);
         if (!validationRegex.HasValue())
         {
             return validationRegex.Error();
         }
-
         metadata.validationRegex = std::move(validationRegex.Value());
         auto validationFailedMessage = OptionalString(entryObject, "validationFailedMessage", entryContext);
         if (!validationFailedMessage.HasValue())
         {
             return validationFailedMessage.Error();
         }
-
         metadata.validationFailedMessage = std::move(validationFailedMessage.Value());
         const JSON_Value* mandatoryValue = json_object_get_value(entryObject, "mandatory");
         if (nullptr != mandatoryValue && JSONBoolean != json_value_get_type(mandatoryValue))
@@ -564,11 +561,11 @@ Result<Resource> ParseRule(const JSON_Object* ruleObject, size_t index, const Be
     resource.ruleName = std::move(ruleName.Value());
     resource.tags = std::move(tags.Value());
     resource.metadata = std::move(metadata.Value());
+    resource.parameterMetadata = std::move(parameterMetadata.Value());
     // Every rule carries an init object.
     resource.hasInitAudit = true;
     // Definitions carry no desired object value; the payload is modelled as
     // absent.
-    resource.parameterMetadata = std::move(parameterMetadata.Value());
 
     return resource;
 }
@@ -752,10 +749,8 @@ Result<BenchmarkDocument> ParseString(const string& json, OsConfigLogHandle logH
     doc.version = std::move(version.Value());
     doc.benchmarkInfo = std::move(documentInfo);
     doc.resources.reserve(ruleCount);
-    // Rules already seen, keyed by id - the identifier guaranteed unique
-    // within one file; plan/run key
-    // on it directly, so a duplicate here would make a rule reference
-    // ambiguous.
+    // Plan/run key rules by id; reject duplicate ids rather than selecting
+    // an ambiguous rule.
     std::set<string> seenIds;
     for (size_t i = 0; i < ruleCount; ++i)
     {

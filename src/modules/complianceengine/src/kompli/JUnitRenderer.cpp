@@ -559,9 +559,7 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
         }
 
         // Guard against schema drift / upstream bugs: an unrecognised or missing
-        // status must not be silently rendered as a passing test case. `Skipped`
-        // is accepted ahead of its own landing (kompli-cli-completion M-4 item 5)
-        // so this renderer doesn't hard-fail the day it appears.
+        // status must not be silently rendered as a passing test case.
         if (status != "Compliant" && status != "NonCompliant" && status != "NotApplicable" && status != "Skipped")
         {
             return Error("Canonical result JSON rule has invalid 'status' value: '" + status + "'", EINVAL);

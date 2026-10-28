@@ -1,13 +1,9 @@
 # kompli CLI contract
 
-This document is the target design contract for the `kompli` CLI — what
-subcommands are meant to exist, what they mean, and the on-disk formats
-they read/write. It describes the shape `kompli`'s CLI is converging to, not
-a snapshot of what's shipped at any given moment; implementation status and
-remaining gaps are tracked separately, in each workstream's own roadmap.
-Cross-referenced from [architecture.md](architecture.md) and
-[src/komplid/README.md](../src/komplid/README.md) rather than duplicated
-there. See [glossary.md](glossary.md) for unfamiliar acronyms (e.g. NRP, GC).
+This document defines the commands, arguments, options, exit behavior, and
+on-disk formats exposed by the `kompli` CLI. Future daemon-awareness and
+additional list views are identified as proposals below, not shipped commands.
+See [glossary.md](glossary.md) for unfamiliar acronyms.
 
 ## 1. Command overview
 
@@ -18,10 +14,49 @@ there. See [glossary.md](glossary.md) for unfamiliar acronyms (e.g. NRP, GC).
 | `kompli run <plan-file>` | Execute a plan file (one or more benchmark files), emit one combined canonical result JSON. See §2. |
 | `kompli list <file>` | List every rule's `id`/`title`, one per line. See §2. |
 
+### Command and artifact flow
+
+```mermaid
+flowchart LR
+    definitions["Benchmark-definition JSON<br/>(one or more verified files)"]
+    list["kompli list &lt;file&gt;"]
+    inventory["Rule inventory<br/>id + title"]
+    plan["kompli plan &lt;file&gt;...<br/>toggles + --param"]
+    planFile["Plan JSON"]
+    run["kompli run &lt;plan-file&gt;"]
+    result["Canonical result JSON<br/>(run stdout)"]
+    resultFile["Canonical result JSON<br/>(file)"]
+    resultStdin["Canonical result JSON<br/>(stdin)"]
+    renderFile["kompli render &lt;file&gt;"]
+    renderStdin["kompli render<br/>or kompli render -"]
+    report["JUnit or text report"]
+
+    definitions --> list --> inventory
+    definitions --> plan --> planFile --> run
+    definitions -. "referenced by plan" .-> run
+    run --> result
+    result -- "shell redirect: &gt; result.json" --> resultFile --> renderFile --> report
+    result -- "pipe" --> resultStdin --> renderStdin --> report
+```
+
+`list` and `plan` inspect definitions without executing rules. `run` resolves
+the definition paths recorded by the plan and executes its per-rule choices.
+`render` is a separate, root-free presentation step and accepts canonical JSON
+from either a file or stdin. Omitting the filename and passing `-` both select
+stdin:
+
+```bash
+kompli run plan.json > result.json
+kompli render result.json
+kompli render < result.json
+kompli render - < result.json
+kompli run plan.json | kompli render
+```
+
 Common flags: `-h/--help`, `-V/--version`, `-v/--verbose`, `-d/--debug`.
-`run`-only: `-e/--continue-on-error`. kompli logs
-to stderr unconditionally (no `--log-file`; see
-[logging.md](logging.md) for the sink model and why the flag was removed).
+Logs go to stderr (there is no `--log-file`; see [logging.md](logging.md)
+for the sink model and why the flag was removed).
+`run`-only: `-e/--continue-on-error`.
 `plan`-only: repeatable
 `--audit=<section>` / `--remediate=<section>` / `--enforce=<section>`
 toggles (flag names kept for continuity with the former `section`
@@ -50,11 +85,9 @@ rule seeded at one mode) when that's what's wanted.
 
 ### Why
 
-The wire protocol `komplid` will speak is per-rule (`{benchmark, id,
-mode}` → one canonical result), because different rules may need different
-modes (`audit` vs `remediate` vs the reserved, not-yet-working `enforce` —
-kept in this contract regardless, see below) in the same run. The CLI needs
-an input model that can express that, without forcing a user to
+Different rules may need different modes (`audit` vs `remediate` vs the
+reserved, not-yet-working `enforce`) in the same run. The CLI needs an input
+model that can express that without forcing a user to
 hand-enumerate every rule for the common "run everything" case. There is no
 separate `audit`/`remediate` command that applies one mode to a whole file —
 `plan`+`run` is the only input model, whether a plan covers one rule or
@@ -68,13 +101,9 @@ Enumerates rules in a benchmark-definition file: prints each rule's `id` and
 shared `BenchmarkDefinition::ParseFile`, so it inherits the same input-hardening
 posture as `plan`/`run`). No flags beyond the common ones
 (`-h/-V/-v/-d`); `--continue-on-error`/toggles/`--output`/`--format`
-are all rejected, matching `plan`'s scoping. Prerequisite for building a plan —
-a user or script needs to know what to reference before they can toggle its
-mode. A detail view for one rule
-(`kompli list <file> --rule=<id>`, exact flag not finalized) additionally
-showing its parameters and their defaults — needed so a user knows what's
-available to override in a plan (see "Parametrization" under `plan` below).
-`id` is
+are all rejected, matching `plan`'s scoping. This is the prerequisite for
+building a plan: a user or script needs to know what to reference before it
+can toggle a rule's mode. `id` is
 kompli's *sole* externally-quoted per-rule
 identifier — a separate `section` field used to exist but was eliminated,
 and the field itself was later renamed from `payloadKey` to `id`;
@@ -97,8 +126,8 @@ Generates a plan: **every** rule in `<file>` is seeded at `mode: audit`
 (never a mutating default). Toggle specific rules with repeatable
 `--audit=<section>` / `--remediate=<section>` / `--enforce=<section>` flags
 (`--enforce` is accepted and recorded like the others, consistent with
-keeping `enforce` in every contract even though `run`/`komplid` can't
-actually execute it yet — see §2's `enforce` note). **Output default:**
+keeping `enforce` in the plan contract even though `run` can't actually
+execute it yet — see §2's `enforce` note). **Output default:**
 standard output, same as `render`; `-o/--output
 <path>` writes to a file instead.
 
@@ -207,18 +236,10 @@ already supports multiple `benchmarks[]` entries (see above).
   hard error, same as the unqualified-unrecognised-section error.
 - **Output, unchanged.** Same `-o/--output` behavior; still one JSON document
   on stdout or to the given path.
-- **Not in scope**: an interactive picker across files (that's
-  `plan --interactive`, below) and a `--merge` flag that combines two
-  *already-generated* plan files (regenerating from the source definitions
-  is always equivalent and simpler, since plans are meant to be regenerated
-  rather than hand-assembled from other plans).
-
 ### Parametrization
 
-Procedures can be parametrized (e.g. a package name, a file mode/mask); the
-The unified definitions carry default values for every parameter (only the
-GC/NRP scenario supports overriding them elsewhere — this folds
-that capability into `kompli`/`komplid` too, not just GC).
+Procedures can be parametrized (for example, with a package name or file
+mode). Unified definitions carry default values for every parameter.
 
 - **Plan generation pre-fills every rule's parameters with their defaults.**
   A rule's `parameterMetadata` (name → `{default, validationRegex, mandatory,
@@ -284,11 +305,6 @@ document covering the whole plan.
 - A rule set to `enforce` fails that rule with a logged error (honoring
   `--continue-on-error`) rather than producing a result for it — `enforce`
   has no execution backend (see §2's note on the reserved value).
-- Execution happens either in-process (the default) or forwarded to
-  `komplid` via `--passthrough` (daemon-awareness, §7) — the plan/run input
-  model and the execution backend are meant to be orthogonal, so switching
-  backend doesn't require a CLI rework.
-
 ### Rule filtering
 
 `plan` and `render` share one rule-filter vocabulary:
@@ -328,20 +344,12 @@ subset; run-wide status and duration remain facts of the source result.
 `run` deliberately has no filters. The plan's rule map is the complete
 execution selection.
 
-### `kompli plan --interactive`
-
-Interactively build or edit a plan (pick a rule, pick/toggle its mode,
-repeat) rather than only via repeatable flags — kept in the design so the
-plan format doesn't need to change to support an interactive editor for it
-later.
 
 ## 3. Result schema changes this implies — Implemented
 
 `kompli-result.schema.json`'s `action` field moved from the **top-level**
 envelope to **per-rule** (`$defs/rule`): once one `run` invocation can mix
-modes across rules, a single result-wide `action` can't describe it, the same
-conclusion reached independently for `komplid`'s wire protocol — the CLI's own
-output and the daemon's output converge on the same per-rule shape.
+modes across rules, a single result-wide `action` cannot describe it.
 `action` is absent on a rule whose `status` is `Skipped` (a rule present in
 the benchmark file but absent from a `run` plan's `rules` map, so never
 executed - a new `status` enum value, see §2).
@@ -363,12 +371,12 @@ it. `BenchmarkDefinition::ParseString`/`ParseFile`
 **reject** a document with a duplicate `id` across its rules, checked as each
 rule is parsed.
 
-`BenchmarkIO::Resource` retains `id` verbatim, which `komplid`'s wire
-protocol needs to identify a rule by `id`.
+`BenchmarkIO::Resource` retains `id` verbatim for plan generation and
+execution.
 
-## 6. Open design questions
+## 6. Future proposals (not shipped CLI behavior)
 
-Not yet resolved by this contract:
+These proposals do not change the commands or flags documented above:
 
 - **`kompli list <file> --rule=<id>` detail view** (§2) — exact flag/output
   not finalized.
@@ -382,7 +390,7 @@ Not yet resolved by this contract:
   deduplication — see the "attach to the existing task" note in
   [src/komplid/README.md](../src/komplid/README.md#long-running-rules-background-tasks).
 
-## 7. Daemon-awareness
+## 7. Proposed daemon-awareness (not implemented)
 
 `run` forwards its per-rule requests to `komplid` instead of executing them
 in-process when given an explicit **`--passthrough` flag**. Without it,
@@ -397,7 +405,7 @@ backend for `run`, not a different input model.
 - **Standalone mode** (the default — no daemon involved): always requires
   root, no lower-privilege path. Unchanged from the original assessor's
   posture.
-- **Passthrough mode** (`--passthrough`): requires
+- **Proposed passthrough mode** (`--passthrough`): would require
   membership in the `kompli` system group (or root) to connect to
   `komplid`'s socket and to read `/etc/kompli/`. See
   [src/komplid/README.md](../src/komplid/README.md#privilege-model)

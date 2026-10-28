@@ -28,7 +28,6 @@ void PrintHelp(const std::string& programName)
     std::cout << "\t-V, --version\tShow software version and exit.\n";
     std::cout << "\t-v, --verbose\tRun in verbose mode.\n";
     std::cout << "\t-d, --debug\tRun in debug mode.\n";
-    std::cout << "\t-l, --log-file\tSpecify a log file. Default: print log entries to standard error.\n";
 #ifdef BUILD_TELEMETRY
     std::cout << "\t-t, --telemetry\tEnable telemetry event logging. Default: disabled.\n";
 #endif // BUILD_TELEMETRY

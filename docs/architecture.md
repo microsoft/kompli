@@ -51,8 +51,8 @@ src/
 
 kompli supports two integration scenarios that share the same ComplianceEngine module:
 
-- **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The definitions generator produces MOF files that drive audit and remediation per rule.
-- **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/kompli/`) that builds plans from on-disk benchmark-definition JSON files and executes per-rule audit or remediation via `run`, without platform or daemon involvement. Definition files cannot be piped through stdin.
+- **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The augmentation engine generates MOF files that drive audit and remediation per rule.
+- **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/kompli/`) that builds plans from one or more on-disk benchmark-definition JSON files and executes each plan's per-rule audit/remediation choices without platform or daemon involvement. Definition and plan inputs must be on-disk files; stdin is not supported for them.
 
 A third scenario, `komplid` (a native, systemd-managed daemon sharing the same ComplianceEngine core), runs a synchronous audit/remediate subset; see §3 and [src/komplid/README.md](../src/komplid/README.md) for its design.
 
