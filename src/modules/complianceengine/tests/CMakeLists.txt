@@ -104,6 +104,7 @@ add_executable(complianceenginetests
     StringToolsTest.cpp
     TemporaryDirectoryTest.cpp
     UsersIteratorTest.cpp
+    VariantTest.cpp
     ${PROCEDURES}
 )
 # for ProcedureMap.h
