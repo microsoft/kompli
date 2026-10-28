@@ -75,7 +75,7 @@ and executed campaign remain pending.
 Kompli supports two integration scenarios that share the same ComplianceEngine module:
 
 - **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The augmentation engine generates MOF files that drive audit and remediation per rule.
-- **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/kompli/`) that reads a benchmark-definition JSON file (supplied on disk as a required positional filename argument; stdin is not supported for definitions) and directly executes audits or remediations without any platform or daemon involvement.
+- **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/kompli/`) that builds plans from one or more benchmark-definition JSON files and executes each plan's per-rule audit/remediation choices without platform or daemon involvement. Definition and plan inputs are required on-disk files; stdin is not supported for them.
 
 Benchmark definitions bind the file-level identity tuple (`framework`,
 `distribution`, `distributionVersion`, `benchmarkVersion`) in metadata. Each
