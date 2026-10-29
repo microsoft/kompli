@@ -27,6 +27,10 @@
     {
       "name": "gtest",
       "version>=": "1.12.0"
+    },
+    {
+      "name": "pugixml",
+      "version>=": "1.16"
     }
   ],
   "overrides": [
