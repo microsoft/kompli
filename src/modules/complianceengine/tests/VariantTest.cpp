@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "Variant.h"
+#include "Variant.hpp"
 
 #include "TypeTraits.h"
 
@@ -261,6 +261,63 @@ struct Tracked
     }
 };
 
+struct PlacementState
+{
+    int alive = 0;
+    int constructed = 0;
+    int destroyed = 0;
+    int moves = 0;
+};
+
+struct AdversarialPlacement
+{
+    PlacementState* state;
+    int value;
+
+    static int& PlacementCalls() noexcept
+    {
+        static int calls = 0;
+        return calls;
+    }
+
+    // A legal class-specific overload: it records a regression without
+    // redirecting construction away from the supplied inline storage.
+    static void* operator new(std::size_t, void* destination) noexcept
+    {
+        ++PlacementCalls();
+        return destination;
+    }
+
+    explicit AdversarialPlacement(PlacementState& counters, int number) noexcept
+        : state(&counters),
+          value(number)
+    {
+        ++state->alive;
+        ++state->constructed;
+    }
+
+    AdversarialPlacement(AdversarialPlacement&& other) noexcept
+        : state(other.state),
+          value(other.value)
+    {
+        ++state->moves;
+        ++state->alive;
+        ++state->constructed;
+    }
+
+    AdversarialPlacement& operator=(AdversarialPlacement&& other) noexcept
+    {
+        value = other.value;
+        return *this;
+    }
+
+    ~AdversarialPlacement() noexcept
+    {
+        ++state->destroyed;
+        --state->alive;
+    }
+};
+
 using Observable = Variant<Tracked, int>;
 static_assert(!std::is_copy_constructible<Observable>::value, "copyable payload still has move-only Variant");
 static_assert(!std::is_copy_assignable<Observable>::value, "copy assignment stays disabled");
@@ -268,6 +325,41 @@ static_assert(std::is_nothrow_move_constructible<Observable>::value, "nonthrowin
 static_assert(std::is_nothrow_move_assignable<Observable>::value, "nonthrowing payload assignment");
 static_assert(!std::is_nothrow_constructible<Observable, InPlaceType<Tracked>, Tracked&>::value, "lvalue copy can throw");
 static_assert(std::is_nothrow_constructible<Observable, InPlaceType<Tracked>, Tracked&&>::value, "rvalue construction follows move");
+
+TEST(VariantTest, GlobalPlacementConstructionBypassesClassOverload)
+{
+    PlacementState state;
+    AdversarialPlacement::PlacementCalls() = 0;
+    {
+        using Adversarial = Variant<AdversarialPlacement, int>;
+        Adversarial source(InPlaceType<AdversarialPlacement>{}, AdversarialPlacement(state, 1));
+        EXPECT_EQ(0, AdversarialPlacement::PlacementCalls());
+        EXPECT_EQ(2, state.constructed);
+        EXPECT_EQ(1, state.moves);
+        EXPECT_EQ(1, state.destroyed);
+        EXPECT_EQ(1, state.alive);
+
+        Adversarial moved(std::move(source));
+        EXPECT_EQ(0, AdversarialPlacement::PlacementCalls());
+        EXPECT_EQ(3, state.constructed);
+        EXPECT_EQ(2, state.moves);
+        EXPECT_EQ(1, state.destroyed);
+        EXPECT_EQ(2, state.alive);
+
+        Adversarial replacement(InPlaceType<int>{}, 9);
+        replacement = std::move(moved);
+        EXPECT_EQ(0, AdversarialPlacement::PlacementCalls());
+        EXPECT_EQ(4, state.constructed);
+        EXPECT_EQ(3, state.moves);
+        EXPECT_EQ(1, state.destroyed);
+        EXPECT_EQ(3, state.alive);
+        EXPECT_TRUE(replacement.Is<AdversarialPlacement>());
+    }
+    EXPECT_EQ(0, AdversarialPlacement::PlacementCalls());
+    EXPECT_EQ(0, state.alive);
+    EXPECT_EQ(4, state.constructed);
+    EXPECT_EQ(4, state.destroyed);
+}
 
 TEST(VariantTest, BorrowedReferencesHaveLogicalAccessInEveryCategory)
 {

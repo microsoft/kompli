@@ -15,7 +15,7 @@ find_package(OpenSSL REQUIRED NO_DEFAULT_PATH PATHS ${VCPKG_PACKAGES_DIR})
 set(variant_compile_case_source "${CMAKE_CURRENT_SOURCE_DIR}/VariantCompileCase.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${variant_compile_case_source}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../src/lib/Variant.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/lib/Variant.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/lib/TypeTraits.h"
 )
 set(variant_compile_flags

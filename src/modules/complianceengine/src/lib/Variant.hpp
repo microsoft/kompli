@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_VARIANT_H
-#define COMPLIANCEENGINE_VARIANT_H
+#ifndef COMPLIANCEENGINE_VARIANT_HPP
+#define COMPLIANCEENGINE_VARIANT_HPP
 
 #include "TypeTraits.h"
 
@@ -298,4 +298,4 @@ const T&& As(const MovableVariant<Alternatives...>&& variant)
 }
 } // namespace ComplianceEngine
 
-#endif // COMPLIANCEENGINE_VARIANT_H
+#endif // COMPLIANCEENGINE_VARIANT_HPP

@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "../src/lib/Variant.h"
+#include "../src/lib/Variant.hpp"
 
 #include <type_traits>
 #include <utility>
