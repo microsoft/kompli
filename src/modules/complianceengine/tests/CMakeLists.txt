@@ -69,6 +69,57 @@ expect_variant_compile_failure(9 "cv-mismatched Is" "Variant query requires the 
 expect_variant_compile_failure(10 "unlisted As" "Variant query requires a listed alternative")
 expect_variant_compile_failure(11 "cv-mismatched As" "Variant query requires the exact listed cv-qualified type")
 
+# Independently check wrapper copy operations and unsupported payloads against
+# a valid C++11 translation unit before accepting diagnostic-checked failures.
+set(wrapper_compile_case_source "${CMAKE_CURRENT_SOURCE_DIR}/WrapperCompileCase.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${wrapper_compile_case_source}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/lib/Optional.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/lib/Result.h"
+)
+try_compile(wrapper_compile_control
+    "${CMAKE_CURRENT_BINARY_DIR}/wrapper-compile/control"
+    "${wrapper_compile_case_source}"
+    CMAKE_FLAGS ${variant_compile_flags}
+    COMPILE_DEFINITIONS "-DWRAPPER_COMPILE_CASE=0"
+    OUTPUT_VARIABLE wrapper_compile_output
+)
+if(NOT wrapper_compile_control)
+    message(FATAL_ERROR "Wrapper compile control failed:\n${wrapper_compile_output}")
+endif()
+message(STATUS "Optional/Result C++11 compile control: passed")
+
+function(expect_wrapper_compile_failure case_number case_name diagnostic)
+    set(result_var "wrapper_compile_case_${case_number}")
+    try_compile(${result_var}
+        "${CMAKE_CURRENT_BINARY_DIR}/wrapper-compile/${case_number}"
+        "${wrapper_compile_case_source}"
+        CMAKE_FLAGS ${variant_compile_flags}
+        COMPILE_DEFINITIONS "-DWRAPPER_COMPILE_CASE=${case_number}"
+        OUTPUT_VARIABLE compile_output
+    )
+    if(${result_var})
+        message(FATAL_ERROR "Optional/Result ${case_name} unexpectedly compiled")
+    endif()
+    string(FIND "${compile_output}" "${diagnostic}" diagnostic_position)
+    if(diagnostic_position EQUAL -1)
+        message(FATAL_ERROR "Optional/Result ${case_name} failed for the wrong reason:\n${compile_output}")
+    endif()
+    message(STATUS "Optional/Result C++11 negative compile ${case_name}: rejected as expected")
+endfunction()
+
+expect_wrapper_compile_failure(1 "Optional move-only copy construction" "deleted")
+expect_wrapper_compile_failure(2 "Optional move-only copy assignment" "deleted")
+expect_wrapper_compile_failure(3 "Result move-only copy construction" "deleted")
+expect_wrapper_compile_failure(4 "Result move-only copy assignment" "deleted")
+expect_wrapper_compile_failure(5 "Optional const mutation" "cannot assign to return value")
+expect_wrapper_compile_failure(6 "Result const mutation" "cannot assign to return value")
+expect_wrapper_compile_failure(7 "Optional void" "Optional cannot hold void")
+expect_wrapper_compile_failure(8 "Optional reference" "Optional cannot hold references")
+expect_wrapper_compile_failure(9 "Result void" "Result cannot hold void")
+expect_wrapper_compile_failure(10 "Result reference" "Result cannot hold references")
+expect_wrapper_compile_failure(11 "Result Error value" "Result cannot hold Error as its value type")
+
 set(PROCEDURES
     procedures/AideAttributesTest.cpp
     procedures/AksCommandTest.cpp

@@ -6,8 +6,13 @@
 
 #include "TypeTraits.h"
 
+#include <cstddef>
+#include <iosfwd>
+#include <new>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <utility>
 
 namespace ComplianceEngine
 {
@@ -70,9 +75,12 @@ constexpr std::size_t Max(std::size_t a, std::size_t b)
 }
 } // anonymous namespace
 
-template <typename T>
-class Result
+namespace ResultDetail
 {
+template <typename T>
+class Storage
+{
+protected:
     union Pointer
     {
         T* value;
@@ -86,56 +94,28 @@ class Result
     };
 
     alignas(Max(alignof(T), alignof(ComplianceEngine::Error))) char mBuffer[Max(sizeof(T), sizeof(ComplianceEngine::Error))];
-    Tag mTag;
-    Pointer mPointer;
+    Tag mTag = Tag::Error;
+    Pointer mPointer = {nullptr};
 
-public:
-    Result(T value)
-        : mTag(Tag::Value)
-    {
-        mPointer.value = new (mBuffer) T(std::move(value));
-    }
-
-    Result(ComplianceEngine::Error error)
-        : mTag(Tag::Error)
-    {
-        mPointer.error = new (mBuffer) ComplianceEngine::Error(std::move(error));
-    }
-
-    Result(const Result& other)
-        : mTag(other.mTag)
-    {
-        if (mTag == Tag::Value)
-        {
-            mPointer.value = new (mBuffer) T(*other.mPointer.value);
-        }
-        else
-        {
-            mPointer.error = new (mBuffer) ComplianceEngine::Error(*other.mPointer.error);
-        }
-    }
-
-    Result(Result&& other) noexcept(NoexceptMovable<T>())
-        : mTag(other.mTag)
-    {
-        if (mTag == Tag::Value)
-        {
-            mPointer.value = new (mBuffer) T(std::move(*other.mPointer.value));
-        }
-        else
-        {
-            mPointer.error = new (mBuffer) ComplianceEngine::Error(std::move(*other.mPointer.error));
-        }
-
-        other.Reset();
-    }
-
-    ~Result()
+    Storage() = default;
+    ~Storage()
     {
         Reset();
     }
 
-private:
+    void CopyFrom(const Storage& other)
+    {
+        mTag = other.mTag;
+        if (mTag == Tag::Value)
+        {
+            mPointer.value = ::new (static_cast<void*>(mBuffer)) T(*other.mPointer.value);
+        }
+        else
+        {
+            mPointer.error = ::new (static_cast<void*>(mBuffer)) ComplianceEngine::Error(*other.mPointer.error);
+        }
+    }
+
     void Reset() noexcept(NoexceptDestructible<T>())
     {
         if (mTag == Tag::Value)
@@ -156,28 +136,89 @@ private:
         mPointer.value = nullptr;
         mTag = Tag::Error;
     }
+};
+
+template <typename T, bool Copyable>
+class CopyStorage;
+
+template <typename T>
+class CopyStorage<T, true> : public Storage<T>
+{
+public:
+    CopyStorage() = default;
+    CopyStorage(const CopyStorage& other)
+    {
+        this->CopyFrom(other);
+    }
+    CopyStorage& operator=(const CopyStorage& other)
+    {
+        if (this != &other)
+        {
+            this->Reset();
+            this->CopyFrom(other);
+        }
+        return *this;
+    }
+};
+
+template <typename T>
+class CopyStorage<T, false> : public Storage<T>
+{
+public:
+    CopyStorage() = default;
+    CopyStorage(const CopyStorage&) = delete;
+    CopyStorage& operator=(const CopyStorage&) = delete;
+};
+} // namespace ResultDetail
+
+template <typename T>
+class Result : private ResultDetail::CopyStorage<T, std::is_copy_constructible<T>::value>
+{
+    using Storage = ResultDetail::CopyStorage<T, std::is_copy_constructible<T>::value>;
+    using Tag = typename ResultDetail::Storage<T>::Tag;
+
+    static_assert(!std::is_void<T>::value, "Result cannot hold void");
+    static_assert(!std::is_reference<T>::value, "Result cannot hold references");
+    static_assert(!std::is_same<T, ComplianceEngine::Error>::value, "Result cannot hold Error as its value type");
 
 public:
-    Result& operator=(const Result& other)
+    Result(T value)
     {
-        if (this == &other)
-        {
-            return *this;
-        }
+        this->mPointer.value = ::new (static_cast<void*>(this->mBuffer)) T(std::move(value));
+        this->mTag = Tag::Value;
+    }
 
-        Reset();
-        mTag = other.mTag;
-        if (mTag == Tag::Value)
+    Result(ComplianceEngine::Error error)
+    {
+        this->mPointer.error = ::new (static_cast<void*>(this->mBuffer)) ComplianceEngine::Error(std::move(error));
+    }
+
+    Result(const Result&) = default;
+
+    Result(Result&& other) noexcept(NoexceptMovable<T>())
+    {
+        this->mTag = other.mTag;
+        if (this->mTag == Tag::Value)
         {
-            mPointer.value = new (mBuffer) T(*other.mPointer.value);
+            this->mPointer.value = ::new (static_cast<void*>(this->mBuffer)) T(std::move(*other.mPointer.value));
         }
         else
         {
-            mPointer.error = new (mBuffer) ComplianceEngine::Error(*other.mPointer.error);
+            this->mPointer.error = ::new (static_cast<void*>(this->mBuffer)) ComplianceEngine::Error(std::move(*other.mPointer.error));
         }
-
-        return *this;
+        other.Reset();
     }
+
+    ~Result() = default;
+
+private:
+    void Reset() noexcept(NoexceptDestructible<T>())
+    {
+        Storage::Reset();
+    }
+
+public:
+    Result& operator=(const Result&) = default;
 
     Result& operator=(Result&& other) noexcept(NoexceptMovable<T>())
     {
@@ -187,14 +228,14 @@ public:
         }
 
         Reset();
-        mTag = other.mTag;
-        if (mTag == Tag::Value)
+        this->mTag = other.mTag;
+        if (this->mTag == Tag::Value)
         {
-            mPointer.value = new (mBuffer) T(std::move(*other.mPointer.value));
+            this->mPointer.value = ::new (static_cast<void*>(this->mBuffer)) T(std::move(*other.mPointer.value));
         }
         else
         {
-            mPointer.error = new (mBuffer) ComplianceEngine::Error(std::move(*other.mPointer.error));
+            this->mPointer.error = ::new (static_cast<void*>(this->mBuffer)) ComplianceEngine::Error(std::move(*other.mPointer.error));
         }
 
         other.Reset();
@@ -203,7 +244,7 @@ public:
 
     bool HasValue() const noexcept
     {
-        return mTag == Tag::Value;
+        return this->mTag == Tag::Value;
     }
 
     operator bool() const noexcept
@@ -213,83 +254,83 @@ public:
 
     T ValueOr(T default_value) const& noexcept(NoexceptCopyable<T>())
     {
-        if (mTag == Tag::Error)
+        if (this->mTag == Tag::Error)
         {
             return std::move(default_value);
         }
 
-        return *mPointer.value;
+        return *this->mPointer.value;
     }
 
     T ValueOr(T default_value) && noexcept(NoexceptMovable<T>())
     {
-        if (mTag == Tag::Error)
+        if (this->mTag == Tag::Error)
         {
             return std::move(default_value);
         }
 
-        return std::move(*mPointer.value);
+        return std::move(*this->mPointer.value);
     }
 
     const T& Value() const&
     {
         CheckValue();
-        return *mPointer.value;
+        return *this->mPointer.value;
     }
 
     T Value() &&
     {
         CheckValue();
-        return std::move(*mPointer.value);
+        return std::move(*this->mPointer.value);
     }
 
     T& Value() &
     {
         CheckValue();
-        return *mPointer.value;
+        return *this->mPointer.value;
     }
 
     const T* operator->() const&
     {
         CheckValue();
-        return mPointer.value;
+        return this->mPointer.value;
     }
 
     T* operator->() &
     {
         CheckValue();
-        return mPointer.value;
+        return this->mPointer.value;
     }
 
     const ComplianceEngine::Error& Error() const&
     {
         CheckError();
-        return *mPointer.error;
+        return *this->mPointer.error;
     }
 
     ComplianceEngine::Error Error() &&
     {
         CheckError();
-        return std::move(*mPointer.error);
+        return std::move(*this->mPointer.error);
     }
 
     ComplianceEngine::Error& Error() &
     {
         CheckError();
-        return *mPointer.error;
+        return *this->mPointer.error;
     }
 
 private:
     void CheckError() const
     {
-        if (mTag != Tag::Error)
+        if (this->mTag != Tag::Error)
         {
             throw std::logic_error("Result: unchecked access to Error");
         }
     }
     void CheckValue() const
     {
-        if (mTag != Tag::Value)
+        if (this->mTag != Tag::Value)
         {
             throw std::logic_error("Result: unchecked access to Value");
         }
