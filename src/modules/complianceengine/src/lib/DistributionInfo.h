@@ -42,7 +42,7 @@ enum class Architecture
 struct DistributionInfo
 {
     static constexpr const char* cDefaultEtcOsReleasePath = "/etc/os-release";
-    static constexpr const char* cDefaultOverrideFilePath = "/etc/osconfig/system_id.override";
+    static constexpr const char* cDefaultOverrideFilePath = "/etc/kompli/system_id.override";
 
     OSType osType = OSType::Linux;
 

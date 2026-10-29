@@ -45,7 +45,7 @@ static constexpr const char* cModuleTestClientName = "ModuleTestClient";
 static constexpr const char* cNRPClientName = "ComplianceEngine";
 OsConfigLogHandle g_log = nullptr;
 static const std::set<int> g_criticalErrors = {ENOMEM};
-static constexpr const char* g_configurationFile = "/etc/osconfig/osconfig.json";
+static constexpr const char* g_configurationFile = "/etc/kompli/kompli.json";
 #ifdef BUILD_TELEMETRY
 static constexpr const char* telemetry_log_dir = "/var/lib/osconfig/telemetry/";
 static constexpr const char* telemetry_log_file = "complianceengine.telemetry";
