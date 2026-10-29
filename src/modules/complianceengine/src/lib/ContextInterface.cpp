@@ -4,6 +4,7 @@
 #include "ContextInterface.h"
 
 #include "filesystem/Handle.hpp"
+#include "filesystem/PathInternal.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -19,12 +20,12 @@ ContextInterface::~ContextInterface() = default;
 
 using Filesystem::Detail::Descriptor;
 
-Descriptor ContextInterface::EmptyDescriptor(const char* diagnostic) const noexcept
+Descriptor ContextInterface::EmptyDescriptor(CloseDiagnostic diagnostic) const& noexcept
 {
     return Descriptor(*this, -1, diagnostic);
 }
 
-Result<Descriptor> ContextInterface::OpenAbsolutePin(const char* path, bool directory) const
+Result<Descriptor> ContextInterface::OpenAbsolutePin(const char* path, bool directory) const&
 {
     if (!path || *path != '/')
     {
@@ -35,10 +36,25 @@ Result<Descriptor> ContextInterface::OpenAbsolutePin(const char* path, bool dire
     {
         return Error("Cannot open absolute pin", errno ? errno : EIO);
     }
-    return Descriptor(*this, fd, "Failed to close internal filesystem descriptor");
+    return Descriptor(*this, fd, CloseDiagnostic::Descriptor);
 }
 
-Result<Descriptor> ContextInterface::OpenAt(const Descriptor& directory, const char* name, OpenProfile profile, const char* diagnostic) const
+Result<Descriptor> ContextInterface::OpenAt(const Descriptor& directory, const char* name, OpenProfile profile, CloseDiagnostic diagnostic) const&
+{
+    switch (profile)
+    {
+        case OpenProfile::ReadFdinfo:
+        case OpenProfile::FollowAliasFile:
+        case OpenProfile::FollowAliasDirectory:
+        case OpenProfile::FollowAliasPin:
+        case OpenProfile::FollowAliasPinDirectory:
+            return Error("Procfs alias profiles require verified directories", EINVAL);
+        default:
+            return OpenVerifiedAt(directory, name, profile, diagnostic);
+    }
+}
+
+Result<Descriptor> ContextInterface::OpenVerifiedAt(const Descriptor& directory, const char* name, OpenProfile profile, CloseDiagnostic diagnostic) const&
 {
     if (!directory.mDescriptor.HasValue())
     {
@@ -58,9 +74,13 @@ Result<Descriptor> ContextInterface::OpenAt(const Descriptor& directory, const c
             flags |= O_PATH | O_DIRECTORY;
             break;
         case OpenProfile::PinChild:
+            if (!Filesystem::Detail::IsSingleChildComponent(name))
+                return Error("Child pin requires a single component", EINVAL);
             flags |= O_PATH | O_NOFOLLOW;
             break;
         case OpenProfile::PinChildDirectory:
+            if (!Filesystem::Detail::IsSingleChildComponent(name))
+                return Error("Child pin requires a single component", EINVAL);
             flags |= O_PATH | O_NOFOLLOW | O_DIRECTORY;
             break;
         case OpenProfile::ReadFdinfo:
@@ -89,8 +109,10 @@ Result<Descriptor> ContextInterface::OpenAt(const Descriptor& directory, const c
     return Descriptor(*this, fd, diagnostic);
 }
 
-Result<Descriptor> ContextInterface::OpenFdinfo(const Descriptor& directory, const Descriptor& target) const
+Result<Descriptor> ContextInterface::OpenFdinfo(const Filesystem::Detail::VerifiedProcfs& procfs, const Descriptor& target) const&
 {
+    if (!procfs.VerifyRole(*this, true))
+        return Error("Unverified procfs fdinfo directory", EINVAL);
     if (!target.mDescriptor.HasValue())
     {
         return Error("Descriptor information target is empty", EBADF);
@@ -100,11 +122,14 @@ Result<Descriptor> ContextInterface::OpenFdinfo(const Descriptor& directory, con
         return Error("Foreign descriptor information target", EINVAL);
     }
     const std::string alias = std::to_string(target.mDescriptor.Value());
-    return OpenAt(directory, alias.c_str(), OpenProfile::ReadFdinfo);
+    return OpenVerifiedAt(procfs.fdinfo, alias.c_str(), OpenProfile::ReadFdinfo, CloseDiagnostic::Descriptor);
 }
 
-Result<Descriptor> ContextInterface::OpenAlias(const Descriptor& directory, const Descriptor& target, bool directoryAlias, const char* diagnostic) const
+Result<Descriptor> ContextInterface::OpenAlias(const Filesystem::Detail::VerifiedProcfs& procfs, const Descriptor& target, bool directoryAlias,
+    CloseDiagnostic diagnostic) const&
 {
+    if (!procfs.VerifyRole(*this, false))
+        return Error("Unverified procfs fd directory", EINVAL);
     if (!target.mDescriptor.HasValue())
     {
         return Error("Alias target is empty", EBADF);
@@ -114,11 +139,13 @@ Result<Descriptor> ContextInterface::OpenAlias(const Descriptor& directory, cons
         return Error("Foreign alias target", EINVAL);
     }
     const std::string alias = std::to_string(target.mDescriptor.Value());
-    return OpenAt(directory, alias.c_str(), directoryAlias ? OpenProfile::FollowAliasDirectory : OpenProfile::FollowAliasFile, diagnostic);
+    return OpenVerifiedAt(procfs.fd, alias.c_str(), directoryAlias ? OpenProfile::FollowAliasDirectory : OpenProfile::FollowAliasFile, diagnostic);
 }
 
-Result<Descriptor> ContextInterface::OpenPinAlias(const Descriptor& directory, const Descriptor& target, bool directoryAlias) const
+Result<Descriptor> ContextInterface::OpenPinAlias(const Filesystem::Detail::VerifiedProcfs& procfs, const Descriptor& target, bool directoryAlias) const&
 {
+    if (!procfs.VerifyRole(*this, false))
+        return Error("Unverified procfs fd directory", EINVAL);
     if (!target.mDescriptor.HasValue())
     {
         return Error("Alias target is empty", EBADF);
@@ -128,10 +155,10 @@ Result<Descriptor> ContextInterface::OpenPinAlias(const Descriptor& directory, c
         return Error("Foreign alias target", EINVAL);
     }
     const std::string alias = std::to_string(target.mDescriptor.Value());
-    return OpenAt(directory, alias.c_str(), directoryAlias ? OpenProfile::FollowAliasPinDirectory : OpenProfile::FollowAliasPin);
+    return OpenVerifiedAt(procfs.fd, alias.c_str(), directoryAlias ? OpenProfile::FollowAliasPinDirectory : OpenProfile::FollowAliasPin, CloseDiagnostic::Descriptor);
 }
 
-Result<Descriptor> ContextInterface::Duplicate(const Descriptor& source) const
+Result<Descriptor> ContextInterface::Duplicate(const Descriptor& source) const&
 {
     if (!source.mDescriptor.HasValue())
     {
@@ -146,7 +173,7 @@ Result<Descriptor> ContextInterface::Duplicate(const Descriptor& source) const
     {
         return Error("Cannot duplicate descriptor", errno ? errno : EIO);
     }
-    return Descriptor(*this, fd, "Failed to close internal filesystem descriptor");
+    return Descriptor(*this, fd, CloseDiagnostic::Descriptor);
 }
 
 #define CHECK_OWNER(owner, failure)                                                                                                                    \
@@ -196,12 +223,16 @@ int ContextInterface::ChownPinned(const Descriptor& owner, uid_t user, gid_t gro
     CHECK_OWNER(owner, -1)
     return ChownPinnedFileDescriptor(owner.mDescriptor.Value(), user, group);
 }
-int ContextInterface::ChmodAlias(const Descriptor& directory, const Descriptor& pin, mode_t mode) const
+int ContextInterface::ChmodAlias(const Filesystem::Detail::VerifiedProcfs& procfs, const Descriptor& pin, mode_t mode) const
 {
-    CHECK_OWNER(directory, -1)
+    if (!procfs.VerifyRole(*this, false))
+    {
+        errno = EINVAL;
+        return -1;
+    }
     CHECK_OWNER(pin, -1)
     const std::string alias = std::to_string(pin.mDescriptor.Value());
-    return ChmodPinnedAlias(directory.mDescriptor.Value(), alias.c_str(), mode);
+    return ChmodPinnedAlias(procfs.fd.mDescriptor.Value(), alias.c_str(), mode);
 }
 int ContextInterface::CloseOwnedDescriptor(Descriptor& owner) const
 {
@@ -210,7 +241,7 @@ int ContextInterface::CloseOwnedDescriptor(Descriptor& owner) const
     owner.mDescriptor.Reset();
     return CloseFileDescriptor(fd);
 }
-Result<Filesystem::DirectoryCursor> ContextInterface::OpenDirectoryCursor(Descriptor&& owner) const
+Result<Filesystem::DirectoryCursor> ContextInterface::OpenDirectoryCursor(Descriptor&& owner) const&
 {
     if (!owner.mDescriptor.HasValue())
     {

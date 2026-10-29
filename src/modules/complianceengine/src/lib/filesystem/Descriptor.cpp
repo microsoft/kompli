@@ -11,7 +11,7 @@ namespace Filesystem
 {
 namespace Detail
 {
-Descriptor::Descriptor(const ContextInterface& context, int descriptor, const char* closeDiagnostic) noexcept
+Descriptor::Descriptor(const ContextInterface& context, int descriptor, ContextInterface::CloseDiagnostic closeDiagnostic) noexcept
     : mContext(&context),
       mDescriptor(0 > descriptor ? Optional<int>() : Optional<int>(descriptor)),
       mCloseDiagnostic(closeDiagnostic)
@@ -73,7 +73,10 @@ Result<bool> Descriptor::Close()
     {
         try
         {
-            OsConfigLogError(Context().GetLogHandle(), "%s: %d", mCloseDiagnostic, error);
+            const char* diagnostic = mCloseDiagnostic == ContextInterface::CloseDiagnostic::DirectoryActivation ?
+                                         "Failed to close directory activation" :
+                                         "Failed to close internal filesystem descriptor";
+            OsConfigLogError(Context().GetLogHandle(), "%s: %d", diagnostic, error);
         }
         catch (...)
         {

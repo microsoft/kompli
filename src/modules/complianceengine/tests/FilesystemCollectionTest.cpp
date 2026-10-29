@@ -189,7 +189,7 @@ TEST(FilesystemCollectionTest, CoreNoRootReplayAfterAcceptedDirectoryRenameAndRe
     ASSERT_TRUE(root.HasValue()) << root.Error().message;
     ASSERT_TRUE(root.Value().Is<Path>());
     Path accepted = As<Path>(std::move(root).Value());
-    const ino_t acceptedInode = accepted.Root().Stat().st_ino;
+    const ino_t acceptedInode = accepted.Root().AcquiredMetadata().st_ino;
     ASSERT_EQ(0, ::rename(tree.Path("root").c_str(), tree.Path("moved").c_str()));
     tree.Directory("root");
     tree.File("root/replacement");
@@ -207,7 +207,7 @@ TEST(FilesystemCollectionTest, CoreNoRootReplayAfterAcceptedDirectoryRenameAndRe
         seen.push_back(entry.Value().path);
         struct stat original = {};
         ASSERT_EQ(0, ::stat(tree.Path("moved/original").c_str(), &original));
-        EXPECT_EQ(original.st_ino, entry.Value().LiveHandle()->Stat().st_ino);
+        EXPECT_EQ(original.st_ino, entry.Value().LiveHandle()->AcquiredMetadata().st_ino);
     }
     EXPECT_EQ((std::vector<std::string>{tree.Path("root/original")}), seen);
     EXPECT_NE(0, acceptedInode);
@@ -289,11 +289,11 @@ TEST(FilesystemCollectionTest, OwnedLiveEntryOutlivesRangeButCollectedSnapshotHa
         ASSERT_NE(entry, opened->end());
         ASSERT_TRUE(entry->HasValue());
         ASSERT_NE(nullptr, entry->Value().LiveHandle());
-        inode = entry->Value().LiveHandle()->Stat().st_ino;
+        inode = entry->Value().LiveHandle()->AcquiredMetadata().st_ino;
         ASSERT_TRUE(opened->Close().HasValue());
     }
     ASSERT_EQ(0, unlink(tree.Path("file").c_str()));
-    auto inspected = entry->Value().LiveHandle()->Stat(FilesystemCollectionLimits{}.fullPathBytes);
+    auto inspected = entry->Value().LiveHandle()->Stat();
     ASSERT_TRUE(inspected.HasValue()) << inspected.Error().message;
     EXPECT_EQ(inode, inspected.Value().st_ino);
 }
@@ -634,6 +634,7 @@ TEST(FilesystemCollectionTest, InitializesNativeDefaultsAndMatchesExplicitDefaul
     explicitDefaults.entryWork = defaultLimits.entryWork;
     explicitDefaults.directoryWidth = defaultLimits.directoryWidth;
     explicitDefaults.fullPathBytes = defaultLimits.fullPathBytes;
+    explicitDefaults.fdinfoBytes = defaultLimits.fdinfoBytes;
     explicitDefaults.retainedPathBytes = defaultLimits.retainedPathBytes;
     explicitDefaults.openDirectories = defaultLimits.openDirectories;
 
@@ -656,6 +657,7 @@ TEST(FilesystemCollectionTest, InitializesNativeDefaultsAndMatchesExplicitDefaul
     EXPECT_EQ(100000u, resolved.limits.entryWork);
     EXPECT_EQ(4096u, resolved.limits.directoryWidth);
     EXPECT_EQ(4096u, resolved.limits.fullPathBytes);
+    EXPECT_EQ(4096u, resolved.limits.fdinfoBytes);
     EXPECT_EQ(32u * 1024u * 1024u, resolved.limits.retainedPathBytes);
     EXPECT_EQ(16u, resolved.limits.openDirectories);
     EXPECT_EQ(resolved.direction, explicitResolved.direction);
@@ -671,6 +673,7 @@ TEST(FilesystemCollectionTest, InitializesNativeDefaultsAndMatchesExplicitDefaul
     EXPECT_EQ(resolved.limits.entryWork, explicitResolved.limits.entryWork);
     EXPECT_EQ(resolved.limits.directoryWidth, explicitResolved.limits.directoryWidth);
     EXPECT_EQ(resolved.limits.fullPathBytes, explicitResolved.limits.fullPathBytes);
+    EXPECT_EQ(resolved.limits.fdinfoBytes, explicitResolved.limits.fdinfoBytes);
     EXPECT_EQ(resolved.limits.retainedPathBytes, explicitResolved.limits.retainedPathBytes);
     EXPECT_EQ(resolved.limits.openDirectories, explicitResolved.limits.openDirectories);
 }
@@ -718,6 +721,7 @@ TEST(FilesystemCollectionTest, AcceptsLargerPositiveResourceOverridesWithoutClam
     request.entryWork = 200000;
     request.directoryWidth = 8192;
     request.fullPathBytes = 8192;
+    request.fdinfoBytes = 8192;
     request.retainedPathBytes = 64u * 1024u * 1024u;
     request.openDirectories = 32;
 
@@ -728,6 +732,7 @@ TEST(FilesystemCollectionTest, AcceptsLargerPositiveResourceOverridesWithoutClam
     EXPECT_EQ(200000u, result->limits.entryWork);
     EXPECT_EQ(8192u, result->limits.directoryWidth);
     EXPECT_EQ(8192u, result->limits.fullPathBytes);
+    EXPECT_EQ(8192u, result->limits.fdinfoBytes);
     EXPECT_EQ(64u * 1024u * 1024u, result->limits.retainedPathBytes);
     EXPECT_EQ(32u, result->limits.openDirectories);
 }
@@ -807,6 +812,10 @@ TEST(FilesystemCollectionTest, RejectsZeroResourceLimits)
     ExpectInvalid(request, EINVAL);
 
     request = Request();
+    request.fdinfoBytes = 0;
+    ExpectInvalid(request, EINVAL);
+
+    request = Request();
     request.retainedPathBytes = 0;
     ExpectInvalid(request, EINVAL);
 
@@ -834,12 +843,53 @@ TEST(FilesystemCollectionTest, RejectsNegativeResourceLimits)
     ExpectInvalid(request, EINVAL);
 
     request = Request();
+    request.fdinfoBytes = -1;
+    ExpectInvalid(request, EINVAL);
+
+    request = Request();
     request.retainedPathBytes = -1;
     ExpectInvalid(request, EINVAL);
 
     request = Request();
     request.openDirectories = -1;
     ExpectInvalid(request, EINVAL);
+}
+
+TEST(FilesystemCollectionTest, ShortPathBudgetDoesNotLimitProcfsInspection)
+{
+    MockContext context;
+    FilesystemCollectionRequest request("/", FilesystemRootKind::Directory);
+    request.fullPathBytes = 2;
+    request.scope = FilesystemScope::All;
+    auto opened = Files(request, context);
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    EXPECT_TRUE(opened.Value().Close().HasValue());
+}
+
+TEST(FilesystemCollectionTest, ContinuationCannotUnderstateAcquiredRootInspectionBound)
+{
+    MockContext context;
+    FilesystemCollectionRequest request("/", FilesystemRootKind::Directory);
+    request.scope = FilesystemScope::All;
+    auto resolved = ResolveFilesystemCollectionRequest(request);
+    ASSERT_TRUE(resolved.HasValue()) << resolved.Error().message;
+    auto root = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), CollectionRootLimits(resolved.Value()));
+    ASSERT_TRUE(root.HasValue()) << root.Error().message;
+    ASSERT_TRUE(root.Value().Is<Path>());
+    Path accepted = As<Path>(std::move(root).Value());
+    ASSERT_EQ(4096u, accepted.Limits().shared.fdinfoBytes);
+    auto continuation = CollectionContinuation(resolved.Value());
+    continuation.limits.fdinfoBytes = 1;
+    EXPECT_CALL(context, OpenNativePath(testing::_, testing::_)).Times(0);
+    EXPECT_CALL(context, OpenNativeAt(testing::_, testing::_, testing::_)).Times(0);
+    EXPECT_CALL(context, StatFileDescriptor(testing::_, testing::_)).Times(0);
+    EXPECT_CALL(context, ReadFileDescriptor(testing::_, testing::_, testing::_)).Times(0);
+    EXPECT_CALL(context, FdOpenDirectory(testing::_)).Times(0);
+    auto rejected = Files(std::move(accepted), continuation);
+    ASSERT_FALSE(rejected.HasValue());
+    EXPECT_EQ(EINVAL, rejected.Error().code);
+    EXPECT_EQ("Filesystem continuation fdinfo byte limit is below the acquired root's bound inspection limit", rejected.Error().message);
+    EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
 }
 
 TEST(FilesystemCollectionTest, AppliesExactRootPathBudgetIncludingTerminator)
@@ -1750,7 +1800,7 @@ TEST(FilesystemCollectionTest, FactoryAcquiresRootButReadsDescendantsOnePullAtAT
     ASSERT_TRUE(entry->HasValue());
     EXPECT_EQ(tree.Path("root"), entry->Value().path);
     ASSERT_NE(nullptr, entry->Value().LiveHandle());
-    auto rootIdentity = entry->Value().LiveHandle()->Stat(FilesystemCollectionLimits{}.fullPathBytes);
+    auto rootIdentity = entry->Value().LiveHandle()->Stat();
     ASSERT_TRUE(rootIdentity.HasValue()) << rootIdentity.Error().message;
     EXPECT_EQ(0u, stats);
     EXPECT_EQ(0u, reads);
@@ -1794,9 +1844,9 @@ TEST(FilesystemCollectionTest, RangeForRetainsEachRegularFilePinWithoutReacquiri
         ASSERT_TRUE(item.HasValue()) << item.Error().message;
         const auto& entry = item.Value();
         ASSERT_NE(nullptr, entry.LiveHandle());
-        const auto inode = entry.LiveHandle()->Stat().st_ino;
+        const auto inode = entry.LiveHandle()->AcquiredMetadata().st_ino;
         ASSERT_EQ(0, unlink(entry.path.c_str()));
-        auto inspected = entry.LiveHandle()->Stat(FilesystemCollectionLimits{}.fullPathBytes);
+        auto inspected = entry.LiveHandle()->Stat();
         ASSERT_TRUE(inspected.HasValue()) << inspected.Error().message;
         EXPECT_EQ(inode, inspected.Value().st_ino);
         seen.push_back(entry.path);
@@ -2010,7 +2060,7 @@ TEST(FilesystemCollectionTest, DescendantOpenFailureIsDeferredUntilAfterItsEntry
     ASSERT_TRUE(entry->HasValue());
     EXPECT_EQ(tree.Path("root/child"), entry->Value().path);
     ASSERT_NE(nullptr, entry->Value().LiveHandle());
-    const auto childInode = entry->Value().LiveHandle()->Stat().st_ino;
+    const auto childInode = entry->Value().LiveHandle()->AcquiredMetadata().st_ino;
     EXPECT_EQ(expectedChild.st_ino, childInode);
     ++entry;
     ASSERT_NE(entry, files.end());

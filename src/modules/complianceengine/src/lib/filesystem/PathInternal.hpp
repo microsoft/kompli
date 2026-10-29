@@ -24,11 +24,32 @@ bool SameIdentity(const struct stat& first, const struct stat& second) noexcept;
 struct VerifiedProcfs
 {
     explicit VerifiedProcfs(const ContextInterface& context);
+    VerifiedProcfs(const ContextInterface&&) = delete;
     Result<bool> Open();
     Result<bool> Close();
+    const Descriptor& ProcDirectory() const noexcept
+    {
+        return proc;
+    }
+    const Descriptor& FdDirectory() const noexcept
+    {
+        return fd;
+    }
+    const Descriptor& FdinfoDirectory() const noexcept
+    {
+        return fdinfo;
+    }
+
+private:
+    friend class ::ComplianceEngine::ContextInterface;
+    bool VerifyRole(const ContextInterface& context, bool information) const;
+    // Only Open() fills the role owners after verifying /proc/self against
+    // the current PID. Ordinary callers cannot replace or swap these pins.
     Descriptor proc, self, pid, fd, fdinfo;
+    bool mVerified = false;
+    struct stat mFdIdentity = {}, mFdinfoIdentity = {};
 };
-Result<std::uint64_t> MountId(const ContextInterface& context, const Descriptor& fdinfoDirectory, const Descriptor& descriptor, std::size_t byteCap);
+Result<std::uint64_t> MountId(const ContextInterface& context, const VerifiedProcfs& procfs, const Descriptor& descriptor, std::size_t byteCap);
 
 // A strict child component, not a pathname. Root resolution and any
 // whole-path parsing belong to the separately authorized acquisition layer.
@@ -83,7 +104,12 @@ public:
 
 private:
     friend class ::ComplianceEngine::Filesystem::Path;
-    ResolvedPath() = default;
+    friend struct ResolvedPathAllocationProbe; // focused allocator-failure test
+    ResolvedPath()
+        : mPins(new std::deque<Handle>()),
+          mEffectivePins(new std::deque<std::string>())
+    {
+    }
     Handle TakeOwnedLeaf();
     struct Frame
     {
@@ -91,10 +117,11 @@ private:
         std::size_t ownedIndex = 0;
         bool owned = false;
     };
-    std::deque<Handle> mPins;
+    // The heap-owned deques move by pointer transfer, not by deque move.
+    std::unique_ptr<std::deque<Handle>> mPins;
     // Recorded at the actual parent->child transition, not inferred from
     // Handle::Component after following a link.
-    std::deque<std::string> mEffectivePins;
+    std::unique_ptr<std::deque<std::string>> mEffectivePins;
     std::string mEffectiveLeaf;
     std::string mSourceLookup;
     std::vector<Frame> mFrames;

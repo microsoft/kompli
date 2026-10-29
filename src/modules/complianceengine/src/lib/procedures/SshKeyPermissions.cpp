@@ -35,13 +35,59 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
     //  - pass mask for private keys too if semantics is to forbid bits (private keys should typically be 0600). However user explicitly said 'permissions 0137'. That suggests we want to CLEAR these bits. In helper logic supplying 'permissions' would require those bits to be present which is opposite. Thus we pass it as 'mask'.
     // So: treat provided numbers as masks of forbidden bits.
 
-    auto processFile = [&](const std::string& fullPath) -> Result<Status> {
-        auto content = context.GetFileContents(fullPath);
-        if (!content.HasValue())
+    auto processFile = [&](const Filesystem::FilesystemCollectionEntry& entry) -> Result<Status> {
+        const auto* pin = entry.LiveHandle();
+        if (pin == nullptr || entry.missing)
         {
-            return content.Error();
+            return Error("SSH key collection requires a live regular-file pin", EBADF);
         }
-        std::istringstream iss(content.Value());
+        auto opened = pin->OpenReadOnly();
+        if (!opened.HasValue())
+        {
+            return std::move(opened).Error();
+        }
+        auto readable = std::move(opened).Value();
+        // The old classifier used only the first line but propagated errors
+        // reading the entire file. Retain that behavior with a bounded read.
+        constexpr std::size_t maxKeyBytes = 1024 * 1024;
+        std::string content;
+        auto closeAfterError = [&]() {
+            auto closed = readable.Close();
+            if (!closed.HasValue())
+            {
+                try
+                {
+                    OsConfigLogError(context.GetLogHandle(), "Secondary SSH key reader close failure: %d", closed.Error().code);
+                }
+                catch (...)
+                {
+                    OsConfigLogError(nullptr, "Secondary SSH key reader close or log failure: %d", closed.Error().code);
+                }
+            }
+        };
+        for (;;)
+        {
+            auto chunk = readable.Read(4096);
+            if (!chunk.HasValue())
+            {
+                auto primary = std::move(chunk).Error();
+                closeAfterError();
+                return primary;
+            }
+            if (!chunk.Value().HasValue())
+                break;
+            const auto& bytes = chunk.Value().Value();
+            if (bytes.size() > maxKeyBytes - content.size())
+            {
+                closeAfterError();
+                return Error("SSH key content exceeds classification byte limit", E2BIG);
+            }
+            content += bytes;
+        }
+        auto closed = readable.Close();
+        if (!closed.HasValue())
+            return std::move(closed).Error();
+        std::istringstream iss(content);
         std::string firstLine;
         if (!std::getline(iss, firstLine))
         {
@@ -82,7 +128,7 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
         }
 
         FilePermissionsParams params;
-        params.path = fullPath;
+        params.path = entry.path;
         static const auto rootPattern = Pattern::Make("root");
         if (!rootPattern.HasValue())
         {
@@ -104,7 +150,8 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
             params.mask = 0137; // private key stricter forbidden bits
         }
 
-        Result<Status> result = isRemediation ? RemediateFilePermissions(params, indicators, context) : AuditFilePermissions(params, indicators, context);
+        Result<Status> result = isRemediation ? EnforcePinnedFilePermissions(params, *pin, false, indicators, context) :
+                                                CheckPinnedFilePermissions(params, *pin, indicators, context);
         if (!result.HasValue())
         {
             return result.Error();
@@ -146,7 +193,7 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
         {
             return entry.Error();
         }
-        const auto result = processFile(entry.Value().path);
+        const auto result = processFile(entry.Value());
         if (!result.HasValue())
         {
             return result.Error();

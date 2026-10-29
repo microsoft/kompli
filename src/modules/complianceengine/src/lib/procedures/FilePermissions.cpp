@@ -231,8 +231,7 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
     }
 }
 
-static Result<Status> AuditFilePermissionsImpl(const FilePermissionsParams& params, const Filesystem::Handle* pin, std::size_t fdinfoByteCap,
-    IndicatorsTree& indicators, ContextInterface& context)
+static Result<Status> AuditFilePermissionsImpl(const FilePermissionsParams& params, const Filesystem::Handle* pin, IndicatorsTree& indicators, ContextInterface& context)
 {
     assert(params.behavior.HasValue());
     if (params.groupId.HasValue() && (params.group.HasValue() || params.groupId.Value() < 0))
@@ -243,7 +242,7 @@ static Result<Status> AuditFilePermissionsImpl(const FilePermissionsParams& para
     struct stat statbuf;
     if (nullptr != pin)
     {
-        auto observed = pin->Stat(fdinfoByteCap);
+        auto observed = pin->Stat();
         if (!observed.HasValue())
         {
             return std::move(observed).Error();
@@ -390,13 +389,12 @@ static Result<Status> AuditFilePermissionsImpl(const FilePermissionsParams& para
 
 Result<Status> AuditFilePermissions(const FilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
-    return AuditFilePermissionsImpl(params, nullptr, 0, indicators, context);
+    return AuditFilePermissionsImpl(params, nullptr, indicators, context);
 }
 
-Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, std::size_t fdinfoByteCap,
-    IndicatorsTree& indicators, ContextInterface& context)
+Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, IndicatorsTree& indicators, ContextInterface& context)
 {
-    return AuditFilePermissionsImpl(params, &handle, fdinfoByteCap, indicators, context);
+    return AuditFilePermissionsImpl(params, &handle, indicators, context);
 }
 
 namespace
@@ -405,7 +403,7 @@ namespace
 // target; the compatibility path caller opens once and may additionally check
 // a historical identity. Only the pinned caller preserves collector continuity.
 Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params, const Optional<FileIdentity>& expectedIdentity,
-    const Filesystem::Handle* pin, std::size_t fdinfoByteCap, bool requireUnique, IndicatorsTree& indicators, ContextInterface& context)
+    const Filesystem::Handle* pin, bool requireUnique, IndicatorsTree& indicators, ContextInterface& context)
 {
     if (params.groupId.HasValue() && (params.group.HasValue() || params.groupId.Value() < 0))
     {
@@ -457,7 +455,7 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
     struct stat statbuf;
     if (nullptr != pin)
     {
-        auto observed = pin->Stat(fdinfoByteCap);
+        auto observed = pin->Stat();
         if (!observed.HasValue())
         {
             return std::move(observed).Error();
@@ -586,7 +584,7 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
         // path string, so the change cannot be redirected to a different file via a symlink swap.
         if (nullptr != pin && requireUnique)
         {
-            auto fresh = pin->Stat(fdinfoByteCap);
+            auto fresh = pin->Stat();
             if (!fresh.HasValue())
             {
                 return std::move(fresh).Error();
@@ -598,7 +596,7 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
         }
         if (nullptr != pin)
         {
-            auto changed = pin->SetOwnership(uid, gid, fdinfoByteCap);
+            auto changed = pin->SetOwnership(uid, gid);
             if (!changed.HasValue())
             {
                 return std::move(changed).Error();
@@ -638,7 +636,7 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
         // pins (verified above not to be a symlink), so it is not subject to a symlink race.
         if (nullptr != pin && requireUnique)
         {
-            auto fresh = pin->Stat(fdinfoByteCap);
+            auto fresh = pin->Stat();
             if (!fresh.HasValue())
             {
                 return std::move(fresh).Error();
@@ -650,7 +648,7 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
         }
         if (nullptr != pin)
         {
-            auto changed = pin->SetMode(new_perms, fdinfoByteCap);
+            auto changed = pin->SetMode(new_perms);
             if (!changed.HasValue())
             {
                 return std::move(changed).Error();
@@ -673,19 +671,19 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
 
 Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
-    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(), nullptr, 0, false, indicators, context);
+    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(), nullptr, false, indicators, context);
 }
 
 Result<Status> EnforceFilePermissionsAtIdentity(const FilePermissionsParams& params, const FileIdentity& expectedIdentity, IndicatorsTree& indicators,
     ContextInterface& context)
 {
-    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(expectedIdentity), nullptr, 0, false, indicators, context);
+    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(expectedIdentity), nullptr, false, indicators, context);
 }
 
-Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, std::size_t fdinfoByteCap,
-    bool requireUnique, IndicatorsTree& indicators, ContextInterface& context)
+Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, bool requireUnique,
+    IndicatorsTree& indicators, ContextInterface& context)
 {
-    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(), &handle, fdinfoByteCap, requireUnique, indicators, context);
+    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(), &handle, requireUnique, indicators, context);
 }
 
 Result<Status> AuditFilePermissionsCollection(const FilePermissionsCollectionParams& params, IndicatorsTree& indicators, ContextInterface& context)

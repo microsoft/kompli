@@ -106,9 +106,9 @@ TEST(FileObjectCollectorTest, TypedContextOpenRejectsUnsupportedProfilesWithoutD
     EXPECT_NE(0, ::access(missing.c_str(), F_OK));
 
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    const auto notFound = context.OpenAt(directory.Value(), "missing", Profile::ReadFdinfo);
-    ASSERT_FALSE(notFound.HasValue());
-    EXPECT_EQ(ENOENT, notFound.Error().code);
+    const auto restricted = context.OpenAt(directory.Value(), "missing", Profile::ReadFdinfo);
+    ASSERT_FALSE(restricted.HasValue());
+    EXPECT_EQ(EINVAL, restricted.Error().code);
 
     const auto result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_TRUE(result.HasValue());

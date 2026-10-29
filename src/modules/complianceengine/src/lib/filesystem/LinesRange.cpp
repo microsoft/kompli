@@ -320,7 +320,7 @@ Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string
     if (pins.Leaf().AcquiredType() != Filesystem::Handle::Type::RegularFile)
         return fail(Error("File target is not regular", EINVAL));
 
-    auto opened = pins.Leaf().OpenReadOnly(limits.shared.fdinfoBytes, ReadableFile::Policy(policy.limits.maxInterruptedReads));
+    auto opened = pins.Leaf().OpenReadOnly(ReadableFile::Policy(policy.limits.maxInterruptedReads));
     if (!opened.HasValue())
         return fail(std::move(opened).Error());
 
@@ -330,7 +330,7 @@ Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string
         return fail(std::move(inspected).Error());
 
     const struct stat before = inspected.Value();
-    const auto held = pins.Leaf().Stat();
+    const auto held = pins.Leaf().AcquiredMetadata();
     if (held.st_dev != before.st_dev || held.st_ino != before.st_ino || !S_ISREG(before.st_mode))
         return fail(Error("Pinned file identity changed", EAGAIN));
 

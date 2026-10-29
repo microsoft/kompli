@@ -65,6 +65,7 @@ struct FilesystemCollectionLimits
     std::size_t entryWork = 100000;
     std::size_t directoryWidth = 4096;
     std::size_t fullPathBytes = 4096;
+    std::size_t fdinfoBytes = 4096; // independent bound for procfs descriptor information
     // Collection-owned observation path strings retained in pending/result
     // entries, traversal frames and exclusions (including their NUL bytes).
     // Not a total-memory limit: the resolver separately reserves bounded
@@ -112,6 +113,7 @@ struct FilesystemCollectionRequest
     long long entryWork = FilesystemCollectionLimits{}.entryWork;
     long long directoryWidth = FilesystemCollectionLimits{}.directoryWidth;
     long long fullPathBytes = FilesystemCollectionLimits{}.fullPathBytes;
+    long long fdinfoBytes = FilesystemCollectionLimits{}.fdinfoBytes;
     long long retainedPathBytes = FilesystemCollectionLimits{}.retainedPathBytes;
     long long openDirectories = FilesystemCollectionLimits{}.openDirectories;
 };
@@ -136,6 +138,8 @@ struct ResolvedFilesystemCollectionRequest
 
 // Applies only after acquisition. It cannot change whether an initial link
 // was accepted; Path is the sole owner of the pinned root and its provenance.
+// fdinfoBytes must be at least the accepted Path's already-bound inspection
+// limit. Acquire a new root with a smaller bound to enforce a stricter cap.
 struct FilesystemTraversalPolicy
 {
     FilesystemDirection direction = FilesystemDirection::None;

@@ -49,11 +49,11 @@ public:
 
 private:
     friend class ::ComplianceEngine::ContextInterface;
-    Descriptor(const ContextInterface& context, int descriptor, const char* closeDiagnostic) noexcept;
+    Descriptor(const ContextInterface& context, int descriptor, ContextInterface::CloseDiagnostic closeDiagnostic) noexcept;
 
     const ContextInterface* mContext;
     Optional<int> mDescriptor;
-    const char* mCloseDiagnostic;
+    ContextInterface::CloseDiagnostic mCloseDiagnostic;
 };
 
 } // namespace Detail

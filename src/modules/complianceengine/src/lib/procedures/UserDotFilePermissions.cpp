@@ -148,7 +148,7 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
                 params.group = {{std::move(groupPattern.Value())}};
                 params.mask = mask;
                 indicators.Push("AuditFilePermissions");
-                auto subResult = CheckPinnedFilePermissions(params, *entry.LiveHandle(), FilesystemCollectionLimits{}.fullPathBytes, indicators, context);
+                auto subResult = CheckPinnedFilePermissions(params, *entry.LiveHandle(), indicators, context);
                 if (!subResult.HasValue())
                 {
                     OsConfigLogError(context.GetLogHandle(), "Failed to check permissions for file '%s': %s", path.c_str(), subResult.Error().message.c_str());

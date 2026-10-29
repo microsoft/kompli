@@ -173,9 +173,8 @@ Result<Status> ProcessLogfile(const FilesystemCollectionEntry& entry, const Daem
 
     // The path is diagnostic/argument provenance only. Both operations use
     // the live file pin supplied by Files, never a pathname re-open.
-    Result<Status> result =
-        remediate ? EnforcePinnedFilePermissions(params, *entry.LiveHandle(), FilesystemCollectionLimits{}.fullPathBytes, false, indicators, context) :
-                    CheckPinnedFilePermissions(params, *entry.LiveHandle(), FilesystemCollectionLimits{}.fullPathBytes, indicators, context);
+    Result<Status> result = remediate ? EnforcePinnedFilePermissions(params, *entry.LiveHandle(), false, indicators, context) :
+                                        CheckPinnedFilePermissions(params, *entry.LiveHandle(), indicators, context);
     if (!result.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to %s permissions for logfile '%s': %s", remediate ? "remediate" : "audit", fullPath.c_str(),

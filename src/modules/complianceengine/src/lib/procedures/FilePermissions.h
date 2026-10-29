@@ -114,9 +114,8 @@ class Handle;
 // Synchronous borrow: the caller keeps the acquired regular-file pin live
 // throughout inspection/mutation. path is diagnostic only, never reopened.
 // requireUnique retains the dotfile rule's fresh hard-link safeguard.
-Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, std::size_t fdinfoByteCap,
+Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, IndicatorsTree& indicators, ContextInterface& context);
+Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, bool requireUnique,
     IndicatorsTree& indicators, ContextInterface& context);
-Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, std::size_t fdinfoByteCap,
-    bool requireUnique, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace ComplianceEngine
 #endif // COMPLIANCEENGINE_PROCEDURES_FILE_PERMISSIONS_H

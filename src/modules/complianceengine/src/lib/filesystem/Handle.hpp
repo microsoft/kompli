@@ -31,7 +31,8 @@ struct DirectoryChild
     unsigned char type = DT_UNKNOWN; // untrusted readdir type hint, not acquired metadata
 };
 // Move-only, checked directory stream on a verified descriptor alias. Its
-// originating Handle must remain alive through Close/destruction.
+// originating context must remain alive through Close/destruction; the
+// originating Handle may be closed or destroyed.
 class DirectoryCursor
 {
 public:
@@ -42,8 +43,8 @@ public:
     ~DirectoryCursor() noexcept;
     Result<Optional<std::string>> Next();
     Result<Optional<DirectoryChild>> NextEntry();
-    // Relinquish the stream before closedir; a failed/throwing close is
-    // cached and never retried against a possibly reused descriptor.
+    // Relinquish the stream before closedir; return an actual close failure
+    // once, never retrying against a possibly reused descriptor.
     Result<bool> Close();
 
 private:
@@ -51,7 +52,6 @@ private:
     DirectoryCursor(const ContextInterface& context, DIR* stream) noexcept;
     const ContextInterface* mContext = nullptr;
     DIR* mStream = nullptr;
-    int mCloseError = 0;
 };
 // Owns exactly one pinned descriptor. A popped handle needs only its own pin
 // for inspection, read-only activation and metadata operations;
@@ -76,59 +76,56 @@ public:
     ~Handle() noexcept;
 
     Type AcquiredType() const noexcept;
-    const std::string& Component() const noexcept;
-    // Cached stat observed during acquisition, not current metadata. The
-    // held identity does not freeze content or metadata.
-    const struct stat& Stat() const noexcept;
+    // Historical diagnostic component; available after Close. Never use a
+    // moved-from owner for acquisition evidence.
+    const std::string& Component() const& noexcept;
+    const std::string& Component() const&& = delete;
+    // Historical acquisition identity, copied by value; never authority for
+    // current permissions. Available even after Close; do not query moved-from owners.
+    struct stat AcquiredMetadata() const noexcept;
     // Fresh stat of the held object, without resolving its former pathname.
     // It may immediately be stale: neither this observation nor matching
     // before/after stats prove an atomic content snapshot, absence of
     // concurrent writes, race-free authorization or exclusive hardlink
-    // membership. Requires a positive, caller-supplied fdinfo byte cap and
-    // trusted procfs.
-    Result<struct stat> Stat(std::size_t fdinfoByteCap) const;
+    // membership. Uses the acquisition-bound inspection budget and trusted procfs.
+    Result<struct stat> Stat() const;
     // Mount identity of this held descriptor, verified with its inode/type.
     // Unlike st_dev, this distinguishes a same-device bind mount.
-    Result<std::uint64_t> MountIdentity(std::size_t fdinfoByteCap) const;
+    Result<std::uint64_t> MountIdentity() const;
     // One syscall per method; callers retain existing rule mask, ordering and
     // hardlink checks. No ownership/mode transaction or rollback is implied.
     // A post-syscall verification failure can report an error after mutation.
-    Result<bool> SetOwnership(uid_t owner, gid_t group, std::size_t fdinfoByteCap) const;
-    Result<bool> SetMode(mode_t mode, std::size_t fdinfoByteCap) const;
+    Result<bool> SetOwnership(uid_t owner, gid_t group) const;
+    Result<bool> SetMode(mode_t mode) const;
     // Activates only a held regular file, using verified procfs alias identity
     // and mount checks. The new descriptor survives this Handle's destruction.
-    Result<ReadableFile> OpenReadOnly(std::size_t fdinfoByteCap) const;
-    Result<ReadableFile> OpenReadOnly(std::size_t fdinfoByteCap, ReadableFile::Policy policy) const;
+    Result<ReadableFile> OpenReadOnly() const;
+    Result<ReadableFile> OpenReadOnly(ReadableFile::Policy policy) const;
     // Enumerate through a verified read-only alias; only names escape.
     // Children must still be acquired from the live parent Path.
-    Result<DirectoryCursor> OpenChildren(std::size_t fdinfoByteCap) const;
+    Result<DirectoryCursor> OpenChildren() const;
     // Relinquish this pin before attempting its native close, exactly once.
-    // A failed close is returned unchanged on later calls, without retrying
-    // a descriptor number that may have been reused. Existing readable files
-    // remain valid.
-    // Destruction logs close failure only if no explicit attempt was made.
+    // A failed close is returned only on the actual attempt; later calls
+    // succeed without retrying a possibly reused number. Existing readable
+    // files remain valid. Descriptor logs native close errors.
     Result<bool> Close();
 
 private:
     // Path owns composition. The checked acquisition methods below are
     // private: no consumer can supply an fd.
     friend class Path;
-    Handle(Detail::Descriptor&& descriptor, Type type, std::string component, const struct stat& snapshot);
-    static Result<Handle> AcquireChild(const ContextInterface& context, const Detail::Descriptor& parentDirectory, std::string component, bool directory);
-    static Result<Handle> AcquireChild(const Handle& parent, std::string component, bool directory);
-    static Result<Handle> PinProcessRoot(const ContextInterface& context);
+    Handle(Detail::Descriptor&& descriptor, Type type, std::string component, const struct stat& snapshot, std::size_t fdinfoBytes);
+    static Result<Handle> PinProcessRoot(const ContextInterface& context, std::size_t fdinfoBytes);
     static Result<bool> RecognizeAcceptedRoot(const Handle& acceptedRoot, const Handle& candidate, std::size_t fdinfoByteCap);
-    Result<struct stat> InspectWithProcfs(const Detail::Descriptor& fdinfoDirectory, std::size_t fdinfoByteCap, std::uint64_t& mountId) const;
+    Result<struct stat> InspectWithProcfs(const Detail::VerifiedProcfs& procfs, std::uint64_t& mountId) const;
     void Swap(Handle& other) noexcept;
     int CloseOnce() noexcept;
 
-    const ContextInterface* mContext = nullptr;
     Detail::Descriptor mDescriptor;
     Type mType = Type::Directory;
     std::string mComponent;
     struct stat mSnapshot = {};
-    bool mPin = true;
-    int mCloseError = 0;
+    std::size_t mFdinfoBytes;
 };
 } // namespace Filesystem
 } // namespace ComplianceEngine

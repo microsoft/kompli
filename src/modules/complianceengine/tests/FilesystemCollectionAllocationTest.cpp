@@ -6,9 +6,12 @@
 #include <cerrno>
 #include <cstddef>
 #include <filesystem/FilesystemCollection.hpp>
+#include <filesystem/PathInternal.hpp>
 #include <gtest/gtest.h>
 #include <new>
 #include <string>
+#include <type_traits>
+#include <utility>
 
 namespace
 {
@@ -20,7 +23,30 @@ thread_local std::size_t copyBytes = 0;
 thread_local std::size_t armedCopies = 0;
 thread_local std::size_t allocationAttempts = 0;
 thread_local std::size_t failedCopies = 0;
+thread_local bool faultTransfers = false;
+thread_local std::size_t transferAllocations = 0;
 } // namespace
+
+namespace ComplianceEngine
+{
+namespace Filesystem
+{
+namespace Detail
+{
+struct ResolvedPathAllocationProbe
+{
+    static ResolvedPath Staged()
+    {
+        ResolvedPath stage;
+        stage.mEffectivePins->emplace_back(160, 'p');
+        stage.mFrames.emplace_back();
+        stage.mAccountedBytes = 160;
+        return stage;
+    }
+};
+} // namespace Detail
+} // namespace Filesystem
+} // namespace ComplianceEngine
 
 extern "C" void ArmFilesystemCollectionRootCopy(std::size_t bytes) noexcept
 {
@@ -40,6 +66,11 @@ extern "C" void DisarmFilesystemCollectionRootCopy() noexcept
 extern "C" void* __real__Znwm(std::size_t bytes);
 extern "C" void* __wrap__Znwm(std::size_t bytes)
 {
+    if (faultTransfers)
+    {
+        ++transferAllocations;
+        throw std::bad_alloc();
+    }
     if (copyBytes != 0)
     {
         ++allocationAttempts;
@@ -51,6 +82,47 @@ extern "C" void* __wrap__Znwm(std::size_t bytes)
         }
     }
     return __real__Znwm(bytes);
+}
+
+TEST(FilesystemCollectionAllocationTest, ResolverResultTransfersDoNotAllocate)
+{
+    using ComplianceEngine::Filesystem::Detail::ResolvedPath;
+    static_assert(std::is_nothrow_move_constructible<ResolvedPath>::value, "Resolver result transfer must be noexcept");
+    static_assert(std::is_nothrow_move_assignable<ResolvedPath>::value, "Resolver result replacement must be noexcept");
+    auto stage = ComplianceEngine::Filesystem::Detail::ResolvedPathAllocationProbe::Staged();
+    // Both owning deques have already allocated their maps. The Result
+    // transfer must move ownership, not construct replacement empty maps.
+    faultTransfers = true;
+    ComplianceEngine::Result<ResolvedPath> first(std::move(stage));
+    ComplianceEngine::Result<ResolvedPath> second(std::move(first));
+    faultTransfers = false;
+    EXPECT_TRUE(second.HasValue());
+    EXPECT_EQ(160u, second.Value().AccountedBytes());
+    EXPECT_EQ(0u, transferAllocations);
+}
+
+TEST(FilesystemCollectionAllocationTest, PathMoveAndResultTransferDoNotAllocate)
+{
+    static_assert(std::is_nothrow_move_constructible<ComplianceEngine::Filesystem::Path>::value, "Path move must be noexcept");
+    MockContext context;
+    ComplianceEngine::Filesystem::ResolverLimits limits;
+    limits.shared.retainedBytes = 262144;
+    ComplianceEngine::Filesystem::Path::Policy policy;
+    policy.mounts = ComplianceEngine::Filesystem::MountPolicy::AllowCrossing;
+    auto opened = ComplianceEngine::Filesystem::Path::Make(context, context.GetTempdirPath(), policy, limits);
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    ASSERT_TRUE(opened.Value().Is<ComplianceEngine::Filesystem::Path>());
+    auto path = ComplianceEngine::As<ComplianceEngine::Filesystem::Path>(std::move(opened.Value()));
+    faultTransfers = true;
+    ComplianceEngine::Filesystem::Path moved(std::move(path));
+    using Path = ComplianceEngine::Filesystem::Path;
+    using Outcome = ComplianceEngine::Variant<Path, Path::RejectionReason>;
+    ComplianceEngine::Result<Outcome> returned(Outcome(ComplianceEngine::InPlaceType<Path>{}, std::move(moved)));
+    ComplianceEngine::Result<Outcome> transferred(std::move(returned));
+    faultTransfers = false;
+    EXPECT_TRUE(transferred.HasValue());
+    EXPECT_EQ(0u, transferAllocations);
+    EXPECT_TRUE(ComplianceEngine::As<Path>(transferred.Value()).Close().HasValue());
 }
 
 TEST(FilesystemCollectionAllocationTest, RootCopyAllocationFailureReturnsENOMEMBeforeLookup)

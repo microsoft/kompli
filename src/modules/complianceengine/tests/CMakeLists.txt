@@ -210,6 +210,7 @@ add_executable(complianceenginetests
     EngineTest.cpp
     EvaluatorTest.cpp
     FileObjectCollectorTest.cpp
+    DescriptorBoundaryTest.cpp
     LinesRangeTest.cpp
     FilesystemCollectionTest.cpp
     PathTest.cpp

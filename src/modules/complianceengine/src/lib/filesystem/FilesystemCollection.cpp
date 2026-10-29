@@ -67,6 +67,11 @@ Result<std::size_t> Limit(long long number, const char* name)
 
 Result<bool> Validate(const ResolvedFilesystemCollectionRequest& request)
 {
+    if (request.limits.fdinfoBytes == 0 || request.limits.fdinfoBytes >= std::string().max_size() || request.limits.fdinfoBytes > std::vector<char>().max_size() ||
+        request.limits.fdinfoBytes > static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()))
+    {
+        return Error("Invalid procfs descriptor information byte limit", EINVAL);
+    }
     if (request.rootPath.empty())
     {
         return Error("Filesystem collection root path must not be empty", EINVAL);
@@ -181,7 +186,7 @@ Filesystem::ResolverLimits AcquisitionBudget(const ResolvedFilesystemCollectionR
     budget.shared.work = work;
     budget.shared.liveDescriptors = limits.openDirectories + components + 8;
     budget.shared.retainedBytes = std::max(limits.retainedPathBytes, minimum);
-    budget.shared.fdinfoBytes = limits.fullPathBytes;
+    budget.shared.fdinfoBytes = limits.fdinfoBytes;
     budget.linkTargetBytes = limits.fullPathBytes;
     budget.linkExpansions = limits.entryWork;
     budget.depth = limits.operationalDescent + components + 1;
@@ -309,6 +314,12 @@ Result<ResolvedFilesystemCollectionRequest> ResolveFilesystemCollectionRequest(c
             return limit.Error();
         }
         resolved.limits.fullPathBytes = limit.Value();
+        limit = Limit(request.fdinfoBytes, "fdinfo byte limit");
+        if (!limit.HasValue())
+        {
+            return limit.Error();
+        }
+        resolved.limits.fdinfoBytes = limit.Value();
         limit = Limit(request.retainedPathBytes, "retained path byte limit");
         if (!limit.HasValue())
         {
@@ -439,7 +450,7 @@ struct FileRange::State
     {
         const std::string& rootName = path->DiagnosticPath();
         const bool directory = path->Root().AcquiredType() == Handle::Type::Directory;
-        auto rootMount = path->Root().MountIdentity(request.limits.fullPathBytes);
+        auto rootMount = path->Root().MountIdentity();
         if (!rootMount.HasValue())
         {
             return std::move(rootMount).Error();
@@ -464,14 +475,14 @@ struct FileRange::State
             Frame frame;
             frame.path = rootName;
             frame.bytes = frame.path.size() + 1;
-            frame.device = path->Leaf().Stat().st_dev;
-            frame.inode = path->Leaf().Stat().st_ino;
+            frame.device = path->Leaf().AcquiredMetadata().st_dev;
+            frame.inode = path->Leaf().AcquiredMetadata().st_ino;
             auto charged = Charge(frame.bytes, rootName);
             if (!charged.HasValue())
             {
                 return charged;
             }
-            auto opened = path->Leaf().OpenChildren(request.limits.fullPathBytes);
+            auto opened = path->Leaf().OpenChildren();
             if (!opened.HasValue())
             {
                 return std::move(opened).Error();
@@ -497,7 +508,6 @@ struct FileRange::State
     Result<bool> PushChild(const Filesystem::DirectoryChild& child, FilesystemCollectionEntry& entry)
     {
         ExtensionPolicy extension;
-        extension.symlinks = SymlinkPolicy::Follow;
         extension.mounts = MountPolicy::AllowCrossing;
         extension.unsupported = request.unsupported;
         extension.fileLinks = request.childFileLinkAction;
@@ -540,7 +550,7 @@ struct FileRange::State
             }
             return Exclude(entry.path, "filesystem scope");
         }
-        auto mount = handle.MountIdentity(request.limits.fullPathBytes);
+        auto mount = handle.MountIdentity();
         if (!mount.HasValue())
         {
             return std::move(mount).Error();
@@ -575,7 +585,7 @@ struct FileRange::State
             {
                 for (const auto& ancestor : frames)
                 {
-                    if ((ancestor.device == handle.Stat().st_dev) && (ancestor.inode == handle.Stat().st_ino))
+                    if ((ancestor.device == handle.AcquiredMetadata().st_dev) && (ancestor.inode == handle.AcquiredMetadata().st_ino))
                     {
                         return Error("Directory ancestor cycle at '" + entry.path + "'", ELOOP);
                     }
@@ -583,8 +593,8 @@ struct FileRange::State
                 Frame frame;
                 frame.path = entry.path;
                 frame.bytes = frame.path.size() + 1;
-                frame.device = handle.Stat().st_dev;
-                frame.inode = handle.Stat().st_ino;
+                frame.device = handle.AcquiredMetadata().st_dev;
+                frame.inode = handle.AcquiredMetadata().st_ino;
                 auto charged = Charge(frame.bytes, entry.path);
                 if (!charged.HasValue())
                 {
@@ -652,7 +662,7 @@ struct FileRange::State
                 {
                     return budget.Error();
                 }
-                auto opened = path->Leaf().OpenChildren(request.limits.fullPathBytes);
+                auto opened = path->Leaf().OpenChildren();
                 if (!opened.HasValue())
                 {
                     return std::move(opened).Error();
@@ -863,8 +873,11 @@ Result<bool> ValidateContinuation(const Path& root, const FilesystemTraversalPol
     if (policy.direction != FilesystemDirection::None && policy.direction != FilesystemDirection::Down)
         return Error("Invalid filesystem collection direction", EINVAL);
     if (policy.maxDepth < -1 || limits.operationalDescent == 0 || limits.entryWork == 0 || limits.directoryWidth == 0 || limits.fullPathBytes == 0 ||
-        limits.retainedPathBytes == 0 || limits.openDirectories == 0)
+        limits.fdinfoBytes == 0 || limits.fdinfoBytes >= std::string().max_size() || limits.fdinfoBytes > std::vector<char>().max_size() ||
+        limits.fdinfoBytes > static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()) || limits.retainedPathBytes == 0 || limits.openDirectories == 0)
         return Error("Invalid filesystem continuation limits", EINVAL);
+    if (limits.fdinfoBytes < root.Limits().shared.fdinfoBytes)
+        return Error("Filesystem continuation fdinfo byte limit is below the acquired root's bound inspection limit", EINVAL);
     if (policy.childFileLinkAction != SymlinkPolicy::Follow && policy.childFileLinkAction != SymlinkPolicy::DoNotFollow)
         return Error("Invalid child file link policy", EINVAL);
     if (policy.childDirectoryLinkAction != SymlinkPolicy::Follow && policy.childDirectoryLinkAction != SymlinkPolicy::DoNotFollow)

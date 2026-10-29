@@ -26,7 +26,6 @@
 
 using ComplianceEngine::Filesystem::ExtensionPolicy;
 using ComplianceEngine::Filesystem::Handle;
-using ComplianceEngine::Filesystem::HardlinkPolicy;
 using ComplianceEngine::Filesystem::MountPolicy;
 using ComplianceEngine::Filesystem::Path;
 using ComplianceEngine::Filesystem::ReadableFile;
@@ -64,19 +63,7 @@ std::size_t OpenDescriptors()
 
 ComplianceEngine::Result<Descriptor> VerifiedTestDescriptor(const ComplianceEngine::ContextInterface& context)
 {
-    VerifiedProcfs procfs(context);
-    auto opened = procfs.Open();
-    if (!opened.HasValue())
-    {
-        return std::move(opened).Error();
-    }
-    Descriptor owned(std::move(procfs.proc));
-    auto closed = procfs.Close();
-    if (!closed.HasValue())
-    {
-        return std::move(closed).Error();
-    }
-    return owned;
+    return context.OpenAbsolutePin("/proc");
 }
 
 struct ThrowingLogContext : NiceMock<MockContext>
@@ -259,13 +246,13 @@ TEST_F(ReadableFileTest, AliasOpenFailureDoesNotReopenNameOrLeak)
         }
         return status;
     });
-    auto readable = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto readable = pinned.Value().OpenReadOnly();
     ASSERT_FALSE(readable.HasValue());
     EXPECT_EQ(EACCES, readable.Error().code);
     EXPECT_TRUE(cleanupFailed);
     EXPECT_EQ(before, OpenDescriptors());
     throwAlias = true;
-    EXPECT_THROW((void)pinned.Value().OpenReadOnly(fdinfoCap), std::runtime_error);
+    EXPECT_THROW((void)pinned.Value().OpenReadOnly(), std::runtime_error);
     EXPECT_EQ(before, OpenDescriptors());
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
 }
@@ -298,7 +285,7 @@ TEST_F(ReadableFileTest, AliasOutputClosesWhenProcfsHelperCloseFails)
         }
         return status;
     });
-    auto readable = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto readable = pinned.Value().OpenReadOnly();
     ASSERT_FALSE(readable.HasValue());
     EXPECT_EQ(EIO, readable.Error().code);
     EXPECT_TRUE(aliasOpened);
@@ -312,13 +299,13 @@ TEST_F(ReadableFileTest, SurvivesPinAndNameReplacementAndInspectsReadableDescrip
     const std::string original = context.MakeTempfile("first");
     auto pinned = Pin(Component(original));
     ASSERT_TRUE(pinned.HasValue());
-    const ino_t inode = pinned.Value().Stat().st_ino;
-    auto pinnedBefore = pinned.Value().Stat(fdinfoCap);
+    const ino_t inode = pinned.Value().AcquiredMetadata().st_ino;
+    auto pinnedBefore = pinned.Value().Stat();
     ASSERT_TRUE(pinnedBefore.HasValue());
     EXPECT_EQ(inode, pinnedBefore.Value().st_ino);
     ASSERT_EQ(0, ::rename(original.c_str(), (original + ".old").c_str()));
     ASSERT_EQ(0, ::symlink("/dev/zero", original.c_str()));
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue()) << activated.Error().message;
     ReadableFile readable = std::move(activated).Value();
     pinned = ComplianceEngine::Error("Release pin", EINVAL);
@@ -383,7 +370,7 @@ TEST_F(ReadableFileTest, NativeDescriptorZeroRemainsOwnedThroughEofUntilClose)
                 }
                 return descriptor;
             });
-            auto acquired = pinned.Value().OpenReadOnly(fdinfoCap);
+            auto acquired = pinned.Value().OpenReadOnly();
             if (!mapped || !acquired.HasValue())
             {
                 ::_exit(4);
@@ -425,7 +412,7 @@ TEST_F(ReadableFileTest, ReturnsOwnedBinaryChunksWithoutTextFiltering)
     const std::string source = context.MakeTempfile(payload);
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
 
@@ -456,7 +443,7 @@ TEST_F(ReadableFileTest, ShortNativeReadsFillCapacityAtShrinkingOffsetsWithoutEo
     const std::string source = context.MakeTempfile(std::string("a\0bcd", 5));
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_FALSE(readable.AtEnd());
@@ -490,7 +477,7 @@ TEST_F(ReadableFileTest, EofAfterShortProgressReturnsEngagedPartialButImmediateE
     const std::string source = context.MakeTempfile("ab");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_FALSE(readable.AtEnd());
@@ -521,8 +508,8 @@ TEST_F(ReadableFileTest, ObservedEofTransfersWithOwnershipAndResetsOnClose)
     const std::string source = context.MakeTempfile("ab");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto first = pinned.Value().OpenReadOnly(fdinfoCap);
-    auto second = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto first = pinned.Value().OpenReadOnly();
+    auto second = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(first.HasValue());
     ASSERT_TRUE(second.HasValue());
     ReadableFile original = std::move(first).Value();
@@ -556,7 +543,7 @@ TEST_F(ReadableFileTest, InterruptedShortReadsShareCumulativeBudgetAndAllowProgr
     const std::string source = context.MakeTempfile("abcde");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap, ReadableFile::Policy(2));
+    auto activated = pinned.Value().OpenReadOnly(ReadableFile::Policy(2));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     int calls = 0;
@@ -604,7 +591,7 @@ TEST_F(ReadableFileTest, NativeErrorAfterShortProgressDoesNotReturnPartialDataOr
     const std::string source = context.MakeTempfile("abcde");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
@@ -631,7 +618,7 @@ TEST_F(ReadableFileTest, ExhaustedEintrAfterShortProgressIsErrorNotPartialData)
     const std::string source = context.MakeTempfile("abc");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap, ReadableFile::Policy(0));
+    auto activated = pinned.Value().OpenReadOnly(ReadableFile::Policy(0));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 3)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
@@ -657,7 +644,7 @@ TEST_F(ReadableFileTest, OverreportOnReducedRemainingRequestFailsBeforePublishin
     const std::string source = context.MakeTempfile("abcde");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
@@ -681,7 +668,7 @@ TEST_F(ReadableFileTest, ZeroBudgetPreservesInterruptedReadAndInspectErrnosWitho
     const std::string source = context.MakeTempfile("x");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap, ReadableFile::Policy(0));
+    auto activated = pinned.Value().OpenReadOnly(ReadableFile::Policy(0));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
@@ -726,7 +713,7 @@ TEST_F(ReadableFileTest, InterruptedReadConsumesOnlyRetriesAndPreservesBinaryDat
     const std::string source = context.MakeTempfile(std::string("a\0b", 3));
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap, ReadableFile::Policy(2));
+    auto activated = pinned.Value().OpenReadOnly(ReadableFile::Policy(2));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 8))
@@ -758,7 +745,7 @@ TEST_F(ReadableFileTest, ExhaustedInterruptedReadReturnsNativeEintrAfterLimitPlu
     const std::string source = context.MakeTempfile("x");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap, ReadableFile::Policy(1));
+    auto activated = pinned.Value().OpenReadOnly(ReadableFile::Policy(1));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(2).WillRepeatedly([](int, void*, std::size_t) -> ssize_t {
@@ -780,7 +767,7 @@ TEST_F(ReadableFileTest, InterruptedBudgetMovesWithReadableAcrossSeparateReads)
     const std::string source = context.MakeTempfile("ab");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap, ReadableFile::Policy(1));
+    auto activated = pinned.Value().OpenReadOnly(ReadableFile::Policy(1));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     int calls = 0;
@@ -815,7 +802,7 @@ TEST_F(ReadableFileTest, NonInterruptedNativeErrorsNeverSpendRetryBudget)
     const std::string source = context.MakeTempfile("x");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     for (const int failure : {EAGAIN, EIO})
@@ -840,7 +827,7 @@ TEST_F(ReadableFileTest, EmptyFilePositiveReadReturnsEof)
     const std::string source = context.MakeTempfile("");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     auto metadata = readable.Stat();
@@ -863,7 +850,7 @@ TEST_F(ReadableFileTest, OverreportedReadIsAnErrorNotDataOrEof)
     const std::string source = context.MakeTempfile("x");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t { return 2; });
@@ -882,7 +869,7 @@ TEST_F(ReadableFileTest, ThrowingReadPropagatesWithoutInvalidatingDescriptor)
     const std::string source = context.MakeTempfile("x");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t { throw std::bad_alloc(); });
@@ -918,7 +905,7 @@ TEST_F(ReadableFileTest, CheckedLeafAndPathReleasePreservesIndependentReadable)
     ASSERT_TRUE(popped.HasValue());
     Handle leaf = std::move(popped).Value();
     EXPECT_GT(path.RetainedDescriptors(), 0U);
-    auto activated = leaf.OpenReadOnly(fdinfoCap);
+    auto activated = leaf.OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     const std::size_t pins = path.RetainedDescriptors();
@@ -929,10 +916,10 @@ TEST_F(ReadableFileTest, CheckedLeafAndPathReleasePreservesIndependentReadable)
     EXPECT_EQ(0U, path.Size());
     EXPECT_EQ(0U, path.RetainedDescriptors()); // the popped handle belongs to the caller
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    EXPECT_TRUE(leaf.Stat(fdinfoCap).HasValue());
+    EXPECT_TRUE(leaf.Stat().HasValue());
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int fd) { return ::close(fd); });
     EXPECT_TRUE(leaf.Close().HasValue());
-    EXPECT_EQ(EBADF, leaf.OpenReadOnly(fdinfoCap).Error().code);
+    EXPECT_EQ(EBADF, leaf.OpenReadOnly().Error().code);
     EXPECT_EQ(0U, path.RetainedDescriptors());
     EXPECT_EQ(0U, path.RetainedBytes());
     EXPECT_EQ(EINVAL, path.Push("other", CrossMountExtension()).Error().code);
@@ -965,23 +952,25 @@ TEST_F(ReadableFileTest, RejectsDirectoryInvalidCapAndPinInspectionFailureWithou
         auto directory = Path::Make(context, context.GetTempdirPath(), policy, limits);
         ASSERT_TRUE(directory.HasValue());
         ASSERT_TRUE(directory.Value().Is<Path>());
-        auto wrongType = ComplianceEngine::As<Path>(directory.Value()).Leaf().OpenReadOnly(fdinfoCap);
+        auto wrongType = ComplianceEngine::As<Path>(directory.Value()).Leaf().OpenReadOnly();
         ASSERT_FALSE(wrongType.HasValue());
         EXPECT_EQ(EINVAL, wrongType.Error().code);
         const std::string source = context.MakeTempfile("x");
         auto pinned = Pin(Component(source));
         ASSERT_TRUE(pinned.HasValue());
-        auto invalidCap = pinned.Value().OpenReadOnly(0);
+        limits.shared.fdinfoBytes = 0;
+        auto invalidCap = Path::Make(context, source, policy, limits);
         ASSERT_FALSE(invalidCap.HasValue());
         EXPECT_EQ(EINVAL, invalidCap.Error().code);
-        auto shortCap = pinned.Value().OpenReadOnly(1);
-        ASSERT_FALSE(shortCap.HasValue());
-        EXPECT_EQ(E2BIG, shortCap.Error().code);
+        limits.shared.fdinfoBytes = std::numeric_limits<std::size_t>::max();
+        auto oversizedCap = Path::Make(context, source, policy, limits);
+        ASSERT_FALSE(oversizedCap.HasValue());
+        EXPECT_EQ(EINVAL, oversizedCap.Error().code);
         EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(1).WillOnce([](int, struct stat*) {
             errno = EIO;
             return -1;
         });
-        auto failed = pinned.Value().OpenReadOnly(fdinfoCap);
+        auto failed = pinned.Value().OpenReadOnly();
         ASSERT_FALSE(failed.HasValue());
         EXPECT_EQ(EIO, failed.Error().code);
     }
@@ -993,7 +982,7 @@ TEST_F(ReadableFileTest, CloseFailureIsReportedOnceAndDoesNotCloseReusedDescript
     const std::string source = context.MakeTempfile("x");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     pinned = ComplianceEngine::Error("Release pin", EINVAL);
     int reused = -1;
@@ -1032,8 +1021,8 @@ TEST_F(ReadableFileTest, FailedCloseTransfersNoErrorThroughMoveConstructionOrAss
     const std::string source = context.MakeTempfile("x");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto first = pinned.Value().OpenReadOnly(fdinfoCap);
-    auto second = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto first = pinned.Value().OpenReadOnly();
+    auto second = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(first.HasValue());
     ASSERT_TRUE(second.HasValue());
     pinned = ComplianceEngine::Error("Release pin", EINVAL);
@@ -1068,7 +1057,7 @@ TEST_F(ReadableFileTest, ThrowingNativeCloseReportsEioOnceAndDoesNotRetry)
     const std::string source = context.MakeTempfile("x");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     pinned = ComplianceEngine::Error("Release pin", EINVAL);
     {
@@ -1093,7 +1082,7 @@ TEST_F(ReadableFileTest, DestructorContainsThrowingLogAfterFailedNativeClose)
     {
         auto pinned = Pin(selectedContext, Component(source));
         ASSERT_TRUE(pinned.HasValue());
-        auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
+        auto activated = pinned.Value().OpenReadOnly();
         ASSERT_TRUE(activated.HasValue());
         pinned = ComplianceEngine::Error("Release pin", EINVAL);
         testing::internal::CaptureStderr();
@@ -1127,8 +1116,8 @@ TEST_F(ReadableFileTest, MoveAssignmentContainsThrowingLogAndRetainsIncomingOwne
         auto newPin = Pin(selectedContext, Component(newSource));
         ASSERT_TRUE(oldPin.HasValue());
         ASSERT_TRUE(newPin.HasValue());
-        auto oldOpened = oldPin.Value().OpenReadOnly(fdinfoCap);
-        auto newOpened = newPin.Value().OpenReadOnly(fdinfoCap);
+        auto oldOpened = oldPin.Value().OpenReadOnly();
+        auto newOpened = newPin.Value().OpenReadOnly();
         ASSERT_TRUE(oldOpened.HasValue());
         ASSERT_TRUE(newOpened.HasValue());
         oldPin = ComplianceEngine::Error("Release pin", EINVAL);
@@ -1179,8 +1168,8 @@ TEST_F(ReadableFileTest, DestructorAndMoveAssignmentCloseOnce)
     {
         auto pinned = Pin(Component(source));
         ASSERT_TRUE(pinned.HasValue());
-        auto first = pinned.Value().OpenReadOnly(fdinfoCap);
-        auto second = pinned.Value().OpenReadOnly(fdinfoCap);
+        auto first = pinned.Value().OpenReadOnly();
+        auto second = pinned.Value().OpenReadOnly();
         ASSERT_TRUE(first.HasValue());
         ASSERT_TRUE(second.HasValue());
         pinned = ComplianceEngine::Error("Release pin", EINVAL);
@@ -1206,8 +1195,8 @@ TEST_F(ReadableFileTest, SameContextMoveConstructorAssignmentAndSelfMoveKeepSing
     const std::string source = context.MakeTempfile("x");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
-    auto first = pinned.Value().OpenReadOnly(fdinfoCap);
-    auto second = pinned.Value().OpenReadOnly(fdinfoCap);
+    auto first = pinned.Value().OpenReadOnly();
+    auto second = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(first.HasValue());
     ASSERT_TRUE(second.HasValue());
     pinned = ComplianceEngine::Error("Release pin", EINVAL);
@@ -1247,8 +1236,8 @@ TEST_F(ReadableFileTest, CrossContextMoveAssignmentClosesOldOwnerAndRoutesIncomi
     auto foreignPin = Pin(foreignContext, Component(newPath));
     ASSERT_TRUE(pinned.HasValue());
     ASSERT_TRUE(foreignPin.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
-    auto foreignActivated = foreignPin.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly();
+    auto foreignActivated = foreignPin.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ASSERT_TRUE(foreignActivated.HasValue());
     pinned = ComplianceEngine::Error("Release pin", EINVAL);
@@ -1312,8 +1301,8 @@ TEST_F(ReadableFileTest, CrossContextMoveReplacementContainsOldOwnerLoggingFault
     auto newPin = Pin(newContext, Component(newPath));
     ASSERT_TRUE(oldPin.HasValue());
     ASSERT_TRUE(newPin.HasValue());
-    auto oldOpened = oldPin.Value().OpenReadOnly(fdinfoCap);
-    auto newOpened = newPin.Value().OpenReadOnly(fdinfoCap);
+    auto oldOpened = oldPin.Value().OpenReadOnly();
+    auto newOpened = newPin.Value().OpenReadOnly();
     ASSERT_TRUE(oldOpened.HasValue());
     ASSERT_TRUE(newOpened.HasValue());
     oldPin = ComplianceEngine::Error("Release pin", EINVAL);
@@ -1349,8 +1338,8 @@ TEST_F(ReadableFileTest, CrossContextClosedAndMovedFromAssignmentsTransferEofAnd
     auto foreignPin = Pin(foreignContext, Component(newPath));
     ASSERT_TRUE(pinned.HasValue());
     ASSERT_TRUE(foreignPin.HasValue());
-    auto activated = pinned.Value().OpenReadOnly(fdinfoCap);
-    auto foreignActivated = foreignPin.Value().OpenReadOnly(fdinfoCap);
+    auto activated = pinned.Value().OpenReadOnly();
+    auto foreignActivated = foreignPin.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ASSERT_TRUE(foreignActivated.HasValue());
     pinned = ComplianceEngine::Error("Release pin", EINVAL);

@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -29,16 +30,15 @@ namespace Detail
 class ResolvedPath;
 } // namespace Detail
 
-// Per-call ceilings with conservative defaults; every member must be positive.
-// Defaults are budgets, not an authorization to access a path.
+// Conservative budgets, not authorization to access a path. All must be positive.
 struct PrefixLimits
 {
-    std::size_t targetBytes = 4096;
-    std::size_t components = 128;
-    std::size_t work = 100000;
-    std::size_t liveDescriptors = 256;
-    std::size_t retainedBytes = std::size_t{1024} * 1024;
-    std::size_t fdinfoBytes = 4096;
+    std::size_t targetBytes = 4096;                       // each absolute symlink target
+    std::size_t components = 128;                         // resolution steps per confined ResolveChild call
+    std::size_t work = 100000;                            // cumulative for Make and subsequent Push calls, including failed attempts
+    std::size_t liveDescriptors = 256;                    // held Path pins plus current resolution and helper headroom
+    std::size_t retainedBytes = std::size_t{1024} * 1024; // Path-owned state and current resolution's transient storage
+    std::size_t fdinfoBytes = 4096;                       // each pinned fdinfo read
 };
 enum class MountPolicy
 {
@@ -48,24 +48,9 @@ enum class MountPolicy
 struct ResolverLimits
 {
     PrefixLimits shared;
-    std::size_t linkTargetBytes = 4096;
-    std::size_t linkExpansions = 128;
-    std::size_t depth = 128;
-};
-
-namespace Detail
-{
-// Source-compatible spellings for limits and policy formerly declared here.
-// New consumers use the Filesystem names above without an internal include.
-using PrefixLimits = ::ComplianceEngine::Filesystem::PrefixLimits;
-using ResolverLimits = ::ComplianceEngine::Filesystem::ResolverLimits;
-using MountPolicy = ::ComplianceEngine::Filesystem::MountPolicy;
-} // namespace Detail
-
-enum class HardlinkPolicy
-{
-    Permit,
-    RequireUnique // unsupported until inspection timing/semantics are agreed
+    std::size_t linkTargetBytes = 4096; // each pinned symlink read
+    std::size_t linkExpansions = 128;   // per confined ResolveChild call
+    std::size_t depth = 128;            // physical directory stack per confined ResolveChild call
 };
 enum class UnsupportedTypeAction
 {
@@ -79,9 +64,7 @@ enum class NonFollowedLinkAction
 };
 struct ExtensionPolicy
 {
-    SymlinkPolicy symlinks = SymlinkPolicy::DoNotFollow;
     MountPolicy mounts = MountPolicy::StayOnRootMount;
-    HardlinkPolicy hardlinks = HardlinkPolicy::Permit;
     UnsupportedTypeAction unsupported = UnsupportedTypeAction::Reject;
     SymlinkPolicy fileLinks = SymlinkPolicy::DoNotFollow;
     SymlinkPolicy directoryLinks = SymlinkPolicy::DoNotFollow;
@@ -232,7 +215,10 @@ private:
         bool logicalLeaf;
     };
     static constexpr std::size_t NoIndex = static_cast<std::size_t>(-1);
-    std::deque<Entry> mEntries;
+    // Own the deque allocation separately: moving a deque itself may allocate
+    // an empty map even when its declared move constructor is noexcept.
+    // A moved-from Path has no deque and remains a valid empty owner.
+    std::unique_ptr<std::deque<Entry>> mEntries;
     std::size_t mLeafIndex = NoIndex;
     std::size_t mSize = 0;
     std::string mDiagnosticPath;
