@@ -135,7 +135,7 @@ public:
         return this->mValue != nullptr;
     }
 
-    T ValueOr(T default_value) const noexcept(NoexceptCopyable<T>())
+    T ValueOr(T default_value) const noexcept(NoexceptCopyable<T>() && NoexceptMovable<T>())
     {
         if (nullptr == this->mValue)
         {

@@ -252,7 +252,7 @@ public:
         return HasValue();
     }
 
-    T ValueOr(T default_value) const& noexcept(NoexceptCopyable<T>())
+    T ValueOr(T default_value) const& noexcept(NoexceptCopyable<T>() && NoexceptMovable<T>())
     {
         if (this->mTag == Tag::Error)
         {

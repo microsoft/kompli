@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 #include <memory>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -26,12 +27,54 @@ struct CopyConstructibleNotAssignable
     int number;
 };
 
+struct FallbackState
+{
+    int copies = 0;
+    int moves = 0;
+    bool throwOnMove = false;
+};
+
+struct ThrowingFallbackMove
+{
+    FallbackState* state;
+    int value;
+
+    ThrowingFallbackMove(FallbackState& counters, int number) noexcept
+        : state(&counters),
+          value(number)
+    {
+    }
+
+    ThrowingFallbackMove(const ThrowingFallbackMove& other) noexcept
+        : state(other.state),
+          value(other.value)
+    {
+        ++state->copies;
+    }
+
+    ThrowingFallbackMove(ThrowingFallbackMove&& other)
+        : state(other.state),
+          value(other.value)
+    {
+        ++state->moves;
+        if (state->throwOnMove)
+        {
+            throw std::runtime_error("fallback move");
+        }
+    }
+};
+
 static_assert(std::is_copy_constructible<Result<int>>::value, "copyable Result must be copy constructible");
 static_assert(std::is_copy_assignable<Result<int>>::value, "copyable Result must be copy assignable");
 static_assert(!std::is_copy_constructible<Result<std::unique_ptr<int>>>::value, "move-only Result must not be copy constructible");
 static_assert(!std::is_copy_assignable<Result<std::unique_ptr<int>>>::value, "move-only Result must not be copy assignable");
 static_assert(std::is_copy_assignable<Result<CopyConstructibleNotAssignable>>::value, "Result assignment reconstructs its value");
 static_assert(std::is_same<decltype(std::declval<Result<int>&&>().Value()), int>::value, "rvalue Result access returns by value");
+static_assert(noexcept(std::declval<const Result<int>&>().ValueOr(std::declval<const int&>())), "nonthrowing scalar ValueOr remains nonthrowing");
+static_assert(std::is_nothrow_copy_constructible<ThrowingFallbackMove>::value, "test isolates a throwing fallback move");
+static_assert(!std::is_nothrow_move_constructible<ThrowingFallbackMove>::value, "test fallback move can throw");
+static_assert(!noexcept(std::declval<const Result<ThrowingFallbackMove>&>().ValueOr(std::declval<const ThrowingFallbackMove&>())),
+    "const ValueOr must permit a fallback move to throw");
 } // namespace
 
 class ResultTest : public ::testing::Test
@@ -163,6 +206,26 @@ TEST_F(ResultTest, ValueOr)
     ASSERT_EQ(result.ValueOr(42), 42);
     result = 43;
     ASSERT_EQ(result.ValueOr(42), 43);
+}
+
+TEST_F(ResultTest, ConstValueOrPropagatesFallbackMoveAndCopiesPresentValue)
+{
+    FallbackState state;
+    const ThrowingFallbackMove fallback(state, 42);
+    const Result<ThrowingFallbackMove> error(Error("error"));
+    state.throwOnMove = true;
+    EXPECT_THROW(error.ValueOr(fallback), std::runtime_error);
+    EXPECT_EQ(1, state.copies);
+    EXPECT_EQ(1, state.moves);
+
+    state.throwOnMove = false;
+    const Result<ThrowingFallbackMove> present(ThrowingFallbackMove(state, 7));
+    const int movesBefore = state.moves;
+    const int copiesBefore = state.copies;
+    state.throwOnMove = true;
+    EXPECT_EQ(7, present.ValueOr(fallback).value);
+    EXPECT_EQ(copiesBefore + 2, state.copies);
+    EXPECT_EQ(movesBefore, state.moves);
 }
 
 TEST_F(ResultTest, ArrowOperator)

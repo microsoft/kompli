@@ -82,56 +82,65 @@ expect_variant_compile_failure(22 "cv-mismatched reference As" "Variant query re
 expect_variant_compile_failure(23 "unlisted value Get" "Variant query requires a listed alternative")
 expect_variant_compile_failure(24 "cv-mismatched value Get" "Variant query requires the exact listed cv-qualified type")
 
-# Independently check wrapper copy operations and unsupported payloads against
-# a valid C++11 translation unit before accepting diagnostic-checked failures.
-set(wrapper_compile_case_source "${CMAKE_CURRENT_SOURCE_DIR}/WrapperCompileCase.cpp")
+# Independently check each class's copy operations and unsupported payloads
+# against its own valid C++11 translation unit before accepting failures.
+set(optional_compile_case_source "${CMAKE_CURRENT_SOURCE_DIR}/OptionalCompileCase.cpp")
+set(result_compile_case_source "${CMAKE_CURRENT_SOURCE_DIR}/ResultCompileCase.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${wrapper_compile_case_source}"
+    "${optional_compile_case_source}"
+    "${result_compile_case_source}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/lib/Optional.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/lib/Result.h"
 )
-try_compile(wrapper_compile_control
-    "${CMAKE_CURRENT_BINARY_DIR}/wrapper-compile/control"
-    "${wrapper_compile_case_source}"
-    CMAKE_FLAGS ${variant_compile_flags}
-    COMPILE_DEFINITIONS "-DWRAPPER_COMPILE_CASE=0"
-    OUTPUT_VARIABLE wrapper_compile_output
-)
-if(NOT wrapper_compile_control)
-    message(FATAL_ERROR "Wrapper compile control failed:\n${wrapper_compile_output}")
-endif()
-message(STATUS "Optional/Result C++11 compile control: passed")
 
-function(expect_wrapper_compile_failure case_number case_name diagnostic)
-    set(result_var "wrapper_compile_case_${case_number}")
+function(check_wrapper_compile_case subject source case_number case_name diagnostic)
+    string(TOLOWER "${subject}" subject_lower)
+    string(TOUPPER "${subject}" subject_upper)
+    if(case_number EQUAL 0)
+        set(result_var "${subject_lower}_compile_control")
+        set(case_dir "control")
+    else()
+        set(result_var "${subject_lower}_compile_case_${case_number}")
+        set(case_dir "${case_number}")
+    endif()
     try_compile(${result_var}
-        "${CMAKE_CURRENT_BINARY_DIR}/wrapper-compile/${case_number}"
-        "${wrapper_compile_case_source}"
+        "${CMAKE_CURRENT_BINARY_DIR}/${subject_lower}-compile/${case_dir}"
+        "${source}"
         CMAKE_FLAGS ${variant_compile_flags}
-        COMPILE_DEFINITIONS "-DWRAPPER_COMPILE_CASE=${case_number}"
+        COMPILE_DEFINITIONS "-D${subject_upper}_COMPILE_CASE=${case_number}"
         OUTPUT_VARIABLE compile_output
     )
+    if(case_number EQUAL 0)
+        if(NOT ${result_var})
+            message(FATAL_ERROR "${subject} compile control failed:\n${compile_output}")
+        endif()
+        message(STATUS "${subject} C++11 compile control: passed")
+        return()
+    endif()
     if(${result_var})
-        message(FATAL_ERROR "Optional/Result ${case_name} unexpectedly compiled")
+        message(FATAL_ERROR "${subject} ${case_name} unexpectedly compiled")
     endif()
     string(FIND "${compile_output}" "${diagnostic}" diagnostic_position)
     if(diagnostic_position EQUAL -1)
-        message(FATAL_ERROR "Optional/Result ${case_name} failed for the wrong reason:\n${compile_output}")
+        message(FATAL_ERROR "${subject} ${case_name} failed for the wrong reason:\n${compile_output}")
     endif()
-    message(STATUS "Optional/Result C++11 negative compile ${case_name}: rejected as expected")
+    message(STATUS "${subject} C++11 negative compile ${case_name}: rejected as expected")
 endfunction()
 
-expect_wrapper_compile_failure(1 "Optional move-only copy construction" "deleted")
-expect_wrapper_compile_failure(2 "Optional move-only copy assignment" "deleted")
-expect_wrapper_compile_failure(3 "Result move-only copy construction" "deleted")
-expect_wrapper_compile_failure(4 "Result move-only copy assignment" "deleted")
-expect_wrapper_compile_failure(5 "Optional const mutation" "cannot assign to return value")
-expect_wrapper_compile_failure(6 "Result const mutation" "cannot assign to return value")
-expect_wrapper_compile_failure(7 "Optional void" "Optional cannot hold void")
-expect_wrapper_compile_failure(8 "Optional reference" "Optional cannot hold references")
-expect_wrapper_compile_failure(9 "Result void" "Result cannot hold void")
-expect_wrapper_compile_failure(10 "Result reference" "Result cannot hold references")
-expect_wrapper_compile_failure(11 "Result Error value" "Result cannot hold Error as its value type")
+check_wrapper_compile_case(Optional "${optional_compile_case_source}" 0 "control" "")
+check_wrapper_compile_case(Optional "${optional_compile_case_source}" 1 "move-only copy construction" "deleted")
+check_wrapper_compile_case(Optional "${optional_compile_case_source}" 2 "move-only copy assignment" "deleted")
+check_wrapper_compile_case(Optional "${optional_compile_case_source}" 3 "const mutation" "cannot assign to return value")
+check_wrapper_compile_case(Optional "${optional_compile_case_source}" 4 "void" "Optional cannot hold void")
+check_wrapper_compile_case(Optional "${optional_compile_case_source}" 5 "reference" "Optional cannot hold references")
+
+check_wrapper_compile_case(Result "${result_compile_case_source}" 0 "control" "")
+check_wrapper_compile_case(Result "${result_compile_case_source}" 1 "move-only copy construction" "deleted")
+check_wrapper_compile_case(Result "${result_compile_case_source}" 2 "move-only copy assignment" "deleted")
+check_wrapper_compile_case(Result "${result_compile_case_source}" 3 "const mutation" "cannot assign to return value")
+check_wrapper_compile_case(Result "${result_compile_case_source}" 4 "void" "Result cannot hold void")
+check_wrapper_compile_case(Result "${result_compile_case_source}" 5 "reference" "Result cannot hold references")
+check_wrapper_compile_case(Result "${result_compile_case_source}" 6 "Error value" "Result cannot hold Error as its value type")
 
 set(PROCEDURES
     procedures/AideAttributesTest.cpp
