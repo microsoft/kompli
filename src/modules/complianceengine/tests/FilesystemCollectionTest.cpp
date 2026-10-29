@@ -1049,7 +1049,7 @@ TEST(FilesystemCollectionTest, DescendantAbsoluteLinkOutsideAcceptedRootFailsClo
     request.childFileLinkAction = SymlinkPolicy::Follow;
     const auto result = CollectFilesystem(request);
     ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(ENOTDIR, result.Error().code); // The outside prefix is not an accepted-root directory.
+    EXPECT_EQ(EXDEV, result.Error().code); // No accepted frozen root binding covers the target.
 }
 
 TEST(FilesystemCollectionTest, StreamingStopAndCallbackErrorDoNotFabricateEntries)

@@ -92,6 +92,11 @@ private:
         bool owned = false;
     };
     std::deque<Handle> mPins;
+    // Recorded at the actual parent->child transition, not inferred from
+    // Handle::Component after following a link.
+    std::deque<std::string> mEffectivePins;
+    std::string mEffectiveLeaf;
+    std::string mSourceLookup;
     std::vector<Frame> mFrames;
     const Handle* mBorrowedLeaf = nullptr;
     std::size_t mOwnedLeaf = 0;

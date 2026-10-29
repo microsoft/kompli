@@ -118,8 +118,10 @@ public:
         struct stat accepted = {}; // retained accepted directory/regular-file pin
         std::uint64_t mountId = 0; // original name's verified mount, before a link target
     };
-    // Pin each prefix through the trusted resolver, then rebase all subsequent
-    // descendant resolution on the selected file or directory, never on "/".
+    // Pin the initial absolute spelling through the trusted resolver, close
+    // its scratch ancestors before acceptance, then resolve descendants only
+    // through the selected root pin. Complete logical/effective root names
+    // select this frozen binding, not a fresh process-root lookup.
     // The Path alternative is accepted. Missing is reported only for a
     // directly missing path component; helper and confined-resolution ENOENT
     // remain errors. Excluded means an explicit final-link policy omission,
@@ -146,8 +148,8 @@ public:
     // the consumer must bound retained handles independently.
     // An empty (also moved-from) Path returns EINVAL.
     ComplianceEngine::Result<Handle> Pop();
-    // Release every pin still owned by this Path, including retained root
-    // prefix identities and hidden symlink-resolution pins. Attempt all closes;
+    // Release every pin still owned by this Path, including hidden
+    // symlink-resolution pins. Attempt all closes;
     // return the first error and log subsequent failures. No native close is
     // retried. The Path becomes empty; subsequent calls succeed without native
     // closes. Popped handles and activated readable files are separate
@@ -164,6 +166,8 @@ public:
     // not handles transferred by Pop().
     std::size_t RetainedDescriptors() const noexcept;
     std::size_t RetainedBytes() const noexcept;
+    // Acquired effective spelling; not a current global canonical pathname.
+    std::string ToString() const;
     const ContextInterface& Context() const noexcept
     {
         return mContext.get();
@@ -179,9 +183,18 @@ public:
 
 private:
     class Resolver;
+    struct NameBinding
+    {
+        const Handle* pin;
+        const std::string* lookup;
+        const std::string* effective;
+        std::uint64_t mount;
+    };
     static ComplianceEngine::Result<Detail::ResolvedPath> ResolveChild(const ContextInterface& context, const std::vector<const Handle*>& rootLineage,
         const std::vector<const Handle*>& parentLineage, std::string component, bool followSymlinks, MountPolicy mounts, const ResolverLimits& limits,
-        bool permitUnsupported, bool allowMissing, bool excludeLinks, std::size_t* spent = nullptr);
+        bool permitUnsupported, bool allowMissing, bool excludeLinks, const std::vector<NameBinding>& names, const std::string& logicalRoot,
+        const std::string& effectiveRoot, std::size_t* spent = nullptr);
+    std::vector<NameBinding> Bindings() const;
     Path(const ContextInterface& context, ResolverLimits limits);
     ComplianceEngine::Result<Handle> RetainLeaf(Detail::ResolvedPath& stage, const std::string& component);
     ComplianceEngine::Result<bool> ReleaseStage(Detail::ResolvedPath& stage);
@@ -200,33 +213,26 @@ private:
     };
     Usage mUsage;
     std::uint64_t mRootMountId = 0;
-    // The only persistent owner graph. A logical checkpoint is the first
-    // entry of its step; physicalParent follows pinned identity, not spelling.
+    // One persistent owner deque. Effective names are captured at actual
+    // acquisition and tied to the pins; logical leaves delimit Pop steps.
     struct Entry
     {
-        Entry(Handle&& owned, std::size_t parent, std::size_t alias, std::size_t previous, std::size_t checkpoint, std::size_t bytes, std::uint64_t mount, bool visible)
+        Entry(Handle&& owned, std::string lookup, std::string effective, std::uint64_t mount, bool leaf)
             : pin(std::move(owned)),
-              physicalParent(parent),
-              physicalAlias(alias),
-              logicalPrevious(previous),
-              stepCheckpoint(checkpoint),
-              stepBytes(bytes),
+              lookupName(std::move(lookup)),
+              effectiveName(std::move(effective)),
               originalMount(mount),
-              accepted(visible)
+              logicalLeaf(leaf)
         {
         }
         Handle pin;
-        std::size_t physicalParent;
-        std::size_t physicalAlias;
-        std::size_t logicalPrevious;
-        std::size_t stepCheckpoint;
-        std::size_t stepBytes;
+        std::string lookupName;
+        std::string effectiveName;
         std::uint64_t originalMount;
-        bool accepted;
+        bool logicalLeaf;
     };
     static constexpr std::size_t NoIndex = static_cast<std::size_t>(-1);
     std::deque<Entry> mEntries;
-    std::size_t mRootIndex = NoIndex;
     std::size_t mLeafIndex = NoIndex;
     std::size_t mSize = 0;
     std::string mDiagnosticPath;

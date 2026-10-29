@@ -922,7 +922,7 @@ TEST_F(ReadableFileTest, CheckedLeafAndPathReleasePreservesIndependentReadable)
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     const std::size_t pins = path.RetainedDescriptors();
-    ASSERT_GT(pins, 1U);
+    ASSERT_EQ(pins, 1U); // only accepted root, not its acquisition scratch
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([](int fd) { return ::close(fd); });
     EXPECT_TRUE(path.Close().HasValue());
     EXPECT_TRUE(path.Close().HasValue());

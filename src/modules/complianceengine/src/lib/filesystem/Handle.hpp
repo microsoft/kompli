@@ -15,7 +15,6 @@
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <vector>
 
 namespace ComplianceEngine
 {
@@ -24,7 +23,6 @@ class ContextInterface;
 namespace Filesystem
 {
 class Path;
-struct PrefixLimits;
 class Handle;
 class ReadableFile;
 struct DirectoryChild
@@ -120,8 +118,6 @@ private:
     static Result<Handle> AcquireChild(const Handle& parent, std::string component, bool directory);
     static Result<Handle> PinProcessRoot(const ContextInterface& context);
     static Result<bool> RecognizeAcceptedRoot(const Handle& acceptedRoot, const Handle& candidate, std::size_t fdinfoByteCap);
-    static Result<std::string> ValidateAbsolutePrefix(const ContextInterface& context, const std::vector<const Handle*>& heldLineage,
-        const std::string& target, const PrefixLimits& limits);
     Result<struct stat> InspectWithProcfs(const Detail::Descriptor& fdinfoDirectory, std::size_t fdinfoByteCap, std::uint64_t& mountId) const;
     void Swap(Handle& other) noexcept;
     int CloseOnce() noexcept;

@@ -1138,14 +1138,14 @@ TEST_F(PathFile, CheckedAcquisitionReleaseAttemptsAllPinsAndLogsSecondaryFailure
     ASSERT_FALSE(opened.HasValue());
     EXPECT_EQ(EACCES, opened.Error().code);
     EXPECT_EQ("Failed to close pinned descriptor", opened.Error().message);
-    EXPECT_GE(failedPins, 2);
+    EXPECT_EQ(1, failedPins); // the selected file is the only retained root pin
     EXPECT_EQ(1, dataCloses);
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    EXPECT_NE(std::string::npos, text.find("Secondary filesystem pin close failure: " + std::to_string(EIO)));
+    EXPECT_EQ(std::string::npos, text.find("Secondary filesystem pin close failure: " + std::to_string(EIO)));
     EXPECT_NE(std::string::npos, text.find("Failed to close internal filesystem descriptor: " + std::to_string(EACCES)));
 }
 
