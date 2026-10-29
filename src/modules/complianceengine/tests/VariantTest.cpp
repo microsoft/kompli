@@ -3,6 +3,9 @@
 
 #include "Variant.h"
 
+#include "TypeTraits.h"
+
+#include <cstddef>
 #include <cstdint>
 #include <gtest/gtest.h>
 #include <memory>
@@ -13,9 +16,29 @@
 using ComplianceEngine::InPlaceType;
 using ComplianceEngine::MovableVariant;
 using ComplianceEngine::Variant;
+namespace TypeTraits = ComplianceEngine::TypeTraits;
 
 namespace
 {
+static_assert(TypeTraits::All<>::value, "empty boolean pack is true");
+static_assert(TypeTraits::All<true, true>::value, "all true");
+static_assert(!TypeTraits::All<true, false>::value, "one false rejects the pack");
+static_assert(0 == TypeTraits::Count<int>::value, "count in empty type pack");
+static_assert(2 == TypeTraits::Count<const int, int, volatile int, char>::value, "count ignores top-level cv");
+static_assert(0 == TypeTraits::Count<int, char, short>::value, "count absent type");
+static_assert(TypeTraits::Unique<>::value, "empty type pack is unique");
+static_assert(TypeTraits::Unique<int, char>::value, "distinct types are unique");
+static_assert(!TypeTraits::Unique<int, const int>::value, "uniqueness ignores top-level cv");
+static_assert(1 == TypeTraits::Find<int, char, const int, long>::Index, "find matching index");
+static_assert(std::is_same<typename TypeTraits::Find<int, char, const int, long>::Type, const int>::value, "find preserves listed cv");
+static_assert(0 == TypeTraits::Find<volatile int, int, const int>::Index, "find selects first cv-insensitive match");
+static_assert(2 == TypeTraits::Find<int, char, long>::Index, "missing index equals pack length");
+static_assert(std::is_same<typename TypeTraits::Find<int, char, long>::Type, void>::value, "missing type is void");
+static_assert(0 == TypeTraits::Find<int>::Index, "empty pack has zero index");
+static_assert(std::is_same<typename TypeTraits::Find<int>::Type, void>::value, "empty pack has no type");
+static_assert(7 == TypeTraits::Max(7), "one size_t value");
+static_assert(9 == TypeTraits::Max(std::size_t{2}, std::size_t{9}, std::size_t{4}), "maximum of multiple values");
+
 struct alignas(128) Wide
 {
     char data[256] = {};

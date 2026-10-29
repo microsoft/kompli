@@ -4,6 +4,8 @@
 #ifndef COMPLIANCEENGINE_VARIANT_H
 #define COMPLIANCEENGINE_VARIANT_H
 
+#include "TypeTraits.h"
+
 #include <cstddef>
 #include <new>
 #include <stdexcept>
@@ -19,80 +21,6 @@ struct InPlaceType
 
 namespace VariantDetail
 {
-constexpr std::size_t Max(std::size_t value)
-{
-    return value;
-}
-
-template <typename... Rest>
-constexpr std::size_t Max(std::size_t first, std::size_t second, Rest... rest)
-{
-    return Max(first < second ? second : first, rest...);
-}
-
-template <bool... Values>
-struct All;
-
-template <>
-struct All<> : std::true_type
-{
-};
-
-template <bool First, bool... Rest>
-struct All<First, Rest...> : std::integral_constant<bool, First && All<Rest...>::value>
-{
-};
-
-template <typename T, typename... Alternatives>
-struct Count;
-
-template <typename T>
-struct Count<T> : std::integral_constant<std::size_t, 0>
-{
-};
-
-template <typename T, typename First, typename... Rest>
-struct Count<T, First, Rest...>
-    : std::integral_constant<std::size_t, (std::is_same<typename std::remove_cv<T>::type, typename std::remove_cv<First>::type>::value ? 1 : 0) + Count<T, Rest...>::value>
-{
-};
-
-template <typename... Alternatives>
-struct Unique;
-
-template <>
-struct Unique<> : std::true_type
-{
-};
-
-template <typename First, typename... Rest>
-struct Unique<First, Rest...> : std::integral_constant<bool, (0 == Count<First, Rest...>::value) && Unique<Rest...>::value>
-{
-};
-
-// Find matches a tag ignoring cv; Get additionally requires the exact listed cv.
-template <typename T, typename... Alternatives>
-struct Find;
-
-template <typename T>
-struct Find<T>
-{
-    using Type = void;
-    static constexpr std::size_t Index = 0;
-};
-
-template <typename T, typename First, typename... Rest>
-struct Find<T, First, Rest...>
-{
-private:
-    using Next = Find<T, Rest...>;
-    static constexpr bool Match = std::is_same<typename std::remove_cv<T>::type, typename std::remove_cv<First>::type>::value;
-
-public:
-    using Type = typename std::conditional<Match, First, typename Next::Type>::type;
-    static constexpr std::size_t Index = Match ? 0 : 1 + Next::Index;
-};
-
 // Dispatch only the lifetime operations needed by the nonthrowing move profile.
 template <std::size_t Index, typename... Alternatives>
 struct Dispatch;
@@ -161,27 +89,26 @@ template <typename... Alternatives>
 class MovableVariant
 {
     static_assert(0 < sizeof...(Alternatives), "Variant requires at least one alternative");
-    static_assert(VariantDetail::Unique<Alternatives...>::value, "Variant alternatives must be distinct, ignoring cv");
-    static_assert(VariantDetail::All<!std::is_reference<Alternatives>::value...>::value, "Variant cannot hold references");
-    static_assert(VariantDetail::All<!std::is_void<Alternatives>::value...>::value, "Variant cannot hold void");
-    static_assert(VariantDetail::All<std::is_nothrow_move_constructible<Alternatives>::value...>::value,
-        "Variant requires nonthrowing move constructors");
-    static_assert(VariantDetail::All<std::is_nothrow_move_assignable<Alternatives>::value...>::value, "Variant requires nonthrowing move assignment");
-    static_assert(VariantDetail::All<std::is_nothrow_destructible<Alternatives>::value...>::value, "Variant requires nonthrowing destructors");
+    static_assert(TypeTraits::Unique<Alternatives...>::value, "Variant alternatives must be distinct, ignoring cv");
+    static_assert(TypeTraits::All<!std::is_reference<Alternatives>::value...>::value, "Variant cannot hold references");
+    static_assert(TypeTraits::All<!std::is_void<Alternatives>::value...>::value, "Variant cannot hold void");
+    static_assert(TypeTraits::All<std::is_nothrow_move_constructible<Alternatives>::value...>::value, "Variant requires nonthrowing move constructors");
+    static_assert(TypeTraits::All<std::is_nothrow_move_assignable<Alternatives>::value...>::value, "Variant requires nonthrowing move assignment");
+    static_assert(TypeTraits::All<std::is_nothrow_destructible<Alternatives>::value...>::value, "Variant requires nonthrowing destructors");
 
-    alignas(VariantDetail::Max(alignof(Alternatives)...)) char mStorage[VariantDetail::Max(sizeof(Alternatives)...)];
+    alignas(TypeTraits::Max(alignof(Alternatives)...)) char mStorage[TypeTraits::Max(sizeof(Alternatives)...)];
     std::size_t mIndex;
 
 public:
     template <typename T, typename U,
-        typename std::enable_if<(1 == VariantDetail::Count<T, Alternatives...>::value) &&
+        typename std::enable_if<(1 == TypeTraits::Count<T, Alternatives...>::value) &&
                                     std::is_same<typename std::remove_cv<T>::type, typename std::remove_cv<typename std::remove_reference<U>::type>::type>::value &&
-                                    std::is_constructible<typename VariantDetail::Find<T, Alternatives...>::Type, U&&>::value,
+                                    std::is_constructible<typename TypeTraits::Find<T, Alternatives...>::Type, U&&>::value,
             int>::type = 0>
-    explicit MovableVariant(InPlaceType<T>, U&& value) noexcept(std::is_nothrow_constructible<typename VariantDetail::Find<T, Alternatives...>::Type, U&&>::value)
-        : mIndex(VariantDetail::Find<T, Alternatives...>::Index)
+    explicit MovableVariant(InPlaceType<T>, U&& value) noexcept(std::is_nothrow_constructible<typename TypeTraits::Find<T, Alternatives...>::Type, U&&>::value)
+        : mIndex(TypeTraits::Find<T, Alternatives...>::Index)
     {
-        using Selected = typename VariantDetail::Find<T, Alternatives...>::Type;
+        using Selected = typename TypeTraits::Find<T, Alternatives...>::Type;
         // A failed lvalue copy never completes construction of a Variant.
         ::new (static_cast<void*>(mStorage)) Selected(std::forward<U>(value));
     }
@@ -249,10 +176,10 @@ private:
     template <typename T>
     void Check() const
     {
-        static_assert(1 == VariantDetail::Count<T, Alternatives...>::value, "Get<T> requires a listed alternative");
-        static_assert(std::is_same<T, typename VariantDetail::Find<T, Alternatives...>::Type>::value,
+        static_assert(1 == TypeTraits::Count<T, Alternatives...>::value, "Get<T> requires a listed alternative");
+        static_assert(std::is_same<T, typename TypeTraits::Find<T, Alternatives...>::Type>::value,
             "Get<T> requires the exact listed cv-qualified type");
-        if (VariantDetail::Find<T, Alternatives...>::Index != mIndex)
+        if (TypeTraits::Find<T, Alternatives...>::Index != mIndex)
         {
             throw std::logic_error("Variant: inactive alternative");
         }
