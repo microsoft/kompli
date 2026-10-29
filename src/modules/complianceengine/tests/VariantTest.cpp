@@ -13,6 +13,7 @@
 #include <type_traits>
 #include <utility>
 
+using ComplianceEngine::As;
 using ComplianceEngine::InPlaceType;
 using ComplianceEngine::MovableVariant;
 using ComplianceEngine::Variant;
@@ -98,9 +99,6 @@ static_assert(!std::is_nothrow_move_constructible<ThrowingMove>::value, "unsuppo
 static_assert(!std::is_nothrow_move_assignable<ThrowingMove>::value, "unsupported throwing assignment");
 static_assert(!std::is_nothrow_move_assignable<NoMoveAssignment>::value, "unsupported absent move assignment");
 static_assert(!std::is_nothrow_destructible<ThrowingDestructor>::value, "unsupported throwing destruction");
-// Unsupported lists fail MovableVariant's class-level assertions: Variant<>,
-// Variant<int, const int>, Variant<int&>, Variant<void>, Variant<ThrowingMove>,
-// Variant<NoMoveAssignment>, and Variant<ThrowingDestructor>.
 static_assert(std::is_constructible<Scalar, InPlaceType<int>, int>::value, "exact value construction");
 static_assert(!std::is_constructible<Scalar, InPlaceType<int>, short>::value, "reject converted value");
 static_assert(!std::is_constructible<Scalar, InPlaceType<long>, long>::value, "reject unlisted tag");
@@ -119,6 +117,18 @@ static_assert(std::is_same<decltype(std::declval<Scalar&>().Get<int>()), int&>::
 static_assert(std::is_same<decltype(std::declval<const Scalar&>().Get<int>()), const int&>::value, "const lvalue access");
 static_assert(std::is_same<decltype(std::declval<Scalar&&>().Get<int>()), int&&>::value, "rvalue access");
 static_assert(std::is_same<decltype(std::declval<const Scalar&&>().Get<int>()), const int&&>::value, "const rvalue access");
+static_assert(std::is_same<decltype(As<int>(std::declval<Scalar&>())), int&>::value, "mutable As returns lvalue reference");
+static_assert(std::is_same<decltype(As<int>(std::declval<const Scalar&>())), const int&>::value, "const As returns lvalue reference");
+static_assert(std::is_same<decltype(As<int>(std::declval<Scalar&&>())), int&&>::value, "mutable As returns rvalue reference");
+static_assert(std::is_same<decltype(As<int>(std::declval<const Scalar&&>())), const int&&>::value, "const As returns rvalue reference");
+static_assert(!noexcept(As<int>(std::declval<Scalar&>())), "mutable As can report inactive alternatives");
+static_assert(!noexcept(As<int>(std::declval<const Scalar&>())), "const As can report inactive alternatives");
+static_assert(!noexcept(As<int>(std::declval<Scalar&&>())), "rvalue As can report inactive alternatives");
+static_assert(!noexcept(As<int>(std::declval<const Scalar&&>())), "const rvalue As can report inactive alternatives");
+static_assert(std::is_same<decltype(std::declval<Scalar&>().Is<int>()), bool>::value, "mutable Is returns bool");
+static_assert(std::is_same<decltype(std::declval<const Scalar&>().Is<char>()), bool>::value, "const Is returns bool");
+static_assert(noexcept(std::declval<Scalar&>().Is<int>()), "mutable Is is nonthrowing");
+static_assert(noexcept(std::declval<const Scalar&>().Is<char>()), "const Is is nonthrowing");
 
 struct Counters
 {
@@ -190,6 +200,59 @@ static_assert(std::is_nothrow_move_assignable<Observable>::value, "nonthrowing p
 static_assert(!std::is_nothrow_constructible<Observable, InPlaceType<Tracked>, Tracked&>::value, "lvalue copy can throw");
 static_assert(std::is_nothrow_constructible<Observable, InPlaceType<Tracked>, Tracked&&>::value, "rvalue construction follows move");
 
+TEST(VariantTest, FindIndexCanBeOdrUsed)
+{
+    const volatile std::size_t& found = TypeTraits::Find<int, char, int>::Index;
+    const volatile std::size_t* absent = &TypeTraits::Find<int>::Index;
+    const std::size_t foundIndex = found;
+    const std::size_t absentIndex = *absent;
+    EXPECT_EQ(1u, foundIndex);
+    EXPECT_EQ(0u, absentIndex);
+}
+
+TEST(VariantTest, IsQueriesActiveAndInactiveAlternatives)
+{
+    Scalar mutableValue(InPlaceType<int>{}, 41);
+    EXPECT_TRUE(mutableValue.Is<int>());
+    EXPECT_FALSE(mutableValue.Is<char>());
+    const Scalar& constView = mutableValue;
+    EXPECT_TRUE(constView.Is<int>());
+    EXPECT_FALSE(constView.Is<char>());
+
+    const Scalar constValue(InPlaceType<char>{}, 'x');
+    EXPECT_TRUE(constValue.Is<char>());
+    EXPECT_FALSE(constValue.Is<int>());
+}
+
+TEST(VariantTest, IsTracksMoveDestinationsAndReinitializedSources)
+{
+    Scalar source(InPlaceType<int>{}, 7);
+    Scalar moved(std::move(source));
+    EXPECT_TRUE(moved.Is<int>());
+    EXPECT_FALSE(moved.Is<char>());
+
+    source = Scalar(InPlaceType<char>{}, 'a');
+    EXPECT_TRUE(source.Is<char>());
+    EXPECT_FALSE(source.Is<int>());
+
+    Scalar sameAlternative(InPlaceType<int>{}, 0);
+    sameAlternative = std::move(moved);
+    EXPECT_TRUE(sameAlternative.Is<int>());
+    EXPECT_FALSE(sameAlternative.Is<char>());
+
+    moved = Scalar(InPlaceType<char>{}, 'b');
+    EXPECT_TRUE(moved.Is<char>());
+    EXPECT_FALSE(moved.Is<int>());
+
+    sameAlternative = std::move(moved);
+    EXPECT_TRUE(sameAlternative.Is<char>());
+    EXPECT_FALSE(sameAlternative.Is<int>());
+
+    moved = Scalar(InPlaceType<int>{}, 9);
+    EXPECT_TRUE(moved.Is<int>());
+    EXPECT_FALSE(moved.Is<char>());
+}
+
 TEST(VariantTest, ExactAccessAndAlignment)
 {
     Scalar value(InPlaceType<const int>{}, 41);
@@ -218,6 +281,42 @@ TEST(VariantTest, ExactAccessAndAlignment)
     EXPECT_EQ('y', wideLast.Get<Large>().data[512]);
     wideLast = Variant<Large, Wide>(InPlaceType<Wide>{}, Wide{});
     EXPECT_EQ(0u, reinterpret_cast<std::uintptr_t>(&wideLast.Get<Wide>()) % alignof(Wide));
+}
+
+TEST(VariantTest, PublicAsChecksEveryValueCategory)
+{
+    Scalar value(InPlaceType<int>{}, 41);
+    As<int>(value) = 42;
+    const Scalar& constView = value;
+    EXPECT_EQ(42, As<int>(constView));
+    EXPECT_EQ(42, As<int>(std::move(value)));
+    EXPECT_EQ(42, As<int>(std::move(constView)));
+
+    EXPECT_THROW(As<char>(value), std::logic_error);
+    EXPECT_THROW(As<char>(constView), std::logic_error);
+    EXPECT_THROW(As<char>(std::move(value)), std::logic_error);
+    EXPECT_THROW(As<char>(std::move(constView)), std::logic_error);
+
+    const Scalar constValue(InPlaceType<char>{}, 'x');
+    EXPECT_EQ('x', As<char>(constValue));
+    EXPECT_EQ('x', As<char>(std::move(constValue)));
+    EXPECT_THROW(As<int>(constValue), std::logic_error);
+    EXPECT_THROW(As<int>(std::move(constValue)), std::logic_error);
+}
+
+TEST(VariantTest, PublicAsMovesOwnerWithoutEndingSourceLifetime)
+{
+    int deletions = 0;
+    {
+        Owner source(InPlaceType<OwnedInt>{}, OwnedInt(new int(12), CountingDeleter{&deletions}));
+        OwnedInt extracted = As<OwnedInt>(std::move(source));
+        ASSERT_TRUE(extracted);
+        EXPECT_EQ(12, *extracted);
+        source = Owner(InPlaceType<char>{}, 'x');
+        EXPECT_EQ('x', As<char>(source));
+        EXPECT_EQ(0, deletions);
+    }
+    EXPECT_EQ(1, deletions);
 }
 
 TEST(VariantTest, TaggedLvalueCopyFailureDoesNotCreateVariant)

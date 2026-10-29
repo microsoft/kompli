@@ -90,6 +90,13 @@ public:
     using Type = typename std::conditional<Match, First, typename Next::Type>::type;
     static constexpr std::size_t Index = Match ? 0 : 1 + Next::Index;
 };
+
+// C++11 requires definitions when callers take the address or bind a reference.
+template <typename T>
+constexpr std::size_t Find<T>::Index;
+
+template <typename T, typename First, typename... Rest>
+constexpr std::size_t Find<T, First, Rest...>::Index;
 } // namespace TypeTraits
 
 template <typename T>

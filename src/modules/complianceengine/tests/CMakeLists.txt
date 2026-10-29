@@ -10,6 +10,65 @@ find_package(GTest CONFIG REQUIRED)
 set(VCPKG_PACKAGES_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
 find_package(OpenSSL REQUIRED NO_DEFAULT_PATH PATHS ${VCPKG_PACKAGES_DIR})
 
+# Compile a valid control first, then require each unsupported Variant use to
+# fail for its specific constraint (not for a missing header or broken compiler).
+set(variant_compile_case_source "${CMAKE_CURRENT_SOURCE_DIR}/VariantCompileCase.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${variant_compile_case_source}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/lib/Variant.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/lib/TypeTraits.h"
+)
+set(variant_compile_flags
+    "-DCMAKE_CXX_STANDARD:STRING=11"
+    "-DCMAKE_CXX_STANDARD_REQUIRED:BOOL=ON"
+    "-DCMAKE_CXX_EXTENSIONS:BOOL=OFF"
+)
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+try_compile(variant_compile_control
+    "${CMAKE_CURRENT_BINARY_DIR}/variant-compile/control"
+    "${variant_compile_case_source}"
+    CMAKE_FLAGS ${variant_compile_flags}
+    COMPILE_DEFINITIONS "-DVARIANT_COMPILE_CASE=0"
+    OUTPUT_VARIABLE variant_compile_output
+)
+if(NOT variant_compile_control)
+    message(FATAL_ERROR "Variant compile control failed:\n${variant_compile_output}")
+endif()
+message(STATUS "Variant C++11 compile control: passed")
+
+function(expect_variant_compile_failure case_number case_name diagnostic)
+    set(result_var "variant_compile_case_${case_number}")
+    try_compile(${result_var}
+        "${CMAKE_CURRENT_BINARY_DIR}/variant-compile/${case_number}"
+        "${variant_compile_case_source}"
+        CMAKE_FLAGS ${variant_compile_flags}
+        COMPILE_DEFINITIONS "-DVARIANT_COMPILE_CASE=${case_number}"
+        OUTPUT_VARIABLE compile_output
+    )
+    if(${result_var})
+        message(FATAL_ERROR "Variant ${case_name} unexpectedly compiled")
+    endif()
+    string(FIND "${compile_output}" "${diagnostic}" diagnostic_position)
+    if(diagnostic_position EQUAL -1)
+        message(FATAL_ERROR "Variant ${case_name} failed for the wrong reason:\n${compile_output}")
+    endif()
+    message(STATUS "Variant C++11 negative compile ${case_name}: rejected as expected")
+endfunction()
+
+expect_variant_compile_failure(1 "empty list" "Variant requires at least one alternative")
+expect_variant_compile_failure(2 "cv duplicate" "Variant alternatives must be distinct, ignoring cv")
+expect_variant_compile_failure(3 "reference" "Variant cannot hold references")
+expect_variant_compile_failure(4 "void" "Variant cannot hold void")
+expect_variant_compile_failure(5 "throwing move" "Variant requires nonthrowing move constructors")
+expect_variant_compile_failure(6 "deleted move assignment" "Variant requires nonthrowing move assignment")
+# In C++11, is_nothrow_move_constructible is already false for a throwing
+# destructor, even when its move constructor is explicitly noexcept.
+expect_variant_compile_failure(7 "throwing destructor" "Variant requires nonthrowing move constructors")
+expect_variant_compile_failure(8 "unlisted Is" "Variant query requires a listed alternative")
+expect_variant_compile_failure(9 "cv-mismatched Is" "Variant query requires the exact listed cv-qualified type")
+expect_variant_compile_failure(10 "unlisted As" "Variant query requires a listed alternative")
+expect_variant_compile_failure(11 "cv-mismatched As" "Variant query requires the exact listed cv-qualified type")
+
 set(PROCEDURES
     procedures/AideAttributesTest.cpp
     procedures/AksCommandTest.cpp

@@ -7,7 +7,6 @@
 #include "TypeTraits.h"
 
 #include <cstddef>
-#include <new>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -21,6 +20,19 @@ struct InPlaceType
 
 namespace VariantDetail
 {
+// Precondition: storage contains a live, correctly aligned T; no active-type check.
+template <typename T>
+T& As(void* storage) noexcept
+{
+    return *static_cast<T*>(storage);
+}
+
+template <typename T>
+const T& As(const void* storage) noexcept
+{
+    return *static_cast<const T*>(storage);
+}
+
 // Dispatch only the lifetime operations needed by the nonthrowing move profile.
 template <std::size_t Index, typename... Alternatives>
 struct Dispatch;
@@ -32,7 +44,7 @@ struct Dispatch<Index, First, Rest...>
     {
         if (Index == active)
         {
-            ::new (destination) First(std::move(*static_cast<First*>(source)));
+            ::new (destination) First(std::move(As<First>(source)));
         }
         else
         {
@@ -44,7 +56,7 @@ struct Dispatch<Index, First, Rest...>
     {
         if (Index == active)
         {
-            *static_cast<First*>(destination) = std::move(*static_cast<First*>(source));
+            As<First>(destination) = std::move(As<First>(source));
         }
         else
         {
@@ -56,7 +68,7 @@ struct Dispatch<Index, First, Rest...>
     {
         if (Index == active)
         {
-            static_cast<First*>(storage)->~First();
+            As<First>(storage).~First();
         }
         else
         {
@@ -70,17 +82,17 @@ struct Dispatch<Index, Last>
 {
     static void MoveConstruct(std::size_t, void* destination, void* source) noexcept
     {
-        ::new (destination) Last(std::move(*static_cast<Last*>(source)));
+        ::new (destination) Last(std::move(As<Last>(source)));
     }
 
     static void MoveAssign(std::size_t, void* destination, void* source) noexcept
     {
-        *static_cast<Last*>(destination) = std::move(*static_cast<Last*>(source));
+        As<Last>(destination) = std::move(As<Last>(source));
     }
 
     static void Destroy(std::size_t, void* storage) noexcept
     {
-        static_cast<Last*>(storage)->~Last();
+        As<Last>(storage).~Last();
     }
 };
 } // namespace VariantDetail
@@ -150,14 +162,14 @@ public:
     T& Get() &
     {
         Check<T>();
-        return *reinterpret_cast<T*>(mStorage);
+        return VariantDetail::As<T>(static_cast<void*>(mStorage));
     }
 
     template <typename T>
     const T& Get() const&
     {
         Check<T>();
-        return *reinterpret_cast<const T*>(mStorage);
+        return VariantDetail::As<T>(static_cast<const void*>(mStorage));
     }
 
     template <typename T>
@@ -172,13 +184,26 @@ public:
         return std::move(this->template Get<T>());
     }
 
+    template <typename T>
+    bool Is() const noexcept
+    {
+        AssertAlternativeType<T>();
+        return TypeTraits::Find<T, Alternatives...>::Index == mIndex;
+    }
+
 private:
+    template <typename T>
+    static void AssertAlternativeType() noexcept
+    {
+        static_assert(1 == TypeTraits::Count<T, Alternatives...>::value, "Variant query requires a listed alternative");
+        static_assert(std::is_same<T, typename TypeTraits::Find<T, Alternatives...>::Type>::value,
+            "Variant query requires the exact listed cv-qualified type");
+    }
+
     template <typename T>
     void Check() const
     {
-        static_assert(1 == TypeTraits::Count<T, Alternatives...>::value, "Get<T> requires a listed alternative");
-        static_assert(std::is_same<T, typename TypeTraits::Find<T, Alternatives...>::Type>::value,
-            "Get<T> requires the exact listed cv-qualified type");
+        AssertAlternativeType<T>();
         if (TypeTraits::Find<T, Alternatives...>::Index != mIndex)
         {
             throw std::logic_error("Variant: inactive alternative");
@@ -188,6 +213,31 @@ private:
 
 template <typename... Alternatives>
 using Variant = MovableVariant<Alternatives...>;
+
+// Checked typed access; Get validates the listed type and active alternative.
+template <typename T, typename... Alternatives>
+T& As(MovableVariant<Alternatives...>& variant)
+{
+    return variant.template Get<T>();
+}
+
+template <typename T, typename... Alternatives>
+const T& As(const MovableVariant<Alternatives...>& variant)
+{
+    return variant.template Get<T>();
+}
+
+template <typename T, typename... Alternatives>
+T&& As(MovableVariant<Alternatives...>&& variant)
+{
+    return std::move(variant).template Get<T>();
+}
+
+template <typename T, typename... Alternatives>
+const T&& As(const MovableVariant<Alternatives...>&& variant)
+{
+    return std::move(variant).template Get<T>();
+}
 } // namespace ComplianceEngine
 
 #endif // COMPLIANCEENGINE_VARIANT_H
