@@ -9,8 +9,8 @@
 #include <string>
 
 static OsConfigLogHandle g_log;
-static const char* g_logFile = "/var/log/osconfig_telemetry.log";
-static const char* g_rolledLogFile = "/var/log/osconfig_telemetry.bak";
+static const char* g_logFile = "/var/log/kompli_telemetry.log";
+static const char* g_rolledLogFile = "/var/log/kompli_telemetry.bak";
 
 void __attribute__((constructor)) Init(void)
 {

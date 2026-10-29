@@ -10,8 +10,8 @@
 
 static OsConfigLogHandle gLog = NULL;
 static const char* gComplianceEngineModuleName = "OSConfig ComplianceEngine module";
-static const char* gLogFile = "/var/log/osconfig_complianceengine.log";
-static const char* gRolledLogFile = "/var/log/osconfig_complianceengine.bak";
+static const char* gLogFile = "/var/log/kompli_complianceengine.log";
+static const char* gRolledLogFile = "/var/log/kompli_complianceengine.bak";
 
 void __attribute__((constructor)) InitModule(void)
 {
