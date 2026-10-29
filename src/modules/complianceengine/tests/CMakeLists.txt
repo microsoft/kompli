@@ -57,7 +57,7 @@ endfunction()
 
 expect_variant_compile_failure(1 "empty list" "Variant requires at least one alternative")
 expect_variant_compile_failure(2 "cv duplicate" "Variant alternatives must be distinct, ignoring cv")
-expect_variant_compile_failure(3 "reference" "Variant cannot hold references")
+expect_variant_compile_failure(3 "rvalue reference" "Variant cannot hold rvalue references")
 expect_variant_compile_failure(4 "void" "Variant cannot hold void")
 expect_variant_compile_failure(5 "throwing move" "Variant requires nonthrowing move constructors")
 expect_variant_compile_failure(6 "deleted move assignment" "Variant requires nonthrowing move assignment")
@@ -68,6 +68,19 @@ expect_variant_compile_failure(8 "unlisted Is" "Variant query requires a listed 
 expect_variant_compile_failure(9 "cv-mismatched Is" "Variant query requires the exact listed cv-qualified type")
 expect_variant_compile_failure(10 "unlisted As" "Variant query requires a listed alternative")
 expect_variant_compile_failure(11 "cv-mismatched As" "Variant query requires the exact listed cv-qualified type")
+expect_variant_compile_failure(12 "temporary reference binding" "Variant rejects temporary reference binding")
+expect_variant_compile_failure(13 "const rvalue reference binding" "Variant rejects const rvalue reference binding")
+expect_variant_compile_failure(14 "const to mutable reference binding" "Variant rejects const to mutable reference binding")
+expect_variant_compile_failure(15 "numeric reference conversion" "Variant rejects numeric reference conversion")
+expect_variant_compile_failure(16 "derived reference conversion" "Variant rejects derived reference conversion")
+expect_variant_compile_failure(17 "unlisted reference Get" "Variant query requires a listed alternative")
+expect_variant_compile_failure(18 "cv-mismatched reference Get" "Variant query requires the exact listed cv-qualified type")
+expect_variant_compile_failure(19 "unlisted reference Is" "Variant query requires a listed alternative")
+expect_variant_compile_failure(20 "unlisted reference As" "Variant query requires a listed alternative")
+expect_variant_compile_failure(21 "cv-mismatched reference Is" "Variant query requires the exact listed cv-qualified type")
+expect_variant_compile_failure(22 "cv-mismatched reference As" "Variant query requires the exact listed cv-qualified type")
+expect_variant_compile_failure(23 "unlisted value Get" "Variant query requires a listed alternative")
+expect_variant_compile_failure(24 "cv-mismatched value Get" "Variant query requires the exact listed cv-qualified type")
 
 # Independently check wrapper copy operations and unsupported payloads against
 # a valid C++11 translation unit before accepting diagnostic-checked failures.

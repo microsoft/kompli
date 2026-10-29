@@ -130,6 +130,75 @@ static_assert(std::is_same<decltype(std::declval<const Scalar&>().Is<char>()), b
 static_assert(noexcept(std::declval<Scalar&>().Is<int>()), "mutable Is is nonthrowing");
 static_assert(noexcept(std::declval<const Scalar&>().Is<char>()), "const Is is nonthrowing");
 
+struct BorrowState
+{
+    int alive = 0;
+    int destroyed = 0;
+};
+
+struct Borrowed
+{
+    BorrowState* state;
+    int value;
+
+    explicit Borrowed(BorrowState& counters, int number) noexcept
+        : state(&counters),
+          value(number)
+    {
+        ++state->alive;
+    }
+
+    Borrowed(const Borrowed&) = delete;
+    Borrowed(Borrowed&&) = delete;
+    Borrowed& operator=(const Borrowed&) = delete;
+    Borrowed& operator=(Borrowed&&) = delete;
+
+    Borrowed* operator&() noexcept
+    {
+        return nullptr;
+    }
+
+    const Borrowed* operator&() const noexcept
+    {
+        return nullptr;
+    }
+
+    ~Borrowed() noexcept
+    {
+        ++state->destroyed;
+        --state->alive;
+    }
+};
+
+using References = Variant<Borrowed&, const Borrowed&, int>;
+static_assert(!std::is_copy_constructible<References>::value, "borrowed Variant stays move-only");
+static_assert(std::is_nothrow_move_constructible<References>::value, "pointee need not move");
+static_assert(std::is_nothrow_move_assignable<References>::value, "pointee need not assign");
+static_assert(std::is_nothrow_destructible<References>::value, "pointee is not destroyed by Variant");
+static_assert(std::is_constructible<References, InPlaceType<Borrowed&>, Borrowed&>::value, "mutable lvalue binding");
+static_assert(std::is_constructible<References, InPlaceType<const Borrowed&>, Borrowed&>::value, "mutable to const binding");
+static_assert(std::is_constructible<References, InPlaceType<const Borrowed&>, const Borrowed&>::value, "const lvalue binding");
+static_assert(!std::is_constructible<References, InPlaceType<Borrowed&>, const Borrowed&>::value, "no const to mutable binding");
+static_assert(!std::is_constructible<References, InPlaceType<const Borrowed&>, Borrowed&&>::value, "no temporary binding");
+static_assert(!std::is_constructible<References, InPlaceType<const Borrowed&>, const Borrowed&&>::value, "no const rvalue binding");
+static_assert(!std::is_constructible<Variant<const int&>, InPlaceType<const int&>, short&>::value, "no conversion temporary");
+static_assert(std::is_same<decltype(std::declval<References&>().Get<Borrowed&>()), Borrowed&>::value, "mutable reference Get &");
+static_assert(std::is_same<decltype(std::declval<const References&>().Get<Borrowed&>()), Borrowed&>::value, "mutable reference Get const&");
+static_assert(std::is_same<decltype(std::declval<References&&>().Get<Borrowed&>()), Borrowed&>::value, "mutable reference Get &&");
+static_assert(std::is_same<decltype(std::declval<const References&&>().Get<Borrowed&>()), Borrowed&>::value, "mutable reference Get const&&");
+static_assert(std::is_same<decltype(std::declval<References&>().Get<const Borrowed&>()), const Borrowed&>::value, "const reference Get &");
+static_assert(std::is_same<decltype(std::declval<const References&>().Get<const Borrowed&>()), const Borrowed&>::value, "const reference Get const&");
+static_assert(std::is_same<decltype(std::declval<References&&>().Get<const Borrowed&>()), const Borrowed&>::value, "const reference Get &&");
+static_assert(std::is_same<decltype(std::declval<const References&&>().Get<const Borrowed&>()), const Borrowed&>::value, "const reference Get const&&");
+static_assert(std::is_same<decltype(As<Borrowed&>(std::declval<References&>())), Borrowed&>::value, "mutable reference As &");
+static_assert(std::is_same<decltype(As<Borrowed&>(std::declval<const References&>())), Borrowed&>::value, "mutable reference As const&");
+static_assert(std::is_same<decltype(As<Borrowed&>(std::declval<References&&>())), Borrowed&>::value, "mutable reference As &&");
+static_assert(std::is_same<decltype(As<Borrowed&>(std::declval<const References&&>())), Borrowed&>::value, "mutable reference As const&&");
+static_assert(std::is_same<decltype(As<const Borrowed&>(std::declval<References&>())), const Borrowed&>::value, "const reference As &");
+static_assert(std::is_same<decltype(As<const Borrowed&>(std::declval<const References&>())), const Borrowed&>::value, "const reference As const&");
+static_assert(std::is_same<decltype(As<const Borrowed&>(std::declval<References&&>())), const Borrowed&>::value, "const reference As &&");
+static_assert(std::is_same<decltype(As<const Borrowed&>(std::declval<const References&&>())), const Borrowed&>::value, "const reference As const&&");
+
 struct Counters
 {
     int alive = 0;
@@ -199,6 +268,125 @@ static_assert(std::is_nothrow_move_constructible<Observable>::value, "nonthrowin
 static_assert(std::is_nothrow_move_assignable<Observable>::value, "nonthrowing payload assignment");
 static_assert(!std::is_nothrow_constructible<Observable, InPlaceType<Tracked>, Tracked&>::value, "lvalue copy can throw");
 static_assert(std::is_nothrow_constructible<Observable, InPlaceType<Tracked>, Tracked&&>::value, "rvalue construction follows move");
+
+TEST(VariantTest, BorrowedReferencesHaveLogicalAccessInEveryCategory)
+{
+    BorrowState state;
+    Borrowed first(state, 11);
+    const Borrowed second(state, 22);
+    References mutableRef(InPlaceType<Borrowed&>{}, first);
+    const References& constView = mutableRef;
+    EXPECT_TRUE(mutableRef.Is<Borrowed&>());
+    EXPECT_FALSE(mutableRef.Is<const Borrowed&>());
+    EXPECT_EQ(std::addressof(first), std::addressof(mutableRef.Get<Borrowed&>()));
+    EXPECT_EQ(std::addressof(first), std::addressof(constView.Get<Borrowed&>()));
+    EXPECT_EQ(std::addressof(first), std::addressof(std::move(mutableRef).Get<Borrowed&>()));
+    EXPECT_EQ(std::addressof(first), std::addressof(std::move(constView).Get<Borrowed&>()));
+    EXPECT_EQ(std::addressof(first), std::addressof(As<Borrowed&>(mutableRef)));
+    EXPECT_EQ(std::addressof(first), std::addressof(As<Borrowed&>(constView)));
+    EXPECT_EQ(std::addressof(first), std::addressof(As<Borrowed&>(std::move(mutableRef))));
+    EXPECT_EQ(std::addressof(first), std::addressof(As<Borrowed&>(std::move(constView))));
+    constView.Get<Borrowed&>().value = 12;
+    EXPECT_EQ(12, first.value);
+
+    const References constRef(InPlaceType<const Borrowed&>{}, second);
+    EXPECT_TRUE(constRef.Is<const Borrowed&>());
+    EXPECT_FALSE(constRef.Is<Borrowed&>());
+    EXPECT_EQ(std::addressof(second), std::addressof(constRef.Get<const Borrowed&>()));
+    EXPECT_EQ(std::addressof(second), std::addressof(std::move(constRef).Get<const Borrowed&>()));
+    EXPECT_EQ(std::addressof(second), std::addressof(As<const Borrowed&>(constRef)));
+    EXPECT_EQ(std::addressof(second), std::addressof(As<const Borrowed&>(std::move(constRef))));
+    References mutableConstRef(InPlaceType<const Borrowed&>{}, first);
+    const References& constConstRef = mutableConstRef;
+    EXPECT_EQ(std::addressof(first), std::addressof(mutableConstRef.Get<const Borrowed&>()));
+    EXPECT_EQ(std::addressof(first), std::addressof(constConstRef.Get<const Borrowed&>()));
+    EXPECT_EQ(std::addressof(first), std::addressof(std::move(mutableConstRef).Get<const Borrowed&>()));
+    EXPECT_EQ(std::addressof(first), std::addressof(std::move(constConstRef).Get<const Borrowed&>()));
+    EXPECT_EQ(std::addressof(first), std::addressof(As<const Borrowed&>(mutableConstRef)));
+    EXPECT_EQ(std::addressof(first), std::addressof(As<const Borrowed&>(constConstRef)));
+    EXPECT_EQ(std::addressof(first), std::addressof(As<const Borrowed&>(std::move(mutableConstRef))));
+    EXPECT_EQ(std::addressof(first), std::addressof(As<const Borrowed&>(std::move(constConstRef))));
+    EXPECT_THROW(mutableRef.Get<const Borrowed&>(), std::logic_error);
+    EXPECT_THROW(constView.Get<const Borrowed&>(), std::logic_error);
+    EXPECT_THROW(std::move(mutableRef).Get<const Borrowed&>(), std::logic_error);
+    EXPECT_THROW(std::move(constView).Get<const Borrowed&>(), std::logic_error);
+    EXPECT_THROW(As<const Borrowed&>(mutableRef), std::logic_error);
+    EXPECT_THROW(As<const Borrowed&>(constView), std::logic_error);
+    EXPECT_THROW(As<const Borrowed&>(std::move(mutableRef)), std::logic_error);
+    EXPECT_THROW(As<const Borrowed&>(std::move(constView)), std::logic_error);
+    EXPECT_THROW(constRef.Get<Borrowed&>(), std::logic_error);
+    EXPECT_THROW(As<Borrowed&>(constRef), std::logic_error);
+    EXPECT_EQ(2, state.alive);
+    EXPECT_EQ(0, state.destroyed);
+}
+
+TEST(VariantTest, BorrowedBindingsRebindWithoutTouchingPointees)
+{
+    BorrowState state;
+    Borrowed first(state, 1);
+    Borrowed second(state, 2);
+    const Borrowed third(state, 3);
+    {
+        References source(InPlaceType<Borrowed&>{}, first);
+        References destination(InPlaceType<Borrowed&>{}, second);
+        destination = std::move(source);
+        EXPECT_EQ(std::addressof(first), std::addressof(destination.Get<Borrowed&>()));
+        EXPECT_EQ(2, second.value);
+        References& self = destination;
+        destination = std::move(self);
+        EXPECT_EQ(std::addressof(first), std::addressof(destination.Get<Borrowed&>()));
+        References moved(std::move(destination));
+        EXPECT_EQ(std::addressof(first), std::addressof(moved.Get<Borrowed&>()));
+        destination = References(InPlaceType<const Borrowed&>{}, third);
+        EXPECT_TRUE(destination.Is<const Borrowed&>());
+        EXPECT_FALSE(destination.Is<Borrowed&>());
+        source = References(InPlaceType<int>{}, 4);
+        EXPECT_TRUE(source.Is<int>());
+        moved = std::move(destination);
+        EXPECT_EQ(std::addressof(third), std::addressof(moved.Get<const Borrowed&>()));
+        destination = References(InPlaceType<Borrowed&>{}, second);
+        EXPECT_EQ(std::addressof(second), std::addressof(destination.Get<Borrowed&>()));
+    }
+    EXPECT_EQ(3, state.alive);
+    EXPECT_EQ(0, state.destroyed);
+    EXPECT_EQ(1, first.value);
+    EXPECT_EQ(2, second.value);
+    EXPECT_EQ(3, third.value);
+}
+
+TEST(VariantTest, OwnedAndBorrowedTransitionsDestroyOnlyOwnedStorage)
+{
+    Counters state;
+    {
+        Tracked referent(state, 7);
+        Tracked seed(state, 9);
+        using Mixed = Variant<Tracked, Tracked&, const Tracked&>;
+        Mixed owned(InPlaceType<Tracked>{}, seed);
+        Mixed ref(InPlaceType<Tracked&>{}, referent);
+        EXPECT_EQ(3, state.constructed);
+        EXPECT_EQ(1, state.copies);
+        owned = std::move(ref);
+        EXPECT_EQ(1, state.destroyed);
+        EXPECT_EQ(2, state.alive);
+        EXPECT_EQ(std::addressof(referent), std::addressof(owned.Get<Tracked&>()));
+        Mixed newOwned(InPlaceType<Tracked>{}, seed);
+        ref = std::move(newOwned);
+        EXPECT_EQ(1, state.moves);
+        EXPECT_EQ(4, state.alive);
+        EXPECT_EQ(1, state.destroyed);
+        ref = std::move(owned);
+        EXPECT_EQ(2, state.destroyed);
+        EXPECT_EQ(3, state.alive);
+        EXPECT_TRUE(ref.Is<Tracked&>());
+        EXPECT_FALSE(ref.Is<Tracked>());
+        owned = Mixed(InPlaceType<const Tracked&>{}, referent);
+        EXPECT_EQ(std::addressof(referent), std::addressof(owned.Get<const Tracked&>()));
+        EXPECT_EQ(1, state.moves);
+        EXPECT_EQ(0, state.moveAssignments);
+    }
+    EXPECT_EQ(0, state.alive);
+    EXPECT_EQ(state.constructed, state.destroyed);
+}
 
 TEST(VariantTest, FindIndexCanBeOdrUsed)
 {

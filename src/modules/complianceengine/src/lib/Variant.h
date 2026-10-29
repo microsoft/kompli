@@ -7,6 +7,8 @@
 #include "TypeTraits.h"
 
 #include <cstddef>
+#include <memory>
+#include <new> // IWYU pragma: keep - included transitively, but needed for portability
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -33,6 +35,52 @@ const T& As(const void* storage) noexcept
     return *static_cast<const T*>(storage);
 }
 
+// Logical references are represented by pointers; constness of the Variant
+// must not change the cv qualification of the bound object.
+template <typename T, bool IsReference = std::is_lvalue_reference<T>::value>
+struct Storage
+{
+    using Type = T;
+
+    template <typename U>
+    static void Construct(void* storage, U&& value)
+    {
+        ::new (storage) T(std::forward<U>(value));
+    }
+
+    static T& Get(void* storage) noexcept
+    {
+        return As<T>(storage);
+    }
+
+    static const T& Get(const void* storage) noexcept
+    {
+        return As<T>(storage);
+    }
+};
+
+template <typename T>
+struct Storage<T, true>
+{
+    using Type = typename std::add_pointer<typename std::remove_reference<T>::type>::type;
+
+    template <typename U>
+    static void Construct(void* storage, U&& value) noexcept
+    {
+        ::new (storage) Type(std::addressof(value));
+    }
+
+    static T Get(void* storage) noexcept
+    {
+        return *As<Type>(storage);
+    }
+
+    static T Get(const void* storage) noexcept
+    {
+        return *As<Type>(storage);
+    }
+};
+
 // Dispatch only the lifetime operations needed by the nonthrowing move profile.
 template <std::size_t Index, typename... Alternatives>
 struct Dispatch;
@@ -44,7 +92,8 @@ struct Dispatch<Index, First, Rest...>
     {
         if (Index == active)
         {
-            ::new (destination) First(std::move(As<First>(source)));
+            using Stored = typename Storage<First>::Type;
+            ::new (destination) Stored(std::move(As<Stored>(source)));
         }
         else
         {
@@ -56,7 +105,8 @@ struct Dispatch<Index, First, Rest...>
     {
         if (Index == active)
         {
-            As<First>(destination) = std::move(As<First>(source));
+            using Stored = typename Storage<First>::Type;
+            As<Stored>(destination) = std::move(As<Stored>(source));
         }
         else
         {
@@ -68,7 +118,8 @@ struct Dispatch<Index, First, Rest...>
     {
         if (Index == active)
         {
-            As<First>(storage).~First();
+            using Stored = typename Storage<First>::Type;
+            As<Stored>(storage).~Stored();
         }
         else
         {
@@ -82,17 +133,20 @@ struct Dispatch<Index, Last>
 {
     static void MoveConstruct(std::size_t, void* destination, void* source) noexcept
     {
-        ::new (destination) Last(std::move(As<Last>(source)));
+        using Stored = typename Storage<Last>::Type;
+        ::new (destination) Stored(std::move(As<Stored>(source)));
     }
 
     static void MoveAssign(std::size_t, void* destination, void* source) noexcept
     {
-        As<Last>(destination) = std::move(As<Last>(source));
+        using Stored = typename Storage<Last>::Type;
+        As<Stored>(destination) = std::move(As<Stored>(source));
     }
 
     static void Destroy(std::size_t, void* storage) noexcept
     {
-        As<Last>(storage).~Last();
+        using Stored = typename Storage<Last>::Type;
+        As<Stored>(storage).~Stored();
     }
 };
 } // namespace VariantDetail
@@ -102,27 +156,31 @@ class MovableVariant
 {
     static_assert(0 < sizeof...(Alternatives), "Variant requires at least one alternative");
     static_assert(TypeTraits::Unique<Alternatives...>::value, "Variant alternatives must be distinct, ignoring cv");
-    static_assert(TypeTraits::All<!std::is_reference<Alternatives>::value...>::value, "Variant cannot hold references");
+    static_assert(TypeTraits::All<!std::is_rvalue_reference<Alternatives>::value...>::value, "Variant cannot hold rvalue references");
     static_assert(TypeTraits::All<!std::is_void<Alternatives>::value...>::value, "Variant cannot hold void");
-    static_assert(TypeTraits::All<std::is_nothrow_move_constructible<Alternatives>::value...>::value, "Variant requires nonthrowing move constructors");
-    static_assert(TypeTraits::All<std::is_nothrow_move_assignable<Alternatives>::value...>::value, "Variant requires nonthrowing move assignment");
-    static_assert(TypeTraits::All<std::is_nothrow_destructible<Alternatives>::value...>::value, "Variant requires nonthrowing destructors");
+    static_assert(TypeTraits::All<std::is_nothrow_move_constructible<typename VariantDetail::Storage<Alternatives>::Type>::value...>::value,
+        "Variant requires nonthrowing move constructors");
+    static_assert(TypeTraits::All<std::is_nothrow_move_assignable<typename VariantDetail::Storage<Alternatives>::Type>::value...>::value,
+        "Variant requires nonthrowing move assignment");
+    static_assert(TypeTraits::All<std::is_nothrow_destructible<typename VariantDetail::Storage<Alternatives>::Type>::value...>::value,
+        "Variant requires nonthrowing destructors");
 
-    alignas(TypeTraits::Max(alignof(Alternatives)...)) char mStorage[TypeTraits::Max(sizeof(Alternatives)...)];
+    alignas(TypeTraits::Max(alignof(
+        typename VariantDetail::Storage<Alternatives>::Type)...)) char mStorage[TypeTraits::Max(sizeof(typename VariantDetail::Storage<Alternatives>::Type)...)];
     std::size_t mIndex;
 
 public:
     template <typename T, typename U,
         typename std::enable_if<(1 == TypeTraits::Count<T, Alternatives...>::value) &&
-                                    std::is_same<typename std::remove_cv<T>::type, typename std::remove_cv<typename std::remove_reference<U>::type>::type>::value &&
-                                    std::is_constructible<typename TypeTraits::Find<T, Alternatives...>::Type, U&&>::value,
+                                    std::is_same<typename std::remove_cv<typename std::remove_reference<T>::type>::type, typename std::remove_cv<typename std::remove_reference<U>::type>::type>::value &&
+                                    std::is_constructible<typename TypeTraits::Find<T, Alternatives...>::Type, U&&>::value && (!std::is_lvalue_reference<T>::value || std::is_lvalue_reference<U&&>::value),
             int>::type = 0>
     explicit MovableVariant(InPlaceType<T>, U&& value) noexcept(std::is_nothrow_constructible<typename TypeTraits::Find<T, Alternatives...>::Type, U&&>::value)
         : mIndex(TypeTraits::Find<T, Alternatives...>::Index)
     {
         using Selected = typename TypeTraits::Find<T, Alternatives...>::Type;
         // A failed lvalue copy never completes construction of a Variant.
-        ::new (static_cast<void*>(mStorage)) Selected(std::forward<U>(value));
+        VariantDetail::Storage<Selected>::Construct(static_cast<void*>(mStorage), std::forward<U>(value));
     }
 
     ~MovableVariant() noexcept
@@ -162,26 +220,26 @@ public:
     T& Get() &
     {
         Check<T>();
-        return VariantDetail::As<T>(static_cast<void*>(mStorage));
+        return VariantDetail::Storage<T>::Get(static_cast<void*>(mStorage));
     }
 
     template <typename T>
     const T& Get() const&
     {
         Check<T>();
-        return VariantDetail::As<T>(static_cast<const void*>(mStorage));
+        return VariantDetail::Storage<T>::Get(static_cast<const void*>(mStorage));
     }
 
     template <typename T>
     T&& Get() &&
     {
-        return std::move(this->template Get<T>());
+        return std::forward<T>(this->template Get<T>());
     }
 
     template <typename T>
     const T&& Get() const&&
     {
-        return std::move(this->template Get<T>());
+        return std::forward<const T>(this->template Get<T>());
     }
 
     template <typename T>
