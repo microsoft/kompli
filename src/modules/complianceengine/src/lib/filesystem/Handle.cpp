@@ -294,7 +294,7 @@ Result<std::uint64_t> MountId(const ContextInterface& context, const VerifiedPro
 // compare procfs mount IDs as well, including for the verified alias.
 // Repeated pin observations bracket sensitive operations but do not freeze
 // metadata or namespace state; checked helper closes gate published success.
-static Result<bool> VerifyActivatedAlias(const ContextInterface& context, const VerifiedProcfs& procfs, const Descriptor& pin, Descriptor& operational,
+static Result<bool> OpenAndVerifyAlias(const ContextInterface& context, const VerifiedProcfs& procfs, const Descriptor& pin, Descriptor& aliasOwner,
     const struct stat& before, bool directory, std::size_t fdinfoByteCap)
 {
     auto pinnedMount = MountId(context, procfs, pin, fdinfoByteCap);
@@ -308,13 +308,14 @@ static Result<bool> VerifyActivatedAlias(const ContextInterface& context, const 
     {
         return Error("Cannot open pinned descriptor alias for reading", aliasResult.Error().code);
     }
-    operational = std::move(aliasResult).Value();
-    if (!operational.HasValue())
+    aliasOwner = std::move(aliasResult).Value();
+    // After acquisition, the caller owns this output even if later verification fails.
+    if (!aliasOwner.HasValue())
     {
         return Error("Cannot open pinned descriptor alias for reading", EPROTO);
     }
     struct stat activated = {}, stillPinned = {};
-    if ((context.StatFile(operational, &activated) != 0) || (context.StatFile(pin, &stillPinned) != 0))
+    if ((context.StatFile(aliasOwner, &activated) != 0) || (context.StatFile(pin, &stillPinned) != 0))
     {
         return Error("Cannot inspect activated object and pin", SavedError());
     }
@@ -323,7 +324,7 @@ static Result<bool> VerifyActivatedAlias(const ContextInterface& context, const 
     {
         return Error("Activated object does not match live pin", EAGAIN);
     }
-    auto activatedMount = MountId(context, procfs, operational, fdinfoByteCap);
+    auto activatedMount = MountId(context, procfs, aliasOwner, fdinfoByteCap);
     if (!activatedMount.HasValue())
     {
         return std::move(activatedMount).Error();
@@ -389,8 +390,8 @@ Result<Descriptor> ActivateReadOnly(const ContextInterface& context, const Descr
     {
         return std::move(verified).Error();
     }
-    Descriptor operational = context.EmptyDescriptor(ContextInterface::CloseDiagnostic::DirectoryActivation);
-    auto inspected = VerifyActivatedAlias(context, procfs, pin, operational, before, directory, fdinfoByteCap);
+    Descriptor aliasOwner = context.EmptyDescriptor(ContextInterface::CloseDiagnostic::DirectoryActivation);
+    auto inspected = OpenAndVerifyAlias(context, procfs, pin, aliasOwner, before, directory, fdinfoByteCap);
     auto procfsClose = procfs.Close();
     if (!procfsClose.HasValue())
     {
@@ -406,16 +407,16 @@ Result<Descriptor> ActivateReadOnly(const ContextInterface& context, const Descr
     if (!inspected.HasValue())
     {
         auto primary = std::move(inspected).Error();
-        auto cleanup = operational.Close();
+        auto cleanup = aliasOwner.Close();
         if (!cleanup.HasValue())
         {
             LogSecondaryClose(context, cleanup.Error().code);
         }
         return primary;
     }
-    // The operational alias must remain owned until all procfs checks and
+    // The alias must remain owned until all procfs checks and
     // helper closes have succeeded; output transfer occurs below.
-    return std::move(operational);
+    return std::move(aliasOwner);
 }
 
 Result<std::uint64_t> ParseMountId(const std::string& fdinfo)
@@ -552,17 +553,20 @@ Result<struct stat> Handle::Stat() const
         return std::move(opened).Error();
     }
     auto inspected = InspectWithProcfs(procfs);
-    Result<struct stat> metadata = inspected.HasValue() ? Result<struct stat>(inspected.Value().metadata) : Result<struct stat>(std::move(inspected).Error());
     auto closed = procfs.Close();
     if (!closed.HasValue())
     {
-        if (metadata.HasValue())
+        if (inspected.HasValue())
         {
             return std::move(closed).Error();
         }
         Detail::LogSecondaryClose(context, closed.Error().code);
     }
-    return metadata;
+    if (!inspected.HasValue())
+    {
+        return std::move(inspected).Error();
+    }
+    return inspected.Value().metadata;
 }
 
 Result<std::uint64_t> Handle::MountIdentity() const
@@ -579,18 +583,20 @@ Result<std::uint64_t> Handle::MountIdentity() const
         return std::move(opened).Error();
     }
     auto inspected = InspectWithProcfs(procfs);
-    Result<std::uint64_t> outcome =
-        inspected.HasValue() ? Result<std::uint64_t>(inspected.Value().mountId) : Result<std::uint64_t>(std::move(inspected).Error());
     auto closed = procfs.Close();
     if (!closed.HasValue())
     {
-        if (outcome.HasValue())
+        if (inspected.HasValue())
         {
             return std::move(closed).Error();
         }
         Detail::LogSecondaryClose(context, closed.Error().code);
     }
-    return outcome;
+    if (!inspected.HasValue())
+    {
+        return std::move(inspected).Error();
+    }
+    return inspected.Value().mountId;
 }
 
 Result<bool> Handle::SetOwnership(uid_t owner, gid_t group) const
