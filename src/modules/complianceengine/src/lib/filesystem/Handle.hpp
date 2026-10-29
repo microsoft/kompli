@@ -111,20 +111,26 @@ public:
     Result<bool> Close();
 
 private:
+    struct PinObservation
+    {
+        struct stat metadata;
+        std::uint64_t mountId;
+    };
     // Path owns composition. The checked acquisition methods below are
     // private: no consumer can supply an fd.
     friend class Path;
     Handle(Detail::Descriptor&& descriptor, Type type, std::string component, const struct stat& snapshot, std::size_t fdinfoBytes);
     static Result<Handle> PinProcessRoot(const ContextInterface& context, std::size_t fdinfoBytes);
     static Result<bool> RecognizeAcceptedRoot(const Handle& acceptedRoot, const Handle& candidate, std::size_t fdinfoByteCap);
-    Result<struct stat> InspectWithProcfs(const Detail::VerifiedProcfs& procfs, std::uint64_t& mountId) const;
+    Result<PinObservation> InspectWithProcfs(const Detail::VerifiedProcfs& procfs) const;
+    Result<bool> SetModeWithProcfs(const Detail::VerifiedProcfs& procfs, mode_t mode) const;
     void Swap(Handle& other) noexcept;
     int CloseOnce() noexcept;
 
     Detail::Descriptor mDescriptor;
     Type mType = Type::Directory;
     std::string mComponent;
-    struct stat mSnapshot = {};
+    struct stat mAcquiredMetadata = {};
     std::size_t mFdinfoBytes;
 };
 } // namespace Filesystem

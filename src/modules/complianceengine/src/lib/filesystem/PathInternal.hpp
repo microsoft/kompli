@@ -67,27 +67,7 @@ Result<LinkTarget> ReadPinnedLink(const ContextInterface& context, const Descrip
 
 // Internal read-only activation of an already held O_PATH pin. The returned
 // descriptor is independently owned and never exposed through Path.hpp.
-class ReadOnlyActivation
-{
-public:
-    ReadOnlyActivation(ReadOnlyActivation&& other) noexcept;
-    ReadOnlyActivation& operator=(ReadOnlyActivation&& other) noexcept;
-    ReadOnlyActivation(const ReadOnlyActivation&) = delete;
-    ReadOnlyActivation& operator=(const ReadOnlyActivation&) = delete;
-    ~ReadOnlyActivation() noexcept = default;
-    const struct stat& Snapshot() const noexcept;
-    // Internal ownership handoff to an opaque public resource.
-    Detail::Descriptor TakeDescriptor() noexcept;
-    Result<bool> Close();
-
-private:
-    friend Result<ReadOnlyActivation> ActivateReadOnly(const ContextInterface&, const Detail::Descriptor&, const struct stat&, bool, std::size_t);
-    ReadOnlyActivation(Detail::Descriptor&& descriptor, const struct stat& snapshot) noexcept;
-    Detail::Descriptor mDescriptor;
-    struct stat mSnapshot;
-};
-Result<ReadOnlyActivation> ActivateReadOnly(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory,
-    std::size_t fdinfoByteCap);
+Result<Descriptor> ActivateReadOnly(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory, std::size_t fdinfoByteCap);
 
 // Ephemeral resolver staging only. Path commits its pins and checked physical
 // indexes into one owning deque; no stage survives a Make/Push operation.

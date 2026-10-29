@@ -1960,6 +1960,56 @@ TEST_F(PathAliasTest, CachedAliasRestoresHeldPhysicalAncestryBeforeDotDot)
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
+TEST_F(PathAliasTest, PreparedSelfAliasOwnsItsLeafIndependentlyOfHeldRoot)
+{
+    const std::string root = context.GetTempdirPath() + "/accepted";
+    ASSERT_EQ(0, ::mkdir(root.c_str(), 0700));
+    ASSERT_EQ(0, ::symlink(".", (root + "/self").c_str()));
+    const auto before = CountOpenDescriptors();
+    auto opened = SelectAcceptedPath(context, root, CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+    const Handle& original = path.Root();
+    const auto policy = ChildPolicy(SymlinkPolicy::Follow, MountPolicy::AllowCrossing);
+    auto pushed = path.Push("self", policy);
+    ASSERT_TRUE(pushed.HasValue()) << pushed.Error().message;
+    ASSERT_TRUE(pushed.Value().Is<const Path&>());
+    EXPECT_EQ(original.AcquiredMetadata().st_ino, path.Leaf().AcquiredMetadata().st_ino);
+    EXPECT_NE(&original, &path.Leaf());
+    auto detached = path.Pop();
+    ASSERT_TRUE(detached.HasValue()) << detached.Error().message;
+    EXPECT_EQ(&original, &path.Leaf());
+    ASSERT_TRUE(path.Close().HasValue());
+    EXPECT_EQ(before + 1, CountOpenDescriptors());
+    ASSERT_TRUE(detached.Value().Close().HasValue());
+    EXPECT_EQ(before, CountOpenDescriptors());
+}
+
+TEST_F(PathAliasTest, FailedPreparedSelfAliasDuplicationKeepsAcceptedRoot)
+{
+    const std::string root = context.GetTempdirPath() + "/accepted";
+    ASSERT_EQ(0, ::mkdir(root.c_str(), 0700));
+    ASSERT_EQ(0, ::symlink(".", (root + "/self").c_str()));
+    auto opened = SelectAcceptedPath(context, root, CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+    const auto before = CountOpenDescriptors();
+    const auto bytes = path.RetainedBytes();
+    const auto inode = path.Root().AcquiredMetadata().st_ino;
+    EXPECT_CALL(context, DuplicateDescriptor(_)).WillOnce([](int) {
+        errno = EMFILE;
+        return -1;
+    });
+    const auto failed = path.Push("self", ChildPolicy(SymlinkPolicy::Follow, MountPolicy::AllowCrossing));
+    ASSERT_FALSE(failed.HasValue());
+    EXPECT_EQ(EMFILE, failed.Error().code);
+    EXPECT_EQ(1U, path.Size());
+    EXPECT_EQ(bytes, path.RetainedBytes());
+    EXPECT_EQ(inode, path.Leaf().AcquiredMetadata().st_ino);
+    EXPECT_EQ(before, CountOpenDescriptors());
+    EXPECT_TRUE(path.Close().HasValue());
+}
+
 TEST_F(PathAliasTest, SingleMakeCachedSelfAliasHonorsFinalDirectoryLinkRejectAndSkip)
 {
     const std::string root = context.GetTempdirPath() + "/accepted";
@@ -3500,17 +3550,21 @@ TEST_F(PathAliasTest, AliasStaysOnPinnedFileAfterNameReplacementAndUnlink)
         // descriptor-alias activation must instead bind to the prior inode.
         auto active = ComplianceEngine::Filesystem::Detail::ActivateReadOnly(context, pinned, original, false, 4096);
         ASSERT_TRUE(active.HasValue()) << active.Error().message;
-        EXPECT_EQ(original.st_ino, active.Value().Snapshot().st_ino);
-        EXPECT_EQ(original.st_dev, active.Value().Snapshot().st_dev);
+        struct stat activated = {};
+        ASSERT_EQ(0, context.StatFile(active.Value(), &activated));
+        EXPECT_EQ(original.st_ino, activated.st_ino);
+        EXPECT_EQ(original.st_dev, activated.st_dev);
         char bytes[15] = {};
-        Descriptor reader = active.Value().TakeDescriptor();
+        Descriptor reader = std::move(active).Value();
         ASSERT_EQ(14, context.ReadFile(reader, bytes, 14));
         EXPECT_EQ("original bytes", std::string(bytes, 14));
 
         ASSERT_EQ(0, ::unlink((source + ".former").c_str()));
         auto again = ComplianceEngine::Filesystem::Detail::ActivateReadOnly(context, pinned, original, false, 4096);
         ASSERT_TRUE(again.HasValue()) << again.Error().message;
-        EXPECT_EQ(original.st_ino, again.Value().Snapshot().st_ino);
+        struct stat reacquired = {};
+        ASSERT_EQ(0, context.StatFile(again.Value(), &reacquired));
+        EXPECT_EQ(original.st_ino, reacquired.st_ino);
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }
@@ -3528,9 +3582,12 @@ TEST_F(PathAliasTest, DirectoryAliasAndMovesRetainSingleOwnership)
     {
         auto active = ComplianceEngine::Filesystem::Detail::ActivateReadOnly(context, pinned, original, true, 4096);
         ASSERT_TRUE(active.HasValue()) << active.Error().message;
-        EXPECT_EQ(original.st_ino, active.Value().Snapshot().st_ino);
-        ComplianceEngine::Filesystem::Detail::ReadOnlyActivation transferred = std::move(active).Value();
-        EXPECT_EQ(original.st_ino, transferred.Snapshot().st_ino);
+        struct stat activated = {};
+        ASSERT_EQ(0, context.StatFile(active.Value(), &activated));
+        EXPECT_EQ(original.st_ino, activated.st_ino);
+        Descriptor transferred = std::move(active).Value();
+        ASSERT_EQ(0, context.StatFile(transferred, &activated));
+        EXPECT_EQ(original.st_ino, activated.st_ino);
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }
@@ -3553,8 +3610,8 @@ TEST_F(PathAliasTest, ActivationHandsOffOwnerWithoutRetryingFailedClose)
             errno = EIO;
             return -1;
         });
-        Descriptor owner = activated.Value().TakeDescriptor();
-        EXPECT_FALSE(activated.Value().TakeDescriptor().HasValue());
+        Descriptor owner = std::move(activated).Value();
+        EXPECT_FALSE(activated.Value().HasValue());
         EXPECT_TRUE(owner.HasValue());
         auto closed = owner.Close();
         ASSERT_FALSE(closed.HasValue());
