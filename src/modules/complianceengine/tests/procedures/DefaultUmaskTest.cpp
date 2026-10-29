@@ -77,7 +77,7 @@ TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, ReachedReadFailureIsNotAbsentSett
     mContext.SetSpecialFilePath("/etc/bashrc", path);
     ON_CALL(mContext, ReadFileDescriptor(testing::_, testing::_, testing::_)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsData(fd, path))
-            return mContext.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return mContext.RealReadFileDescriptor(fd, buffer, size);
         errno = EIO;
         return -1;
     });
@@ -124,18 +124,18 @@ TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, CorrectValueStopsWithoutReadingTa
     int closes = 0;
     ON_CALL(mContext, ReadFileDescriptor(testing::_, testing::_, testing::_)).WillByDefault([&](int descriptor, void* buffer, std::size_t size) -> ssize_t {
         if (!IsData(descriptor, path))
-            return mContext.ContextInterface::ReadFileDescriptor(descriptor, buffer, size);
+            return mContext.RealReadFileDescriptor(descriptor, buffer, size);
         ++reads;
         if (reads == 1)
         {
-            return mContext.ContextInterface::ReadFileDescriptor(descriptor, buffer, size);
+            return mContext.RealReadFileDescriptor(descriptor, buffer, size);
         }
         errno = EIO;
         return -1;
     });
     ON_CALL(mContext, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
         closes += IsData(descriptor, path);
-        return mContext.ContextInterface::CloseFileDescriptor(descriptor);
+        return mContext.RealCloseFileDescriptor(descriptor);
     });
 
     const auto result = AuditDefaultUmask(mIndicators, mContext);
@@ -153,7 +153,7 @@ TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, CorrectValueCloseFailurePrecedesE
     int closes = 0;
     ON_CALL(mContext, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
         const bool data = IsData(descriptor, path);
-        mContext.ContextInterface::CloseFileDescriptor(descriptor);
+        mContext.RealCloseFileDescriptor(descriptor);
         if (data)
         {
             ++closes;

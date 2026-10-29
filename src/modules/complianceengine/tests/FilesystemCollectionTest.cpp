@@ -17,9 +17,13 @@
 #include <utility>
 #include <vector>
 
+using ComplianceEngine::As;
 using ComplianceEngine::Result;
 using ComplianceEngine::TemporaryDirectory;
 using ComplianceEngine::Filesystem::CollectFilesystem;
+using ComplianceEngine::Filesystem::CollectionContinuation;
+using ComplianceEngine::Filesystem::CollectionRootLimits;
+using ComplianceEngine::Filesystem::CollectionRootPolicy;
 using ComplianceEngine::Filesystem::FilesystemCollectionEntry;
 using ComplianceEngine::Filesystem::FilesystemCollectionLimits;
 using ComplianceEngine::Filesystem::FilesystemCollectionRequest;
@@ -29,6 +33,7 @@ using ComplianceEngine::Filesystem::FilesystemRootKind;
 using ComplianceEngine::Filesystem::FilesystemScope;
 using ComplianceEngine::Filesystem::FilesystemVisitAction;
 using ComplianceEngine::Filesystem::FilesystemYieldType;
+using ComplianceEngine::Filesystem::Path;
 using ComplianceEngine::Filesystem::ResolvedFilesystemCollectionRequest;
 using ComplianceEngine::Filesystem::ResolveFilesystemCollectionRequest;
 using ComplianceEngine::Filesystem::StreamFilesystemCollection;
@@ -168,6 +173,102 @@ TEST(FilesystemCollectionTest, UnifiedRangeRetainsLiveLeafAndSupportsRootDeviceS
     ASSERT_TRUE(scoped.Value().Close().HasValue());
 }
 
+TEST(FilesystemCollectionTest, CoreNoRootReplayAfterAcceptedDirectoryRenameAndReplacement)
+{
+    MockContext context;
+    TestTree tree;
+    tree.Directory("root");
+    tree.File("root/original");
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    request.scope = FilesystemScope::All;
+    request.yieldType = FilesystemYieldType::RegularFiles;
+    auto resolved = ResolveFilesystemCollectionRequest(request);
+    ASSERT_TRUE(resolved.HasValue()) << resolved.Error().message;
+    auto root = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), CollectionRootLimits(resolved.Value()));
+    ASSERT_TRUE(root.HasValue()) << root.Error().message;
+    ASSERT_TRUE(root.Value().Is<Path>());
+    Path accepted = As<Path>(std::move(root).Value());
+    const ino_t acceptedInode = accepted.Root().Stat().st_ino;
+    ASSERT_EQ(0, ::rename(tree.Path("root").c_str(), tree.Path("moved").c_str()));
+    tree.Directory("root");
+    tree.File("root/replacement");
+    EXPECT_CALL(context, OpenNativeAt(testing::_, testing::_, testing::_)).Times(testing::AnyNumber()).WillRepeatedly([&](int directory, const char* name, int flags) {
+        return context.RealOpenNativeAt(directory, name, flags);
+    });
+    EXPECT_CALL(context, OpenNativeAt(testing::_, testing::StrEq("root"), testing::_)).Times(0);
+    auto files = Files(std::move(accepted), CollectionContinuation(resolved.Value()));
+    ASSERT_TRUE(files.HasValue()) << files.Error().message;
+    std::vector<std::string> seen;
+    for (const auto& entry : files.Value())
+    {
+        ASSERT_TRUE(entry.HasValue()) << entry.Error().message;
+        ASSERT_NE(nullptr, entry.Value().LiveHandle());
+        seen.push_back(entry.Value().path);
+        struct stat original = {};
+        ASSERT_EQ(0, ::stat(tree.Path("moved/original").c_str(), &original));
+        EXPECT_EQ(original.st_ino, entry.Value().LiveHandle()->Stat().st_ino);
+    }
+    EXPECT_EQ((std::vector<std::string>{tree.Path("root/original")}), seen);
+    EXPECT_NE(0, acceptedInode);
+    EXPECT_TRUE(files->Close().HasValue());
+}
+
+TEST(FilesystemCollectionTest, AcquiredRootAndChildContinuationPoliciesRemainSeparate)
+{
+    MockContext context;
+    TestTree tree;
+    tree.Directory("real");
+    tree.File("real/ordinary");
+    tree.Link("ordinary", "real/link");
+    tree.Link("real", "alias");
+    FilesystemCollectionRequest request(tree.Path("alias"), FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    request.scope = FilesystemScope::All;
+    request.yieldType = FilesystemYieldType::RegularFiles;
+    request.rootDirectoryLinkAction = SymlinkPolicy::Follow;
+    request.rootFileLinkAction = SymlinkPolicy::Follow;
+    auto resolved = ResolveFilesystemCollectionRequest(request);
+    ASSERT_TRUE(resolved.HasValue());
+    auto root = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), CollectionRootLimits(resolved.Value()));
+    ASSERT_TRUE(root.HasValue()) << root.Error().message;
+    ASSERT_TRUE(root.Value().Is<Path>());
+    auto strict = CollectionContinuation(resolved.Value());
+    strict.childFileLinkAction = SymlinkPolicy::DoNotFollow;
+    auto excluded = Files(As<Path>(std::move(root).Value()), strict);
+    ASSERT_TRUE(excluded.HasValue()) << excluded.Error().message;
+    std::vector<std::string> seen;
+    for (const auto& entry : excluded.Value())
+    {
+        ASSERT_TRUE(entry.HasValue()) << entry.Error().message;
+        seen.push_back(entry.Value().path);
+    }
+    EXPECT_EQ((std::vector<std::string>{tree.Path("alias/ordinary")}), seen);
+    EXPECT_TRUE(excluded->Close().HasValue());
+
+    request.rootPath = tree.Path("real");
+    request.rootDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
+    request.rootFileLinkAction = SymlinkPolicy::DoNotFollow;
+    resolved = ResolveFilesystemCollectionRequest(request);
+    ASSERT_TRUE(resolved.HasValue());
+    auto direct = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), CollectionRootLimits(resolved.Value()));
+    ASSERT_TRUE(direct.HasValue());
+    ASSERT_TRUE(direct.Value().Is<Path>());
+    auto followChildren = CollectionContinuation(resolved.Value());
+    followChildren.childFileLinkAction = SymlinkPolicy::Follow;
+    auto followed = Files(As<Path>(std::move(direct).Value()), followChildren);
+    ASSERT_TRUE(followed.HasValue()) << followed.Error().message;
+    seen.clear();
+    for (const auto& entry : followed.Value())
+    {
+        ASSERT_TRUE(entry.HasValue()) << entry.Error().message;
+        seen.push_back(entry.Value().path);
+    }
+    std::sort(seen.begin(), seen.end());
+    EXPECT_EQ((std::vector<std::string>{tree.Path("real/link"), tree.Path("real/ordinary")}), seen);
+    EXPECT_TRUE(followed->Close().HasValue());
+}
+
 TEST(FilesystemCollectionTest, OwnedLiveEntryOutlivesRangeButCollectedSnapshotHasNoAuthority)
 {
     TestTree tree;
@@ -233,10 +334,10 @@ TEST(FilesystemCollectionTest, ClosingBeforeFirstPullChecksUnyieldedFilePinAndAl
         return descriptor;
     };
     ON_CALL(context, OpenNativePath(testing::_, testing::_)).WillByDefault([&](const char* path, int flags) {
-        return recordOpen(context.ContextInterface::OpenNativePath(path, flags));
+        return recordOpen(context.RealOpenNativePath(path, flags));
     });
     ON_CALL(context, OpenNativeAt(testing::_, testing::_, testing::_)).WillByDefault([&](int directory, const char* path, int flags) {
-        return recordOpen(context.ContextInterface::OpenNativeAt(directory, path, flags));
+        return recordOpen(context.RealOpenNativeAt(directory, path, flags));
     });
     std::size_t failedFilePin = 0;
     bool injectFileCloseFailure = false;
@@ -262,13 +363,13 @@ TEST(FilesystemCollectionTest, ClosingBeforeFirstPullChecksUnyieldedFilePinAndAl
     {
         auto opened = Files(FilesystemCollectionRequest(tree.Path("file"), FilesystemRootKind::File), context);
         ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
-        // All helpers have already closed. What remains belongs to the range:
-        // one pending file pin and the individual acquisition-path pins.
+        // Popping the accepted file releases its prefix immediately; only
+        // the independently owned pending file pin remains in the range.
         for (const auto& live : livePins)
         {
             ownedPins.push_back(live.second);
         }
-        ASSERT_GT(ownedPins.size(), 1u);
+        ASSERT_EQ(ownedPins.size(), 1u);
         std::size_t filePins = 0;
         std::size_t directoryPins = 0;
         for (const auto index : ownedPins)
@@ -291,7 +392,7 @@ TEST(FilesystemCollectionTest, ClosingBeforeFirstPullChecksUnyieldedFilePinAndAl
             }
         }
         ASSERT_EQ(1u, filePins);
-        ASSERT_GT(directoryPins, 0u);
+        ASSERT_EQ(directoryPins, 0u);
         injectFileCloseFailure = true;
         const auto closed = opened->Close();
         ASSERT_FALSE(closed.HasValue());
@@ -404,8 +505,7 @@ TEST(FilesystemCollectionTest, MissingRegularNameReportsWithoutFabricatingAMetad
     EXPECT_TRUE(missing->Value().missing);
     EXPECT_EQ(tree.Path("root/vanishing"), missing->Value().path);
     EXPECT_EQ(nullptr, missing->Value().LiveHandle());
-    EXPECT_EQ(0, missing->Value().linkMetadata.st_mode);
-    EXPECT_FALSE(missing->Value().targetMetadata.HasValue());
+    EXPECT_EQ(0, missing->Value().metadata.st_mode); // no accepted stat exists
     ASSERT_TRUE(opened->Close().HasValue());
 
     tree.File("root/vanishing");
@@ -444,7 +544,7 @@ TEST(FilesystemCollectionTest, MissingPolicyDoesNotSwallowPinnedChildInspectionF
             errno = ENOENT;
             return -1;
         }
-        return context.ContextInterface::StatFileDescriptor(descriptor, metadata);
+        return context.RealStatFileDescriptor(descriptor, metadata);
     });
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.yieldType = FilesystemYieldType::RegularFiles;
@@ -460,7 +560,6 @@ TEST(FilesystemCollectionTest, RejectsInvalidAcquisitionRootsBeforeLookup)
     MockContext context;
     EXPECT_CALL(context, LstatPath(testing::_, testing::_)).Times(0);
     EXPECT_CALL(context, StatPath(testing::_, testing::_)).Times(0);
-    EXPECT_CALL(context, OpenExistingFile(testing::_, testing::_)).Times(0);
     EXPECT_CALL(context, OpenDirectory(testing::_)).Times(0);
     EXPECT_CALL(context, StatFileDescriptor(testing::_, testing::_)).Times(0);
     const std::vector<std::string> roots = {"", ".", "..", "relative/root", std::string("/valid\0hidden", 13), std::string("relative\0hidden", 15)};
@@ -776,7 +875,7 @@ TEST(FilesystemCollectionTest, DistinguishesAbsentRootFromEmptyDirectoryAndFileR
     EXPECT_EQ((std::vector<std::string>{tree.Path("empty")}), Paths(directory->entries));
     ASSERT_TRUE(file.HasValue());
     EXPECT_EQ((std::vector<std::string>{tree.Path("file")}), Paths(file->entries));
-    EXPECT_TRUE(S_ISREG(file->entries[0].linkMetadata.st_mode));
+    EXPECT_TRUE(S_ISREG(file->entries[0].metadata.st_mode));
 }
 
 TEST(FilesystemCollectionTest, NoneAndDepthZeroInspectDirectEntriesWithoutDescending)
@@ -904,9 +1003,7 @@ TEST(FilesystemCollectionTest, SkipsAndFollowsDirectoryLinksIndependently)
     const auto alias = std::find_if(followed->entries.begin(), followed->entries.end(),
         [&tree](const FilesystemCollectionEntry& entry) { return entry.path == tree.Path("root/alias"); });
     ASSERT_NE(followed->entries.end(), alias);
-    ASSERT_TRUE(alias->targetMetadata.HasValue());
-    EXPECT_TRUE(S_ISLNK(alias->linkMetadata.st_mode));
-    EXPECT_TRUE(S_ISDIR(alias->targetMetadata.Value().st_mode));
+    EXPECT_TRUE(S_ISDIR(alias->metadata.st_mode));
     EXPECT_TRUE(followed->exclusions.empty());
 
     // A file-only follow setting does not cause directory traversal.
@@ -1179,9 +1276,7 @@ TEST(FilesystemCollectionTest, RootDirectoryLinkSkipIsAnExclusionNotAnAbsentRoot
     const auto followed = CollectFilesystem(request);
     ASSERT_TRUE(followed.HasValue());
     EXPECT_EQ(2u, followed->entries.size());
-    EXPECT_TRUE(followed->entries[0].targetMetadata.HasValue());
-    EXPECT_TRUE(S_ISLNK(followed->entries[0].linkMetadata.st_mode));
-    EXPECT_TRUE(S_ISDIR(followed->entries[0].targetMetadata.Value().st_mode));
+    EXPECT_TRUE(S_ISDIR(followed->entries[0].metadata.st_mode));
     ASSERT_EQ(1u, followed->exclusions.size());
     EXPECT_EQ(tree.Path("alias/descendant-link"), followed->exclusions[0].path);
     EXPECT_EQ("link policy", followed->exclusions[0].reason);
@@ -1208,9 +1303,7 @@ TEST(FilesystemCollectionTest, RootFileLinkAndChildFileLinkUseIndependentSetting
     const auto followedRoot = CollectFilesystem(file);
     ASSERT_TRUE(followedRoot.HasValue());
     ASSERT_EQ(1u, followedRoot->entries.size());
-    EXPECT_TRUE(S_ISLNK(followedRoot->entries[0].linkMetadata.st_mode));
-    ASSERT_TRUE(followedRoot->entries[0].targetMetadata.HasValue());
-    EXPECT_TRUE(S_ISREG(followedRoot->entries[0].targetMetadata.Value().st_mode));
+    EXPECT_TRUE(S_ISREG(followedRoot->entries[0].metadata.st_mode));
     EXPECT_TRUE(followedRoot->exclusions.empty());
 
     FilesystemCollectionRequest children(tree.Path("root"), FilesystemRootKind::Directory);
@@ -1228,9 +1321,7 @@ TEST(FilesystemCollectionTest, RootFileLinkAndChildFileLinkUseIndependentSetting
     const auto alias = std::find_if(followedChild->entries.begin(), followedChild->entries.end(),
         [&tree](const FilesystemCollectionEntry& entry) { return entry.path == tree.Path("root/alias"); });
     ASSERT_NE(followedChild->entries.end(), alias);
-    EXPECT_TRUE(S_ISLNK(alias->linkMetadata.st_mode));
-    ASSERT_TRUE(alias->targetMetadata.HasValue());
-    EXPECT_TRUE(S_ISREG(alias->targetMetadata.Value().st_mode));
+    EXPECT_TRUE(S_ISREG(alias->metadata.st_mode));
     EXPECT_TRUE(followedChild->exclusions.empty());
 
     children.yieldType = FilesystemYieldType::SymbolicLinks;
@@ -1339,7 +1430,7 @@ TEST(FilesystemCollectionTest, FileRootPinAndSnapshotHaveAnExactRetainedBudgetBo
     EXPECT_EQ(E2BIG, exceeded.Error().code);
 }
 
-TEST(FilesystemCollectionTest, ReplacingPinnedChildLinkKeepsOriginalLinkAndTargetIdentity)
+TEST(FilesystemCollectionTest, ReplacingPinnedChildLinkKeepsAcceptedTargetIdentity)
 {
     TestTree tree;
     tree.Directory("root");
@@ -1371,14 +1462,14 @@ TEST(FilesystemCollectionTest, ReplacingPinnedChildLinkKeepsOriginalLinkAndTarge
     auto alias =
         std::find_if(entries.begin(), entries.end(), [&](const FilesystemCollectionEntry& entry) { return entry.path == tree.Path("root/alias"); });
     ASSERT_NE(entries.end(), alias);
-    EXPECT_EQ(original.st_ino, alias->linkMetadata.st_ino);
-    ASSERT_TRUE(alias->targetMetadata.HasValue());
+    // The pinned link is used for resolution, but only its accepted target
+    // observation is published even after the name is replaced.
     struct stat first = {};
     ASSERT_EQ(0, stat(tree.Path("root/first").c_str(), &first));
-    EXPECT_EQ(first.st_ino, alias->targetMetadata.Value().st_ino);
+    EXPECT_EQ(first.st_ino, alias->metadata.st_ino);
 }
 
-TEST(FilesystemCollectionTest, ReplacingPinnedRootLinkKeepsOriginalLinkAndTargetIdentity)
+TEST(FilesystemCollectionTest, ReplacingPinnedRootLinkKeepsAcceptedTargetIdentity)
 {
     TestTree tree;
     tree.File("first");
@@ -1405,11 +1496,10 @@ TEST(FilesystemCollectionTest, ReplacingPinnedRootLinkKeepsOriginalLinkAndTarget
     EXPECT_TRUE(replaced);
     ASSERT_EQ(1u, opened->entries.size());
     const auto& entry = opened->entries.front();
-    EXPECT_EQ(original.st_ino, entry.linkMetadata.st_ino);
-    ASSERT_TRUE(entry.targetMetadata.HasValue());
+    // A replacement name cannot change the accepted pinned target snapshot.
     struct stat first = {};
     ASSERT_EQ(0, stat(tree.Path("first").c_str(), &first));
-    EXPECT_EQ(first.st_ino, entry.targetMetadata.Value().st_ino);
+    EXPECT_EQ(first.st_ino, entry.metadata.st_ino);
 }
 
 TEST(FilesystemCollectionTest, FactoryConvertsAllocationFailureDuringPinnedRootOpenToENOMEM)
@@ -1482,7 +1572,7 @@ TEST(FilesystemCollectionTest, UnsupportedSkipDoesNotTurnMissingRegularChildInto
             errno = ENOENT;
             return -1;
         }
-        return context.ContextInterface::OpenNativeAt(directory, name, flags);
+        return context.RealOpenNativeAt(directory, name, flags);
     });
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.direction = FilesystemDirection::Down;
@@ -1760,7 +1850,7 @@ TEST(FilesystemCollectionTest, FactorySeparatesAbsentRootFromInitializationFailu
     EXPECT_EQ(EIO, statFailure.Error().code);
 
     ON_CALL(context, StatFileDescriptor(testing::_, testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
-        return context.ContextInterface::StatFileDescriptor(descriptor, metadata);
+        return context.RealStatFileDescriptor(descriptor, metadata);
     });
     ON_CALL(context, OpenNativeAt(testing::_, testing::_, testing::_)).WillByDefault([](int, const char*, int) {
         errno = EACCES;
@@ -1817,7 +1907,7 @@ TEST(FilesystemCollectionTest, YieldSelectionDoesNotSuppressDescentOrWorkBudgets
     EXPECT_EQ(EACCES, opened->Close().Error().code);
 }
 
-TEST(FilesystemCollectionTest, LinkSelectionUsesEffectiveMetadataWithoutLosingLstat)
+TEST(FilesystemCollectionTest, LinkSelectionPublishesAcceptedTargetMetadata)
 {
     TestTree tree;
     tree.Directory("root");
@@ -1838,13 +1928,11 @@ TEST(FilesystemCollectionTest, LinkSelectionUsesEffectiveMetadataWithoutLosingLs
     const auto link = std::find_if(followed->entries.begin(), followed->entries.end(),
         [&tree](const FilesystemCollectionEntry& entry) { return entry.path == tree.Path("root/link"); });
     ASSERT_NE(followed->entries.end(), link);
-    EXPECT_TRUE(S_ISLNK(link->linkMetadata.st_mode));
-    struct stat expectedLink = {};
-    ASSERT_EQ(0, lstat(tree.Path("root/link").c_str(), &expectedLink));
-    EXPECT_EQ(expectedLink.st_dev, link->linkMetadata.st_dev);
-    EXPECT_EQ(expectedLink.st_ino, link->linkMetadata.st_ino);
-    ASSERT_TRUE(link->targetMetadata.HasValue());
-    EXPECT_TRUE(S_ISREG(link->targetMetadata.Value().st_mode));
+    struct stat target = {};
+    ASSERT_EQ(0, stat(tree.Path("root/target").c_str(), &target));
+    EXPECT_TRUE(S_ISREG(link->metadata.st_mode));
+    EXPECT_EQ(target.st_dev, link->metadata.st_dev);
+    EXPECT_EQ(target.st_ino, link->metadata.st_ino);
 
     request.yieldType = FilesystemYieldType::SymbolicLinks;
     request.childFileLinkAction = SymlinkPolicy::DoNotFollow;

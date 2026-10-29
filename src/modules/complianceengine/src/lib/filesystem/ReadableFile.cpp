@@ -47,12 +47,7 @@ Result<Optional<string>> ReadableFile::Read(std::size_t maxBytes)
     while (filled < maxBytes)
     {
         const std::size_t remaining = maxBytes - filled;
-        auto descriptor = mDescriptor->Get();
-        if (!descriptor.HasValue())
-        {
-            return std::move(descriptor).Error();
-        }
-        const ssize_t bytes = mDescriptor->Context().ReadFileDescriptor(descriptor.Value(), &chunk[filled], remaining);
+        const ssize_t bytes = mDescriptor->Context().ReadFile(mDescriptor.Value(), &chunk[filled], remaining);
         if (bytes < 0)
         {
             const int error = Detail::SavedError();
@@ -99,12 +94,7 @@ Result<struct stat> ReadableFile::Stat() const
     }
 
     struct stat metadata = {};
-    auto descriptor = mDescriptor->Get();
-    if (!descriptor.HasValue())
-    {
-        return std::move(descriptor).Error();
-    }
-    if (mDescriptor->Context().StatFileDescriptor(descriptor.Value(), &metadata) != 0)
+    if (mDescriptor->Context().StatFile(mDescriptor.Value(), &metadata) != 0)
     {
         return Error("Cannot inspect readable file", Detail::SavedError());
     }

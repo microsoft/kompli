@@ -14,11 +14,20 @@
 #include <grp.h>
 #include <string>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <sys/types.h>
 #include <vector>
 
 namespace ComplianceEngine
 {
+namespace Filesystem
+{
+namespace Detail
+{
+class Descriptor;
+}
+class DirectoryCursor;
+} // namespace Filesystem
 // A single network interface as reported by the system: its name and the IFF_* flags
 // bitmask (see <net/if.h>). Produced by ContextInterface::GetNetworkInterfaces().
 struct InterfaceInfo
@@ -34,22 +43,42 @@ public:
     virtual Result<std::string> ExecuteCommand(const std::string& cmd) const = 0;
     virtual Result<std::string> GetFileContents(const std::string& filePath) const = 0;
 
-    // Syscall results and errno are preserved. Open supports only O_RDONLY (zero),
-    // O_PATH, O_CLOEXEC and O_NOFOLLOW; creation and write flags return EINVAL.
-    virtual int OpenExistingFile(const char* path, int flags) const;
-    // Native acquisition forwards for the filesystem foundation: absolute
-    // process-root/procfs opens and dirfd-relative child/procfs-alias opens.
-    // These are internal syscall seams, not public Handle fd accessors.
-    virtual int OpenNativePath(const char* path, int flags) const;
-    virtual int OpenNativeAt(int directory, const char* path, int flags) const;
-    virtual int StatFileDescriptor(int descriptor, struct stat* metadata) const;
-    virtual ssize_t ReadFileDescriptor(int descriptor, void* buffer, std::size_t size) const;
-    virtual int CloseFileDescriptor(int descriptor) const;
-    // Internal metadata syscall forwards. The foundation passes only its
-    // live O_PATH pin or its verified procfs directory and decimal alias;
-    // these are not handle descriptor accessors or alternate path lookups.
-    virtual int ChownPinnedFileDescriptor(int descriptor, uid_t owner, gid_t group) const;
-    virtual int ChmodPinnedAlias(int procfsDirectory, const char* decimalAlias, mode_t mode) const;
+    enum class OpenProfile
+    {
+        PinDirectory,
+        PinSelfDirectory,
+        PinChild,
+        PinChildDirectory,
+        ReadFdinfo,
+        FollowAliasFile,
+        FollowAliasDirectory,
+        FollowAliasPin,
+        FollowAliasPinDirectory
+    };
+    // Only the context syscall boundary extracts native descriptor numbers.
+    // Open/duplicate atomically set CLOEXEC. Duplicate shares the open-file
+    // description (including offset); it is not an independent reader.
+    Filesystem::Detail::Descriptor EmptyDescriptor(const char* diagnostic = "Failed to close internal filesystem descriptor") const noexcept;
+    Result<Filesystem::Detail::Descriptor> OpenAbsolutePin(const char* path, bool directory = true) const;
+    Result<Filesystem::Detail::Descriptor> OpenAt(const Filesystem::Detail::Descriptor& directory, const char* name, OpenProfile profile,
+        const char* diagnostic = "Failed to close internal filesystem descriptor") const;
+    Result<Filesystem::Detail::Descriptor> OpenFdinfo(const Filesystem::Detail::Descriptor& directory, const Filesystem::Detail::Descriptor& target) const;
+    Result<Filesystem::Detail::Descriptor> OpenAlias(const Filesystem::Detail::Descriptor& directory, const Filesystem::Detail::Descriptor& target,
+        bool directoryAlias, const char* diagnostic = "Failed to close internal filesystem descriptor") const;
+    Result<Filesystem::Detail::Descriptor> OpenPinAlias(const Filesystem::Detail::Descriptor& directory, const Filesystem::Detail::Descriptor& target,
+        bool directoryAlias) const;
+    Result<Filesystem::Detail::Descriptor> Duplicate(const Filesystem::Detail::Descriptor& source) const;
+    int StatFile(const Filesystem::Detail::Descriptor& owner, struct stat* metadata) const;
+    int StatFilesystem(const Filesystem::Detail::Descriptor& owner, struct statfs* metadata) const;
+    ssize_t ReadFile(const Filesystem::Detail::Descriptor& owner, void* buffer, std::size_t size) const;
+    ssize_t ReadLink(const Filesystem::Detail::Descriptor& owner, char* buffer, std::size_t size) const;
+    int StatusFlags(const Filesystem::Detail::Descriptor& owner) const;
+    int DescriptorFlags(const Filesystem::Detail::Descriptor& owner) const;
+    int ChownPinned(const Filesystem::Detail::Descriptor& owner, uid_t user, gid_t group) const;
+    int ChmodAlias(const Filesystem::Detail::Descriptor& procfsDirectory, const Filesystem::Detail::Descriptor& pin, mode_t mode) const;
+    Result<Filesystem::DirectoryCursor> OpenDirectoryCursor(Filesystem::Detail::Descriptor&& owner) const;
+    // Relinquish before the single native close attempt (even if it throws).
+    int CloseOwnedDescriptor(Filesystem::Detail::Descriptor& owner) const;
 
     // POSIX directory and path operations. A null ReadDirectory result is EOF
     // only when errno is zero; callers clear errno immediately before reading.
@@ -84,6 +113,23 @@ public:
 
     // Returns the path to be used for storing state.
     virtual std::string GetStatePath() const = 0;
+
+protected:
+    // Native-only override seams: subclasses receive integers solely for
+    // system-call simulation, never through an owner-access API.
+    virtual int OpenNativePath(const char* path, int flags) const;
+    virtual int OpenNativeAt(int directory, const char* path, int flags) const;
+    virtual int StatFileDescriptor(int descriptor, struct stat* metadata) const;
+    virtual int StatFilesystemDescriptor(int descriptor, struct statfs* metadata) const;
+    virtual ssize_t ReadFileDescriptor(int descriptor, void* buffer, std::size_t size) const;
+    virtual ssize_t ReadLinkDescriptor(int descriptor, char* buffer, std::size_t size) const;
+    virtual int StatusFlagsDescriptor(int descriptor) const;
+    virtual int DescriptorFlagsDescriptor(int descriptor) const;
+    virtual int DuplicateDescriptor(int descriptor) const;
+    virtual DIR* FdOpenDirectory(int descriptor) const;
+    virtual int CloseFileDescriptor(int descriptor) const;
+    virtual int ChownPinnedFileDescriptor(int descriptor, uid_t owner, gid_t group) const;
+    virtual int ChmodPinnedAlias(int procfsDirectory, const char* decimalAlias, mode_t mode) const;
 };
 } // namespace ComplianceEngine
 #endif // COMPLIANCEENGINE_CONTEXT_H

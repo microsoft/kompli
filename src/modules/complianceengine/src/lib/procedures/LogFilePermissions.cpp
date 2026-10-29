@@ -30,6 +30,7 @@ using Filesystem::FilesystemRootKind;
 using Filesystem::FilesystemScope;
 using Filesystem::FilesystemYieldType;
 using Filesystem::SymlinkPolicy;
+using Filesystem::UnsupportedTypeAction;
 
 // Global map of fnmatch patterns to file permission arguments
 // Pattern -> {args}
@@ -139,10 +140,9 @@ FilePermissionsParams GetFilePermissionArgs(const std::string& filename, const s
 
 Result<Status> ProcessLogfile(const FilesystemCollectionEntry& entry, const DaemonUidSet& daemonUids, IndicatorsTree& indicators, ContextInterface& context, bool remediate)
 {
-    const struct stat& statInfo = entry.linkMetadata;
+    const struct stat& statInfo = entry.metadata;
     const std::string& fullPath = entry.path;
     const std::size_t separator = fullPath.find_last_of('/');
-    const std::string path = fullPath.substr(0, separator);
     const std::string filename = fullPath.substr(separator + 1);
     if (entry.missing)
     {
@@ -157,12 +157,6 @@ Result<Status> ProcessLogfile(const FilesystemCollectionEntry& entry, const Daem
     }
     if (S_ISDIR(statInfo.st_mode))
     {
-        return Status::Compliant;
-    }
-
-    if (S_ISLNK(statInfo.st_mode))
-    {
-        OsConfigLogDebug(context.GetLogHandle(), "Skipping symbolic link: %s/%s", path.c_str(), filename.c_str());
         return Status::Compliant;
     }
 
@@ -212,9 +206,23 @@ Result<Status> WalkLogfiles(const std::string& path, const DaemonUidSet& daemonU
     policy.childFileLinkAction = SymlinkPolicy::DoNotFollow;
     policy.childDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
     policy.yieldType = FilesystemYieldType::RegularFiles;
+    // The scan selects only regular files; special children are not logfiles
+    // and must be omitted without attempting an operational open.
+    policy.unsupported = UnsupportedTypeAction::Skip;
     policy.missingChildAction = FilesystemMissingChildAction::ReportRegularFile;
 
-    auto opened = Filesystem::FTW::Files(policy, context);
+    auto resolved = Filesystem::ResolveFilesystemCollectionRequest(policy);
+    if (!resolved.HasValue())
+        return resolved.Error();
+    auto root = Filesystem::Path::Make(context, resolved.Value().rootPath, Filesystem::CollectionRootPolicy(resolved.Value()),
+        Filesystem::CollectionRootLimits(resolved.Value()));
+    if (!root.HasValue())
+        return root.Error();
+    if (root.Value().Is<Filesystem::Path::RejectionReason>())
+        return Status::Compliant; // missing/excluded root: no matching files
+    if (As<Filesystem::Path>(root.Value()).Root().AcquiredType() != Filesystem::Handle::Type::Directory)
+        return Error("Expected directory root at '" + path + "'", ENOTDIR);
+    auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), Filesystem::CollectionContinuation(resolved.Value()));
     if (!opened.HasValue())
     {
         return opened.Error();

@@ -122,16 +122,23 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
     policy.childDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
     policy.childFileLinkAction = SymlinkPolicy::DoNotFollow;
     policy.yieldType = FilesystemYieldType::RegularFiles;
-    auto opened = Filesystem::FTW::Files(policy, context);
+    auto resolved = Filesystem::ResolveFilesystemCollectionRequest(policy);
+    if (!resolved.HasValue())
+        return resolved.Error();
+    auto root = Filesystem::Path::Make(context, resolved.Value().rootPath, Filesystem::CollectionRootPolicy(resolved.Value()),
+        Filesystem::CollectionRootLimits(resolved.Value()));
+    if (!root.HasValue())
+        return root.Error();
+    if (root.Value().Is<Filesystem::Path::RejectionReason>())
+        return Status::Compliant;
+    if (As<Filesystem::Path>(root.Value()).Root().AcquiredType() != Filesystem::Handle::Type::Directory)
+        return Error("Expected directory root at '" + baseDir + "'", ENOTDIR);
+    auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), Filesystem::CollectionContinuation(resolved.Value()));
     if (!opened.HasValue())
     {
         return opened.Error();
     }
     auto& files = opened.Value();
-    if (!files.RootExists())
-    {
-        return Status::Compliant;
-    }
     Status verdict = Status::Compliant;
     for (const auto& entry : files)
     {

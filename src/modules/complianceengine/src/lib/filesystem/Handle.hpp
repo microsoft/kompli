@@ -49,8 +49,8 @@ public:
     Result<bool> Close();
 
 private:
-    friend class Handle;
-    DirectoryCursor(const ContextInterface& context, DIR* stream);
+    friend class ::ComplianceEngine::ContextInterface;
+    DirectoryCursor(const ContextInterface& context, DIR* stream) noexcept;
     const ContextInterface* mContext = nullptr;
     DIR* mStream = nullptr;
     int mCloseError = 0;
@@ -116,13 +116,13 @@ private:
     // private: no consumer can supply an fd.
     friend class Path;
     Handle(Detail::Descriptor&& descriptor, Type type, std::string component, const struct stat& snapshot);
-    static Result<Handle> AcquireChild(const ContextInterface& context, int parentDirectory, std::string component, bool directory);
+    static Result<Handle> AcquireChild(const ContextInterface& context, const Detail::Descriptor& parentDirectory, std::string component, bool directory);
     static Result<Handle> AcquireChild(const Handle& parent, std::string component, bool directory);
     static Result<Handle> PinProcessRoot(const ContextInterface& context);
     static Result<bool> RecognizeAcceptedRoot(const Handle& acceptedRoot, const Handle& candidate, std::size_t fdinfoByteCap);
     static Result<std::string> ValidateAbsolutePrefix(const ContextInterface& context, const std::vector<const Handle*>& heldLineage,
         const std::string& target, const PrefixLimits& limits);
-    Result<struct stat> InspectWithProcfs(int fdinfoDirectory, std::size_t fdinfoByteCap, std::uint64_t& mountId) const;
+    Result<struct stat> InspectWithProcfs(const Detail::Descriptor& fdinfoDirectory, std::size_t fdinfoByteCap, std::uint64_t& mountId) const;
     void Swap(Handle& other) noexcept;
     int CloseOnce() noexcept;
 

@@ -39,6 +39,13 @@ using testing::NiceMock;
 
 namespace
 {
+ExtensionPolicy CrossMountExtension()
+{
+    ExtensionPolicy policy;
+    policy.mounts = MountPolicy::AllowCrossing;
+    return policy;
+}
+
 std::size_t OpenDescriptors()
 {
     DIR* directory = ::opendir("/proc/self/fd");
@@ -91,18 +98,26 @@ protected:
 
     ComplianceEngine::Result<Handle> Pin(MockContext& selectedContext, const std::string& component)
     {
-        const ResolverLimits limits{{4096, 100, 100000, 256, 262144, fdinfoCap}, 4096, 8, 128};
-        auto root = Path::Make(selectedContext, selectedContext.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
+        ResolverLimits limits;
+        limits.shared.components = 100;
+        limits.shared.retainedBytes = 262144;
+        limits.shared.fdinfoBytes = fdinfoCap;
+        limits.linkExpansions = 8;
+        Path::Policy policy;
+        policy.mounts = MountPolicy::AllowCrossing;
+        auto root = Path::Make(selectedContext, selectedContext.GetTempdirPath(), policy, limits);
         if (!root.HasValue())
         {
             return std::move(root).Error();
         }
-        if (root.Value().GetStatus() != Path::Result::Status::Accepted)
+        if (!root.Value().Is<Path>())
         {
             return ComplianceEngine::Error("Fixture directory is unavailable", ENOENT);
         }
-        Path path = std::move(root.Value()).TakePath();
-        auto pushed = path.Push(component, ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit});
+        Path path = ComplianceEngine::As<Path>(std::move(root.Value()));
+        ExtensionPolicy extension;
+        extension.mounts = MountPolicy::AllowCrossing;
+        auto pushed = path.Push(component, extension);
         if (!pushed.HasValue())
         {
             return std::move(pushed).Error();
@@ -145,9 +160,8 @@ TEST_F(ReadableFileTest, DescriptorExplicitCloseLogsNativeErrorOnceWithoutRetryI
     auto acquired = VerifiedTestDescriptor(context);
     ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
     Descriptor owner = std::move(acquired).Value();
-    const int fd = owner.Get().Value();
     {
-        EXPECT_CALL(context, CloseFileDescriptor(fd)).Times(1).WillOnce([](int descriptor) {
+        EXPECT_CALL(context, CloseFileDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) {
             EXPECT_EQ(0, ::close(descriptor));
             errno = EACCES;
             return -1;
@@ -178,17 +192,15 @@ TEST_F(ReadableFileTest, DescriptorMoveReplacementRoutesThrownCloseToOldContextO
     auto oldResult = VerifiedTestDescriptor(oldContext);
     ASSERT_TRUE(oldResult.HasValue()) << oldResult.Error().message;
     Descriptor old = std::move(oldResult).Value();
-    const int oldFd = old.Get().Value();
     auto incomingResult = VerifiedTestDescriptor(incomingContext);
     ASSERT_TRUE(incomingResult.HasValue()) << incomingResult.Error().message;
     Descriptor incoming = std::move(incomingResult).Value();
-    const int incomingFd = incoming.Get().Value();
     {
-        EXPECT_CALL(oldContext, CloseFileDescriptor(oldFd)).Times(1).WillOnce([](int descriptor) -> int {
+        EXPECT_CALL(oldContext, CloseFileDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) -> int {
             EXPECT_EQ(0, ::close(descriptor));
             throw std::runtime_error("native close fault");
         });
-        EXPECT_CALL(incomingContext, CloseFileDescriptor(incomingFd)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
+        EXPECT_CALL(incomingContext, CloseFileDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
         testing::internal::CaptureStderr();
         old = std::move(incoming);
         EXPECT_TRUE(incoming.Close().HasValue());
@@ -214,11 +226,8 @@ TEST_F(ReadableFileTest, AliasOpenFailureDoesNotReopenNameOrLeak)
     ASSERT_TRUE(pinned.HasValue());
     const auto before = OpenDescriptors();
     bool throwAlias = false, denied = false, cleanupFailed = false;
-    EXPECT_CALL(context, OpenNativePath(_, _)).WillRepeatedly([&](const char* path, int flags) {
-        return context.ContextInterface::OpenNativePath(path, flags);
-    });
+    EXPECT_CALL(context, OpenNativePath(_, _)).WillRepeatedly([&](const char* path, int flags) { return context.RealOpenNativePath(path, flags); });
     EXPECT_CALL(context, OpenNativePath(testing::StrEq(source.c_str()), _)).Times(0);
-    EXPECT_CALL(context, OpenExistingFile(testing::StrEq(source.c_str()), _)).Times(0);
     EXPECT_CALL(context, OpenNativeAt(_, _, _)).WillRepeatedly([&](int directory, const char* name, int flags) {
         char path[512] = {};
         const std::string alias = "/proc/self/fd/" + std::to_string(directory);
@@ -235,7 +244,7 @@ TEST_F(ReadableFileTest, AliasOpenFailureDoesNotReopenNameOrLeak)
             errno = EACCES;
             return -1;
         }
-        return context.ContextInterface::OpenNativeAt(directory, name, flags);
+        return context.RealOpenNativeAt(directory, name, flags);
     });
     EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) {
         struct statfs filesystem = {};
@@ -269,7 +278,7 @@ TEST_F(ReadableFileTest, AliasOutputClosesWhenProcfsHelperCloseFails)
     const auto before = OpenDescriptors();
     bool failed = false, aliasOpened = false;
     EXPECT_CALL(context, OpenNativeAt(_, _, _)).WillRepeatedly([&](int directory, const char* name, int flags) {
-        const int descriptor = context.ContextInterface::OpenNativeAt(directory, name, flags);
+        const int descriptor = context.RealOpenNativeAt(directory, name, flags);
         if ((0 <= descriptor) && (0 == (flags & O_PATH)) && (0 == (flags & O_NOFOLLOW)))
         {
             aliasOpened = true;
@@ -358,7 +367,7 @@ TEST_F(ReadableFileTest, NativeDescriptorZeroRemainsOwnedThroughEofUntilClose)
             bool mapped = false;
             bool closed = false;
             EXPECT_CALL(context, OpenNativeAt(_, _, _)).WillRepeatedly([&](int directory, const char* name, int flags) {
-                const int descriptor = context.ContextInterface::OpenNativeAt(directory, name, flags);
+                const int descriptor = context.RealOpenNativeAt(directory, name, flags);
                 if ((descriptor >= 0) && ((flags & (O_PATH | O_NOFOLLOW)) == 0))
                 {
                     if ((::dup2(descriptor, STDIN_FILENO) != STDIN_FILENO) || (::fcntl(STDIN_FILENO, F_SETFD, FD_CLOEXEC) != 0) || mapped)
@@ -454,15 +463,15 @@ TEST_F(ReadableFileTest, ShortNativeReadsFillCapacityAtShrinkingOffsetsWithoutEo
     void* start = nullptr;
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
         start = buffer;
-        return context.ContextInterface::ReadFileDescriptor(fd, buffer, 1);
+        return context.RealReadFileDescriptor(fd, buffer, 1);
     });
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 4)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
         EXPECT_EQ(static_cast<char*>(start) + 1, buffer);
-        return context.ContextInterface::ReadFileDescriptor(fd, buffer, 2);
+        return context.RealReadFileDescriptor(fd, buffer, 2);
     });
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 2)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t size) {
         EXPECT_EQ(static_cast<char*>(start) + 3, buffer);
-        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        return context.RealReadFileDescriptor(fd, buffer, size);
     });
     auto filled = readable.Read(5);
     ASSERT_TRUE(filled.HasValue());
@@ -488,11 +497,11 @@ TEST_F(ReadableFileTest, EofAfterShortProgressReturnsEngagedPartialButImmediateE
     void* start = nullptr;
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
         start = buffer;
-        return context.ContextInterface::ReadFileDescriptor(fd, buffer, 2);
+        return context.RealReadFileDescriptor(fd, buffer, 2);
     });
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 3)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t size) {
         EXPECT_EQ(static_cast<char*>(start) + 2, buffer);
-        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        return context.RealReadFileDescriptor(fd, buffer, size);
     });
     auto partial = readable.Read(5);
     ASSERT_TRUE(partial.HasValue());
@@ -559,7 +568,7 @@ TEST_F(ReadableFileTest, InterruptedShortReadsShareCumulativeBudgetAndAllowProgr
             return -1;
         }
         start = buffer;
-        return context.ContextInterface::ReadFileDescriptor(fd, buffer, 2);
+        return context.RealReadFileDescriptor(fd, buffer, 2);
     });
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 3)).Times(2).WillRepeatedly([&](int fd, void* buffer, std::size_t) -> ssize_t {
         EXPECT_EQ(static_cast<char*>(start) + 2, buffer);
@@ -568,11 +577,11 @@ TEST_F(ReadableFileTest, InterruptedShortReadsShareCumulativeBudgetAndAllowProgr
             errno = EINTR;
             return -1;
         }
-        return context.ContextInterface::ReadFileDescriptor(fd, buffer, 1);
+        return context.RealReadFileDescriptor(fd, buffer, 1);
     });
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 2)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t size) {
         EXPECT_EQ(static_cast<char*>(start) + 3, buffer);
-        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        return context.RealReadFileDescriptor(fd, buffer, size);
     });
     auto filled = readable.Read(5);
     ASSERT_TRUE(filled.HasValue());
@@ -599,7 +608,7 @@ TEST_F(ReadableFileTest, NativeErrorAfterShortProgressDoesNotReturnPartialDataOr
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
-        return context.ContextInterface::ReadFileDescriptor(fd, buffer, 2);
+        return context.RealReadFileDescriptor(fd, buffer, 2);
     });
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 3)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
         errno = EIO;
@@ -626,7 +635,7 @@ TEST_F(ReadableFileTest, ExhaustedEintrAfterShortProgressIsErrorNotPartialData)
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 3)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
-        return context.ContextInterface::ReadFileDescriptor(fd, buffer, 1);
+        return context.RealReadFileDescriptor(fd, buffer, 1);
     });
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 2)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
         errno = EINTR;
@@ -652,7 +661,7 @@ TEST_F(ReadableFileTest, OverreportOnReducedRemainingRequestFailsBeforePublishin
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
-        return context.ContextInterface::ReadFileDescriptor(fd, buffer, 2);
+        return context.RealReadFileDescriptor(fd, buffer, 2);
     });
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 3)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t { return 4; });
     auto failed = readable.Read(5);
@@ -730,7 +739,7 @@ TEST_F(ReadableFileTest, InterruptedReadConsumesOnlyRetriesAndPreservesBinaryDat
             errno = EINTR;
             return -1;
         })
-        .WillOnce([&](int descriptor, void* buffer, std::size_t size) { return context.ContextInterface::ReadFileDescriptor(descriptor, buffer, size); });
+        .WillOnce([&](int descriptor, void* buffer, std::size_t size) { return context.RealReadFileDescriptor(descriptor, buffer, size); });
     EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1);
     auto read = readable.Read(8);
     ASSERT_TRUE(read.HasValue());
@@ -782,7 +791,7 @@ TEST_F(ReadableFileTest, InterruptedBudgetMovesWithReadableAcrossSeparateReads)
             errno = EINTR;
             return -1;
         }
-        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        return context.RealReadFileDescriptor(fd, buffer, size);
     });
 
     auto first = readable.Read(1);
@@ -893,12 +902,18 @@ TEST_F(ReadableFileTest, ThrowingReadPropagatesWithoutInvalidatingDescriptor)
 TEST_F(ReadableFileTest, CheckedLeafAndPathReleasePreservesIndependentReadable)
 {
     const std::string source = context.MakeTempfile(std::string("a\0b", 3));
-    const ResolverLimits limits{{4096, 100, 100000, 256, 262144, fdinfoCap}, 4096, 8, 128};
-    auto opened = Path::Make(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
+    ResolverLimits limits;
+    limits.shared.components = 100;
+    limits.shared.retainedBytes = 262144;
+    limits.shared.fdinfoBytes = fdinfoCap;
+    limits.linkExpansions = 8;
+    Path::Policy policy;
+    policy.mounts = MountPolicy::AllowCrossing;
+    auto opened = Path::Make(context, context.GetTempdirPath(), policy, limits);
     ASSERT_TRUE(opened.HasValue());
-    ASSERT_EQ(Path::Result::Status::Accepted, opened.Value().GetStatus());
-    Path path = std::move(opened.Value()).TakePath();
-    ASSERT_TRUE(path.Push(Component(source), ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit}).HasValue());
+    ASSERT_TRUE(opened.Value().Is<Path>());
+    Path path = ComplianceEngine::As<Path>(std::move(opened.Value()));
+    ASSERT_TRUE(path.Push(Component(source), CrossMountExtension()).HasValue());
     auto popped = path.Pop();
     ASSERT_TRUE(popped.HasValue());
     Handle leaf = std::move(popped).Value();
@@ -920,9 +935,9 @@ TEST_F(ReadableFileTest, CheckedLeafAndPathReleasePreservesIndependentReadable)
     EXPECT_EQ(EBADF, leaf.OpenReadOnly(fdinfoCap).Error().code);
     EXPECT_EQ(0U, path.RetainedDescriptors());
     EXPECT_EQ(0U, path.RetainedBytes());
-    EXPECT_EQ(EINVAL, path.Push("other", ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit}).Error().code);
+    EXPECT_EQ(EINVAL, path.Push("other", CrossMountExtension()).Error().code);
     EXPECT_EQ(EINVAL, path.Pop().Error().code);
-    EXPECT_EQ(EINVAL, path.Push("other", ExtensionPolicy{SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit}).Error().code);
+    EXPECT_EQ(EINVAL, path.Push("other", CrossMountExtension()).Error().code);
     EXPECT_THROW(path.Root(), std::logic_error);
     EXPECT_THROW(path.Leaf(), std::logic_error);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
@@ -940,11 +955,17 @@ TEST_F(ReadableFileTest, RejectsDirectoryInvalidCapAndPinInspectionFailureWithou
 {
     const std::size_t before = OpenDescriptors();
     {
-        const ResolverLimits limits{{4096, 100, 100000, 256, 262144, fdinfoCap}, 4096, 8, 128};
-        auto directory = Path::Make(context, context.GetTempdirPath(), {SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing}, limits);
+        ResolverLimits limits;
+        limits.shared.components = 100;
+        limits.shared.retainedBytes = 262144;
+        limits.shared.fdinfoBytes = fdinfoCap;
+        limits.linkExpansions = 8;
+        Path::Policy policy;
+        policy.mounts = MountPolicy::AllowCrossing;
+        auto directory = Path::Make(context, context.GetTempdirPath(), policy, limits);
         ASSERT_TRUE(directory.HasValue());
-        ASSERT_EQ(Path::Result::Status::Accepted, directory.Value().GetStatus());
-        auto wrongType = directory.Value().AcceptedPath().Leaf().OpenReadOnly(fdinfoCap);
+        ASSERT_TRUE(directory.Value().Is<Path>());
+        auto wrongType = ComplianceEngine::As<Path>(directory.Value()).Leaf().OpenReadOnly(fdinfoCap);
         ASSERT_FALSE(wrongType.HasValue());
         EXPECT_EQ(EINVAL, wrongType.Error().code);
         const std::string source = context.MakeTempfile("x");
@@ -1250,11 +1271,11 @@ TEST_F(ReadableFileTest, CrossContextMoveAssignmentClosesOldOwnerAndRoutesIncomi
     EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
     EXPECT_CALL(foreignContext, StatFileDescriptor(_, _)).Times(1).WillOnce([&](int descriptor, struct stat* metadata) {
         incomingDescriptor = descriptor;
-        return foreignContext.ContextInterface::StatFileDescriptor(descriptor, metadata);
+        return foreignContext.RealStatFileDescriptor(descriptor, metadata);
     });
     EXPECT_CALL(foreignContext, ReadFileDescriptor(_, _, _)).Times(1).WillOnce([&](int descriptor, void* buffer, std::size_t size) {
         EXPECT_EQ(incomingDescriptor, descriptor);
-        return foreignContext.ContextInterface::ReadFileDescriptor(descriptor, buffer, size);
+        return foreignContext.RealReadFileDescriptor(descriptor, buffer, size);
     });
 
     destination = std::move(source);

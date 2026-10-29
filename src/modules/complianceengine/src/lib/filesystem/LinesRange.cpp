@@ -30,24 +30,6 @@ bool SameFile(const struct stat& before, const struct stat& after)
            before.st_ctim.tv_sec == after.st_ctim.tv_sec && before.st_ctim.tv_nsec == after.st_ctim.tv_nsec;
 }
 
-// The Path resolver charges link work and retained pins separately from the
-// reader's content-byte budget. Root "/" preserves absolute-path semantics:
-// every component uses Policy.
-// This does not establish trust in a caller-supplied path's ancestors.
-Filesystem::ResolverLimits AcquisitionLimits()
-{
-    Filesystem::ResolverLimits limits;
-    limits.shared.targetBytes = 4096;
-    limits.shared.components = 128;
-    limits.shared.work = 100000;
-    limits.shared.liveDescriptors = 256;
-    limits.shared.retainedBytes = std::size_t{1024} * 1024;
-    limits.shared.fdinfoBytes = 4096;
-    limits.linkTargetBytes = 4096;
-    limits.linkExpansions = 128;
-    limits.depth = 128;
-    return limits;
-}
 } // namespace
 
 LinesRange::LinesRange(ReadableFile&& data, Policy policy, const struct stat& before) noexcept
@@ -297,16 +279,23 @@ Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string
     if (policy.limits.maxBytes >= std::string().max_size())
         return Error("File byte limit is not representable", EOVERFLOW);
 
-    const auto limits = AcquisitionLimits();
-    auto acquired = Filesystem::Path::Make(context, path, {policy.symlinks, Filesystem::MountPolicy::AllowCrossing}, limits);
+    // Resolver pin/work budgets are independent of the content-byte cap.
+    // Root "/" preserves absolute-path semantics for each component.
+    const ResolverLimits limits;
+    Filesystem::Path::Policy pathPolicy;
+    pathPolicy.symlinks = policy.symlinks;
+    pathPolicy.mounts = Filesystem::MountPolicy::AllowCrossing;
+    pathPolicy.fileLinks = policy.symlinks;
+    pathPolicy.directoryLinks = policy.symlinks;
+    auto acquired = Filesystem::Path::Make(context, path, pathPolicy, limits);
     if (!acquired.HasValue())
         return std::move(acquired).Error();
 
-    if (acquired.Value().GetStatus() == Filesystem::Path::Result::Status::Missing)
+    if (acquired.Value().Is<Filesystem::Path::RejectionReason>() && As<Filesystem::Path::RejectionReason>(acquired.Value()) == Filesystem::Path::RejectionReason::Missing)
         return Error("File target is missing", ENOENT);
-    if (acquired.Value().GetStatus() == Filesystem::Path::Result::Status::Excluded)
+    if (acquired.Value().Is<Filesystem::Path::RejectionReason>() && As<Filesystem::Path::RejectionReason>(acquired.Value()) == Filesystem::Path::RejectionReason::Excluded)
         return Error("File target is excluded", ELOOP);
-    auto& pins = acquired.Value().AcceptedPath();
+    auto& pins = As<Filesystem::Path>(acquired.Value());
 
     // A primary acquisition/activation error wins over cleanup failures.
     // Close still attempts every hidden acquisition pin and reports its

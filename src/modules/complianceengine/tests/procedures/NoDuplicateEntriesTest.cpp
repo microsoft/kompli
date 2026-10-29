@@ -292,7 +292,7 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, FailedOpenRetainsHistoricalEnoentContr
             errno = EACCES;
             return -1;
         }
-        return mContext.ContextInterface::OpenNativeAt(directory, component, flags);
+        return mContext.RealOpenNativeAt(directory, component, flags);
     });
     auto denied = AuditNoDuplicateEntries(params, mIndicators, mContext);
     ASSERT_FALSE(denied.HasValue());
@@ -313,15 +313,15 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, ReachedReadFailureRejectsPartialResult
     int reads = 0, closes = 0;
     ON_CALL(mContext, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsData(fd, filename))
-            return mContext.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return mContext.RealReadFileDescriptor(fd, buffer, size);
         if (++reads == 1)
-            return mContext.ContextInterface::ReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 6));
+            return mContext.RealReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 6));
         errno = EIO;
         return -1;
     });
     ON_CALL(mContext, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsData(fd, filename);
-        mContext.ContextInterface::CloseFileDescriptor(fd);
+        mContext.RealCloseFileDescriptor(fd);
         if (data)
         {
             ++closes;
@@ -394,7 +394,7 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, CloseFailureRejectsDuplicateVerdict)
     int closes = 0;
     ON_CALL(mContext, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsData(fd, filename);
-        mContext.ContextInterface::CloseFileDescriptor(fd);
+        mContext.RealCloseFileDescriptor(fd);
         if (data)
         {
             ++closes;

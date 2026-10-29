@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#include <filesystem/Descriptor.hpp>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
@@ -16,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
+#include <type_traits>
 #include <unistd.h>
 #include <vector>
 
@@ -85,25 +87,28 @@ bool IsFixtureParent(int fd, const std::string& path)
 }
 } // namespace
 
-TEST(FileObjectCollectorTest, DefaultContextOpenRejectsCreationAndWriteFlags)
+TEST(FileObjectCollectorTest, TypedContextOpenRejectsUnsupportedProfilesWithoutDispatch)
 {
     NiceMock<MockContext> context;
     const auto path = context.MakeTempfile("nameserver 192.0.2.1\n");
     const auto missing = context.GetTempdirPath() + "/missing";
+    using Profile = ComplianceEngine::ContextInterface::OpenProfile;
+    static_assert(!std::is_convertible<int, Profile>::value, "Native open flags must not be a typed profile");
+    auto directory = context.OpenAbsolutePin(context.GetTempdirPath().c_str());
+    ASSERT_TRUE(directory.HasValue());
+    EXPECT_CALL(context, OpenNativeAt(testing::_, testing::_, testing::_)).Times(0);
     for (const int flags : {O_WRONLY, O_RDWR, O_TRUNC, O_CREAT, O_TMPFILE})
     {
-        errno = 0;
-        EXPECT_EQ(-1, context.ContextInterface::OpenExistingFile(path.c_str(), flags));
-        EXPECT_EQ(EINVAL, errno);
+        const auto rejected = context.OpenAt(directory.Value(), "missing", static_cast<Profile>(flags | 0x10000));
+        ASSERT_FALSE(rejected.HasValue());
+        EXPECT_EQ(EINVAL, rejected.Error().code);
     }
-    errno = 0;
-    EXPECT_EQ(-1, context.ContextInterface::OpenExistingFile(missing.c_str(), O_CREAT | O_RDONLY));
-    EXPECT_EQ(EINVAL, errno);
     EXPECT_NE(0, ::access(missing.c_str(), F_OK));
 
-    errno = 0;
-    EXPECT_EQ(-1, context.ContextInterface::OpenExistingFile(missing.c_str(), O_RDONLY | O_CLOEXEC));
-    EXPECT_EQ(ENOENT, errno);
+    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+    const auto notFound = context.OpenAt(directory.Value(), "missing", Profile::ReadFdinfo);
+    ASSERT_FALSE(notFound.HasValue());
+    EXPECT_EQ(ENOENT, notFound.Error().code);
 
     const auto result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_TRUE(result.HasValue());
@@ -139,7 +144,7 @@ TEST(FileObjectCollectorTest, NulAfterValidCapturePreventsSelectionAndClosesBoth
         int closes = 0;
         ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
             closes += IsFixture(fd, path, true);
-            return context.ContextInterface::CloseFileDescriptor(fd);
+            return context.RealCloseFileDescriptor(fd);
         });
         const auto result = ComplianceEngine::CollectNameserverObject(context, path);
         ASSERT_FALSE(result.HasValue());
@@ -155,7 +160,7 @@ TEST(FileObjectCollectorTest, NulErrorRemainsPrimaryWhenClosingFails)
     int closes = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsFixture(fd, path, true);
-        context.ContextInterface::CloseFileDescriptor(fd);
+        context.RealCloseFileDescriptor(fd);
         if (data)
         {
             ++closes;
@@ -346,9 +351,9 @@ TEST(FileObjectCollectorTest, SelectionFailureDefersToLaterReadError)
     int reads = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFixture(fd, path, true))
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return context.RealReadFileDescriptor(fd, buffer, size);
         if (reads++ == 0)
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 21));
+            return context.RealReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 21));
         errno = EIO;
         return -1;
     });
@@ -368,7 +373,7 @@ TEST(FileObjectCollectorTest, SelectionFailureDefersToExplicitCloseError)
     int closes = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int descriptor) {
         const bool data = IsFixture(descriptor, path, true);
-        context.ContextInterface::CloseFileDescriptor(descriptor);
+        context.RealCloseFileDescriptor(descriptor);
         if (data)
         {
             ++closes;
@@ -395,15 +400,15 @@ TEST(FileObjectCollectorTest, MalformedEvidenceDefersToReachedReadAndCloseFailur
     int reads = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFixture(fd, path, true))
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return context.RealReadFileDescriptor(fd, buffer, size);
         if (reads++ == 0)
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 19));
+            return context.RealReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 19));
         errno = EIO;
         return -1;
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         dataCloses += IsFixture(fd, path, true);
-        return context.ContextInterface::CloseFileDescriptor(fd);
+        return context.RealCloseFileDescriptor(fd);
     });
     auto result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
@@ -413,11 +418,11 @@ TEST(FileObjectCollectorTest, MalformedEvidenceDefersToReachedReadAndCloseFailur
     EXPECT_EQ(1, dataCloses);
 
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
-        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        return context.RealReadFileDescriptor(fd, buffer, size);
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsFixture(fd, path, true);
-        context.ContextInterface::CloseFileDescriptor(fd);
+        context.RealCloseFileDescriptor(fd);
         if (data)
         {
             ++dataCloses;
@@ -445,12 +450,12 @@ TEST(FileObjectCollectorTest, PolicyForwardsFollowAndRejectForEveryComponent)
     int reads = 0, intermediateCloses = 0, finalCloses = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         reads += IsFixture(fd, target, true);
-        return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        return context.RealReadFileDescriptor(fd, buffer, size);
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
         intermediateCloses += IsLinkPin(fd, directoryLink);
         finalCloses += IsLinkPin(fd, finalLink);
-        return context.ContextInterface::CloseFileDescriptor(fd);
+        return context.RealCloseFileDescriptor(fd);
     });
 
     auto followed = ComplianceEngine::CollectNameserverObject(context, chained);
@@ -491,7 +496,7 @@ TEST(FileObjectCollectorTest, PinnedDescriptorSurvivesPathReplacement)
     int replaced = 0;
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
         const bool pin = IsFixture(fd, path, false);
-        const int status = context.ContextInterface::StatFileDescriptor(fd, metadata);
+        const int status = context.RealStatFileDescriptor(fd, metadata);
         if (pin && status == 0 && !replaced++)
         {
             EXPECT_EQ(0, ::rename(path.c_str(), pinnedPath.c_str()));
@@ -514,7 +519,7 @@ TEST(FileObjectCollectorTest, ReadFailureIsAnError)
     const auto path = context.MakeTempfile("nameserver one\n");
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFixture(fd, path, true))
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return context.RealReadFileDescriptor(fd, buffer, size);
         errno = EIO;
         return -1;
     });
@@ -530,7 +535,7 @@ TEST(FileObjectCollectorTest, RetryExhaustionAndOverreportedReadsAreErrors)
     const auto path = context.MakeTempfile("nameserver one\n");
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFixture(fd, path, true))
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return context.RealReadFileDescriptor(fd, buffer, size);
         errno = EINTR;
         return -1;
     });
@@ -542,7 +547,7 @@ TEST(FileObjectCollectorTest, RetryExhaustionAndOverreportedReadsAreErrors)
 
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFixture(fd, path, true))
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return context.RealReadFileDescriptor(fd, buffer, size);
         return static_cast<ssize_t>(size + 1);
     });
     result = ComplianceEngine::CollectNameserverObject(context, path);
@@ -558,7 +563,7 @@ TEST(FileObjectCollectorTest, InterruptedReadCanRecoverWithinTheRetryLimit)
     int reads = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFixture(fd, path, true))
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return context.RealReadFileDescriptor(fd, buffer, size);
         if (reads++ == 0)
         {
             errno = EINTR;
@@ -566,7 +571,7 @@ TEST(FileObjectCollectorTest, InterruptedReadCanRecoverWithinTheRetryLimit)
         }
         if (reads == 2)
         {
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return context.RealReadFileDescriptor(fd, buffer, size);
         }
         return 0;
     });
@@ -586,7 +591,7 @@ TEST(FileObjectCollectorTest, MetadataMutationIsAnErrorAndThrowingOpenPropagates
     const auto path = context.MakeTempfile("nameserver one\n");
     int stats = 0;
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-        const int status = context.ContextInterface::StatFileDescriptor(fd, metadata);
+        const int status = context.RealStatFileDescriptor(fd, metadata);
         if (status == 0 && IsFixture(fd, path, true) && ++stats == 2)
             ++metadata->st_mtim.tv_nsec;
         return status;
@@ -600,7 +605,7 @@ TEST(FileObjectCollectorTest, MetadataMutationIsAnErrorAndThrowingOpenPropagates
     ON_CALL(throwing, OpenNativeAt(_, _, _)).WillByDefault([&](int fd, const char* name, int flags) -> int {
         if (IsFixtureParent(fd, throwingPath) && std::string(name) == throwingPath.substr(throwingPath.find_last_of('/') + 1) && (flags & O_PATH))
             throw std::runtime_error("open failed");
-        return throwing.ContextInterface::OpenNativeAt(fd, name, flags);
+        return throwing.RealOpenNativeAt(fd, name, flags);
     });
     EXPECT_THROW(ComplianceEngine::CollectNameserverObject(throwing, throwingPath), std::runtime_error);
 }
@@ -612,12 +617,12 @@ TEST(FileObjectCollectorTest, ThrowingReadPropagatesEvenWhenCloseThrowsDuringUnw
     int closes = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFixture(fd, path, true))
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return context.RealReadFileDescriptor(fd, buffer, size);
         throw std::runtime_error("read failed");
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
         const bool data = IsFixture(fd, path, true);
-        const int status = context.ContextInterface::CloseFileDescriptor(fd);
+        const int status = context.RealCloseFileDescriptor(fd);
         if (data)
         {
             ++closes;
@@ -635,7 +640,7 @@ TEST(FileObjectCollectorTest, TailReadAndIdentityFailuresAreErrors)
     NiceMock<MockContext> context;
     const auto path = context.MakeTempfile("nameserver one\n");
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-        const int status = context.ContextInterface::StatFileDescriptor(fd, metadata);
+        const int status = context.RealStatFileDescriptor(fd, metadata);
         if (status == 0 && IsFixture(fd, path, true))
             ++metadata->st_ino;
         return status;
@@ -644,15 +649,13 @@ TEST(FileObjectCollectorTest, TailReadAndIdentityFailuresAreErrors)
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EAGAIN, result.Error().code);
 
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-        return context.ContextInterface::StatFileDescriptor(fd, metadata);
-    });
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) { return context.RealStatFileDescriptor(fd, metadata); });
     int reads = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFixture(fd, path, true))
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return context.RealReadFileDescriptor(fd, buffer, size);
         if (reads++ == 0)
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return context.RealReadFileDescriptor(fd, buffer, size);
         errno = EIO;
         return -1;
     });
@@ -668,7 +671,7 @@ TEST(FileObjectCollectorTest, CloseFailureIsAnError)
     int dataCloses = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int descriptor) {
         const bool data = IsFixture(descriptor, path, true);
-        context.ContextInterface::CloseFileDescriptor(descriptor);
+        context.RealCloseFileDescriptor(descriptor);
         if (data)
         {
             ++dataCloses;
@@ -692,7 +695,7 @@ TEST(FileObjectCollectorTest, ValidCapturesAreNotPublishedWhenFinalCloseFails)
     int closes = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsFixture(fd, path, true);
-        context.ContextInterface::CloseFileDescriptor(fd);
+        context.RealCloseFileDescriptor(fd);
         if (data)
         {
             ++closes;
@@ -721,7 +724,7 @@ TEST(FileObjectCollectorTest, PinCloseFailureStopsBeforeReadAndLaterReadFailureF
     int reads = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFixture(fd, path, true))
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return context.RealReadFileDescriptor(fd, buffer, size);
         ++reads;
         if (failRead)
         {
@@ -733,7 +736,7 @@ TEST(FileObjectCollectorTest, PinCloseFailureStopsBeforeReadAndLaterReadFailureF
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int descriptor) {
         const bool pin = IsFixture(descriptor, path, false);
         const bool data = IsFixture(descriptor, path, true);
-        context.ContextInterface::CloseFileDescriptor(descriptor);
+        context.RealCloseFileDescriptor(descriptor);
         if (data)
         {
             ++dataCloses;
@@ -792,11 +795,11 @@ TEST(FileObjectCollectorTest, FailedDataOpenFinalizesPinWithoutReopeningPath)
             errno = EACCES;
             return -1;
         }
-        return context.ContextInterface::OpenNativeAt(directory, name, flags);
+        return context.RealOpenNativeAt(directory, name, flags);
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int descriptor) {
         pinCloses += IsFixture(descriptor, path, false);
-        return context.ContextInterface::CloseFileDescriptor(descriptor);
+        return context.RealCloseFileDescriptor(descriptor);
     });
     const auto result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
@@ -835,7 +838,7 @@ TEST(FileObjectCollectorTest, ReportsCleanupFailuresOnEveryAcquiredFailureExit)
                 errno = EACCES;
                 return -1;
             }
-            return context.ContextInterface::OpenNativeAt(directory, name, flags);
+            return context.RealOpenNativeAt(directory, name, flags);
         });
         ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
             const bool pin = IsFixture(fd, path, false), data = IsFixture(fd, path, true);
@@ -844,7 +847,7 @@ TEST(FileObjectCollectorTest, ReportsCleanupFailuresOnEveryAcquiredFailureExit)
                 errno = EACCES;
                 return -1;
             }
-            const int status = context.ContextInterface::StatFileDescriptor(fd, metadata);
+            const int status = context.RealStatFileDescriptor(fd, metadata);
             if (status == 0 && failure == FailurePoint::Nonregular && pin)
                 metadata->st_mode = S_IFDIR | 0700;
             if (status == 0 && failure == FailurePoint::Identity && data)
@@ -853,13 +856,13 @@ TEST(FileObjectCollectorTest, ReportsCleanupFailuresOnEveryAcquiredFailureExit)
         });
         ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
             if (!IsFixture(fd, path, true))
-                return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+                return context.RealReadFileDescriptor(fd, buffer, size);
             errno = EACCES;
             return -1;
         });
         ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int descriptor) {
             const bool pin = IsFixture(descriptor, path, false), data = IsFixture(descriptor, path, true);
-            context.ContextInterface::CloseFileDescriptor(descriptor);
+            context.RealCloseFileDescriptor(descriptor);
             if (data)
             {
                 ++dataCloses;
@@ -925,7 +928,7 @@ TEST(FileObjectCollectorTest, DataCloseFailureAfterSuccessfulPinCloseIsAnError)
     int dataCloses = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         const bool pin = IsFixture(fd, path, false), data = IsFixture(fd, path, true);
-        context.ContextInterface::CloseFileDescriptor(fd);
+        context.RealCloseFileDescriptor(fd);
         if (data)
         {
             ++dataCloses;
@@ -964,7 +967,7 @@ TEST(FileObjectCollectorTest, PinAndDataCloseFailuresAreIndependentOfReadErrors)
         int reads = 0;
         ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
             if (!IsFixture(fd, path, true))
-                return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+                return context.RealReadFileDescriptor(fd, buffer, size);
             ++reads;
             errno = EACCES;
             return -1;
@@ -973,7 +976,7 @@ TEST(FileObjectCollectorTest, PinAndDataCloseFailuresAreIndependentOfReadErrors)
             const bool pin = IsFixture(fd, path, false), data = IsFixture(fd, path, true);
             pinCloses += pin;
             dataCloses += data;
-            context.ContextInterface::CloseFileDescriptor(fd);
+            context.RealCloseFileDescriptor(fd);
             if ((failingPin && pin) || (!failingPin && data))
             {
                 errno = pin ? EIO : EBADF;
@@ -1009,7 +1012,7 @@ TEST(FileObjectCollectorTest, ReadFailureSurvivesThrowingDataClose)
     int pinCloses = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFixture(fd, path, true))
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return context.RealReadFileDescriptor(fd, buffer, size);
         errno = EACCES;
         return -1;
     });
@@ -1017,7 +1020,7 @@ TEST(FileObjectCollectorTest, ReadFailureSurvivesThrowingDataClose)
         const bool pin = IsFixture(fd, path, false), data = IsFixture(fd, path, true);
         pinCloses += pin;
         dataCloses += data;
-        context.ContextInterface::CloseFileDescriptor(fd);
+        context.RealCloseFileDescriptor(fd);
         if (data)
             throw std::bad_alloc();
         return 0;
@@ -1076,7 +1079,7 @@ TEST(FileObjectCollectorTest, RejectsEmbeddedNulAndInvalidInputsBeforeOpening)
             errno = EACCES;
             return -1;
         }
-        return failedOpen.ContextInterface::OpenNativeAt(directory, component, flags);
+        return failedOpen.RealOpenNativeAt(directory, component, flags);
     });
     result = ComplianceEngine::CollectNameserverObject(failedOpen, path);
     ASSERT_FALSE(result.HasValue());
@@ -1090,7 +1093,7 @@ TEST(FileObjectCollectorTest, PrematureEofWithStableMetadataIsAnError)
     const auto path = context.MakeTempfile("nameserver one\n");
     int dataStats = 0;
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-        const int status = context.ContextInterface::StatFileDescriptor(fd, metadata);
+        const int status = context.RealStatFileDescriptor(fd, metadata);
         if (status == 0 && IsFixture(fd, path, true))
         {
             ++dataStats;
@@ -1100,7 +1103,7 @@ TEST(FileObjectCollectorTest, PrematureEofWithStableMetadataIsAnError)
     });
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFixture(fd, path, true))
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return context.RealReadFileDescriptor(fd, buffer, size);
         return 0;
     });
 

@@ -37,13 +37,18 @@ TEST(SshKeyRangeTest, MissingRootRemainsCompliantAndDeniedRootIsAnError)
     ASSERT_TRUE(absent.HasValue());
     EXPECT_EQ(Status::Compliant, absent.Value());
 
-    ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([](const char*, struct stat*) {
+    // Fail direct acquisition of the missing root name, not a retired
+    // pathname stat; EACCES must remain an error rather than typed Missing.
+    std::size_t deniedPins = 0;
+    ON_CALL(context, OpenNativeAt(::testing::_, ::testing::StrEq("missing-ssh"), ::testing::_)).WillByDefault([&deniedPins](int, const char*, int) {
+        ++deniedPins;
         errno = EACCES;
         return -1;
     });
     const auto denied = RemediateSshKeyPermissions(params, indicators, context);
     ASSERT_FALSE(denied.HasValue());
     EXPECT_EQ(EACCES, denied.Error().code);
+    EXPECT_EQ(1u, deniedPins);
 }
 
 TEST(SshKeyRangeTest, FirstNoncomplianceBreaksWithoutReadingRemainderButCloseErrorWins)

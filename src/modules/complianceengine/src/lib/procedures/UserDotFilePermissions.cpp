@@ -185,7 +185,18 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
         const auto policy = DotfilePolicy(pwd.pw_dir);
         // The selected home is the accepted root; only live pins, not
         // diagnostic paths, authorize checks or remediation.
-        auto opened = Filesystem::FTW::Files(policy, context);
+        auto resolved = Filesystem::ResolveFilesystemCollectionRequest(policy);
+        if (!resolved.HasValue())
+            return resolved.Error();
+        auto root = Filesystem::Path::Make(context, resolved.Value().rootPath, Filesystem::CollectionRootPolicy(resolved.Value()),
+            Filesystem::CollectionRootLimits(resolved.Value()));
+        if (!root.HasValue())
+            return root.Error();
+        if (root.Value().Is<Filesystem::Path::RejectionReason>())
+            continue; // missing/excluded home: no dotfiles to inspect
+        if (As<Filesystem::Path>(root.Value()).Root().AcquiredType() != Filesystem::Handle::Type::Directory)
+            return Error("Expected directory root at '" + policy.rootPath + "'", ENOTDIR);
+        auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), Filesystem::CollectionContinuation(resolved.Value()));
         if (!opened.HasValue())
         {
             OsConfigLogError(context.GetLogHandle(), "Directory validation for user '%s' failed: %s", pwd.pw_name, opened.Error().message.c_str());

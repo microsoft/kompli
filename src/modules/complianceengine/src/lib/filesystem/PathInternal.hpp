@@ -28,7 +28,7 @@ struct VerifiedProcfs
     Result<bool> Close();
     Descriptor proc, self, pid, fd, fdinfo;
 };
-Result<std::uint64_t> MountId(const ContextInterface& context, int fdinfoDirectory, int descriptor, std::size_t byteCap);
+Result<std::uint64_t> MountId(const ContextInterface& context, const Descriptor& fdinfoDirectory, const Descriptor& descriptor, std::size_t byteCap);
 
 // A strict child component, not a pathname. Root resolution and any
 // whole-path parsing belong to the separately authorized acquisition layer.
@@ -42,7 +42,7 @@ struct LinkTarget
     std::string text;
     std::uint64_t mountId = 0;
 };
-Result<LinkTarget> ReadPinnedLink(const ContextInterface& context, int linkPin, std::size_t targetByteCap, std::size_t fdinfoByteCap);
+Result<LinkTarget> ReadPinnedLink(const ContextInterface& context, const Descriptor& linkPin, std::size_t targetByteCap, std::size_t fdinfoByteCap);
 
 // Internal read-only activation of an already held O_PATH pin. The returned
 // descriptor is independently owned and never exposed through Path.hpp.
@@ -55,22 +55,21 @@ public:
     ReadOnlyActivation& operator=(const ReadOnlyActivation&) = delete;
     ~ReadOnlyActivation() noexcept = default;
     const struct stat& Snapshot() const noexcept;
-    Result<int> Descriptor() const;
     // Internal ownership handoff to an opaque public resource.
     Detail::Descriptor TakeDescriptor() noexcept;
     Result<bool> Close();
 
 private:
-    friend Result<ReadOnlyActivation> ActivateReadOnly(const ContextInterface&, int, const struct stat&, bool, std::size_t);
+    friend Result<ReadOnlyActivation> ActivateReadOnly(const ContextInterface&, const Detail::Descriptor&, const struct stat&, bool, std::size_t);
     ReadOnlyActivation(Detail::Descriptor&& descriptor, const struct stat& snapshot) noexcept;
     Detail::Descriptor mDescriptor;
     struct stat mSnapshot;
 };
-Result<ReadOnlyActivation> ActivateReadOnly(const ContextInterface& context, int pin, const struct stat& snapshot, bool directory, std::size_t fdinfoByteCap);
+Result<ReadOnlyActivation> ActivateReadOnly(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory,
+    std::size_t fdinfoByteCap);
 
-// Internal result retains all pins acquired during the resolution, including
-// hidden directories reached through links. Its borrowed leaf, if any, is
-// valid only while the caller's accepted root and parent lineage remain live.
+// Ephemeral resolver staging only. Path commits its pins and checked physical
+// indexes into one owning deque; no stage survives a Make/Push operation.
 class ResolvedPath
 {
 public:
@@ -79,9 +78,6 @@ public:
     ResolvedPath(const ResolvedPath&) = delete;
     ResolvedPath& operator=(const ResolvedPath&) = delete;
     const Handle& Leaf() const;
-    // Private acquisition lineage for a subsequent internal child resolution.
-    // The result and its borrowed root/parent inputs must outlive these refs.
-    std::vector<const Handle*> DirectoryLineage() const;
     std::size_t OwnedDescriptors() const noexcept;
     std::size_t AccountedBytes() const noexcept;
 
@@ -89,7 +85,6 @@ private:
     friend class ::ComplianceEngine::Filesystem::Path;
     ResolvedPath() = default;
     Handle TakeOwnedLeaf();
-    void ForwardLeaf(const Handle& external);
     struct Frame
     {
         const Handle* borrowed = nullptr;
@@ -102,9 +97,8 @@ private:
     std::size_t mOwnedLeaf = 0;
     bool mOwnsLeaf = false;
     bool mLeafTaken = false;
-    const Handle* mForwardedLeaf = nullptr;
     std::size_t mAccountedBytes = 0;
-    Optional<struct stat> mInitialLinkMetadata;
+    bool mInitialFollowedLink = false;
     std::uint64_t mInitialMountId = 0;
     bool mUnsupportedLeaf = false;
     bool mMissingLeaf = false;

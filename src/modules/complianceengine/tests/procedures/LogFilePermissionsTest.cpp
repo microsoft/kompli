@@ -104,7 +104,10 @@ TEST_F(LogFileRangeTest, FactoryFailuresPropagateForAuditAndRemediation)
         ASSERT_TRUE(absent.HasValue());
         EXPECT_EQ(Status::Compliant, absent.Value());
     }
-    ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([](const char*, struct stat*) {
+    // The root name is pinned through its parent; no LstatPath lookup is made.
+    std::size_t deniedPins = 0;
+    ON_CALL(context, OpenNativeAt(::testing::_, ::testing::StrEq("logfile-range"), ::testing::_)).WillByDefault([&deniedPins](int, const char*, int) {
+        ++deniedPins;
         errno = EACCES;
         return -1;
     });
@@ -114,8 +117,9 @@ TEST_F(LogFileRangeTest, FactoryFailuresPropagateForAuditAndRemediation)
         ASSERT_FALSE(result.HasValue());
         EXPECT_EQ(EACCES, result.Error().code);
     }
-    ON_CALL(context, LstatPath(::testing::_, ::testing::_)).WillByDefault([this](const char* path, struct stat* metadata) {
-        return context.ContextInterface::LstatPath(path, metadata);
+    EXPECT_EQ(2u, deniedPins);
+    ON_CALL(context, OpenNativeAt(::testing::_, ::testing::StrEq("logfile-range"), ::testing::_)).WillByDefault([this](int directory, const char* name, int flags) {
+        return context.RealOpenNativeAt(directory, name, flags);
     });
     struct stat expected = {};
     ASSERT_EQ(0, stat(testDir.c_str(), &expected));
@@ -126,7 +130,7 @@ TEST_F(LogFileRangeTest, FactoryFailuresPropagateForAuditAndRemediation)
             errno = EACCES;
             return -1;
         }
-        return context.ContextInterface::StatFileDescriptor(descriptor, metadata);
+        return context.RealStatFileDescriptor(descriptor, metadata);
     });
     for (bool remediate : {false, true})
     {

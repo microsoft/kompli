@@ -11,13 +11,8 @@ namespace Filesystem
 {
 namespace Detail
 {
-Descriptor Descriptor::Take(const ContextInterface& context, int nativeDescriptor, const char* closeDiagnostic) noexcept
-{
-    return Descriptor(context, nativeDescriptor, closeDiagnostic);
-}
-
 Descriptor::Descriptor(const ContextInterface& context, int descriptor, const char* closeDiagnostic) noexcept
-    : mContext(context),
+    : mContext(&context),
       mDescriptor(0 > descriptor ? Optional<int>() : Optional<int>(descriptor)),
       mCloseDiagnostic(closeDiagnostic)
 {
@@ -28,6 +23,7 @@ Descriptor::Descriptor(Descriptor&& other) noexcept
       mDescriptor(std::move(other.mDescriptor)),
       mCloseDiagnostic(other.mCloseDiagnostic)
 {
+    other.mDescriptor.Reset();
 }
 
 Descriptor& Descriptor::operator=(Descriptor&& other) noexcept
@@ -38,6 +34,7 @@ Descriptor& Descriptor::operator=(Descriptor&& other) noexcept
         mContext = other.mContext;
         mDescriptor = std::move(other.mDescriptor);
         mCloseDiagnostic = other.mCloseDiagnostic;
+        other.mDescriptor.Reset();
     }
     return *this;
 }
@@ -60,12 +57,10 @@ Result<bool> Descriptor::Close()
     {
         return true;
     }
-    const int descriptor = mDescriptor.Value();
-    mDescriptor.Reset();
     int error = 0;
     try
     {
-        if (Context().CloseFileDescriptor(descriptor) != 0)
+        if (Context().CloseOwnedDescriptor(*this) != 0)
         {
             error = (errno != 0) ? errno : EIO;
         }
@@ -89,25 +84,6 @@ Result<bool> Descriptor::Close()
     return true;
 }
 
-Result<int> Descriptor::Get() const
-{
-    if (!mDescriptor.HasValue())
-    {
-        return Error("Internal filesystem descriptor is empty", EBADF);
-    }
-    return mDescriptor.Value();
-}
-
-Result<int> Descriptor::Release()
-{
-    if (!mDescriptor.HasValue())
-    {
-        return Error("Internal filesystem descriptor is empty", EBADF);
-    }
-    const int descriptor = mDescriptor.Value();
-    mDescriptor.Reset();
-    return descriptor;
-}
 } // namespace Detail
 } // namespace Filesystem
 } // namespace ComplianceEngine

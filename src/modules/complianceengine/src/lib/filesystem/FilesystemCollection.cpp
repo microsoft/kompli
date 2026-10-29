@@ -149,6 +149,58 @@ Result<bool> Validate(const ResolvedFilesystemCollectionRequest& request)
     return true;
 }
 
+FilesystemTraversalPolicy Continuation(const ResolvedFilesystemCollectionRequest& request)
+{
+    FilesystemTraversalPolicy policy;
+    policy.direction = request.direction;
+    policy.maxDepth = request.maxDepth;
+    policy.childFileLinkAction = request.childFileLinkAction;
+    policy.childDirectoryLinkAction = request.childDirectoryLinkAction;
+    policy.scope = request.scope;
+    policy.yieldType = request.yieldType;
+    policy.unsupported = request.unsupported;
+    policy.depthAction = request.depthAction;
+    policy.missingChildAction = request.missingChildAction;
+    policy.limits = request.limits;
+    return policy;
+}
+
+Filesystem::ResolverLimits AcquisitionBudget(const ResolvedFilesystemCollectionRequest& request)
+{
+    const auto& limits = request.limits;
+    const std::size_t components = std::count(request.rootPath.begin(), request.rootPath.end(), '/') + 1;
+    const std::size_t work = limits.entryWork > (std::numeric_limits<std::size_t>::max() - 32768) / 512 ? std::numeric_limits<std::size_t>::max() :
+                                                                                                          limits.entryWork * 512 + 32768;
+    const std::size_t max = std::numeric_limits<std::size_t>::max();
+    const std::size_t perPrefix = 8 * sizeof(Handle);
+    const std::size_t overhead = components > (max - 65536) / perPrefix ? max : 65536 + components * perPrefix;
+    const std::size_t minimum = request.rootPath.size() > max - overhead ? max : overhead + request.rootPath.size();
+    Filesystem::ResolverLimits budget;
+    budget.shared.targetBytes = limits.fullPathBytes;
+    budget.shared.components = limits.operationalDescent + components + 1;
+    budget.shared.work = work;
+    budget.shared.liveDescriptors = limits.openDirectories + components + 8;
+    budget.shared.retainedBytes = std::max(limits.retainedPathBytes, minimum);
+    budget.shared.fdinfoBytes = limits.fullPathBytes;
+    budget.linkTargetBytes = limits.fullPathBytes;
+    budget.linkExpansions = limits.entryWork;
+    budget.depth = limits.operationalDescent + components + 1;
+    return budget;
+}
+
+Path::Policy AcquisitionPolicy(const ResolvedFilesystemCollectionRequest& request)
+{
+    Path::Policy policy;
+    policy.symlinks = request.rootFileLinkAction == SymlinkPolicy::Follow || request.rootDirectoryLinkAction == SymlinkPolicy::Follow ?
+                          SymlinkPolicy::Follow :
+                          SymlinkPolicy::DoNotFollow;
+    policy.mounts = MountPolicy::AllowCrossing;
+    policy.fileLinks = request.rootFileLinkAction;
+    policy.directoryLinks = request.rootDirectoryLinkAction;
+    policy.nonFollowedLinks = NonFollowedLinkAction::Skip;
+    return policy;
+}
+
 Error OperationError(const char* operation, const std::string& path, int code)
 {
     return Error(std::string("Failed to ") + operation + " '" + path + "': " + std::strerror(code), code);
@@ -174,8 +226,7 @@ FilesystemCollectionEntry Snapshot(const FilesystemCollectionEntry& live)
 {
     FilesystemCollectionEntry copy;
     copy.path = live.path;
-    copy.linkMetadata = live.linkMetadata;
-    copy.targetMetadata = live.targetMetadata;
+    copy.metadata = live.metadata;
     copy.missing = live.missing;
     return copy;
 }
@@ -196,6 +247,19 @@ Result<FilesystemVisitAction> InvokeVisitor(const FilesystemCollectionVisitor& v
     }
 }
 } // namespace
+
+FilesystemTraversalPolicy CollectionContinuation(const ResolvedFilesystemCollectionRequest& request)
+{
+    return Continuation(request);
+}
+Path::Policy CollectionRootPolicy(const ResolvedFilesystemCollectionRequest& request)
+{
+    return AcquisitionPolicy(request);
+}
+ResolverLimits CollectionRootLimits(const ResolvedFilesystemCollectionRequest& request)
+{
+    return AcquisitionBudget(request);
+}
 
 Result<ResolvedFilesystemCollectionRequest> ResolveFilesystemCollectionRequest(const FilesystemCollectionRequest& request)
 {
@@ -284,9 +348,16 @@ struct FileRange::State
         ino_t inode = 0;
     };
 
-    State(ResolvedFilesystemCollectionRequest policy, ContextInterface& owner)
+    State(FilesystemTraversalPolicy policy, const ContextInterface& owner)
         : request(std::move(policy)),
           context(owner)
+    {
+    }
+
+    State(FilesystemTraversalPolicy policy, Path accepted)
+        : request(std::move(policy)),
+          context(accepted.Context()),
+          path(new Path(std::move(accepted)))
     {
     }
 
@@ -336,7 +407,7 @@ struct FileRange::State
 
     Result<bool> Offer(FilesystemCollectionEntry entry)
     {
-        if (entry.missing || Yield(request.yieldType, entry.targetMetadata.HasValue() ? entry.targetMetadata.Value() : entry.linkMetadata))
+        if (entry.missing || Yield(request.yieldType, entry.metadata))
         {
             const std::size_t bytes = entry.path.size() + 1;
             auto liveCharge = Charge(bytes, entry.path);
@@ -361,55 +432,13 @@ struct FileRange::State
 
     Filesystem::ResolverLimits ResolverBudget() const
     {
-        const auto& limits = request.limits;
-        const std::size_t components = std::count(request.rootPath.begin(), request.rootPath.end(), '/') + 1;
-        // The resolver charges each operation (including fdinfo reads)
-        // independently of the collection's one-per-entry work budget.
-        const std::size_t work = limits.entryWork > (std::numeric_limits<std::size_t>::max() - 32768) / 512 ? std::numeric_limits<std::size_t>::max() :
-                                                                                                              limits.entryWork * 512 + 32768;
-        // A tiny collection-owned path-string cap must not prevent Path from
-        // pinning a root link before the collector can charge its exclusion.
-        // Keep internal pin accounting separate, explicit and bounded.
-        const std::size_t max = std::numeric_limits<std::size_t>::max();
-        const std::size_t perPrefix = 8 * sizeof(Handle);
-        const std::size_t overhead = components > (max - 65536) / perPrefix ? max : 65536 + components * perPrefix;
-        const std::size_t minimum = request.rootPath.size() > max - overhead ? max : overhead + request.rootPath.size();
-        const std::size_t resolverBytes = std::max(limits.retainedPathBytes, minimum);
-        return {{limits.fullPathBytes, limits.operationalDescent + components + 1, work, limits.openDirectories + components + 8, resolverBytes, limits.fullPathBytes},
-            limits.fullPathBytes, limits.entryWork, limits.operationalDescent + components + 1};
+        return path->Limits();
     }
 
     Result<bool> Initialize()
     {
-        const std::string& rootName = request.rootPath;
-        const bool followRootLinks = request.rootFileLinkAction == SymlinkPolicy::Follow || request.rootDirectoryLinkAction == SymlinkPolicy::Follow;
-        Path::Policy rootPolicy(followRootLinks ? SymlinkPolicy::Follow : SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing);
-        rootPolicy.fileLinks = request.rootFileLinkAction;
-        rootPolicy.directoryLinks = request.rootDirectoryLinkAction;
-        rootPolicy.nonFollowedLinks = NonFollowedLinkAction::Skip;
-        auto acquired = Path::Make(context, rootName, rootPolicy, ResolverBudget());
-        if (!acquired.HasValue())
-        {
-            return std::move(acquired).Error();
-        }
-        if (acquired.Value().GetStatus() == Path::Result::Status::Missing)
-        {
-            rootExists = false;
-            return true;
-        }
-        if (acquired.Value().GetStatus() == Path::Result::Status::Excluded)
-        {
-            return Exclude(rootName, "link policy");
-        }
-        path.reset(new Path(std::move(acquired.Value()).TakePath()));
-        if ((FilesystemRootKind::Directory == request.rootKind) && (path->Root().AcquiredType() != Handle::Type::Directory))
-        {
-            return Error("Expected directory root at '" + rootName + "'", ENOTDIR);
-        }
-        if ((FilesystemRootKind::File == request.rootKind) && (path->Root().AcquiredType() != Handle::Type::RegularFile))
-        {
-            return Error("Expected file root at '" + rootName + "'", EISDIR);
-        }
+        const std::string& rootName = path->DiagnosticPath();
+        const bool directory = path->Root().AcquiredType() == Handle::Type::Directory;
         auto rootMount = path->Root().MountIdentity(request.limits.fullPathBytes);
         if (!rootMount.HasValue())
         {
@@ -419,12 +448,8 @@ struct FileRange::State
         FilesystemCollectionEntry entry;
         entry.path = rootName;
         const auto metadata = path->LeafMetadata();
-        entry.linkMetadata = metadata.initialLink.HasValue() ? metadata.initialLink.Value() : metadata.accepted;
-        if (metadata.initialLink.HasValue())
-        {
-            entry.targetMetadata = metadata.accepted;
-        }
-        if (FilesystemRootKind::File == request.rootKind)
+        entry.metadata = metadata.accepted;
+        if (!directory)
         {
             auto detached = path->Pop();
             if (!detached.HasValue())
@@ -471,7 +496,10 @@ struct FileRange::State
 
     Result<bool> PushChild(const Filesystem::DirectoryChild& child, FilesystemCollectionEntry& entry)
     {
-        ExtensionPolicy extension{SymlinkPolicy::Follow, MountPolicy::AllowCrossing, HardlinkPolicy::Permit, request.unsupported};
+        ExtensionPolicy extension;
+        extension.symlinks = SymlinkPolicy::Follow;
+        extension.mounts = MountPolicy::AllowCrossing;
+        extension.unsupported = request.unsupported;
         extension.fileLinks = request.childFileLinkAction;
         extension.directoryLinks = request.childDirectoryLinkAction;
         extension.nonFollowedLinks = NonFollowedLinkAction::Skip;
@@ -487,25 +515,22 @@ struct FileRange::State
         {
             return std::move(pushed).Error();
         }
-        if (pushed.Value() == Path::PushOutcome::Missing)
+        if (pushed.Value().Is<Path::RejectionReason>())
         {
-            return MissingChild(child, entry.path);
+            switch (As<Path::RejectionReason>(pushed.Value()))
+            {
+                case Path::RejectionReason::Missing:
+                    return MissingChild(child, entry.path);
+                case Path::RejectionReason::UnsupportedType:
+                    return Exclude(entry.path, "unsupported type");
+                case Path::RejectionReason::Excluded:
+                    return Exclude(entry.path, "link policy");
+            }
         }
-        if (pushed.Value() == Path::PushOutcome::SkippedUnsupported)
-        {
-            return Exclude(entry.path, "unsupported type");
-        }
-        if (pushed.Value() == Path::PushOutcome::SkippedLink)
-        {
-            return Exclude(entry.path, "link policy");
-        }
-        const auto& handle = path->Leaf();
-        const auto metadata = path->LeafMetadata();
-        entry.linkMetadata = metadata.initialLink.HasValue() ? metadata.initialLink.Value() : metadata.accepted;
-        if (metadata.initialLink.HasValue())
-        {
-            entry.targetMetadata = metadata.accepted;
-        }
+        const Path& accepted = As<const Path&>(pushed.Value());
+        const auto& handle = accepted.Leaf();
+        const auto metadata = accepted.LeafMetadata();
+        entry.metadata = metadata.accepted;
         if ((FilesystemScope::All != request.scope) && (baseline != metadata.mountId))
         {
             auto dropped = path->Pop();
@@ -799,8 +824,8 @@ struct FileRange::State
         return true;
     }
 
-    ResolvedFilesystemCollectionRequest request;
-    ContextInterface& context;
+    FilesystemTraversalPolicy request;
+    const ContextInterface& context;
     std::unique_ptr<Filesystem::Path> path;
     std::vector<Frame> frames;
     FilesystemCollectionResult result;
@@ -828,6 +853,70 @@ FileRange::FileRange(std::shared_ptr<State> state)
 
 FileRange::~FileRange() = default;
 
+Result<bool> ValidateContinuation(const Path& root, const FilesystemTraversalPolicy& policy)
+{
+    const auto& limits = policy.limits;
+    if (root.Size() != 1 || root.DiagnosticPath().empty() || root.DiagnosticPath().front() != '/' || root.DiagnosticPath().find('\0') != std::string::npos)
+        return Error("Continuation requires one accepted absolute root", EINVAL);
+    if (policy.direction == FilesystemDirection::Up)
+        return Error("Upward filesystem collection is not supported", ENOTSUP);
+    if (policy.direction != FilesystemDirection::None && policy.direction != FilesystemDirection::Down)
+        return Error("Invalid filesystem collection direction", EINVAL);
+    if (policy.maxDepth < -1 || limits.operationalDescent == 0 || limits.entryWork == 0 || limits.directoryWidth == 0 || limits.fullPathBytes == 0 ||
+        limits.retainedPathBytes == 0 || limits.openDirectories == 0)
+        return Error("Invalid filesystem continuation limits", EINVAL);
+    if (policy.childFileLinkAction != SymlinkPolicy::Follow && policy.childFileLinkAction != SymlinkPolicy::DoNotFollow)
+        return Error("Invalid child file link policy", EINVAL);
+    if (policy.childDirectoryLinkAction != SymlinkPolicy::Follow && policy.childDirectoryLinkAction != SymlinkPolicy::DoNotFollow)
+        return Error("Invalid child directory link policy", EINVAL);
+    if (policy.scope == FilesystemScope::Local)
+        return Error("Local filesystem classification is not supported", ENOTSUP);
+    if (policy.scope != FilesystemScope::RootDevice && policy.scope != FilesystemScope::All && policy.scope != FilesystemScope::Defined)
+        return Error("Invalid filesystem scope", EINVAL);
+    if (policy.yieldType != FilesystemYieldType::All && policy.yieldType != FilesystemYieldType::RegularFiles &&
+        policy.yieldType != FilesystemYieldType::Directories && policy.yieldType != FilesystemYieldType::SymbolicLinks)
+        return Error("Invalid filesystem yield type", EINVAL);
+    if (policy.unsupported != UnsupportedTypeAction::Reject && policy.unsupported != UnsupportedTypeAction::Skip)
+        return Error("Invalid unsupported filesystem type action", EINVAL);
+    if (policy.depthAction != FilesystemDepthAction::Stop && policy.depthAction != FilesystemDepthAction::Error)
+        return Error("Invalid depth action", EINVAL);
+    if (policy.missingChildAction != FilesystemMissingChildAction::Error && policy.missingChildAction != FilesystemMissingChildAction::ReportRegularFile)
+        return Error("Invalid missing-child action", EINVAL);
+    if (policy.missingChildAction == FilesystemMissingChildAction::ReportRegularFile && policy.yieldType != FilesystemYieldType::RegularFiles)
+        return Error("Missing observations require regular-file selection", ENOTSUP);
+    if (root.DiagnosticPath().size() >= limits.fullPathBytes)
+        return Error("Filesystem collection root path exceeds the full path byte limit", ENAMETOOLONG);
+    if (root.DiagnosticPath().size() >= limits.retainedPathBytes)
+        return Error("Filesystem collection root path exceeds the retained path byte limit", E2BIG);
+    return true;
+}
+
+Result<FileRange> Files(Path path, FilesystemTraversalPolicy continuation)
+{
+    auto valid = ValidateContinuation(path, continuation);
+    if (!valid.HasValue())
+        return valid.Error();
+    try
+    {
+        auto state = std::make_shared<FileRange::State>(std::move(continuation), std::move(path));
+        auto initialized = state->Initialize();
+        if (!initialized.HasValue())
+        {
+            state->Abort(initialized.Error());
+            return initialized.Error();
+        }
+        return FileRange(std::move(state));
+    }
+    catch (const std::bad_alloc&)
+    {
+        return Error("Filesystem collection allocation failed", ENOMEM);
+    }
+    catch (const std::exception& exception)
+    {
+        return Error(std::string("Filesystem collection failed: ") + exception.what(), EIO);
+    }
+}
+
 Result<FileRange> Files(const FilesystemCollectionRequest& policy, ContextInterface& context)
 {
     auto resolved = ResolveFilesystemCollectionRequest(policy);
@@ -837,13 +926,31 @@ Result<FileRange> Files(const FilesystemCollectionRequest& policy, ContextInterf
     }
     try
     {
-        auto state = std::make_shared<FileRange::State>(std::move(resolved).Value(), context);
-        auto initialized = state->Initialize();
-        if (!initialized.HasValue())
+        const auto& request = resolved.Value();
+        auto acquired = Path::Make(context, request.rootPath, AcquisitionPolicy(request), AcquisitionBudget(request));
+        if (!acquired.HasValue())
+            return std::move(acquired).Error();
+        if (acquired.Value().Is<Path>())
         {
-            state->Abort(initialized.Error());
-            return initialized.Error();
+            Path accepted = As<Path>(std::move(acquired).Value());
+            if (request.rootKind == FilesystemRootKind::Directory && accepted.Root().AcquiredType() != Handle::Type::Directory)
+                return Error("Expected directory root at '" + request.rootPath + "'", ENOTDIR);
+            if (request.rootKind == FilesystemRootKind::File && accepted.Root().AcquiredType() != Handle::Type::RegularFile)
+                return Error("Expected file root at '" + request.rootPath + "'", EISDIR);
+            return Files(std::move(accepted), Continuation(request));
         }
+        const auto reason = As<Path::RejectionReason>(acquired.Value());
+        auto state = std::make_shared<FileRange::State>(Continuation(request), context);
+        if (reason == Path::RejectionReason::Missing)
+            state->rootExists = false;
+        else if (reason == Path::RejectionReason::Excluded)
+        {
+            auto excluded = state->Exclude(request.rootPath, "link policy");
+            if (!excluded.HasValue())
+                return std::move(excluded).Error();
+        }
+        else
+            return Error("Unsupported collection root", EOPNOTSUPP);
         return FileRange(std::move(state));
     }
     catch (const std::bad_alloc&)

@@ -96,7 +96,7 @@ struct FilesystemCollectionRequest
     FilesystemRootKind rootKind;
     FilesystemDirection direction = FilesystemDirection::None;
     int maxDepth = 32;
-    // DoNotFollow excludes links with their path and reason; Follow uses target metadata.
+    // DoNotFollow excludes links with their path and reason; Follow accepts target metadata.
     SymlinkPolicy rootFileLinkAction = SymlinkPolicy::DoNotFollow;
     SymlinkPolicy rootDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
     SymlinkPolicy childFileLinkAction = SymlinkPolicy::DoNotFollow;
@@ -134,6 +134,27 @@ struct ResolvedFilesystemCollectionRequest
     FilesystemCollectionLimits limits;
 };
 
+// Applies only after acquisition. It cannot change whether an initial link
+// was accepted; Path is the sole owner of the pinned root and its provenance.
+struct FilesystemTraversalPolicy
+{
+    FilesystemDirection direction = FilesystemDirection::None;
+    int maxDepth = 32;
+    SymlinkPolicy childFileLinkAction = SymlinkPolicy::DoNotFollow;
+    SymlinkPolicy childDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
+    FilesystemScope scope = FilesystemScope::RootDevice;
+    FilesystemYieldType yieldType = FilesystemYieldType::All;
+    UnsupportedTypeAction unsupported = UnsupportedTypeAction::Reject;
+    FilesystemDepthAction depthAction = FilesystemDepthAction::Stop;
+    FilesystemMissingChildAction missingChildAction = FilesystemMissingChildAction::Error;
+    FilesystemCollectionLimits limits;
+};
+
+// Shared, validated request-to-policy mapping for explicit Make-first callers.
+FilesystemTraversalPolicy CollectionContinuation(const ResolvedFilesystemCollectionRequest& request);
+Path::Policy CollectionRootPolicy(const ResolvedFilesystemCollectionRequest& request);
+ResolverLimits CollectionRootLimits(const ResolvedFilesystemCollectionRequest& request);
+
 enum class FilesystemVisitAction
 {
     Continue,
@@ -148,8 +169,7 @@ struct FilesystemCollectionEntry
     FilesystemCollectionEntry(const FilesystemCollectionEntry&) = delete;
     FilesystemCollectionEntry& operator=(const FilesystemCollectionEntry&) = delete;
     std::string path;
-    struct stat linkMetadata = {};
-    Optional<struct stat> targetMetadata;
+    struct stat metadata = {}; // accepted pin observation; invalid when missing is true
     // A regular-file name observed in readdir but lost before acquisition;
     // this is not a stat snapshot, file identity, or mutation authority.
     bool missing = false;
@@ -206,8 +226,9 @@ Result<FilesystemCollectionResult> CollectFilesystem(const FilesystemCollectionR
 
 namespace FTW
 {
-// Single-pass live filesystem range. Files() validates policy and acquires the
-// root before returning it; descendants are pulled lazily. Context must
+// Single-pass live filesystem range. The pathname adapter acquires a root
+// once; the moved-Path entry accepts an already pinned root and validates
+// only continuation policy. Descendants are pulled lazily. Context must
 // outlive the range. Abandoned ranges clean up best-effort without certifying
 // the observations already yielded.
 class FileRange
@@ -247,6 +268,7 @@ public:
 
 private:
     friend Result<FileRange> Files(const FilesystemCollectionRequest&, ContextInterface&);
+    friend Result<FileRange> Files(Path, FilesystemTraversalPolicy);
     friend auto ::ComplianceEngine::Filesystem::CollectFilesystem(const FilesystemCollectionRequest&, ContextInterface&) -> Result<FilesystemCollectionResult>;
     friend auto ::ComplianceEngine::Filesystem::StreamFilesystemCollection(const FilesystemCollectionRequest&, const FilesystemCollectionVisitor&,
         ContextInterface&) -> Result<FilesystemCollectionResult>;
@@ -260,6 +282,8 @@ private:
 
 // A missing root is a successful empty range with RootExists() == false.
 Result<FileRange> Files(const FilesystemCollectionRequest& policy, ContextInterface& context);
+// Consumes a previously accepted Path; never resolves its diagnostic name.
+Result<FileRange> Files(Path path, FilesystemTraversalPolicy continuation);
 } // namespace FTW
 
 } // namespace Filesystem

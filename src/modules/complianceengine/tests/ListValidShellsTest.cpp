@@ -101,15 +101,15 @@ TEST_F(ValidShellsTest, ReachedReadErrorTakesPrecedenceOverCloseError)
     int reads = 0, closes = 0;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsData(fd))
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, size);
+            return context.RealReadFileDescriptor(fd, buffer, size);
         if (++reads == 1)
-            return context.ContextInterface::ReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 10));
+            return context.RealReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 10));
         errno = EIO;
         return -1;
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsData(fd);
-        context.ContextInterface::CloseFileDescriptor(fd);
+        context.RealCloseFileDescriptor(fd);
         if (data)
         {
             ++closes;
@@ -132,7 +132,7 @@ TEST_F(ValidShellsTest, CloseFailureAfterEofIsAnError)
     int closes = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsData(fd);
-        context.ContextInterface::CloseFileDescriptor(fd);
+        context.RealCloseFileDescriptor(fd);
         if (data)
         {
             ++closes;

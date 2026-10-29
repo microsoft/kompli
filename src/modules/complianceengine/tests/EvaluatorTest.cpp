@@ -1072,7 +1072,7 @@ TEST_F(UserDotFileRangeTest, LeafReplacementAfterAcquisitionKeepsAuditOnThePinne
     int observations = 0;
     bool replaced = false;
     ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
-        const int result = context.ContextInterface::StatFileDescriptor(descriptor, metadata);
+        const int result = context.RealStatFileDescriptor(descriptor, metadata);
         if ((0 == result) && (original.st_dev == metadata->st_dev) && (original.st_ino == metadata->st_ino) && (2 == ++observations))
         {
             replaced = (0 == rename(target.c_str(), held.c_str()));
@@ -1140,13 +1140,13 @@ TEST_F(UserDotFileRangeTest, MissingRootsAreCompliantAndFactoryFailuresPropagate
             errno = EACCES;
             return -1;
         }
-        return context.ContextInterface::StatFileDescriptor(descriptor, metadata);
+        return context.RealStatFileDescriptor(descriptor, metadata);
     });
     const auto result = Run(User("fixture", home));
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
     ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([this](int descriptor, struct stat* metadata) {
-        return context.ContextInterface::StatFileDescriptor(descriptor, metadata);
+        return context.RealStatFileDescriptor(descriptor, metadata);
     });
     ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([](DIR*) -> struct dirent* {
         errno = EACCES;

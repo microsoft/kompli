@@ -6,11 +6,12 @@
 
 #include "FilesystemPolicy.hpp"
 #include "Handle.hpp"
+#include "Variant.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <memory>
+#include <functional>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -28,16 +29,16 @@ namespace Detail
 class ResolvedPath;
 } // namespace Detail
 
-// Explicit per-call ceilings; every member must be positive. No implicit
-// foundation defaults or authorization are inferred from these limits.
+// Per-call ceilings with conservative defaults; every member must be positive.
+// Defaults are budgets, not an authorization to access a path.
 struct PrefixLimits
 {
-    std::size_t targetBytes;
-    std::size_t components;
-    std::size_t work;
-    std::size_t liveDescriptors;
-    std::size_t retainedBytes;
-    std::size_t fdinfoBytes;
+    std::size_t targetBytes = 4096;
+    std::size_t components = 128;
+    std::size_t work = 100000;
+    std::size_t liveDescriptors = 256;
+    std::size_t retainedBytes = std::size_t{1024} * 1024;
+    std::size_t fdinfoBytes = 4096;
 };
 enum class MountPolicy
 {
@@ -47,9 +48,9 @@ enum class MountPolicy
 struct ResolverLimits
 {
     PrefixLimits shared;
-    std::size_t linkTargetBytes;
-    std::size_t linkExpansions;
-    std::size_t depth;
+    std::size_t linkTargetBytes = 4096;
+    std::size_t linkExpansions = 128;
+    std::size_t depth = 128;
 };
 
 namespace Detail
@@ -78,21 +79,12 @@ enum class NonFollowedLinkAction
 };
 struct ExtensionPolicy
 {
-    ExtensionPolicy(SymlinkPolicy symlinks, MountPolicy mounts, HardlinkPolicy hardlinks, UnsupportedTypeAction unsupported = UnsupportedTypeAction::Reject)
-        : symlinks(symlinks),
-          mounts(mounts),
-          hardlinks(hardlinks),
-          unsupported(unsupported),
-          fileLinks(symlinks),
-          directoryLinks(fileLinks)
-    {
-    }
-    SymlinkPolicy symlinks;
-    MountPolicy mounts;
-    HardlinkPolicy hardlinks;
-    UnsupportedTypeAction unsupported;
-    SymlinkPolicy fileLinks;
-    SymlinkPolicy directoryLinks;
+    SymlinkPolicy symlinks = SymlinkPolicy::DoNotFollow;
+    MountPolicy mounts = MountPolicy::StayOnRootMount;
+    HardlinkPolicy hardlinks = HardlinkPolicy::Permit;
+    UnsupportedTypeAction unsupported = UnsupportedTypeAction::Reject;
+    SymlinkPolicy fileLinks = SymlinkPolicy::DoNotFollow;
+    SymlinkPolicy directoryLinks = SymlinkPolicy::DoNotFollow;
     NonFollowedLinkAction nonFollowedLinks = NonFollowedLinkAction::Reject;
     // Only a direct missing name is reported, never an ENOENT from trusted
     // procfs or symlink-target resolution. FTW additionally checks DT_REG.
@@ -107,76 +99,83 @@ struct ExtensionPolicy
 class Path
 {
 public:
+    enum class RejectionReason
+    {
+        Missing,
+        Excluded,
+        UnsupportedType
+    };
     struct Policy
     {
-        Policy(SymlinkPolicy symlinks, MountPolicy mounts)
-            : symlinks(symlinks),
-              mounts(mounts),
-              fileLinks(symlinks),
-              directoryLinks(fileLinks)
-        {
-        }
-        SymlinkPolicy symlinks;
-        MountPolicy mounts;
-        SymlinkPolicy fileLinks;
-        SymlinkPolicy directoryLinks;
+        SymlinkPolicy symlinks = SymlinkPolicy::DoNotFollow;
+        MountPolicy mounts = MountPolicy::StayOnRootMount;
+        SymlinkPolicy fileLinks = SymlinkPolicy::DoNotFollow;
+        SymlinkPolicy directoryLinks = SymlinkPolicy::DoNotFollow;
         NonFollowedLinkAction nonFollowedLinks = NonFollowedLinkAction::Reject;
     };
-    struct Result;
     struct Metadata
     {
-        struct stat accepted = {};         // retained accepted directory/regular-file pin
-        Optional<struct stat> initialLink; // first name's live link pin during acquisition
-        std::uint64_t mountId = 0;         // original name's verified mount, before a link target
-    };
-    enum class PushOutcome
-    {
-        Pushed,
-        SkippedUnsupported, // no stack mutation; checked release of every temp pin
-        SkippedLink,        // only an explicit final-type DoNotFollow + Skip action
-        Missing             // only explicit reporting of a direct missing name
+        struct stat accepted = {}; // retained accepted directory/regular-file pin
+        std::uint64_t mountId = 0; // original name's verified mount, before a link target
     };
     // Pin each prefix through the trusted resolver, then rebase all subsequent
     // descendant resolution on the selected file or directory, never on "/".
-    // Missing is reported only for a directly missing path component; helper
-    // and confined-resolution ENOENT remain errors. Excluded means an
-    // explicit final-link policy omission, never an unsupported root.
-    static ComplianceEngine::Result<Path::Result> Make(const ContextInterface& context, std::string absolutePath, Policy policy, ResolverLimits limits);
+    // The Path alternative is accepted. Missing is reported only for a
+    // directly missing path component; helper and confined-resolution ENOENT
+    // remain errors. Excluded means an explicit final-link policy omission,
+    // never an unsupported root; UnsupportedType is only a Push skip.
+    static ComplianceEngine::Result<Variant<Path, Path::RejectionReason>> Make(const ContextInterface& context, std::string absolutePath, Policy policy,
+        ResolverLimits limits);
     Path(Path&&) noexcept;
     Path& operator=(Path&&) noexcept;
     ~Path() noexcept;
     Path(const Path&) = delete;
     Path& operator=(const Path&) = delete;
 
-    ComplianceEngine::Result<PushOutcome> Push(std::string component, ExtensionPolicy policy);
+    // Success borrows this Path after committing the child. The borrow expires
+    // on owner destruction/move and reflects subsequent owner mutations; it is
+    // not an immutable snapshot. Rejections leave the stack unchanged.
+    ComplianceEngine::Result<Variant<const Path&, RejectionReason>> Push(std::string component, ExtensionPolicy policy);
     // Transfers the last pin, including the root, without reacquiring its
     // name. The removed element's borrows expire; surviving borrows do not.
-    // Popping any element leaves its hidden acquisition-stage pins owned by
-    // this Path until Close/destruction, so those closes remain checked.
+    // Popping releases hidden pins acquired for this logical step immediately.
+    // If an auxiliary close fails, all step pins are still closed, the
+    // detached leaf is closed rather than returned, and the preceding Path
+    // remains valid; native closes cannot be rolled back.
     // The transferred pin immediately stops counting toward Path's budgets;
     // the consumer must bound retained handles independently.
     // An empty (also moved-from) Path returns EINVAL.
     ComplianceEngine::Result<Handle> Pop();
-    // Release every pin still owned by this Path, including retained root,
-    // stage and hidden symlink-resolution lineage pins. Attempt all closes;
+    // Release every pin still owned by this Path, including retained root
+    // prefix identities and hidden symlink-resolution pins. Attempt all closes;
     // return the first error and log subsequent failures. No native close is
-    // retried. The Path becomes empty, with the original result cached for
-    // repeated calls. Popped handles and activated readable files are separate
+    // retried. The Path becomes empty; subsequent calls succeed without native
+    // closes. Popped handles and activated readable files are separate
     // owners and remain valid; close popped handles explicitly if required.
     // Destruction logs an unobserved first failure if Close was not called.
     ComplianceEngine::Result<bool> Close();
     // On an empty Path these reference-returning accessors throw logic_error.
     const Handle& Root() const;
     const Handle& Leaf() const;
-    // Pinned metadata for the first symlink in the most recent root/child
-    // acquisition, if the selected name itself was a link. This observation
-    // is bound to the link pin used for confined resolution, not a name replay.
+    // Accepted pin metadata and the original component's verified mount ID.
     Metadata LeafMetadata() const;
     std::size_t Size() const noexcept;
-    // Count only resources still owned by this Path, including hidden and
-    // retired acquisition-stage pins, not handles transferred by Pop().
+    // Count only resources still owned by this Path, including hidden pins,
+    // not handles transferred by Pop().
     std::size_t RetainedDescriptors() const noexcept;
     std::size_t RetainedBytes() const noexcept;
+    const ContextInterface& Context() const noexcept
+    {
+        return mContext.get();
+    }
+    const std::string& DiagnosticPath() const noexcept
+    {
+        return mDiagnosticPath;
+    }
+    const ResolverLimits& Limits() const noexcept
+    {
+        return mLimits;
+    }
 
 private:
     class Resolver;
@@ -186,101 +185,53 @@ private:
     Path(const ContextInterface& context, ResolverLimits limits);
     ComplianceEngine::Result<Handle> RetainLeaf(Detail::ResolvedPath& stage, const std::string& component);
     ComplianceEngine::Result<bool> ReleaseStage(Detail::ResolvedPath& stage);
+    ComplianceEngine::Result<bool> Commit(Detail::ResolvedPath& stage, Handle leaf, bool root);
+    std::vector<const Handle*> Lineage(std::size_t index) const;
     std::size_t HeldDescriptors() const noexcept;
     bool ChargeWork() noexcept;
     ComplianceEngine::Result<std::uint64_t> RootMountId() const;
 
-    const ContextInterface* mContext;
+    std::reference_wrapper<const ContextInterface> mContext;
     ResolverLimits mLimits;
-    std::size_t mWorkSpent = 0;
-    std::size_t mStoredMemory = 0;
-    std::uint64_t mRootMountId = 0;
-    std::unique_ptr<Handle> mProcessRoot;
-    std::deque<Detail::ResolvedPath> mRootStages;
-    std::deque<Detail::ResolvedPath> mStages;
-    std::deque<Detail::ResolvedPath> mRetiredStages;
-    std::deque<Handle> mComponents;
-    std::vector<const Handle*> mRootLineage;
-    std::vector<const Handle*> mCurrentLineage;
-    bool mCloseAttempted = false;
-    int mCloseError = 0;
-};
-
-struct Path::Result
-{
-    enum class Status
+    struct Usage
     {
-        Accepted,
-        Missing,
-        Excluded
+        std::size_t workSpent = 0;
+        std::size_t retainedBytes = 0;
     };
-    // No default or externally mutable discriminant: an accepted result
-    // always owns an accepted Path. Moving it leaves the source non-accepted.
-    static Result Accepted(Path path)
+    Usage mUsage;
+    std::uint64_t mRootMountId = 0;
+    // The only persistent owner graph. A logical checkpoint is the first
+    // entry of its step; physicalParent follows pinned identity, not spelling.
+    struct Entry
     {
-        return Result(std::move(path));
-    }
-    static Result Missing()
-    {
-        return Result(Status::Missing);
-    }
-    static Result Excluded()
-    {
-        return Result(Status::Excluded);
-    }
-    Result(Result&& other) noexcept
-        : mStatus(other.mStatus),
-          mPath(std::move(other.mPath))
-    {
-        other.mStatus = Status::Missing;
-    }
-    Result& operator=(Result&& other) noexcept
-    {
-        if (this != &other)
+        Entry(Handle&& owned, std::size_t parent, std::size_t alias, std::size_t previous, std::size_t checkpoint, std::size_t bytes, std::uint64_t mount, bool visible)
+            : pin(std::move(owned)),
+              physicalParent(parent),
+              physicalAlias(alias),
+              logicalPrevious(previous),
+              stepCheckpoint(checkpoint),
+              stepBytes(bytes),
+              originalMount(mount),
+              accepted(visible)
         {
-            mPath = std::move(other.mPath);
-            mStatus = other.mStatus;
-            other.mStatus = Status::Missing;
         }
-        return *this;
-    }
-    ~Result() = default;
-    Result(const Result&) = delete;
-    Result& operator=(const Result&) = delete;
-
-    Status GetStatus() const noexcept
-    {
-        return mStatus;
-    }
-    Path& AcceptedPath() &
-    {
-        return mPath.Value();
-    }
-    const Path& AcceptedPath() const&
-    {
-        return mPath.Value();
-    }
-    Path TakePath() &&
-    {
-        Path accepted(std::move(mPath).Value());
-        mPath.Reset();
-        mStatus = Status::Missing;
-        return accepted;
-    }
-
-private:
-    explicit Result(Path&& accepted)
-        : mStatus(Status::Accepted),
-          mPath(std::move(accepted))
-    {
-    }
-    explicit Result(Status status)
-        : mStatus(status)
-    {
-    }
-    Status mStatus;
-    Optional<Path> mPath; // engaged if and only if mStatus == Accepted
+        Handle pin;
+        std::size_t physicalParent;
+        std::size_t physicalAlias;
+        std::size_t logicalPrevious;
+        std::size_t stepCheckpoint;
+        std::size_t stepBytes;
+        std::uint64_t originalMount;
+        bool accepted;
+    };
+    static constexpr std::size_t NoIndex = static_cast<std::size_t>(-1);
+    std::deque<Entry> mEntries;
+    std::size_t mRootIndex = NoIndex;
+    std::size_t mLeafIndex = NoIndex;
+    std::size_t mSize = 0;
+    std::string mDiagnosticPath;
 };
+
 } // namespace Filesystem
 } // namespace ComplianceEngine
 
