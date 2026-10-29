@@ -173,15 +173,26 @@ private:
         const std::string* effective;
         std::uint64_t mount;
     };
-    static ComplianceEngine::Result<Detail::ResolvedPath> ResolveChild(const ContextInterface& context, const std::vector<const Handle*>& rootLineage,
-        const std::vector<const Handle*>& parentLineage, std::string component, bool followSymlinks, MountPolicy mounts, const ResolverLimits& limits,
-        bool permitUnsupported, bool allowMissing, bool excludeLinks, const std::vector<NameBinding>& names, const std::string& logicalRoot,
-        const std::string& effectiveRoot, std::size_t* spent = nullptr);
+    struct ResolutionPolicy
+    {
+        bool followLinks;
+        MountPolicy mounts;
+        bool permitUnsupported;
+        bool allowMissing;
+        bool excludeLinks;
+    };
+    static ComplianceEngine::Result<Variant<Detail::ResolvedPath, RejectionReason>> ResolveChild(const ContextInterface& context, const Handle& root,
+        const std::vector<const Handle*>& parentLineage, std::string component, ResolutionPolicy policy, const ResolverLimits& limits,
+        const std::vector<NameBinding>& names, const std::string& logicalRoot, const std::string& effectiveRoot, std::size_t& spent);
     std::vector<NameBinding> Bindings() const;
     Path(const ContextInterface& context, ResolverLimits limits);
-    ComplianceEngine::Result<Handle> RetainLeaf(Detail::ResolvedPath& stage, const std::string& component);
-    ComplianceEngine::Result<bool> ReleaseStage(Detail::ResolvedPath& stage);
-    ComplianceEngine::Result<bool> Commit(Detail::ResolvedPath& stage, Handle leaf, bool root);
+    static ComplianceEngine::Result<Handle> RetainLeaf(const ContextInterface& context, const ResolverLimits& limits, std::size_t held,
+        Detail::ResolvedPath& stage, const Handle& source, const std::string& component);
+    ComplianceEngine::Result<bool> Commit(Detail::ResolvedPath& stage, Handle leaf);
+    ComplianceEngine::Result<bool> CommitScratch(Detail::ResolvedPath& stage, Handle leaf);
+    ComplianceEngine::Result<bool> CommitStage(Detail::ResolvedPath& stage, Handle leaf, bool logicalLeaf);
+    static ComplianceEngine::Result<std::vector<const Handle*>> PhysicalLineage(const Handle& root, const std::string& rootName, const Handle& target,
+        const std::string& targetName, const std::vector<NameBinding>& names, const Detail::ResolvedPath* stage, std::size_t depth);
     std::vector<const Handle*> Lineage(std::size_t index) const;
     std::size_t HeldDescriptors() const noexcept;
     bool ChargeWork() noexcept;
@@ -214,12 +225,11 @@ private:
         std::uint64_t originalMount;
         bool logicalLeaf;
     };
-    static constexpr std::size_t NoIndex = static_cast<std::size_t>(-1);
+    static bool Footprint(const Handle& pin, const std::string& lookup, const std::string& effective, std::size_t& bytes) noexcept;
     // Own the deque allocation separately: moving a deque itself may allocate
     // an empty map even when its declared move constructor is noexcept.
     // A moved-from Path has no deque and remains a valid empty owner.
     std::unique_ptr<std::deque<Entry>> mEntries;
-    std::size_t mLeafIndex = NoIndex;
     std::size_t mSize = 0;
     std::string mDiagnosticPath;
 };

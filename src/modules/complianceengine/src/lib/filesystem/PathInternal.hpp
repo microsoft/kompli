@@ -81,40 +81,38 @@ public:
     const Handle& Leaf() const;
     std::size_t OwnedDescriptors() const noexcept;
     std::size_t AccountedBytes() const noexcept;
+    // Checked, attempt-all release of every pin still owned by this stage.
+    Result<bool> Close(const ContextInterface& context);
 
 private:
     friend class ::ComplianceEngine::Filesystem::Path;
     friend struct ResolvedPathAllocationProbe; // focused allocator-failure test
+    struct Pin
+    {
+        Pin(Handle&& handle, std::string name)
+            : handle(std::move(handle)),
+              effective(std::move(name))
+        {
+        }
+        Handle handle;
+        std::string effective;
+    };
     ResolvedPath()
-        : mPins(new std::deque<Handle>()),
-          mEffectivePins(new std::deque<std::string>())
+        : mPins(new std::deque<Pin>())
     {
     }
     Handle TakeOwnedLeaf();
-    struct Frame
-    {
-        const Handle* borrowed = nullptr;
-        std::size_t ownedIndex = 0;
-        bool owned = false;
-    };
+    using Frame = Variant<const Handle*, std::size_t>;
     // The heap-owned deques move by pointer transfer, not by deque move.
-    std::unique_ptr<std::deque<Handle>> mPins;
-    // Recorded at the actual parent->child transition, not inferred from
-    // Handle::Component after following a link.
-    std::unique_ptr<std::deque<std::string>> mEffectivePins;
+    std::unique_ptr<std::deque<Pin>> mPins;
     std::string mEffectiveLeaf;
     std::string mSourceLookup;
     std::vector<Frame> mFrames;
-    const Handle* mBorrowedLeaf = nullptr;
     std::size_t mOwnedLeaf = 0;
-    bool mOwnsLeaf = false;
     bool mLeafTaken = false;
     std::size_t mAccountedBytes = 0;
     bool mInitialFollowedLink = false;
     std::uint64_t mInitialMountId = 0;
-    bool mUnsupportedLeaf = false;
-    bool mMissingLeaf = false;
-    bool mExcludedLink = false;
 };
 
 } // namespace Detail

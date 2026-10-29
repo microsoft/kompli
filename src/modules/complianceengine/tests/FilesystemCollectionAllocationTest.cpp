@@ -38,8 +38,7 @@ struct ResolvedPathAllocationProbe
     static ResolvedPath Staged()
     {
         ResolvedPath stage;
-        stage.mEffectivePins->emplace_back(160, 'p');
-        stage.mFrames.emplace_back();
+        stage.mFrames.emplace_back(InPlaceType<const Handle*>{}, static_cast<const Handle*>(nullptr));
         stage.mAccountedBytes = 160;
         return stage;
     }
@@ -90,7 +89,7 @@ TEST(FilesystemCollectionAllocationTest, ResolverResultTransfersDoNotAllocate)
     static_assert(std::is_nothrow_move_constructible<ResolvedPath>::value, "Resolver result transfer must be noexcept");
     static_assert(std::is_nothrow_move_assignable<ResolvedPath>::value, "Resolver result replacement must be noexcept");
     auto stage = ComplianceEngine::Filesystem::Detail::ResolvedPathAllocationProbe::Staged();
-    // Both owning deques have already allocated their maps. The Result
+    // The owning deque has already allocated its map. The Result
     // transfer must move ownership, not construct replacement empty maps.
     faultTransfers = true;
     ComplianceEngine::Result<ResolvedPath> first(std::move(stage));
