@@ -57,31 +57,13 @@ Result<bool> Descriptor::Close()
     {
         return true;
     }
-    int error = 0;
-    try
-    {
-        if (Context().CloseOwnedDescriptor(*this) != 0)
-        {
-            error = (errno != 0) ? errno : EIO;
-        }
-    }
-    catch (...)
-    {
-        error = EIO;
-    }
+    const int error = Context().CloseOwnedDescriptor(*this) != 0 ? ((errno != 0) ? errno : EIO) : 0;
     if (error != 0)
     {
-        try
-        {
-            const char* diagnostic = mCloseDiagnostic == ContextInterface::CloseDiagnostic::DirectoryActivation ?
-                                         "Failed to close directory activation" :
-                                         "Failed to close internal filesystem descriptor";
-            OsConfigLogError(Context().GetLogHandle(), "%s: %d", diagnostic, error);
-        }
-        catch (...)
-        {
-            OsConfigLogError(nullptr, "Filesystem descriptor close or log failure: %d", error);
-        }
+        const char* diagnostic = mCloseDiagnostic == ContextInterface::CloseDiagnostic::DirectoryActivation ?
+                                     "Failed to close directory activation" :
+                                     "Failed to close internal filesystem descriptor";
+        OsConfigLogError(Context().GetLogHandle(), "%s: %d", diagnostic, error);
         return Error("Cannot close internal filesystem descriptor", error);
     }
     return true;

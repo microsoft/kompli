@@ -1025,16 +1025,13 @@ TEST(FileObjectCollectorTest, ReadFailureSurvivesThrowingDataClose)
             throw std::bad_alloc();
         return 0;
     });
-    const auto result = ComplianceEngine::CollectNameserverObject(context, path);
+    EXPECT_THROW((void)ComplianceEngine::CollectNameserverObject(context, path), std::bad_alloc);
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EACCES, result.Error().code);
-    EXPECT_EQ("Failed to read file bytes", result.Error().message);
     EXPECT_EQ(1, dataCloses);
     EXPECT_EQ(1, pinCloses);
     const auto text = ReadLog(logPath);
-    ExpectLoggedOnce(text, "Failed to close directory activation: " + std::to_string(EIO));
+    EXPECT_EQ(std::string::npos, text.find("Failed to close directory activation: " + std::to_string(EIO)));
     EXPECT_EQ(std::string::npos, text.find("Failed to close pinned descriptor"));
 }
 

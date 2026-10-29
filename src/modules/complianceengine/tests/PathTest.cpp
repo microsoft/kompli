@@ -951,6 +951,93 @@ TEST_F(PathAliasTest, DirectoryCursorFailedCloseIsNotReplayedOrRetried)
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
+TEST_F(PathAliasTest, DirectoryCursorExplicitExceptionAndNoexceptReplacementReleaseOnce)
+{
+    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue());
+    Path path = std::move(opened).Value();
+    auto first = path.Leaf().OpenChildren();
+    auto second = path.Leaf().OpenChildren();
+    ASSERT_TRUE(first.HasValue());
+    ASSERT_TRUE(second.HasValue());
+    const auto before = CountOpenDescriptors();
+    EXPECT_CALL(context, CloseDirectory(_))
+        .Times(2)
+        .WillOnce([](DIR* stream) -> int {
+            EXPECT_EQ(0, ::closedir(stream));
+            throw std::runtime_error("cursor post-close fault");
+        })
+        .WillOnce([](DIR* stream) { return ::closedir(stream); });
+    first.Value() = std::move(second.Value()); // displaced owner closes inside its guarded destructor
+    EXPECT_TRUE(second.Value().Close().HasValue());
+    try
+    {
+        // The transferred stream now owns the second, still live directory.
+        // Inject a separate explicit-close exception below if its close fails.
+        EXPECT_TRUE(first.Value().Close().HasValue());
+    }
+    catch (...)
+    {
+        FAIL() << "The second native close should succeed";
+    }
+    EXPECT_EQ(before - 2, CountOpenDescriptors());
+    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+    auto third = path.Leaf().OpenChildren();
+    ASSERT_TRUE(third.HasValue());
+    EXPECT_CALL(context, CloseDirectory(_)).Times(1).WillOnce([](DIR* stream) -> int {
+        EXPECT_EQ(0, ::closedir(stream));
+        throw std::runtime_error("explicit cursor fault");
+    });
+    try
+    {
+        (void)third.Value().Close();
+        FAIL() << "Explicit cursor close must propagate";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_STREQ("explicit cursor fault", error.what());
+    }
+    EXPECT_TRUE(third.Value().Close().HasValue());
+    EXPECT_TRUE(path.Close().HasValue());
+}
+
+TEST_F(PathAliasTest, DirectoryCursorExplicitLogExceptionPropagatesWithoutRetry)
+{
+    struct FaultyLogContext : NiceMock<MockContext>
+    {
+        OsConfigLogHandle GetLogHandle() const override
+        {
+            if (throwOnLog)
+                throw std::runtime_error("cursor log fault");
+            return MockContext::GetLogHandle();
+        }
+        bool throwOnLog = false;
+    } selected;
+    auto opened = SelectAcceptedPath(selected, selected.GetTempdirPath(), CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue());
+    Path path = std::move(opened).Value();
+    auto cursor = path.Leaf().OpenChildren();
+    ASSERT_TRUE(cursor.HasValue());
+    EXPECT_CALL(selected, CloseDirectory(_)).Times(1).WillOnce([](DIR* stream) {
+        EXPECT_EQ(0, ::closedir(stream));
+        errno = EACCES;
+        return -1;
+    });
+    selected.throwOnLog = true;
+    try
+    {
+        (void)cursor.Value().Close();
+        FAIL() << "The log-accessor exception must propagate";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_STREQ("cursor log fault", error.what());
+    }
+    selected.throwOnLog = false;
+    EXPECT_TRUE(cursor.Value().Close().HasValue());
+    EXPECT_TRUE(path.Close().HasValue());
+}
+
 TEST_F(PathAliasTest, InspectionActivationAndMutationRejectMismatchedMountRecords)
 {
     const std::string file = context.MakeTempfile("held");
@@ -2452,6 +2539,109 @@ TEST_F(PathAliasTest, FailedAuxiliaryPopRestoresParentAndDoesNotRetirePins)
     EXPECT_TRUE(path.Close().HasValue());
 }
 
+TEST_F(PathAliasTest, ThrowingAuxiliaryPopKeepsPredecessorAndReleasesDetachedPins)
+{
+    const std::string root = context.GetTempdirPath() + "/pop-exception-root";
+    ASSERT_EQ(0, ::mkdir(root.c_str(), 0700));
+    ASSERT_EQ(0, ::mkdir((root + "/hidden").c_str(), 0700));
+    ASSERT_EQ(0, ::mkdir((root + "/hidden/leaf").c_str(), 0700));
+    ASSERT_EQ(0, ::symlink("hidden/leaf", (root + "/shortcut").c_str()));
+    auto opened = SelectAcceptedPath(context, root, CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+    const std::size_t baseline = path.RetainedDescriptors();
+    const auto follow = ChildPolicy(SymlinkPolicy::Follow, MountPolicy::AllowCrossing);
+    ASSERT_TRUE(path.Push("shortcut", follow).HasValue());
+    const std::size_t detachedPins = path.RetainedDescriptors() - baseline;
+    ASSERT_GT(detachedPins, 1U);
+    const auto before = CountOpenDescriptors();
+    std::size_t attempts = 0;
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(detachedPins).WillRepeatedly([&](int fd) {
+        ++attempts;
+        EXPECT_EQ(0, ::close(fd));
+        if (attempts == 1)
+            throw std::runtime_error("pop post-close fault");
+        return 0;
+    });
+    try
+    {
+        (void)path.Pop();
+        FAIL() << "Pop must propagate the original exception";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_STREQ("pop post-close fault", error.what());
+    }
+    EXPECT_EQ(detachedPins, attempts);
+    EXPECT_EQ(1U, path.Size());
+    EXPECT_EQ(baseline, path.RetainedDescriptors());
+    EXPECT_EQ(root, path.ToString());
+    EXPECT_EQ(before - detachedPins, CountOpenDescriptors());
+    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+    ASSERT_TRUE(path.Push("hidden", follow).HasValue());
+    ASSERT_TRUE(path.Pop().HasValue());
+    EXPECT_TRUE(path.Close().HasValue());
+}
+
+TEST_F(PathAliasTest, PopLogAccessorExceptionKeepsUsablePredecessor)
+{
+    struct FaultyLogContext : NiceMock<MockContext>
+    {
+        OsConfigLogHandle GetLogHandle() const override
+        {
+            if (throwOnLog)
+                throw std::runtime_error("pop log fault");
+            return MockContext::GetLogHandle();
+        }
+        bool throwOnLog = false;
+    } selected;
+    const std::string root = selected.GetTempdirPath() + "/pop-log-root";
+    ASSERT_EQ(0, ::mkdir(root.c_str(), 0700));
+    ASSERT_EQ(0, ::mkdir((root + "/hidden").c_str(), 0700));
+    ASSERT_EQ(0, ::mkdir((root + "/hidden/leaf").c_str(), 0700));
+    ASSERT_EQ(0, ::symlink("hidden/leaf", (root + "/shortcut").c_str()));
+    auto opened = SelectAcceptedPath(selected, root, CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+    const std::size_t baseline = path.RetainedDescriptors();
+    const auto follow = ChildPolicy(SymlinkPolicy::Follow, MountPolicy::AllowCrossing);
+    ASSERT_TRUE(path.Push("shortcut", follow).HasValue());
+    const std::size_t detachedPins = path.RetainedDescriptors() - baseline;
+    ASSERT_GT(detachedPins, 1U);
+    const auto before = CountOpenDescriptors();
+    std::size_t attempts = 0;
+    EXPECT_CALL(selected, CloseFileDescriptor(_)).Times(detachedPins).WillRepeatedly([&](int fd) {
+        ++attempts;
+        EXPECT_EQ(0, ::close(fd));
+        if (attempts == 1)
+        {
+            errno = EACCES;
+            return -1;
+        }
+        return 0;
+    });
+    selected.throwOnLog = true;
+    try
+    {
+        (void)path.Pop();
+        FAIL() << "Log-accessor exceptions must propagate";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_STREQ("pop log fault", error.what());
+    }
+    selected.throwOnLog = false;
+    EXPECT_EQ(detachedPins, attempts);
+    EXPECT_EQ(1U, path.Size());
+    EXPECT_EQ(baseline, path.RetainedDescriptors());
+    EXPECT_EQ(root, path.ToString());
+    EXPECT_EQ(before - detachedPins, CountOpenDescriptors());
+    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&selected));
+    ASSERT_TRUE(path.Push("hidden", follow).HasValue());
+    ASSERT_TRUE(path.Pop().HasValue());
+    EXPECT_TRUE(path.Close().HasValue());
+}
+
 TEST_F(PathAliasTest, IgnoredPopClosesOnceAndEmptyAccessIsExplicit)
 {
     ResolverLimits limits;
@@ -3175,19 +3365,96 @@ TEST_F(PathAliasTest, ThrowingCloseIsAttemptedOnlyOnceAndOtherPinsStillRelease)
     ASSERT_GT(pins, 1U);
     const std::size_t before = CountOpenDescriptors();
     std::size_t attempted = 0;
+    int reused = -1;
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) {
         const auto index = attempted++;
         EXPECT_EQ(0, ::close(fd));
         if (index == 0)
         {
+            const int replacement = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+            EXPECT_GE(replacement, 0);
+            if (replacement >= 0)
+            {
+                reused = fd;
+                if (replacement != fd)
+                {
+                    EXPECT_EQ(fd, ::dup2(replacement, fd));
+                    ::close(replacement);
+                }
+            }
             throw std::runtime_error("injected post-close failure");
         }
         return 0;
     });
-    EXPECT_EQ(EIO, path.Close().Error().code);
+    try
+    {
+        (void)path.Close();
+        FAIL() << "Native close exceptions must propagate";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_STREQ("injected post-close failure", error.what());
+    }
+    EXPECT_EQ(0U, path.Size());
+    EXPECT_EQ(0U, path.RetainedDescriptors());
+    EXPECT_EQ(0U, path.RetainedBytes());
     EXPECT_TRUE(path.Close().HasValue());
     EXPECT_EQ(pins, attempted);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+    ASSERT_GE(reused, 0);
+    EXPECT_GE(::fcntl(reused, F_GETFD), 0);
+    EXPECT_EQ(before - pins + 1, CountOpenDescriptors());
+    EXPECT_EQ(0, ::close(reused));
+    EXPECT_EQ(before - pins, CountOpenDescriptors());
+}
+
+TEST_F(PathAliasTest, ThrowingCloseLogAccessorLeavesPathEmptyAndReleasesOtherPins)
+{
+    struct FaultyLogContext : NiceMock<MockContext>
+    {
+        OsConfigLogHandle GetLogHandle() const override
+        {
+            if (throwOnLog)
+                throw std::runtime_error("path close log fault");
+            return MockContext::GetLogHandle();
+        }
+        bool throwOnLog = false;
+    } selected;
+    ASSERT_EQ(0, ::mkdir((selected.GetTempdirPath() + "/close-log-child").c_str(), 0700));
+    auto opened = SelectAcceptedPath(selected, selected.GetTempdirPath(), CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+    ASSERT_TRUE(path.Push("close-log-child", ChildPolicy(SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing)).HasValue());
+    const auto pins = path.RetainedDescriptors();
+    ASSERT_GT(pins, 1U);
+    const auto before = CountOpenDescriptors();
+    std::size_t attempts = 0;
+    EXPECT_CALL(selected, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) {
+        ++attempts;
+        EXPECT_EQ(0, ::close(fd));
+        if (attempts == 1)
+        {
+            errno = EACCES;
+            return -1;
+        }
+        return 0;
+    });
+    selected.throwOnLog = true;
+    try
+    {
+        (void)path.Close();
+        FAIL() << "The original log-accessor exception must propagate";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_STREQ("path close log fault", error.what());
+    }
+    selected.throwOnLog = false;
+    EXPECT_EQ(0U, path.Size());
+    EXPECT_EQ(0U, path.RetainedDescriptors());
+    EXPECT_EQ(0U, path.RetainedBytes());
+    EXPECT_EQ(pins, attempts);
+    EXPECT_TRUE(path.Close().HasValue());
     EXPECT_EQ(before - pins, CountOpenDescriptors());
 }
 

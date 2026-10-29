@@ -201,9 +201,9 @@ TEST_F(ReadableFileTest, DescriptorMoveReplacementRoutesThrownCloseToOldContextO
             ASSERT_NE(std::string::npos, occurrence);
             EXPECT_EQ(std::string::npos, logged.find(expected, occurrence + expected.size()));
         }
-        EXPECT_EQ(1, oldContext.logHandleRequests);
+        EXPECT_EQ(0, oldContext.logHandleRequests); // Native exception never enters the diagnostic branch.
     }
-    EXPECT_EQ(1, oldContext.logHandleRequests);
+    EXPECT_EQ(0, oldContext.logHandleRequests);
 }
 
 TEST_F(ReadableFileTest, AliasOpenFailureDoesNotReopenNameOrLeak)
@@ -1052,7 +1052,7 @@ TEST_F(ReadableFileTest, FailedCloseTransfersNoErrorThroughMoveConstructionOrAss
     EXPECT_EQ(before - 2, OpenDescriptors());
 }
 
-TEST_F(ReadableFileTest, ThrowingNativeCloseReportsEioOnceAndDoesNotRetry)
+TEST_F(ReadableFileTest, ThrowingNativeClosePropagatesOnceAndDoesNotRetry)
 {
     const std::string source = context.MakeTempfile("x");
     auto pinned = Pin(Component(source));
@@ -1066,9 +1066,15 @@ TEST_F(ReadableFileTest, ThrowingNativeCloseReportsEioOnceAndDoesNotRetry)
             EXPECT_EQ(0, ::close(descriptor));
             throw std::runtime_error("native close fault");
         });
-        auto first = readable.Close();
-        ASSERT_FALSE(first.HasValue());
-        EXPECT_EQ(EIO, first.Error().code);
+        try
+        {
+            (void)readable.Close();
+            FAIL() << "Native close exceptions must propagate";
+        }
+        catch (const std::runtime_error& error)
+        {
+            EXPECT_STREQ("native close fault", error.what());
+        }
         EXPECT_TRUE(readable.Close().HasValue());
         EXPECT_EQ(EBADF, readable.Stat().Error().code);
     }
@@ -1097,7 +1103,7 @@ TEST_F(ReadableFileTest, DestructorContainsThrowingLogAfterFailedNativeClose)
         const auto logged = testing::internal::GetCapturedStderr();
         if (IsConsoleLoggingEnabled() && GetLoggingLevel() >= LoggingLevelError)
         {
-            EXPECT_NE(std::string::npos, logged.find("Filesystem descriptor close or log failure: " + std::to_string(EACCES)));
+            EXPECT_NE(std::string::npos, logged.find("Filesystem descriptor close or log failure: " + std::to_string(EIO)));
         }
         EXPECT_EQ(1, selectedContext.logHandleRequests);
         EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&selectedContext));

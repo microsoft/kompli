@@ -232,11 +232,56 @@ TEST(DescriptorBoundaryTest, MovedDescriptorLogsFailedCloseOnlyOnce)
         errno = EIO;
         return -1;
     });
-    auto failed = moved.Close();
-    ASSERT_FALSE(failed.HasValue());
-    EXPECT_EQ(EIO, failed.Error().code);
+    try
+    {
+        (void)moved.Close();
+        FAIL() << "The original log-accessor exception must propagate";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_STREQ("diagnostic handle unavailable", error.what());
+    }
     EXPECT_EQ(1, context.logAttempts);
     EXPECT_TRUE(moved.Close().HasValue());
     EXPECT_FALSE(moved.HasValue());
+}
+
+TEST(DescriptorBoundaryTest, NativeCloseExceptionRelinquishesDescriptorBeforeReuse)
+{
+    NiceMock<MockContext> context;
+    auto opened = context.OpenAbsolutePin("/proc");
+    ASSERT_TRUE(opened.HasValue());
+    Descriptor owner = std::move(opened).Value();
+    int reused = -1;
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([&](int fd) -> int {
+        EXPECT_EQ(0, ::close(fd));
+        const int replacement = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+        EXPECT_GE(replacement, 0);
+        if (replacement >= 0)
+        {
+            reused = fd;
+            if (replacement != fd)
+            {
+                EXPECT_EQ(fd, ::dup2(replacement, fd));
+                ::close(replacement);
+            }
+        }
+        throw std::runtime_error("native close fault");
+    });
+    try
+    {
+        (void)owner.Close();
+        FAIL() << "The original native exception must propagate";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_STREQ("native close fault", error.what());
+    }
+    EXPECT_FALSE(owner.HasValue());
+    EXPECT_TRUE(owner.Close().HasValue());
+    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+    ASSERT_GE(reused, 0);
+    EXPECT_GE(::fcntl(reused, F_GETFD), 0);
+    EXPECT_EQ(0, ::close(reused));
 }
 } // namespace

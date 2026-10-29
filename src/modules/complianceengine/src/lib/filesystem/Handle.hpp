@@ -125,7 +125,6 @@ private:
     Result<PinObservation> InspectWithProcfs(const Detail::VerifiedProcfs& procfs) const;
     Result<bool> SetModeWithProcfs(const Detail::VerifiedProcfs& procfs, mode_t mode) const;
     void Swap(Handle& other) noexcept;
-    int CloseOnce() noexcept;
 
     Detail::Descriptor mDescriptor;
     Type mType = Type::Directory;

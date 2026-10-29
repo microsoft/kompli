@@ -769,20 +769,26 @@ TEST_F(PathFile, DestructorSuppressesThrowingDataCloseAndLogsOnce)
             return 0;
         throw std::runtime_error("injected data close failure");
     });
+    testing::internal::CaptureStderr();
     {
         auto opened = LinesRange::Make(context, path);
         ASSERT_TRUE(opened.HasValue());
     }
+    const auto logged = testing::internal::GetCapturedStderr();
     EXPECT_EQ(1, closes);
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto expected = "Failed to close directory activation: " + std::to_string(EIO);
-    const auto occurrence = text.find(expected);
-    ASSERT_NE(std::string::npos, occurrence);
-    EXPECT_EQ(std::string::npos, text.find(expected, occurrence + expected.size()));
+    const auto expected = "Filesystem descriptor close or log failure: " + std::to_string(EIO);
+    EXPECT_EQ(std::string::npos, text.find(expected)); // Destructor fallback uses the literal C logger, not the context handle.
+    if (IsConsoleLoggingEnabled() && GetLoggingLevel() >= LoggingLevelError)
+    {
+        const auto occurrence = logged.find(expected);
+        ASSERT_NE(std::string::npos, occurrence);
+        EXPECT_EQ(std::string::npos, logged.find(expected, occurrence + expected.size()));
+    }
 }
 
 TEST_F(PathFile, MoveAssignmentClosesOldOwnershipAndTransfersNew)
@@ -1186,9 +1192,15 @@ TEST_F(PathFile, ThrowingAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
         return context.RealStatFileDescriptor(fd, metadata);
     });
     dataStats = pinCloses = dataCloses = 0;
-    auto opened = LinesRange::Make(context, path);
-    ASSERT_FALSE(opened.HasValue());
-    EXPECT_EQ(EIO, opened.Error().code); // Opaque close catches, caches, never retries.
+    try
+    {
+        (void)LinesRange::Make(context, path);
+        FAIL() << "The pin-cleanup exception must propagate";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_STREQ("pin cleanup", error.what());
+    }
     EXPECT_GE(pinCloses, 1);
     EXPECT_EQ(1, dataCloses);
 }
@@ -1476,9 +1488,16 @@ TEST_F(PathFile, LastUnterminatedLineIsNotPublishedWhenVerificationOrCloseFails)
     EXPECT_EQ("tail", cursor->Value());
     ++cursor;
     EXPECT_FALSE(cursor != tailRange.end());
-    auto closed = tailRange.Close();
-    ASSERT_FALSE(closed.HasValue());
-    EXPECT_EQ(EIO, closed.Error().code);
+    try
+    {
+        (void)tailRange.Close();
+        FAIL() << "The native close exception must propagate";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_STREQ("close", error.what());
+    }
+    EXPECT_TRUE(tailRange.Close().HasValue());
     EXPECT_EQ(1, closes); // Data close is not retried after throwing.
 }
 

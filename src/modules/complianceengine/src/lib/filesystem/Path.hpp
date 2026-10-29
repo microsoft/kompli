@@ -193,7 +193,7 @@ private:
     ComplianceEngine::Result<bool> CommitStage(Detail::ResolvedPath& stage, Handle leaf, bool logicalLeaf);
     static ComplianceEngine::Result<std::vector<const Handle*>> PhysicalLineage(const Handle& root, const std::string& rootName, const Handle& target,
         const std::string& targetName, const std::vector<NameBinding>& names, const Detail::ResolvedPath* stage, std::size_t depth);
-    std::vector<const Handle*> Lineage(std::size_t index) const;
+    ComplianceEngine::Result<std::vector<const Handle*>> Lineage(std::size_t index) const;
     std::size_t HeldDescriptors() const noexcept;
     bool ChargeWork() noexcept;
     ComplianceEngine::Result<std::uint64_t> RootMountId() const;

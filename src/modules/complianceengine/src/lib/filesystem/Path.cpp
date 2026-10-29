@@ -873,14 +873,7 @@ Path::~Path() noexcept
             auto closed = Close();
             if (!closed.HasValue())
             {
-                try
-                {
-                    OsConfigLogError(mContext.get().GetLogHandle(), "Failed to close acquired filesystem path: %d", closed.Error().code);
-                }
-                catch (...)
-                {
-                    OsConfigLogError(nullptr, "Acquired path close log failure: %d", closed.Error().code);
-                }
+                OsConfigLogError(mContext.get().GetLogHandle(), "Failed to close acquired filesystem path: %d", closed.Error().code);
             }
         }
         catch (...)
@@ -892,37 +885,32 @@ Path::~Path() noexcept
 
 ComplianceEngine::Result<bool> Path::Close()
 {
+    // Relinquish the entire path before any native close or diagnostic can
+    // throw. Remaining detached pins are released by their guarded owners.
+    auto entries = std::move(mEntries);
+    mSize = 0;
+    mUsage.retainedBytes = 0;
+    if (!entries)
+        return true;
     int firstError = 0;
     auto release = [this, &firstError](Handle& pin) {
-        const int error = pin.CloseOnce();
-        if (error != 0)
+        auto closed = pin.Close();
+        if (!closed.HasValue())
         {
             if (firstError == 0)
             {
-                firstError = error;
+                firstError = closed.Error().code;
             }
             else
             {
-                try
-                {
-                    OsConfigLogError(mContext.get().GetLogHandle(), "Secondary filesystem pin close failure: %d", error);
-                }
-                catch (...)
-                {
-                    OsConfigLogError(nullptr, "Secondary filesystem pin close log failure: %d", error);
-                }
+                OsConfigLogError(mContext.get().GetLogHandle(), "Secondary filesystem pin close failure: %d", closed.Error().code);
             }
         }
     };
-    if (!mEntries)
-        return true;
-    for (auto entry = mEntries->rbegin(); entry != mEntries->rend(); ++entry)
+    for (auto entry = entries->rbegin(); entry != entries->rend(); ++entry)
     {
         release(entry->pin);
     }
-    mEntries->clear();
-    mSize = 0;
-    mUsage.retainedBytes = 0;
     if (firstError != 0)
     {
         return Error("Cannot close acquired filesystem path", firstError);
@@ -1088,15 +1076,12 @@ ComplianceEngine::Result<std::vector<const Handle*>> Path::PhysicalLineage(const
     return pins;
 }
 
-std::vector<const Handle*> Path::Lineage(std::size_t index) const
+ComplianceEngine::Result<std::vector<const Handle*>> Path::Lineage(std::size_t index) const
 {
-    if (index >= mEntries->size())
-        throw std::logic_error("Invalid acquired directory boundary");
-    auto lineage = PhysicalLineage(mEntries->front().pin, mEntries->front().effectiveName, (*mEntries)[index].pin, (*mEntries)[index].effectiveName,
-        Bindings(), nullptr, std::numeric_limits<std::size_t>::max());
-    if (!lineage.HasValue())
-        throw std::logic_error("Conflicting held physical ancestor");
-    return std::move(lineage).Value();
+    if (!mEntries || index >= mEntries->size())
+        return Error("Invalid acquired directory boundary", EINVAL);
+    return PhysicalLineage(mEntries->front().pin, mEntries->front().effectiveName, (*mEntries)[index].pin, (*mEntries)[index].effectiveName, Bindings(),
+        nullptr, std::numeric_limits<std::size_t>::max());
 }
 
 bool Path::Footprint(const Handle& pin, const std::string& lookup, const std::string& effective, std::size_t& bytes) noexcept
@@ -1130,7 +1115,6 @@ ComplianceEngine::Result<bool> Path::CommitScratch(Detail::ResolvedPath& stage, 
 
 ComplianceEngine::Result<bool> Path::CommitStage(Detail::ResolvedPath& stage, Handle leaf, bool logicalLeaf)
 {
-    const std::size_t start = mEntries->size();
     // Keep only directories in the final physical ancestry. Previous logical
     // steps remain owned until their own Pop, even if a link branched away.
     auto abort = [this, &stage, &leaf](const Error& error) -> ComplianceEngine::Result<bool> {
@@ -1142,78 +1126,58 @@ ComplianceEngine::Result<bool> Path::CommitStage(Detail::ResolvedPath& stage, Ha
             Detail::LogSecondaryClose(mContext.get(), closedStage.Error().code);
         return error;
     };
-    try
+    std::vector<bool> keep(stage.mPins->size(), false);
+    for (const auto& frame : stage.mFrames)
     {
-        std::vector<bool> keep(stage.mPins->size(), false);
-        for (const auto& frame : stage.mFrames)
+        if (frame.Is<std::size_t>())
         {
-            if (frame.Is<std::size_t>())
-            {
-                if (frame.Get<std::size_t>() >= stage.mPins->size())
-                    return abort(Error("Invalid staged directory index", EINVAL));
-                keep[frame.Get<std::size_t>()] = true;
-            }
-            else if (frame.Get<const Handle*>() == nullptr ||
-                     std::none_of(mEntries->begin(), mEntries->end(), [&frame](const Entry& entry) { return &entry.pin == frame.Get<const Handle*>(); }))
-                return abort(Error("Invalid borrowed staged ancestor", EINVAL));
+            if (frame.Get<std::size_t>() >= stage.mPins->size())
+                return abort(Error("Invalid staged directory index", EINVAL));
+            keep[frame.Get<std::size_t>()] = true;
         }
-        std::size_t bytes = 0;
-        if (!Footprint(leaf, stage.mSourceLookup, stage.mEffectiveLeaf, bytes))
-            return abort(Error("Path entry storage exceeds retained-memory budget", E2BIG));
-        for (std::size_t i = 0; i < stage.mPins->size(); ++i)
+        else if (frame.Get<const Handle*>() == nullptr ||
+                 std::none_of(mEntries->begin(), mEntries->end(), [&frame](const Entry& entry) { return &entry.pin == frame.Get<const Handle*>(); }))
+            return abort(Error("Invalid borrowed staged ancestor", EINVAL));
+    }
+    std::size_t bytes = 0;
+    if (!Footprint(leaf, stage.mSourceLookup, stage.mEffectiveLeaf, bytes))
+        return abort(Error("Path entry storage exceeds retained-memory budget", E2BIG));
+    for (std::size_t i = 0; i < stage.mPins->size(); ++i)
+    {
+        if (stage.mLeafTaken && i == stage.mOwnedLeaf)
+            continue;
+        if (keep[i])
         {
-            if (stage.mLeafTaken && i == stage.mOwnedLeaf)
-                continue;
-            if (keep[i])
-            {
-                std::size_t record = 0;
-                if (!Footprint((*stage.mPins)[i].handle, (*stage.mPins)[i].effective, (*stage.mPins)[i].effective, record) ||
-                    record > std::numeric_limits<std::size_t>::max() - bytes)
-                    return abort(Error("Path entry storage exceeds retained-memory budget", E2BIG));
-                bytes += record;
-            }
+            std::size_t record = 0;
+            if (!Footprint((*stage.mPins)[i].handle, (*stage.mPins)[i].effective, (*stage.mPins)[i].effective, record) ||
+                record > std::numeric_limits<std::size_t>::max() - bytes)
+                return abort(Error("Path entry storage exceeds retained-memory budget", E2BIG));
+            bytes += record;
         }
-        if (mUsage.retainedBytes > mLimits.shared.retainedBytes || bytes > mLimits.shared.retainedBytes - mUsage.retainedBytes)
-            return abort(Error("Path entry storage exceeds retained-memory budget", E2BIG));
+    }
+    if (mUsage.retainedBytes > mLimits.shared.retainedBytes || bytes > mLimits.shared.retainedBytes - mUsage.retainedBytes)
+        return abort(Error("Path entry storage exceeds retained-memory budget", E2BIG));
 
-        // Close abandoned temporary branches before changing the accepted
-        // Path. A failure leaves every existing borrow and index untouched.
-        for (std::size_t i = 0; i < stage.mPins->size(); ++i)
-        {
-            if (!keep[i] && !(stage.mLeafTaken && i == stage.mOwnedLeaf))
-            {
-                auto closed = (*stage.mPins)[i].handle.Close();
-                if (!closed.HasValue())
-                    return abort(std::move(closed).Error());
-            }
-        }
-        for (std::size_t i = 0; i < stage.mPins->size(); ++i)
-        {
-            if (!keep[i] || (stage.mLeafTaken && i == stage.mOwnedLeaf))
-                continue;
-            mEntries->emplace_back(std::move((*stage.mPins)[i].handle), (*stage.mPins)[i].effective, (*stage.mPins)[i].effective, 0, false);
-        }
-        mEntries->emplace_back(std::move(leaf), stage.mSourceLookup, stage.mEffectiveLeaf, stage.mInitialMountId, logicalLeaf);
-        mUsage.retainedBytes += bytes;
-        return true;
-    }
-    catch (...)
+    // Close abandoned temporary branches before changing the accepted
+    // Path. A failure leaves every existing borrow and index untouched.
+    for (std::size_t i = 0; i < stage.mPins->size(); ++i)
     {
-        for (std::size_t i = mEntries->size(); i > start; --i)
+        if (!keep[i] && !(stage.mLeafTaken && i == stage.mOwnedLeaf))
         {
-            const int error = (*mEntries)[i - 1].pin.CloseOnce();
-            if (error != 0)
-                Detail::LogSecondaryClose(mContext.get(), error);
-            mEntries->pop_back();
+            auto closed = (*stage.mPins)[i].handle.Close();
+            if (!closed.HasValue())
+                return abort(std::move(closed).Error());
         }
-        const auto closed = leaf.Close();
-        if (!closed.HasValue())
-            Detail::LogSecondaryClose(mContext.get(), closed.Error().code);
-        const auto remaining = stage.Close(mContext.get());
-        if (!remaining.HasValue())
-            Detail::LogSecondaryClose(mContext.get(), remaining.Error().code);
-        throw;
     }
+    for (std::size_t i = 0; i < stage.mPins->size(); ++i)
+    {
+        if (!keep[i] || (stage.mLeafTaken && i == stage.mOwnedLeaf))
+            continue;
+        mEntries->emplace_back(std::move((*stage.mPins)[i].handle), (*stage.mPins)[i].effective, (*stage.mPins)[i].effective, 0, false);
+    }
+    mEntries->emplace_back(std::move(leaf), stage.mSourceLookup, stage.mEffectiveLeaf, stage.mInitialMountId, logicalLeaf);
+    mUsage.retainedBytes += bytes;
+    return true;
 }
 
 ComplianceEngine::Result<Variant<Path, Path::RejectionReason>> Path::Make(const ContextInterface& context, std::string absolutePath, Policy policy, ResolverLimits limits)
@@ -1283,17 +1247,11 @@ ComplianceEngine::Result<Variant<Path, Path::RejectionReason>> Path::Make(const 
                 const bool follow = finalComponent ? FollowForClassification(policy.fileLinks, policy.directoryLinks) : policy.symlinks == SymlinkPolicy::Follow;
                 const bool exclude = finalComponent && policy.nonFollowedLinks == NonFollowedLinkAction::Skip &&
                                      policy.fileLinks == SymlinkPolicy::DoNotFollow && policy.directoryLinks == SymlinkPolicy::DoNotFollow;
-                std::vector<const Handle*> prefix;
-                try
-                {
-                    prefix = path.Lineage(path.mEntries->size() - 1);
-                }
-                catch (const std::logic_error&)
-                {
-                    return Error("Conflicting held root-prefix identities", EXDEV);
-                }
+                auto prefix = path.Lineage(path.mEntries->size() - 1);
+                if (!prefix.HasValue())
+                    return std::move(prefix).Error();
                 auto names = path.Bindings();
-                auto next = ResolveChild(context, path.mEntries->front().pin, prefix, component,
+                auto next = ResolveChild(context, path.mEntries->front().pin, prefix.Value(), component,
                     ResolutionPolicy{follow, policy.mounts, false, true, exclude}, available, names, "/", "/", path.mUsage.workSpent);
                 if (!next.HasValue())
                 {
@@ -1358,13 +1316,13 @@ ComplianceEngine::Result<Variant<Path, Path::RejectionReason>> Path::Make(const 
             int first = 0;
             for (std::size_t i = scratch.size(); i > 0; --i)
             {
-                const int error = scratch[i - 1].pin.CloseOnce();
-                if (error != 0)
+                auto closed = scratch[i - 1].pin.Close();
+                if (!closed.HasValue())
                 {
                     if (first == 0)
-                        first = error;
+                        first = closed.Error().code;
                     else
-                        Detail::LogSecondaryClose(context, error);
+                        Detail::LogSecondaryClose(context, closed.Error().code);
                 }
             }
             if (first != 0)
@@ -1417,14 +1375,7 @@ ComplianceEngine::Result<Variant<Path, Path::RejectionReason>> Path::Make(const 
             {
                 return std::move(closed).Error();
             }
-            try
-            {
-                OsConfigLogError(context.GetLogHandle(), "Failed to close pinned descriptors for %s: %d", rootName.c_str(), closed.Error().code);
-            }
-            catch (...)
-            {
-                OsConfigLogError(nullptr, "Root secondary pin close log failure for %s: %d", rootName.c_str(), closed.Error().code);
-            }
+            OsConfigLogError(context.GetLogHandle(), "Failed to close pinned descriptors for %s: %d", rootName.c_str(), closed.Error().code);
         }
         if (primary.HasValue())
         {
@@ -1499,15 +1450,10 @@ ComplianceEngine::Result<Variant<const Path&, Path::RejectionReason>> Path::Push
         return Error("Path retained-memory budget exhausted", E2BIG);
     }
     ResolverLimits available = mLimits;
-    std::vector<const Handle*> parentLineage;
-    try
-    {
-        parentLineage = Lineage(mEntries->size() - 1);
-    }
-    catch (const std::logic_error&)
-    {
-        return Error("Conflicting held physical ancestor identities", EXDEV);
-    }
+    auto lineage = Lineage(mEntries->size() - 1);
+    if (!lineage.HasValue())
+        return std::move(lineage).Error();
+    std::vector<const Handle*> parentLineage = std::move(lineage).Value();
     // The logical root can be reached through aliases: its physical parents
     // are not themselves a permitted ".." escape from the accepted boundary.
     auto boundary = std::find(parentLineage.begin(), parentLineage.end(), &Root());
@@ -1593,29 +1539,38 @@ ComplianceEngine::Result<Handle> Path::Pop()
             return Error("Invalid acquired leaf footprint", E2BIG);
         releasedBytes += record;
     }
-    Handle removed(std::move(mEntries->back().pin));
-    int firstError = 0;
-    for (std::size_t i = mEntries->size(); i > checkpoint; --i)
+    // Reserve before moving any entries. Deque end removal preserves borrows
+    // of surviving ancestors; detached entries own every removed pin during
+    // fallible cleanup.
+    std::vector<Entry> detached;
+    detached.reserve(mEntries->size() - checkpoint);
+    while (mEntries->size() > checkpoint)
     {
-        const int error = (*mEntries)[i - 1].pin.CloseOnce();
-        if (error != 0)
-        {
-            if (firstError == 0)
-                firstError = error;
-            else
-                Detail::LogSecondaryClose(mContext.get(), error);
-        }
-        mUsage.retainedBytes = releasedBytes <= mUsage.retainedBytes ? mUsage.retainedBytes - releasedBytes : 0;
+        detached.push_back(std::move(mEntries->back()));
         mEntries->pop_back();
     }
+    Handle removed(std::move(detached.front().pin));
+    mUsage.retainedBytes = releasedBytes <= mUsage.retainedBytes ? mUsage.retainedBytes - releasedBytes : 0;
     --mSize;
     if (mSize == 0)
         mUsage.retainedBytes = 0;
+    int firstError = 0;
+    for (Entry& entry : detached)
+    {
+        auto closed = entry.pin.Close();
+        if (!closed.HasValue())
+        {
+            if (firstError == 0)
+                firstError = closed.Error().code;
+            else
+                Detail::LogSecondaryClose(mContext.get(), closed.Error().code);
+        }
+    }
     if (firstError != 0)
     {
-        const int detachedError = removed.CloseOnce();
-        if (detachedError != 0)
-            Detail::LogSecondaryClose(mContext.get(), detachedError);
+        auto closed = removed.Close();
+        if (!closed.HasValue())
+            Detail::LogSecondaryClose(mContext.get(), closed.Error().code);
         return Error("Cannot close auxiliary filesystem pins after pop", firstError);
     }
     return std::move(removed);

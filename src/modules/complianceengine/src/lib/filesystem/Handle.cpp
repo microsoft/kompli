@@ -30,16 +30,9 @@ int SavedError() noexcept
     return (errno != 0) ? errno : EIO;
 }
 
-void LogSecondaryClose(const ContextInterface& context, int error) noexcept
+void LogSecondaryClose(const ContextInterface& context, int error)
 {
-    try
-    {
-        OsConfigLogError(context.GetLogHandle(), "Secondary filesystem helper close failure: %d", error);
-    }
-    catch (...)
-    {
-        OsConfigLogError(nullptr, "Secondary filesystem helper close or log failure: %d", error);
-    }
+    OsConfigLogError(context.GetLogHandle(), "Secondary filesystem helper close failure: %d", error);
 }
 
 static bool IsProcfsDirectory(const ContextInterface& context, const Descriptor& descriptor)
@@ -825,29 +818,12 @@ void Handle::Swap(Handle& other) noexcept
     swap(mFdinfoBytes, other.mFdinfoBytes);
 }
 
-int Handle::CloseOnce() noexcept
-{
-    if (!mDescriptor.HasValue())
-    {
-        return 0;
-    }
-    try
-    {
-        auto closed = mDescriptor.Close();
-        return closed.HasValue() ? 0 : closed.Error().code;
-    }
-    catch (...)
-    {
-        return EIO;
-    }
-}
-
 Result<bool> Handle::Close()
 {
-    const int error = CloseOnce();
-    if (error != 0)
+    auto closed = mDescriptor.Close();
+    if (!closed.HasValue())
     {
-        return Error("Cannot close pinned filesystem descriptor", error);
+        return Error("Cannot close pinned filesystem descriptor", closed.Error().code);
     }
     return true;
 }
@@ -977,19 +953,7 @@ DirectoryCursor& DirectoryCursor::operator=(DirectoryCursor&& other) noexcept
 {
     if (this != &other)
     {
-        int error = 0;
-        try
-        {
-            auto closed = Close();
-            if (!closed.HasValue())
-            {
-                error = closed.Error().code;
-            }
-        }
-        catch (...)
-        {
-            OsConfigLogError(nullptr, "Directory cursor move close or log failure: %d", error != 0 ? error : EIO);
-        }
+        DirectoryCursor replaced(std::move(*this));
         mContext = other.mContext;
         mStream = other.mStream;
         other.mContext = nullptr;
@@ -1026,29 +990,11 @@ Result<bool> DirectoryCursor::Close()
     }
     DIR* stream = mStream;
     mStream = nullptr;
-    int error = 0;
-    try
-    {
-        if (mContext->CloseDirectory(stream) != 0)
-        {
-            error = SavedError();
-        }
-    }
-    catch (...)
-    {
-        error = EIO;
-    }
+    const int error = mContext->CloseDirectory(stream) != 0 ? SavedError() : 0;
 
     if (error != 0)
     {
-        try
-        {
-            OsConfigLogError(mContext->GetLogHandle(), "Cannot close pinned directory: %d", error);
-        }
-        catch (...)
-        {
-            OsConfigLogError(nullptr, "Directory cursor close or log failure: %d", error);
-        }
+        OsConfigLogError(mContext->GetLogHandle(), "Cannot close pinned directory: %d", error);
         return Error("Cannot close pinned directory", error);
     }
     return true;

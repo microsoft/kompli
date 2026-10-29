@@ -19,7 +19,7 @@ namespace Detail
 // inspection. Descriptors are never exposed by the public headers.
 int SavedError() noexcept;
 // Diagnostics only: callers decide whether a failed close is primary.
-void LogSecondaryClose(const ContextInterface& context, int error) noexcept;
+void LogSecondaryClose(const ContextInterface& context, int error);
 bool SameIdentity(const struct stat& first, const struct stat& second) noexcept;
 struct VerifiedProcfs
 {
