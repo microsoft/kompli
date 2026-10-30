@@ -72,7 +72,7 @@ cd build && ctest
 
 ## Configuration
 
-ComplianceEngine is configured via `/etc/kompli/kompli.json`:
+kompli is configured via `/etc/kompli/kompli.json`:
 
 ```json
 {
