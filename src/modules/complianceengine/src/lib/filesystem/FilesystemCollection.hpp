@@ -272,7 +272,7 @@ public:
 
 private:
     friend Result<FileRange> Files(const FilesystemCollectionRequest&, ContextInterface&);
-    friend Result<FileRange> Files(Path, FilesystemTraversalPolicy);
+    friend Result<FileRange> Files(Path, std::string, FilesystemTraversalPolicy);
     friend auto ::ComplianceEngine::Filesystem::CollectFilesystem(const FilesystemCollectionRequest&, ContextInterface&) -> Result<FilesystemCollectionResult>;
     friend auto ::ComplianceEngine::Filesystem::StreamFilesystemCollection(const FilesystemCollectionRequest&, const FilesystemCollectionVisitor&,
         ContextInterface&) -> Result<FilesystemCollectionResult>;
@@ -286,8 +286,9 @@ private:
 
 // A missing root is a successful empty range with RootExists() == false.
 Result<FileRange> Files(const FilesystemCollectionRequest& policy, ContextInterface& context);
-// Consumes a previously accepted Path; never resolves its diagnostic name.
-Result<FileRange> Files(Path path, FilesystemTraversalPolicy continuation);
+// Consumes a previously accepted Path; the exact reporting name is never
+// resolved again or used as acquisition authority.
+Result<FileRange> Files(Path path, std::string reportingName, FilesystemTraversalPolicy continuation);
 } // namespace FTW
 
 } // namespace Filesystem

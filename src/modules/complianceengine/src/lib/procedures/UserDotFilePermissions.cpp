@@ -196,7 +196,8 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
             continue; // missing/excluded home: no dotfiles to inspect
         if (As<Filesystem::Path>(root.Value()).Root().AcquiredType() != Filesystem::Handle::Type::Directory)
             return Error("Expected directory root at '" + policy.rootPath + "'", ENOTDIR);
-        auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), Filesystem::CollectionContinuation(resolved.Value()));
+        auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), resolved.Value().rootPath,
+            Filesystem::CollectionContinuation(resolved.Value()));
         if (!opened.HasValue())
         {
             OsConfigLogError(context.GetLogHandle(), "Directory validation for user '%s' failed: %s", pwd.pw_name, opened.Error().message.c_str());

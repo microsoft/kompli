@@ -9,6 +9,7 @@
 #include <exception>
 #include <limits>
 #include <new>
+#include <type_traits>
 #include <utility>
 
 #ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
@@ -446,9 +447,8 @@ struct FileRange::State
         return path->Limits();
     }
 
-    Result<bool> Initialize()
+    Result<bool> Initialize(std::string rootName)
     {
-        const std::string& rootName = path->DiagnosticPath();
         const bool directory = path->Root().AcquiredType() == Handle::Type::Directory;
         auto rootMount = path->Root().MountIdentity();
         if (!rootMount.HasValue())
@@ -473,7 +473,7 @@ struct FileRange::State
         {
             entry.BorrowHandle(path->Leaf());
             Frame frame;
-            frame.path = rootName;
+            frame.path = std::move(rootName);
             frame.bytes = frame.path.size() + 1;
             frame.device = path->Leaf().AcquiredMetadata().st_dev;
             frame.inode = path->Leaf().AcquiredMetadata().st_ino;
@@ -770,6 +770,17 @@ struct FileRange::State
         {
             return failure.HasValue() ? Result<bool>(failure.Value()) : Result<bool>(true);
         }
+        // Transfer every remaining owner before a native close or diagnostic
+        // can throw. The detached owners finish cleanup on exception, while
+        // consumed cursors and pins cannot be retried by a later Close.
+        static_assert(std::is_nothrow_move_constructible<Optional<FilesystemCollectionEntry>>::value,
+            "Pending range ownership must detach without throwing");
+        std::vector<Frame> remainingFrames;
+        remainingFrames.swap(frames);
+        auto remainingPending = std::move(pending);
+        auto remainingPath = std::move(path);
+        pendingBytes = 0;
+        retained = 0;
         closed = true;
         Optional<Error> cleanup;
         auto record = [this, &cleanup](const Error& error) {
@@ -782,7 +793,7 @@ struct FileRange::State
                 OsConfigLogError(context.GetLogHandle(), "Secondary filesystem range cleanup failure: %s", error.message.c_str());
             }
         };
-        for (auto& frame : frames)
+        for (auto& frame : remainingFrames)
         {
             if (frame.cursor.HasValue())
             {
@@ -794,30 +805,28 @@ struct FileRange::State
                 frame.cursor.Reset();
             }
         }
-        frames.clear();
-        if (pending.HasValue())
+        remainingFrames.clear();
+        if (remainingPending.HasValue())
         {
-            if (pending.Value().OwnsHandle())
+            if (remainingPending.Value().OwnsHandle())
             {
-                auto ended = pending.Value().CloseHandle();
+                auto ended = remainingPending.Value().CloseHandle();
                 if (!ended.HasValue())
                 {
                     record(ended.Error());
                 }
             }
-            pending.Reset();
-            retained -= pendingBytes;
-            pendingBytes = 0;
+            remainingPending.Reset();
         }
-        if (path)
+        if (remainingPath)
         {
-            auto ended = path->Close();
+            auto ended = remainingPath->Close();
             if (!ended.HasValue())
             {
                 record(ended.Error());
             }
         }
-        path.reset();
+        remainingPath.reset();
         if (failure.HasValue())
         {
             if (cleanup.HasValue())
@@ -863,10 +872,10 @@ FileRange::FileRange(std::shared_ptr<State> state)
 
 FileRange::~FileRange() = default;
 
-Result<bool> ValidateContinuation(const Path& root, const FilesystemTraversalPolicy& policy)
+Result<bool> ValidateContinuation(const Path& root, const std::string& reportingName, const FilesystemTraversalPolicy& policy)
 {
     const auto& limits = policy.limits;
-    if (root.Size() != 1 || root.DiagnosticPath().empty() || root.DiagnosticPath().front() != '/' || root.DiagnosticPath().find('\0') != std::string::npos)
+    if (root.Size() != 1 || reportingName.empty() || reportingName.front() != '/' || reportingName.find('\0') != std::string::npos)
         return Error("Continuation requires one accepted absolute root", EINVAL);
     if (policy.direction == FilesystemDirection::Up)
         return Error("Upward filesystem collection is not supported", ENOTSUP);
@@ -897,22 +906,22 @@ Result<bool> ValidateContinuation(const Path& root, const FilesystemTraversalPol
         return Error("Invalid missing-child action", EINVAL);
     if (policy.missingChildAction == FilesystemMissingChildAction::ReportRegularFile && policy.yieldType != FilesystemYieldType::RegularFiles)
         return Error("Missing observations require regular-file selection", ENOTSUP);
-    if (root.DiagnosticPath().size() >= limits.fullPathBytes)
+    if (reportingName.size() >= limits.fullPathBytes)
         return Error("Filesystem collection root path exceeds the full path byte limit", ENAMETOOLONG);
-    if (root.DiagnosticPath().size() >= limits.retainedPathBytes)
+    if (reportingName.size() >= limits.retainedPathBytes)
         return Error("Filesystem collection root path exceeds the retained path byte limit", E2BIG);
     return true;
 }
 
-Result<FileRange> Files(Path path, FilesystemTraversalPolicy continuation)
+Result<FileRange> Files(Path path, std::string reportingName, FilesystemTraversalPolicy continuation)
 {
-    auto valid = ValidateContinuation(path, continuation);
+    auto valid = ValidateContinuation(path, reportingName, continuation);
     if (!valid.HasValue())
         return valid.Error();
     try
     {
         auto state = std::make_shared<FileRange::State>(std::move(continuation), std::move(path));
-        auto initialized = state->Initialize();
+        auto initialized = state->Initialize(std::move(reportingName));
         if (!initialized.HasValue())
         {
             state->Abort(initialized.Error());
@@ -950,7 +959,7 @@ Result<FileRange> Files(const FilesystemCollectionRequest& policy, ContextInterf
                 return Error("Expected directory root at '" + request.rootPath + "'", ENOTDIR);
             if (request.rootKind == FilesystemRootKind::File && accepted.Root().AcquiredType() != Handle::Type::RegularFile)
                 return Error("Expected file root at '" + request.rootPath + "'", EISDIR);
-            return Files(std::move(accepted), Continuation(request));
+            return Files(std::move(accepted), request.rootPath, Continuation(request));
         }
         const auto reason = As<Path::RejectionReason>(acquired.Value());
         auto state = std::make_shared<FileRange::State>(Continuation(request), context);

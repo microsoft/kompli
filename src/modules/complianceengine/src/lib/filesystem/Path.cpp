@@ -43,6 +43,121 @@ bool FollowForClassification(SymlinkPolicy file, SymlinkPolicy directory)
     return file != directory || file == SymlinkPolicy::Follow;
 }
 
+Optional<Error> ValidateLimits(ResolverLimits const& limits)
+{
+    if (limits.shared.work == 0)
+    {
+        return Error("Work budget must be positive", EINVAL);
+    }
+
+    if (limits.shared.components == 0)
+    {
+        return Error("Components budget must be positive", EINVAL);
+    }
+
+    if (limits.shared.liveDescriptors == 0)
+    {
+        return Error("Live descriptors budget must be positive", EINVAL);
+    }
+
+    if (limits.shared.retainedBytes == 0)
+    {
+        return Error("Retained bytes budget must be positive", EINVAL);
+    }
+
+    if (limits.shared.targetBytes == 0)
+    {
+        return Error("Target bytes budget must be positive", EINVAL);
+    }
+
+    if (limits.shared.fdinfoBytes == 0 || limits.shared.fdinfoBytes >= std::string().max_size() || limits.shared.fdinfoBytes > std::vector<char>().max_size() ||
+        limits.shared.fdinfoBytes > static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()))
+    {
+        return Error("FD info bytes budget is invalid", EINVAL);
+    }
+
+    if (limits.linkTargetBytes == 0)
+    {
+        return Error("Link target bytes budget must be positive", EINVAL);
+    }
+
+    if (limits.depth == 0)
+    {
+        return Error("Depth budget must be positive", EINVAL);
+    }
+
+    return Optional<Error>{};
+}
+
+// Simple validation of enum class to rule out int-cast values
+Optional<Error> ValidatePolicy(Path::Policy const& policy)
+{
+    if (!ValidFollowing(policy.symlinks))
+    {
+        return Error("Invalid symlink policy", EINVAL);
+    }
+
+    if (!ValidFollowing(policy.fileLinks))
+    {
+        return Error("Invalid file link policy", EINVAL);
+    }
+
+    if (!ValidFollowing(policy.directoryLinks))
+    {
+        return Error("Invalid directory link policy", EINVAL);
+    }
+
+    if (!ValidNonFollowedLink(policy.nonFollowedLinks))
+    {
+        return Error("Invalid non-followed link policy", EINVAL);
+    }
+
+    if (((policy.mounts != MountPolicy::AllowCrossing) && (policy.mounts != MountPolicy::StayOnRootMount)))
+    {
+        return Error("Invalid mount policy", EINVAL);
+    }
+
+    return Optional<Error>{};
+}
+
+Optional<Error> ValidateAbsolutePath(const std::string& path, Path::Policy const& policy, ResolverLimits const& limits)
+{
+    if ((path.empty()) || (path.front() != '/'))
+    {
+        return Error("Path must be absolute", EINVAL);
+    }
+
+    if (path.find('\0') != std::string::npos)
+    {
+        return Error("Path contains NUL byte", EINVAL);
+    }
+
+    if ((path.size() > limits.shared.retainedBytes) || (limits.shared.liveDescriptors < 8) || !ValidFollowing(policy.symlinks) ||
+        !ValidFollowing(policy.fileLinks) || !ValidFollowing(policy.directoryLinks) || !ValidNonFollowedLink(policy.nonFollowedLinks) ||
+        ((policy.mounts != MountPolicy::AllowCrossing) && (policy.mounts != MountPolicy::StayOnRootMount)))
+    {
+        return Error("An absolute authorized directory, policy and positive budgets are required", EINVAL);
+    }
+    return Optional<Error>{};
+}
+
+Optional<Error> ValidateMakeInput(const std::string& absolutePath, Path::Policy const& policy, ResolverLimits const& limits)
+{
+    auto validationResult = ValidateLimits(limits);
+    if (validationResult.HasValue())
+        return std::move(validationResult).Value();
+
+    validationResult = ValidatePolicy(policy);
+    if (validationResult.HasValue())
+        return std::move(validationResult).Value();
+
+    validationResult = ValidateAbsolutePath(absolutePath, policy, limits);
+    if (validationResult.HasValue())
+        return std::move(validationResult).Value();
+
+    return {};
+}
+
 std::string JoinName(const std::string& parent, const std::string& child)
 {
     return parent == "/" ? parent + child : parent + "/" + child;
@@ -72,12 +187,52 @@ bool AtBoundary(const std::string& target, const std::string& prefix)
 
 namespace Detail
 {
-Result<LinkTarget> ReadPinnedLink(const ContextInterface& context, const Descriptor& linkPin, std::size_t targetByteCap, std::size_t fdinfoByteCap)
+namespace
+{
+// The acquisition snapshot does not bracket the read: re-observe the pinned
+// object and its mount on both sides of readlinkat, without following its text.
+Result<LinkTarget> ReadVerifiedLinkText(const Descriptor& linkPin, const struct stat& before, const VerifiedProcfs& procfs, std::size_t targetByteCap,
+    std::size_t fdinfoByteCap)
+{
+    const ContextInterface& context = linkPin.Context();
+    auto mount = MountId(context, procfs, linkPin, fdinfoByteCap);
+    if (!mount.HasValue())
+        return std::move(mount).Error();
+
+    std::vector<char> buffer(targetByteCap + 1);
+    const ssize_t count = context.ReadLink(linkPin, buffer.data(), buffer.size());
+    if (count < 0)
+        return Error("Cannot read pinned symlink target", SavedError());
+    if ((count == 0) || (static_cast<std::size_t>(count) > targetByteCap))
+        return Error("Pinned symlink target exceeds byte cap or is empty", E2BIG);
+
+    struct stat after = {};
+    if (context.StatFile(linkPin, &after) != 0)
+        return Error("Cannot recheck pinned symlink", SavedError());
+    if (!SameIdentity(before, after))
+        return Error("Pinned symlink identity changed", EAGAIN);
+    auto retainedMount = MountId(context, procfs, linkPin, fdinfoByteCap);
+    if (!retainedMount.HasValue())
+        return std::move(retainedMount).Error();
+    if (mount.Value() != retainedMount.Value())
+        return Error("Pinned symlink mount changed", EAGAIN);
+
+    LinkTarget target;
+    target.text.assign(buffer.data(), static_cast<std::size_t>(count));
+    if (target.text.find('\0') != std::string::npos)
+        return Error("Pinned symlink contains NUL", EINVAL);
+    target.mountId = mount.Value();
+    return target;
+}
+} // namespace
+
+Result<LinkTarget> ReadPinnedLink(const Descriptor& linkPin, std::size_t targetByteCap, std::size_t fdinfoByteCap)
 {
     if (!linkPin.HasValue())
     {
         return Error("Pinned link is empty", EBADF);
     }
+    const ContextInterface& context = linkPin.Context();
     if ((targetByteCap == 0) || (targetByteCap >= std::vector<char>().max_size() - 1) ||
         (targetByteCap >= static_cast<std::size_t>(std::numeric_limits<ssize_t>::max())) || (fdinfoByteCap == 0))
     {
@@ -98,7 +253,7 @@ Result<LinkTarget> ReadPinnedLink(const ContextInterface& context, const Descrip
     {
         return Error("Pinned link must be a close-on-exec O_PATH descriptor", EINVAL);
     }
-    struct stat before = {}, after = {};
+    struct stat before = {};
     struct statfs filesystem = {};
     if ((context.StatFile(linkPin, &before) != 0) || (context.StatFilesystem(linkPin, &filesystem) != 0))
     {
@@ -115,52 +270,7 @@ Result<LinkTarget> ReadPinnedLink(const ContextInterface& context, const Descrip
     {
         return std::move(verified).Error();
     }
-    auto inspected = [&]() -> Result<LinkTarget> {
-        auto mount = MountId(context, procfs, linkPin, fdinfoByteCap);
-        if (!mount.HasValue())
-        {
-            return std::move(mount).Error();
-        }
-        std::vector<char> buffer(targetByteCap + 1);
-        const ssize_t count = context.ReadLink(linkPin, buffer.data(), buffer.size());
-        if (count < 0)
-        {
-            return Error("Cannot read pinned symlink target", SavedError());
-        }
-
-        if ((count == 0) || (static_cast<std::size_t>(count) > targetByteCap))
-        {
-            return Error("Pinned symlink target exceeds byte cap or is empty", E2BIG);
-        }
-
-        if (context.StatFile(linkPin, &after) != 0)
-        {
-            return Error("Cannot recheck pinned symlink", SavedError());
-        }
-
-        if (!SameIdentity(before, after))
-        {
-            return Error("Pinned symlink identity changed", EAGAIN);
-        }
-        auto retainedMount = MountId(context, procfs, linkPin, fdinfoByteCap);
-        if (!retainedMount.HasValue())
-        {
-            return std::move(retainedMount).Error();
-        }
-
-        if (mount.Value() != retainedMount.Value())
-        {
-            return Error("Pinned symlink mount changed", EAGAIN);
-        }
-        LinkTarget target;
-        target.text.assign(buffer.data(), static_cast<std::size_t>(count));
-        if (target.text.find('\0') != std::string::npos)
-        {
-            return Error("Pinned symlink contains NUL", EINVAL);
-        }
-        target.mountId = mount.Value();
-        return target;
-    }();
+    auto inspected = ReadVerifiedLinkText(linkPin, before, procfs, targetByteCap, fdinfoByteCap);
     auto closed = procfs.Close();
     if (!closed.HasValue())
     {
@@ -321,13 +431,14 @@ private:
         // pointers, including vector growth, before allocating another slot.
         const std::size_t slot = sizeof(Handle) + 4 * sizeof(const Handle*);
         if ((mRetained > mLimits.shared.retainedBytes) || (slot > mLimits.shared.retainedBytes - mRetained) ||
-            (pin->Component().size() > mLimits.shared.retainedBytes - mRetained - slot))
+            (pin->LookupName().size() > mLimits.shared.retainedBytes - mRetained - slot) ||
+            (pin->EffectiveName().size() > mLimits.shared.retainedBytes - mRetained - slot - pin->LookupName().size()))
         {
             return false;
         }
         mSeen.push_back(pin);
         ++mInputPins;
-        mRetained += slot + pin->Component().size();
+        mRetained += slot + pin->LookupName().size() + pin->EffectiveName().size();
         return true;
     }
 
@@ -378,7 +489,7 @@ private:
     {
         for (const auto& owned : *stage.mPins)
             if (&owned.handle == pin)
-                return owned.effective;
+                return owned.handle.EffectiveName();
         for (const auto& binding : mNames)
             if (binding.pin == pin)
                 return *binding.effective;
@@ -407,11 +518,11 @@ private:
         }
         for (const auto& pin : *stage.mPins)
         {
-            if (pin.effective != lookup || pin.handle.AcquiredType() != Handle::Type::Directory)
+            if (pin.handle.EffectiveName() != lookup || pin.handle.AcquiredType() != Handle::Type::Directory)
                 continue;
             if (match.HasValue() && (!SameIdentity(match.Value().pin->AcquiredMetadata(), pin.handle.AcquiredMetadata()) || *match.Value().effective != lookup))
                 return Error("Conflicting staged name bindings", EXDEV);
-            match = HeldMatch{&pin.handle, &pin.effective, 0, false};
+            match = HeldMatch{&pin.handle, &pin.handle.EffectiveName(), 0, false};
         }
         return match;
     }
@@ -457,8 +568,6 @@ private:
             else
                 mountId = mount.Value();
         }
-        if (!primary.HasValue() && mPolicy.mounts == MountPolicy::StayOnRootMount && mountId != mBaseline)
-            primary = Error("Component crosses accepted root mount", EXDEV);
         if (primary.HasValue())
         {
             auto closed = acquired.Close();
@@ -469,10 +578,53 @@ private:
         return Variant<Inspected, RejectionReason>(InPlaceType<Inspected>{}, Inspected(std::move(acquired), snapshot, mountId));
     }
 
+    // Both held and newly acquired pins have an observed mount before they
+    // advance the cursor. Held aliases also retain their original mount.
+    ComplianceEngine::Result<bool> VerifyTransitionMount(std::uint64_t observed, std::uint64_t original, bool held) const
+    {
+        if (mPolicy.mounts == MountPolicy::StayOnRootMount && (observed != mBaseline || (original != 0 && original != mBaseline)))
+            return Error(held ? "Held component crosses accepted root mount" : "Component crosses accepted root mount", EXDEV);
+        return true;
+    }
+
+    ComplianceEngine::Result<bool> AdvanceDirectory(const Handle* directory, const std::string& effective, bool alias,
+        std::vector<const Handle*>& directories, Detail::ResolvedPath& resolved)
+    {
+        if (alias)
+        {
+            // An alias transitions to the held physical lineage, never to
+            // the lookup parent's potentially unrelated lexical lineage.
+            auto lineage = PhysicalLineage(mRoot, Effective(&mRoot, resolved), *directory, effective, mNames, &resolved, mLimits.depth);
+            if (!lineage.HasValue())
+                return std::move(lineage).Error();
+            if (mPolicy.mounts == MountPolicy::StayOnRootMount)
+            {
+                for (const Handle* ancestor : lineage.Value())
+                {
+                    if (ancestor == &mRoot)
+                        continue;
+                    auto ancestorMount = ObservedMount(ancestor->mDescriptor);
+                    if (!ancestorMount.HasValue())
+                        return std::move(ancestorMount).Error();
+                    if (ancestorMount.Value() != mBaseline)
+                        return Error("Held physical ancestor crosses accepted root mount", EXDEV);
+                }
+            }
+            directories = std::move(lineage).Value();
+        }
+        else
+        {
+            if (directories.size() >= mLimits.depth)
+                return Error("Confined resolution depth exhausted", E2BIG);
+            directories.push_back(directory);
+        }
+        return true;
+    }
+
     ComplianceEngine::Result<bool> ExpandPinnedLink(const Descriptor& pin, std::deque<std::string>& pending, std::vector<const Handle*>& directories,
         bool& finalDirectoryRequired, std::uint64_t observedMount)
     {
-        auto target = Detail::ReadPinnedLink(mContext, pin, mLimits.linkTargetBytes, mLimits.shared.fdinfoBytes);
+        auto target = Detail::ReadPinnedLink(pin, mLimits.linkTargetBytes, mLimits.shared.fdinfoBytes);
         if (!target.HasValue())
             return std::move(target).Error();
         if (target.Value().mountId != observedMount || !CanRetain(target.Value().text.size()))
@@ -555,16 +707,84 @@ private:
             }
         // A held ancestor may be the final leaf after physical "..". Pin a
         // verified independent owner before returning an accepted step.
-        auto duplicated = RetainLeaf(mContext, mLimits, mInputPins, step, *leaf, leaf->Component());
+        auto duplicated = RetainLeaf(mContext, mLimits, mInputPins, step, *leaf);
         if (!duplicated.HasValue())
             return std::move(duplicated).Error();
         step.mOwnedLeaf = step.mPins->size();
-        step.mPins->emplace_back(std::move(duplicated).Value(), step.mEffectiveLeaf);
+        step.mPins->emplace_back(std::move(duplicated).Value());
         step.mAccountedBytes = mRetained;
         return true;
     }
 
-    ComplianceEngine::Result<bool> WalkComponents(std::string component, Detail::ResolvedPath& resolved, Optional<RejectionReason>& rejected)
+    enum class ComponentProgress
+    {
+        ExpandedLink,
+        RetainedObject
+    };
+
+    // The caller closes the acquisition pin exactly once after this operation,
+    // whether it expanded a link, staged an owner, rejected or failed.
+    ComplianceEngine::Result<Variant<ComponentProgress, RejectionReason>> ProcessAcquiredComponent(Inspected& component, const std::string& lookup,
+        std::deque<std::string>& pending, std::vector<const Handle*>& directories, Detail::ResolvedPath& resolved, const Handle*& last,
+        std::size_t& expansions, bool& finalDirectoryRequired, bool& resolvingRequestedName)
+    {
+        auto mount = VerifyTransitionMount(component.mount, 0, false);
+        if (!mount.HasValue())
+            return std::move(mount).Error();
+        if (resolvingRequestedName)
+            resolved.mInitialMountId = component.mount;
+
+        const struct stat& snapshot = component.snapshot;
+        if (S_ISLNK(snapshot.st_mode))
+        {
+            if (!mPolicy.followLinks)
+            {
+                if (mPolicy.excludeLinks && resolvingRequestedName && pending.empty())
+                    return Variant<ComponentProgress, RejectionReason>(InPlaceType<RejectionReason>{}, RejectionReason::Excluded);
+                return Error("Descendant symlink following is disabled", ELOOP);
+            }
+            if (++expansions > mLimits.linkExpansions)
+                return Error("Symlink expansion budget exhausted", ELOOP);
+            if (resolvingRequestedName)
+                resolved.mInitialFollowedLink = true;
+            auto expanded = ExpandPinnedLink(component.pin, pending, directories, finalDirectoryRequired, component.mount);
+            if (!expanded.HasValue())
+                return std::move(expanded).Error();
+            last = directories.back();
+            resolvingRequestedName = false;
+            return Variant<ComponentProgress, RejectionReason>(InPlaceType<ComponentProgress>{}, ComponentProgress::ExpandedLink);
+        }
+        resolvingRequestedName = false;
+        if ((!S_ISDIR(snapshot.st_mode)) && (!S_ISREG(snapshot.st_mode)))
+        {
+            // Only a final unsupported object may be skipped. It never
+            // becomes an accepted Handle, even when reached through a link.
+            if (mPolicy.permitUnsupported && pending.empty())
+                return Variant<ComponentProgress, RejectionReason>(InPlaceType<RejectionReason>{}, RejectionReason::UnsupportedType);
+            return Error("Unsupported confined object type", EOPNOTSUPP);
+        }
+        if ((!pending.empty()) && !S_ISDIR(snapshot.st_mode))
+            return Error("Intermediate component is not a directory", ENOTDIR);
+
+        // Full effective spellings cost O(depth squared) across staged pins.
+        const std::size_t ownerBytes = sizeof(Handle) + 2 * lookup.size() + (S_ISDIR(snapshot.st_mode) ? 4 * sizeof(const Handle*) : 0);
+        if (!CanRetain(ownerBytes))
+            return Error("Confined resolution retained-memory budget exhausted", E2BIG);
+        mRetained += ownerBytes;
+        Handle staged(std::move(component.pin), S_ISDIR(snapshot.st_mode) ? Handle::Type::Directory : Handle::Type::RegularFile, snapshot,
+            mLimits.shared.fdinfoBytes, lookup, lookup, component.mount);
+        resolved.mPins->emplace_back(std::move(staged));
+        last = &resolved.mPins->back().handle;
+        if (S_ISDIR(snapshot.st_mode))
+        {
+            auto advanced = AdvanceDirectory(last, lookup, false, directories, resolved);
+            if (!advanced.HasValue())
+                return std::move(advanced).Error();
+        }
+        return Variant<ComponentProgress, RejectionReason>(InPlaceType<ComponentProgress>{}, ComponentProgress::RetainedObject);
+    }
+
+    ComplianceEngine::Result<Variant<Detail::ResolvedPath, RejectionReason>> WalkComponents(std::string component, Detail::ResolvedPath& resolved)
     {
         auto effective = [this, &resolved](const Handle* pin) -> const std::string& { return Effective(pin, resolved); };
         if (!CanRetain(sizeof(std::string) + component.size()))
@@ -579,7 +799,9 @@ private:
         resolved.mSourceLookup = JoinName(effective(last), pending.front());
         std::size_t expansions = 0;
         bool finalDirectoryRequired = false;
-        bool firstComponent = true;
+        // This is the original requested name, not the first loop iteration:
+        // link-expanded names do not qualify for direct-name Missing/Excluded.
+        bool resolvingRequestedName = true;
         while (!pending.empty())
         {
             if (!Charge())
@@ -621,138 +843,37 @@ private:
                 const bool cachedAlias = binding.alias;
                 if (cachedAlias && !mPolicy.followLinks)
                 {
-                    if (mPolicy.excludeLinks && firstComponent && pending.empty())
-                    {
-                        rejected = RejectionReason::Excluded;
-                        break;
-                    }
+                    if (mPolicy.excludeLinks && resolvingRequestedName && pending.empty())
+                        return Variant<Detail::ResolvedPath, RejectionReason>(InPlaceType<RejectionReason>{}, RejectionReason::Excluded);
                     return Error("Descendant symlink following is disabled", ELOOP);
                 }
                 auto mount = ObservedMount(cached->mDescriptor);
                 if (!mount.HasValue())
                     return std::move(mount).Error();
-                if (mPolicy.mounts == MountPolicy::StayOnRootMount && (mount.Value() != mBaseline || (cachedOriginalMount != 0 && cachedOriginalMount != mBaseline)))
-                    return Error("Held component crosses accepted root mount", EXDEV);
-                if (firstComponent)
+                auto verified = VerifyTransitionMount(mount.Value(), cachedOriginalMount, true);
+                if (!verified.HasValue())
+                    return std::move(verified).Error();
+                if (resolvingRequestedName)
                     resolved.mInitialMountId = cachedOriginalMount != 0 ? cachedOriginalMount : mount.Value();
-                if (firstComponent && cachedAlias)
+                if (resolvingRequestedName && cachedAlias)
                     resolved.mInitialFollowedLink = true;
-                firstComponent = false;
+                auto advanced = AdvanceDirectory(cached, cachedEffective, cachedAlias, directories, resolved);
+                if (!advanced.HasValue())
+                    return std::move(advanced).Error();
+                resolvingRequestedName = false;
                 last = cached;
-                // Alias hits are physical transitions: rebuild every
-                // ancestor from held pins rather than appending the target
-                // to the lookup parent's (possibly unrelated) lineage.
-                if (cachedAlias)
-                {
-                    auto lineage = PhysicalLineage(mRoot, effective(&mRoot), *cached, cachedEffective, mNames, &resolved, mLimits.depth);
-                    if (!lineage.HasValue())
-                        return std::move(lineage).Error();
-                    if (mPolicy.mounts == MountPolicy::StayOnRootMount)
-                    {
-                        for (const Handle* ancestor : lineage.Value())
-                        {
-                            if (ancestor == &mRoot)
-                                continue;
-                            auto ancestorMount = ObservedMount(ancestor->mDescriptor);
-                            if (!ancestorMount.HasValue())
-                                return std::move(ancestorMount).Error();
-                            if (ancestorMount.Value() != mBaseline)
-                                return Error("Held physical ancestor crosses accepted root mount", EXDEV);
-                        }
-                    }
-                    directories = std::move(lineage).Value();
-                }
-                else
-                {
-                    if (directories.size() >= mLimits.depth)
-                        return Error("Confined resolution depth exhausted", E2BIG);
-                    directories.push_back(last);
-                }
                 continue;
             }
-            auto inspected = AcquireComponent(*directories.back(), name, !pending.empty(), firstComponent && pending.empty());
+            auto inspected = AcquireComponent(*directories.back(), name, !pending.empty(), resolvingRequestedName && pending.empty());
             if (!inspected.HasValue())
                 return std::move(inspected).Error();
             if (inspected.Value().Is<RejectionReason>())
             {
-                rejected = inspected.Value().Get<RejectionReason>();
-                break;
+                return Variant<Detail::ResolvedPath, RejectionReason>(InPlaceType<RejectionReason>{}, inspected.Value().Get<RejectionReason>());
             }
             Inspected& component = inspected.Value().Get<Inspected>();
             Descriptor& acquired = component.pin;
-            const struct stat& snapshot = component.snapshot;
-            auto step = [&]() -> ComplianceEngine::Result<bool> {
-                if (firstComponent)
-                {
-                    resolved.mInitialMountId = component.mount;
-                }
-
-                if (S_ISLNK(snapshot.st_mode))
-                {
-                    if (!mPolicy.followLinks)
-                    {
-                        if (mPolicy.excludeLinks && firstComponent && pending.empty())
-                        {
-                            rejected = RejectionReason::Excluded;
-                            return true;
-                        }
-                        return Error("Descendant symlink following is disabled", ELOOP);
-                    }
-
-                    if (++expansions > mLimits.linkExpansions)
-                    {
-                        return Error("Symlink expansion budget exhausted", ELOOP);
-                    }
-                    if (firstComponent)
-                        resolved.mInitialFollowedLink = true;
-                    auto expanded = ExpandPinnedLink(acquired, pending, directories, finalDirectoryRequired, component.mount);
-                    if (!expanded.HasValue())
-                        return std::move(expanded).Error();
-                    last = directories.back();
-                    firstComponent = false;
-                    return true;
-                }
-                firstComponent = false;
-                if ((!S_ISDIR(snapshot.st_mode)) && (!S_ISREG(snapshot.st_mode)))
-                {
-                    // Only the final unsupported object may be skipped,
-                    // whether directly pinned or reached by a followed
-                    // link. It never becomes an accepted Handle.
-                    if (mPolicy.permitUnsupported && pending.empty())
-                    {
-                        rejected = RejectionReason::UnsupportedType;
-                        return true;
-                    }
-                    return Error("Unsupported confined object type", EOPNOTSUPP);
-                }
-
-                if ((!pending.empty()) && !S_ISDIR(snapshot.st_mode))
-                {
-                    return Error("Intermediate component is not a directory", ENOTDIR);
-                }
-                // The captured full effective spelling is stored with
-                // each staged pin and can cost O(depth squared) bytes.
-                const std::size_t ownerBytes =
-                    sizeof(Handle) + name.size() + sizeof(std::string) + lookup.size() + (S_ISDIR(snapshot.st_mode) ? 4 * sizeof(const Handle*) : 0);
-                if (!CanRetain(ownerBytes))
-                {
-                    return Error("Confined resolution retained-memory budget exhausted", E2BIG);
-                }
-                mRetained += ownerBytes;
-                Handle staged(std::move(acquired), S_ISDIR(snapshot.st_mode) ? Handle::Type::Directory : Handle::Type::RegularFile, std::move(name),
-                    snapshot, mLimits.shared.fdinfoBytes);
-                resolved.mPins->emplace_back(std::move(staged), lookup);
-                last = &resolved.mPins->back().handle;
-                if (S_ISDIR(snapshot.st_mode))
-                {
-                    if (directories.size() >= mLimits.depth)
-                    {
-                        return Error("Confined resolution depth exhausted", E2BIG);
-                    }
-                    directories.push_back(last);
-                }
-                return true;
-            }();
+            auto step = ProcessAcquiredComponent(component, lookup, pending, directories, resolved, last, expansions, finalDirectoryRequired, resolvingRequestedName);
             auto closed = acquired.Close();
             if (!closed.HasValue())
             {
@@ -769,24 +890,27 @@ private:
             {
                 return std::move(step).Error();
             }
+            if (step.Value().Is<RejectionReason>())
+                return Variant<Detail::ResolvedPath, RejectionReason>(InPlaceType<RejectionReason>{}, step.Value().Get<RejectionReason>());
+            if (step.Value().Get<ComponentProgress>() == ComponentProgress::ExpandedLink)
+                continue;
+            // A retained directory or leaf is now the physical cursor.
         }
 
-        if (rejected.HasValue())
-        {
-            return true;
-        }
         if (finalDirectoryRequired && (last->AcquiredType() != Handle::Type::Directory))
         {
             return Error("Trailing slash requires a directory", ENOTDIR);
         }
-        return PrepareStep(resolved, directories, last);
+        auto prepared = PrepareStep(resolved, directories, last);
+        if (!prepared.HasValue())
+            return std::move(prepared).Error();
+        return Variant<Detail::ResolvedPath, RejectionReason>(InPlaceType<Detail::ResolvedPath>{}, std::move(resolved));
     }
 
     ComplianceEngine::Result<Variant<Detail::ResolvedPath, RejectionReason>> ResolveComponents(std::string component)
     {
         Detail::ResolvedPath resolved;
-        Optional<RejectionReason> rejected;
-        auto resolution = WalkComponents(std::move(component), resolved, rejected);
+        auto resolution = WalkComponents(std::move(component), resolved);
         if (!resolution.HasValue())
         {
             auto primary = std::move(resolution).Error();
@@ -795,14 +919,14 @@ private:
                 Detail::LogSecondaryClose(mContext, closed.Error().code);
             return primary;
         }
-        if (rejected.HasValue())
+        if (resolution.Value().Is<RejectionReason>())
         {
             auto closed = resolved.Close(mContext);
             if (!closed.HasValue())
                 return std::move(closed).Error();
-            return Variant<Detail::ResolvedPath, RejectionReason>(InPlaceType<RejectionReason>{}, rejected.Value());
+            return resolution;
         }
-        return Variant<Detail::ResolvedPath, RejectionReason>(InPlaceType<Detail::ResolvedPath>{}, std::move(resolved));
+        return resolution;
     }
 
     const ContextInterface& mContext;
@@ -839,8 +963,7 @@ Path::Path(Path&& other) noexcept
       mUsage(other.mUsage),
       mRootMountId(other.mRootMountId),
       mEntries(std::move(other.mEntries)),
-      mSize(other.mSize),
-      mDiagnosticPath(std::move(other.mDiagnosticPath))
+      mSize(other.mSize)
 {
     other.mSize = 0;
     other.mUsage = Usage{};
@@ -859,7 +982,6 @@ Path& Path::operator=(Path&& other) noexcept
         swap(mRootMountId, incoming.mRootMountId);
         mEntries.swap(incoming.mEntries);
         swap(mSize, incoming.mSize);
-        mDiagnosticPath.swap(incoming.mDiagnosticPath);
     }
     return *this;
 }
@@ -961,7 +1083,7 @@ ComplianceEngine::Result<std::uint64_t> Path::RootMountId() const
 }
 
 ComplianceEngine::Result<Handle> Path::RetainLeaf(const ContextInterface& context, const ResolverLimits& limits, std::size_t held,
-    Detail::ResolvedPath& stage, const Handle& source, const std::string& component)
+    Detail::ResolvedPath& stage, const Handle& source)
 {
     if (!source.mDescriptor.HasValue() || (&source.mDescriptor.Context() != &context) || (source.mType != Handle::Type::Directory) ||
         (held > limits.shared.liveDescriptors) || (stage.OwnedDescriptors() > limits.shared.liveDescriptors - held) ||
@@ -987,7 +1109,7 @@ ComplianceEngine::Result<Handle> Path::RetainLeaf(const ContextInterface& contex
         {
             return Error("Retained directory identity changed", EAGAIN);
         }
-        Handle candidate(std::move(duplicate), Handle::Type::Directory, component, snapshot, source.mFdinfoBytes);
+        Handle candidate(std::move(duplicate), Handle::Type::Directory, snapshot, source.mFdinfoBytes, stage.mSourceLookup, stage.mEffectiveLeaf, stage.mInitialMountId);
         auto matched = Handle::RecognizeAcceptedRoot(source, candidate, limits.shared.fdinfoBytes);
         if (!matched.HasValue())
         {
@@ -1029,7 +1151,7 @@ std::vector<Path::NameBinding> Path::Bindings() const
     std::vector<NameBinding> names;
     names.reserve(mEntries->size());
     for (const Entry& entry : *mEntries)
-        names.push_back({&entry.pin, &entry.lookupName, &entry.effectiveName, entry.originalMount});
+        names.push_back({&entry.pin, &entry.pin.LookupName(), &entry.pin.EffectiveName(), entry.pin.OriginalMount()});
     return names;
 }
 
@@ -1060,7 +1182,7 @@ ComplianceEngine::Result<std::vector<const Handle*>> Path::PhysicalLineage(const
         }
         if (stage != nullptr)
             for (const auto& pin : *stage->mPins)
-                if (pin.effective == prefix && pin.handle.AcquiredType() == Handle::Type::Directory && !consider(pin.handle))
+                if (pin.handle.EffectiveName() == prefix && pin.handle.AcquiredType() == Handle::Type::Directory && !consider(pin.handle))
                     return Error("Conflicting staged physical ancestors", EXDEV);
         if (prefix == targetName)
             selected = &target;
@@ -1080,20 +1202,25 @@ ComplianceEngine::Result<std::vector<const Handle*>> Path::Lineage(std::size_t i
 {
     if (!mEntries || index >= mEntries->size())
         return Error("Invalid acquired directory boundary", EINVAL);
-    return PhysicalLineage(mEntries->front().pin, mEntries->front().effectiveName, (*mEntries)[index].pin, (*mEntries)[index].effectiveName, Bindings(),
-        nullptr, std::numeric_limits<std::size_t>::max());
+    return PhysicalLineage(mEntries->front().pin, mEntries->front().pin.EffectiveName(), (*mEntries)[index].pin, (*mEntries)[index].pin.EffectiveName(),
+        Bindings(), nullptr, std::numeric_limits<std::size_t>::max());
 }
 
-bool Path::Footprint(const Handle& pin, const std::string& lookup, const std::string& effective, std::size_t& bytes) noexcept
+bool Path::Footprint(std::size_t lookup, std::size_t effective, std::size_t& bytes) noexcept
 {
     bytes = sizeof(Entry);
-    for (std::size_t size : {pin.Component().size(), lookup.size(), effective.size()})
+    for (std::size_t size : {lookup, effective})
     {
         if (size > std::numeric_limits<std::size_t>::max() - bytes)
             return false;
         bytes += size;
     }
     return true;
+}
+
+bool Path::Footprint(const Handle& pin, std::size_t& bytes) noexcept
+{
+    return Footprint(pin.LookupName().size(), pin.EffectiveName().size(), bytes);
 }
 
 ComplianceEngine::Result<bool> Path::Commit(Detail::ResolvedPath& stage, Handle leaf)
@@ -1140,7 +1267,7 @@ ComplianceEngine::Result<bool> Path::CommitStage(Detail::ResolvedPath& stage, Ha
             return abort(Error("Invalid borrowed staged ancestor", EINVAL));
     }
     std::size_t bytes = 0;
-    if (!Footprint(leaf, stage.mSourceLookup, stage.mEffectiveLeaf, bytes))
+    if (!Footprint(stage.mSourceLookup.size(), stage.mEffectiveLeaf.size(), bytes))
         return abort(Error("Path entry storage exceeds retained-memory budget", E2BIG));
     for (std::size_t i = 0; i < stage.mPins->size(); ++i)
     {
@@ -1149,8 +1276,7 @@ ComplianceEngine::Result<bool> Path::CommitStage(Detail::ResolvedPath& stage, Ha
         if (keep[i])
         {
             std::size_t record = 0;
-            if (!Footprint((*stage.mPins)[i].handle, (*stage.mPins)[i].effective, (*stage.mPins)[i].effective, record) ||
-                record > std::numeric_limits<std::size_t>::max() - bytes)
+            if (!Footprint((*stage.mPins)[i].handle, record) || record > std::numeric_limits<std::size_t>::max() - bytes)
                 return abort(Error("Path entry storage exceeds retained-memory budget", E2BIG));
             bytes += record;
         }
@@ -1173,29 +1299,28 @@ ComplianceEngine::Result<bool> Path::CommitStage(Detail::ResolvedPath& stage, Ha
     {
         if (!keep[i] || (stage.mLeafTaken && i == stage.mOwnedLeaf))
             continue;
-        mEntries->emplace_back(std::move((*stage.mPins)[i].handle), (*stage.mPins)[i].effective, (*stage.mPins)[i].effective, 0, false);
+        mEntries->emplace_back(std::move((*stage.mPins)[i].handle), false);
     }
-    mEntries->emplace_back(std::move(leaf), stage.mSourceLookup, stage.mEffectiveLeaf, stage.mInitialMountId, logicalLeaf);
+    // The logical leaf can be a duplicated ancestor or a link target. Bind
+    // this particular owner to the requested lookup and resolved target.
+    leaf.mLookupName = std::move(stage.mSourceLookup);
+    leaf.mEffectiveName = std::move(stage.mEffectiveLeaf);
+    leaf.mOriginalMount = stage.mInitialMountId;
+    mEntries->emplace_back(std::move(leaf), logicalLeaf);
     mUsage.retainedBytes += bytes;
     return true;
 }
 
 ComplianceEngine::Result<Variant<Path, Path::RejectionReason>> Path::Make(const ContextInterface& context, std::string absolutePath, Policy policy, ResolverLimits limits)
 {
-    if ((absolutePath.empty()) || (absolutePath.front() != '/') || (absolutePath.find('\0') != std::string::npos) || (limits.shared.work == 0) ||
-        (limits.shared.components == 0) || (limits.shared.liveDescriptors == 0) || (limits.shared.retainedBytes == 0) ||
-        (limits.shared.targetBytes == 0) || (limits.shared.fdinfoBytes == 0) || (limits.shared.fdinfoBytes >= std::string().max_size()) ||
-        (limits.shared.fdinfoBytes > std::vector<char>().max_size()) ||
-        (limits.shared.fdinfoBytes > static_cast<std::size_t>(std::numeric_limits<ssize_t>::max())) || (limits.linkTargetBytes == 0) ||
-        (limits.linkExpansions == 0) || (limits.depth == 0) || (absolutePath.size() > limits.shared.retainedBytes) || (limits.shared.liveDescriptors < 8) ||
-        !ValidFollowing(policy.symlinks) || !ValidFollowing(policy.fileLinks) || !ValidFollowing(policy.directoryLinks) ||
-        !ValidNonFollowedLink(policy.nonFollowedLinks) || ((policy.mounts != MountPolicy::AllowCrossing) && (policy.mounts != MountPolicy::StayOnRootMount)))
+    auto validationResult = ValidateMakeInput(absolutePath, policy, limits);
+    if (validationResult.HasValue())
     {
-        return Error("An absolute authorized directory, policy and positive budgets are required", EINVAL);
+        return std::move(validationResult).Value();
     }
+
     Path path(context, limits);
-    path.mDiagnosticPath = std::move(absolutePath);
-    const std::string& rootName = path.mDiagnosticPath;
+    const std::string& rootName = absolutePath;
     path.mUsage.retainedBytes = rootName.size() + 1;
     Optional<RejectionReason> selection;
     auto acquired = [&]() -> ComplianceEngine::Result<bool> {
@@ -1214,13 +1339,13 @@ ComplianceEngine::Result<Variant<Path, Path::RejectionReason>> Path::Make(const 
         const bool hasComponent = rootName.find_first_not_of('/') != std::string::npos;
         if (!hasComponent)
         {
-            path.mEntries->emplace_back(std::move(process).Value(), "/", "/", 0, false);
-            path.mUsage.retainedBytes += sizeof(Entry) + 3;
+            path.mEntries->emplace_back(std::move(process).Value(), false);
+            path.mUsage.retainedBytes += sizeof(Entry) + 2;
         }
         else
         {
-            path.mEntries->emplace_back(std::move(process).Value(), "/", "/", 0, false);
-            path.mUsage.retainedBytes += sizeof(Entry) + 3;
+            path.mEntries->emplace_back(std::move(process).Value(), false);
+            path.mUsage.retainedBytes += sizeof(Entry) + 2;
             for (std::size_t position = 1; position < rootName.size();)
             {
                 const std::size_t slash = rootName.find('/', position);
@@ -1327,10 +1452,9 @@ ComplianceEngine::Result<Variant<Path, Path::RejectionReason>> Path::Make(const 
             }
             if (first != 0)
                 return Error("Cannot close initial root-prefix scratch pins", first);
-            path.mEntries->front().lookupName = CollapseSeparators(rootName);
+            path.mEntries->front().pin.mLookupName = CollapseSeparators(rootName);
             std::size_t record = 0;
-            if (!Footprint(path.mEntries->front().pin, path.mEntries->front().lookupName, path.mEntries->front().effectiveName, record) ||
-                record > limits.shared.retainedBytes - (rootName.size() + 1))
+            if (!Footprint(path.mEntries->front().pin, record) || record > limits.shared.retainedBytes - (rootName.size() + 1))
                 return Error("Acquired root name exceeds retained-memory budget", E2BIG);
             path.mUsage.retainedBytes = rootName.size() + 1 + record;
             if (path.mUsage.retainedBytes > limits.shared.retainedBytes)
@@ -1387,8 +1511,10 @@ ComplianceEngine::Result<Variant<Path, Path::RejectionReason>> Path::Make(const 
     accepted.mEntries = std::move(path.mEntries);
     accepted.mSize = 1;
     accepted.mUsage = path.mUsage;
+    // The factory's reporting spelling was temporary; accepted Paths retain
+    // only acquisition provenance, not another copy of caller text.
+    accepted.mUsage.retainedBytes -= rootName.size() + 1;
     accepted.mRootMountId = path.mRootMountId;
-    accepted.mDiagnosticPath = std::move(path.mDiagnosticPath);
     return Variant<Path, RejectionReason>(InPlaceType<Path>{}, std::move(accepted));
 }
 
@@ -1396,7 +1522,7 @@ Path::Metadata Path::LeafMetadata() const
 {
     Metadata metadata;
     metadata.accepted = Leaf().AcquiredMetadata();
-    metadata.mountId = mEntries->back().originalMount;
+    metadata.mountId = mEntries->back().pin.OriginalMount();
     if (mSize == 1)
         metadata.mountId = mRootMountId;
     return metadata;
@@ -1474,7 +1600,7 @@ ComplianceEngine::Result<Variant<const Path&, Path::RejectionReason>> Path::Push
     auto resolved = ResolveChild(mContext.get(), Root(), parentLineage, std::move(component),
         ResolutionPolicy{FollowForClassification(policy.fileLinks, policy.directoryLinks), policy.mounts, true, policy.reportMissingRegularFile,
             policy.nonFollowedLinks == NonFollowedLinkAction::Skip && policy.fileLinks == SymlinkPolicy::DoNotFollow && policy.directoryLinks == SymlinkPolicy::DoNotFollow},
-        available, names, mEntries->front().lookupName, mEntries->front().effectiveName, mUsage.workSpent);
+        available, names, mEntries->front().pin.LookupName(), mEntries->front().pin.EffectiveName(), mUsage.workSpent);
     if (!resolved.HasValue())
     {
         return std::move(resolved).Error();
@@ -1535,7 +1661,7 @@ ComplianceEngine::Result<Handle> Path::Pop()
     {
         const Entry& entry = (*mEntries)[i];
         std::size_t record = 0;
-        if (!Footprint(entry.pin, entry.lookupName, entry.effectiveName, record) || record > std::numeric_limits<std::size_t>::max() - releasedBytes)
+        if (!Footprint(entry.pin, record) || record > std::numeric_limits<std::size_t>::max() - releasedBytes)
             return Error("Invalid acquired leaf footprint", E2BIG);
         releasedBytes += record;
     }
@@ -1590,7 +1716,7 @@ std::string Path::ToString() const
 {
     if (mSize == 0)
         throw std::logic_error("Path has no acquired effective name");
-    return mEntries->back().effectiveName;
+    return mEntries->back().pin.EffectiveName();
 }
 
 const Handle& Path::Root() const

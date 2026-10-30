@@ -76,10 +76,16 @@ public:
     ~Handle() noexcept;
 
     Type AcquiredType() const noexcept;
-    // Historical diagnostic component; available after Close. Never use a
-    // moved-from owner for acquisition evidence.
-    const std::string& Component() const& noexcept;
-    const std::string& Component() const&& = delete;
+    // Frozen names of this acquisition, not live canonical paths or authority
+    // for a new lookup. Available after Close, but not on moved-from owners.
+    // References expire when this owner is moved or destroyed.
+    const std::string& LookupName() const& noexcept;
+    const std::string& LookupName() const&& = delete;
+    const std::string& EffectiveName() const& noexcept;
+    const std::string& EffectiveName() const&& = delete;
+    // Mount of the originally looked-up name, before following a link; it
+    // need not be the mount of the held target.
+    std::uint64_t OriginalMount() const noexcept;
     // Historical acquisition identity, copied by value; never authority for
     // current permissions. Available even after Close; do not query moved-from owners.
     struct stat AcquiredMetadata() const noexcept;
@@ -119,7 +125,8 @@ private:
     // Path owns composition. The checked acquisition methods below are
     // private: no consumer can supply an fd.
     friend class Path;
-    Handle(Detail::Descriptor&& descriptor, Type type, std::string component, const struct stat& snapshot, std::size_t fdinfoBytes);
+    Handle(Detail::Descriptor&& descriptor, Type type, const struct stat& snapshot, std::size_t fdinfoBytes, std::string lookup, std::string effective,
+        std::uint64_t originalMount);
     static Result<Handle> PinProcessRoot(const ContextInterface& context, std::size_t fdinfoBytes);
     static Result<bool> RecognizeAcceptedRoot(const Handle& acceptedRoot, const Handle& candidate, std::size_t fdinfoByteCap);
     Result<PinObservation> InspectWithProcfs(const Detail::VerifiedProcfs& procfs) const;
@@ -128,7 +135,9 @@ private:
 
     Detail::Descriptor mDescriptor;
     Type mType = Type::Directory;
-    std::string mComponent;
+    std::string mLookupName;
+    std::string mEffectiveName;
+    std::uint64_t mOriginalMount = 0;
     struct stat mAcquiredMetadata = {};
     std::size_t mFdinfoBytes;
 };

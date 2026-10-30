@@ -221,7 +221,8 @@ Result<Status> WalkLogfiles(const std::string& path, const DaemonUidSet& daemonU
         return Status::Compliant; // missing/excluded root: no matching files
     if (As<Filesystem::Path>(root.Value()).Root().AcquiredType() != Filesystem::Handle::Type::Directory)
         return Error("Expected directory root at '" + path + "'", ENOTDIR);
-    auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), Filesystem::CollectionContinuation(resolved.Value()));
+    auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), resolved.Value().rootPath,
+        Filesystem::CollectionContinuation(resolved.Value()));
     if (!opened.HasValue())
     {
         return opened.Error();

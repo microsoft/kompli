@@ -80,15 +80,15 @@ static_assert(!HasRawGet<Descriptor>::value && !HasRawRelease<Descriptor>::value
 static_assert(!std::is_convertible<Descriptor, int>::value, "Native descriptors have no integer conversion");
 static_assert(!std::is_constructible<Descriptor, const ComplianceEngine::ContextInterface&, int, const char*>::value, "Native adoption is private");
 template <typename T, typename = void>
-struct CanBorrowComponent : std::false_type
+struct CanBorrowNames : std::false_type
 {
 };
 template <typename T>
-struct CanBorrowComponent<T, std::void_t<decltype(std::declval<T>().Component())>> : std::true_type
+struct CanBorrowNames<T, std::void_t<decltype(std::declval<T>().LookupName()), decltype(std::declval<T>().EffectiveName())>> : std::true_type
 {
 };
-static_assert(CanBorrowComponent<Handle&>::value && CanBorrowComponent<const Handle&>::value, "Lvalue components can be borrowed");
-static_assert(!CanBorrowComponent<Handle&&>::value && !CanBorrowComponent<const Handle&&>::value, "Temporary components cannot be borrowed");
+static_assert(CanBorrowNames<Handle&>::value && CanBorrowNames<const Handle&>::value, "Lvalue acquisition names can be borrowed");
+static_assert(!CanBorrowNames<Handle&&>::value && !CanBorrowNames<const Handle&&>::value, "Temporary acquisition names cannot be borrowed");
 static_assert(std::is_same<decltype(std::declval<Handle&&>().AcquiredMetadata()), struct stat>::value,
     "Temporary acquisition metadata is copied by value");
 static_assert(std::is_same<decltype(std::declval<const Handle&>().Stat()), ComplianceEngine::Result<struct stat>>::value,
@@ -1362,7 +1362,7 @@ TEST_F(PathAliasTest, FrozenAbsoluteBindingKeepsOriginalRootAfterReplacement)
         ASSERT_TRUE(substituted.HasValue()) << substituted.Error().message;
         EXPECT_EQ(original.st_ino, path.Leaf().AcquiredMetadata().st_ino);
         EXPECT_EQ(rootPath + "/inside", path.ToString());
-        EXPECT_EQ(rootPath, path.DiagnosticPath());
+        EXPECT_EQ(rootPath, path.Root().LookupName());
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }
@@ -1379,7 +1379,7 @@ TEST_F(PathAliasTest, AcquiredRootAliasesRenderEffectiveNameAndRejectOverlapping
     auto opened = SelectAcceptedPath(context, root + "/self", CrossMountPathPolicy(SymlinkPolicy::Follow), AmpleLimits());
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
-    EXPECT_EQ(root + "/self", path.DiagnosticPath());
+    EXPECT_EQ(root + "/self", path.Root().LookupName());
     EXPECT_EQ(root, path.ToString());
     EXPECT_EQ(path.Root().AcquiredMetadata().st_ino, path.Leaf().AcquiredMetadata().st_ino);
     ASSERT_EQ(0, ::unlink((root + "/self").c_str()));
@@ -2316,7 +2316,7 @@ TEST_F(PathAliasTest, EndInsertionKeepsBorrowsStableAndFailedPushDoesNotChangeSt
     }
     ASSERT_NE(nullptr, first);
     EXPECT_EQ(73U, path.Size());
-    EXPECT_EQ("d", first->Component());
+    EXPECT_EQ(rootPath + "/d", first->LookupName());
     const std::size_t stableInode = first->AcquiredMetadata().st_ino;
     auto invalid = path.Push("../escape", strict);
     ASSERT_FALSE(invalid.HasValue());
@@ -2421,7 +2421,7 @@ TEST_F(PathAliasTest, PopTransfersLeafAndPreservesSurvivingBorrows)
         EXPECT_EQ(2U, path.Size());
         EXPECT_EQ(&root, &path.Root());
         EXPECT_EQ(&one, &path.Leaf());
-        EXPECT_EQ("one", one.Component());
+        EXPECT_EQ(rootPath + "/one", one.LookupName());
         EXPECT_EQ(twoInode, detached.Value().AcquiredMetadata().st_ino);
         const std::size_t afterPop = CountOpenDescriptors();
         ASSERT_TRUE(path.Push("two", strict).HasValue());
@@ -2458,10 +2458,10 @@ TEST_F(PathAliasTest, RelativeLinkParentUsesPinnedPhysicalAncestryNotLogicalPop)
     ASSERT_TRUE(alias.HasValue()) << alias.Error().message;
     EXPECT_EQ(expected.st_ino, path.Leaf().AcquiredMetadata().st_ino);
     ASSERT_TRUE(path.Pop().HasValue());
-    EXPECT_EQ("b", path.Leaf().Component());
+    EXPECT_EQ(root + "/a/b", path.Leaf().EffectiveName());
     ASSERT_TRUE(path.Pop().HasValue());
     EXPECT_EQ(1U, path.Size());
-    EXPECT_EQ("accepted", path.Leaf().Component());
+    EXPECT_EQ(root, path.Leaf().LookupName());
 }
 
 TEST_F(PathAliasTest, AliasToExistingAncestorUsesItsCanonicalPhysicalParent)
@@ -2900,7 +2900,7 @@ TEST_F(PathAliasTest, PoppedHandleFailedCloseIsSingleShotEvenAfterMove)
     {
         Handle moved = std::move(popped).Value();
         Handle owner = std::move(moved);
-        EXPECT_EQ("/", owner.Component());
+        EXPECT_EQ("/", owner.LookupName());
     }
     EXPECT_EQ(before, CountOpenDescriptors());
     OwnedTestDescriptor reused(::open("/dev/null", O_RDONLY | O_CLOEXEC));
@@ -4123,11 +4123,11 @@ TEST_F(PathAliasTest, PinnedRelativeAndAbsoluteLinksIgnoreReplacementNames)
     const std::size_t before = CountOpenDescriptors();
     ASSERT_EQ(0, ::unlink(link.c_str()));
     ASSERT_EQ(0, ::symlink("/etc/passwd", link.c_str()));
-    auto target = ReadPinnedLink(context, relative, 128, 4096);
+    auto target = ReadPinnedLink(relative, 128, 4096);
     ASSERT_TRUE(target.HasValue()) << target.Error().message;
     EXPECT_EQ("../target", target.Value().text);
     EXPECT_GT(target.Value().mountId, 0U);
-    auto tooSmall = ReadPinnedLink(context, relative, 8, 4096);
+    auto tooSmall = ReadPinnedLink(relative, 8, 4096);
     ASSERT_FALSE(tooSmall.HasValue());
     EXPECT_EQ(E2BIG, tooSmall.Error().code);
     EXPECT_EQ(before, CountOpenDescriptors());
@@ -4135,7 +4135,7 @@ TEST_F(PathAliasTest, PinnedRelativeAndAbsoluteLinksIgnoreReplacementNames)
     auto absoluteResult = context.OpenAbsolutePin(link.c_str(), false);
     ASSERT_TRUE(absoluteResult.HasValue());
     Descriptor absolute = std::move(absoluteResult).Value();
-    auto absoluteTarget = ReadPinnedLink(context, absolute, 128, 4096);
+    auto absoluteTarget = ReadPinnedLink(absolute, 128, 4096);
     ASSERT_TRUE(absoluteTarget.HasValue()) << absoluteTarget.Error().message;
     EXPECT_EQ("/etc/passwd", absoluteTarget.Value().text);
 }
@@ -4145,9 +4145,189 @@ TEST_F(PathAliasTest, ProcfsMagicLinkCannotEnterManualResolver)
     auto opened = context.OpenAbsolutePin("/proc/self/exe", false);
     ASSERT_TRUE(opened.HasValue());
     Descriptor magic = std::move(opened).Value();
-    auto denied = ReadPinnedLink(context, magic, 4096, 4096);
+    auto denied = ReadPinnedLink(magic, 4096, 4096);
     ASSERT_FALSE(denied.HasValue());
     EXPECT_EQ(ELOOP, denied.Error().code);
+}
+
+TEST_F(PathAliasTest, PinnedLinkRejectsEmptyNulAndNonLinkWithoutConsumingPin)
+{
+    const std::string link = context.GetTempdirPath() + "/bounded.link";
+    ASSERT_EQ(0, ::symlink("target", link.c_str()));
+    auto opened = context.OpenAbsolutePin(link.c_str(), false);
+    ASSERT_TRUE(opened.HasValue());
+    Descriptor pin = std::move(opened).Value();
+    const std::size_t before = CountOpenDescriptors();
+    EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).WillOnce([](int, char*, std::size_t) -> ssize_t { return 0; }).WillOnce([](int, char* buffer, std::size_t) -> ssize_t {
+        std::memcpy(buffer, "a\0b", 3);
+        return 3;
+    });
+    auto empty = ReadPinnedLink(pin, 16, 4096);
+    ASSERT_FALSE(empty.HasValue());
+    EXPECT_EQ(E2BIG, empty.Error().code);
+    auto nul = ReadPinnedLink(pin, 16, 4096);
+    ASSERT_FALSE(nul.HasValue());
+    EXPECT_EQ(EINVAL, nul.Error().code);
+    EXPECT_EQ(before, CountOpenDescriptors());
+    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+    auto valid = ReadPinnedLink(pin, 16, 4096);
+    ASSERT_TRUE(valid.HasValue()) << valid.Error().message;
+    EXPECT_EQ("target", valid.Value().text);
+
+    const std::string file = context.MakeTempfile("ordinary");
+    auto regular = context.OpenAbsolutePin(file.c_str(), false);
+    ASSERT_TRUE(regular.HasValue());
+    auto denied = ReadPinnedLink(regular.Value(), 16, 4096);
+    ASSERT_FALSE(denied.HasValue());
+    EXPECT_EQ(ELOOP, denied.Error().code);
+}
+
+TEST_F(PathAliasTest, PinnedLinkReadRechecksIdentityAndMount)
+{
+    const std::string link = context.GetTempdirPath() + "/observed.link";
+    ASSERT_EQ(0, ::symlink("target", link.c_str()));
+    auto opened = context.OpenAbsolutePin(link.c_str(), false);
+    ASSERT_TRUE(opened.HasValue());
+    Descriptor pin = std::move(opened).Value();
+    const std::size_t before = CountOpenDescriptors();
+
+    int observations = 0;
+    EXPECT_CALL(context, StatFileDescriptor(_, _)).WillRepeatedly([&](int fd, struct stat* snapshot) {
+        const int status = context.RealStatFileDescriptor(fd, snapshot);
+        if (status == 0 && S_ISLNK(snapshot->st_mode) && ++observations == 2)
+            ++snapshot->st_ino;
+        return status;
+    });
+    auto changed = ReadPinnedLink(pin, 16, 4096);
+    ASSERT_FALSE(changed.HasValue());
+    EXPECT_EQ(EAGAIN, changed.Error().code);
+    EXPECT_EQ(2, observations);
+    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+
+    int records = 0;
+    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).WillRepeatedly([&](int fd, void* buffer, std::size_t size) {
+        const ssize_t bytes = context.RealReadFileDescriptor(fd, buffer, size);
+        if (bytes > 0 && DescriptorTarget(fd).find("/fdinfo/") != std::string::npos &&
+            std::string(static_cast<char*>(buffer), static_cast<std::size_t>(bytes)).find("mnt_id:") != std::string::npos && ++records == 2)
+            AlterFdinfoMountId(buffer, bytes);
+        return bytes;
+    });
+    auto mount = ReadPinnedLink(pin, 16, 4096);
+    ASSERT_FALSE(mount.HasValue());
+    EXPECT_EQ(EAGAIN, mount.Error().code);
+    EXPECT_EQ(2, records);
+    EXPECT_EQ(before, CountOpenDescriptors());
+}
+
+TEST_F(PathAliasTest, PinnedLinkReadFailsClosedOnMountAndStatObservationErrors)
+{
+    const std::string link = context.GetTempdirPath() + "/fault.link";
+    ASSERT_EQ(0, ::symlink("target", link.c_str()));
+    auto opened = context.OpenAbsolutePin(link.c_str(), false);
+    ASSERT_TRUE(opened.HasValue());
+    Descriptor pin = std::move(opened).Value();
+    const std::size_t before = CountOpenDescriptors();
+
+    bool failedMount = false;
+    EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).Times(0);
+    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).WillRepeatedly([&](int fd, void* buffer, std::size_t size) {
+        if (!failedMount && DescriptorTarget(fd).find("/fdinfo/") != std::string::npos)
+        {
+            failedMount = true;
+            errno = ENOSPC;
+            return static_cast<ssize_t>(-1);
+        }
+        return context.RealReadFileDescriptor(fd, buffer, size);
+    });
+    auto mount = ReadPinnedLink(pin, 16, 4096);
+    ASSERT_FALSE(mount.HasValue());
+    EXPECT_EQ(ENOSPC, mount.Error().code);
+    EXPECT_TRUE(failedMount);
+    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+
+    int observations = 0;
+    EXPECT_CALL(context, StatFileDescriptor(_, _)).WillRepeatedly([&](int fd, struct stat* snapshot) {
+        const int status = context.RealStatFileDescriptor(fd, snapshot);
+        if (status == 0 && S_ISLNK(snapshot->st_mode) && ++observations == 2)
+        {
+            errno = EIO;
+            return -1;
+        }
+        return status;
+    });
+    auto stat = ReadPinnedLink(pin, 16, 4096);
+    ASSERT_FALSE(stat.HasValue());
+    EXPECT_EQ(EIO, stat.Error().code);
+    EXPECT_EQ(2, observations);
+    EXPECT_EQ(before, CountOpenDescriptors());
+}
+
+TEST_F(PathAliasTest, PinnedLinkReadErrorOutranksHelperCloseFailure)
+{
+    const std::string link = context.GetTempdirPath() + "/failing.link";
+    ASSERT_EQ(0, ::symlink("target", link.c_str()));
+    auto opened = context.OpenAbsolutePin(link.c_str(), false);
+    ASSERT_TRUE(opened.HasValue());
+    Descriptor pin = std::move(opened).Value();
+    const std::size_t before = CountOpenDescriptors();
+    bool failedRead = false;
+    EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).WillOnce([&](int, char*, std::size_t) -> ssize_t {
+        failedRead = true;
+        errno = ENOSPC;
+        return -1;
+    });
+    bool failedClose = false;
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+        const bool helper = IsProcfsHelper(fd);
+        const int status = ::close(fd);
+        EXPECT_EQ(0, status);
+        if (helper && failedRead && !failedClose)
+        {
+            failedClose = true;
+            errno = EIO;
+            return -1;
+        }
+        return status;
+    });
+    auto failure = ReadPinnedLink(pin, 16, 4096);
+    ASSERT_FALSE(failure.HasValue());
+    EXPECT_EQ(ENOSPC, failure.Error().code);
+    EXPECT_TRUE(failedRead);
+    EXPECT_TRUE(failedClose);
+    EXPECT_EQ(before, CountOpenDescriptors());
+}
+
+TEST_F(PathAliasTest, PinnedLinkSuccessfulReadReportsHelperCloseFailure)
+{
+    const std::string link = context.GetTempdirPath() + "/close.link";
+    ASSERT_EQ(0, ::symlink("target", link.c_str()));
+    auto opened = context.OpenAbsolutePin(link.c_str(), false);
+    ASSERT_TRUE(opened.HasValue());
+    Descriptor pin = std::move(opened).Value();
+    const std::size_t before = CountOpenDescriptors();
+    bool read = false, failedClose = false;
+    EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).WillOnce([&](int fd, char* buffer, std::size_t size) {
+        read = true;
+        return ::readlinkat(fd, "", buffer, size);
+    });
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+        const bool helper = IsProcfsHelper(fd);
+        const int status = ::close(fd);
+        EXPECT_EQ(0, status);
+        if (helper && read && !failedClose)
+        {
+            failedClose = true;
+            errno = EIO;
+            return -1;
+        }
+        return status;
+    });
+    auto failure = ReadPinnedLink(pin, 16, 4096);
+    ASSERT_FALSE(failure.HasValue());
+    EXPECT_EQ(EIO, failure.Error().code);
+    EXPECT_TRUE(read);
+    EXPECT_TRUE(failedClose);
+    EXPECT_EQ(before, CountOpenDescriptors());
 }
 
 TEST_F(PathAliasTest, AcceptedRootRecognitionUsesHeldIdentityNotCandidateName)

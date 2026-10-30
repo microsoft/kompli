@@ -180,7 +180,8 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
         return Status::Compliant;
     if (As<Filesystem::Path>(root.Value()).Root().AcquiredType() != Filesystem::Handle::Type::Directory)
         return Error("Expected directory root at '" + baseDir + "'", ENOTDIR);
-    auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), Filesystem::CollectionContinuation(resolved.Value()));
+    auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), resolved.Value().rootPath,
+        Filesystem::CollectionContinuation(resolved.Value()));
     if (!opened.HasValue())
     {
         return opened.Error();

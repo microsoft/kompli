@@ -57,13 +57,16 @@ bool IsSingleChildComponent(const std::string& component) noexcept;
 Result<std::uint64_t> ParseMountId(const std::string& fdinfo);
 
 // Inspection only: no kernel-follow of a link, including procfs magic links.
-// The caller owns and keeps the O_PATH|O_NOFOLLOW link pin live.
+// The caller owns and keeps the O_PATH|O_NOFOLLOW link pin live. Acquisition
+// already observes its stat/mount for resolver policy, but this operation
+// validates its own pin and brackets the bounded text read with fresh stat
+// and mount observations; neither check authorizes or resolves the target.
 struct LinkTarget
 {
     std::string text;
     std::uint64_t mountId = 0;
 };
-Result<LinkTarget> ReadPinnedLink(const ContextInterface& context, const Descriptor& linkPin, std::size_t targetByteCap, std::size_t fdinfoByteCap);
+Result<LinkTarget> ReadPinnedLink(const Descriptor& linkPin, std::size_t targetByteCap, std::size_t fdinfoByteCap);
 
 // Internal read-only activation of an already held O_PATH pin. The returned
 // descriptor is independently owned and never exposed through Path.hpp.
@@ -89,13 +92,11 @@ private:
     friend struct ResolvedPathAllocationProbe; // focused allocator-failure test
     struct Pin
     {
-        Pin(Handle&& handle, std::string name)
-            : handle(std::move(handle)),
-              effective(std::move(name))
+        explicit Pin(Handle&& handle)
+            : handle(std::move(handle))
         {
         }
         Handle handle;
-        std::string effective;
     };
     ResolvedPath()
         : mPins(new std::deque<Pin>())

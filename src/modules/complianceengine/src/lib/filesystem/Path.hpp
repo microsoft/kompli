@@ -155,10 +155,6 @@ public:
     {
         return mContext.get();
     }
-    const std::string& DiagnosticPath() const noexcept
-    {
-        return mDiagnosticPath;
-    }
     const ResolverLimits& Limits() const noexcept
     {
         return mLimits;
@@ -187,7 +183,7 @@ private:
     std::vector<NameBinding> Bindings() const;
     Path(const ContextInterface& context, ResolverLimits limits);
     static ComplianceEngine::Result<Handle> RetainLeaf(const ContextInterface& context, const ResolverLimits& limits, std::size_t held,
-        Detail::ResolvedPath& stage, const Handle& source, const std::string& component);
+        Detail::ResolvedPath& stage, const Handle& source);
     ComplianceEngine::Result<bool> Commit(Detail::ResolvedPath& stage, Handle leaf);
     ComplianceEngine::Result<bool> CommitScratch(Detail::ResolvedPath& stage, Handle leaf);
     ComplianceEngine::Result<bool> CommitStage(Detail::ResolvedPath& stage, Handle leaf, bool logicalLeaf);
@@ -211,27 +207,21 @@ private:
     // acquisition and tied to the pins; logical leaves delimit Pop steps.
     struct Entry
     {
-        Entry(Handle&& owned, std::string lookup, std::string effective, std::uint64_t mount, bool leaf)
+        Entry(Handle&& owned, bool leaf)
             : pin(std::move(owned)),
-              lookupName(std::move(lookup)),
-              effectiveName(std::move(effective)),
-              originalMount(mount),
               logicalLeaf(leaf)
         {
         }
         Handle pin;
-        std::string lookupName;
-        std::string effectiveName;
-        std::uint64_t originalMount;
         bool logicalLeaf;
     };
-    static bool Footprint(const Handle& pin, const std::string& lookup, const std::string& effective, std::size_t& bytes) noexcept;
+    static bool Footprint(std::size_t lookup, std::size_t effective, std::size_t& bytes) noexcept;
+    static bool Footprint(const Handle& pin, std::size_t& bytes) noexcept;
     // Own the deque allocation separately: moving a deque itself may allocate
     // an empty map even when its declared move constructor is noexcept.
     // A moved-from Path has no deque and remains a valid empty owner.
     std::unique_ptr<std::deque<Entry>> mEntries;
     std::size_t mSize = 0;
-    std::string mDiagnosticPath;
 };
 
 } // namespace Filesystem

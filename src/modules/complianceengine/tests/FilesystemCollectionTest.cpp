@@ -6,10 +6,12 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <fcntl.h>
 #include <filesystem/FilesystemCollection.hpp>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
@@ -197,7 +199,7 @@ TEST(FilesystemCollectionTest, CoreNoRootReplayAfterAcceptedDirectoryRenameAndRe
         return context.RealOpenNativeAt(directory, name, flags);
     });
     EXPECT_CALL(context, OpenNativeAt(testing::_, testing::StrEq("root"), testing::_)).Times(0);
-    auto files = Files(std::move(accepted), CollectionContinuation(resolved.Value()));
+    auto files = Files(std::move(accepted), request.rootPath, CollectionContinuation(resolved.Value()));
     ASSERT_TRUE(files.HasValue()) << files.Error().message;
     std::vector<std::string> seen;
     for (const auto& entry : files.Value())
@@ -212,6 +214,89 @@ TEST(FilesystemCollectionTest, CoreNoRootReplayAfterAcceptedDirectoryRenameAndRe
     EXPECT_EQ((std::vector<std::string>{tree.Path("root/original")}), seen);
     EXPECT_NE(0, acceptedInode);
     EXPECT_TRUE(files->Close().HasValue());
+}
+
+TEST(FilesystemCollectionTest, MovedRootReportsOriginalSpellingWithoutUsingItAsAuthority)
+{
+    MockContext context;
+    TestTree tree;
+    tree.Directory("actual");
+    tree.File("actual/file");
+    tree.Link("actual", "alias");
+    FilesystemCollectionRequest request(tree.Path("alias") + "///", FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    request.scope = FilesystemScope::All;
+    request.yieldType = FilesystemYieldType::RegularFiles;
+    request.rootDirectoryLinkAction = SymlinkPolicy::Follow;
+    request.rootFileLinkAction = SymlinkPolicy::Follow;
+    auto resolved = ResolveFilesystemCollectionRequest(request);
+    ASSERT_TRUE(resolved.HasValue()) << resolved.Error().message;
+    auto acquired = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), CollectionRootLimits(resolved.Value()));
+    ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
+    ASSERT_TRUE(acquired.Value().Is<Path>());
+    Path accepted = As<Path>(std::move(acquired).Value());
+    EXPECT_EQ(tree.Path("alias"), accepted.Root().LookupName());
+    EXPECT_NE(request.rootPath, accepted.Root().LookupName()); // binding normalization never changes reporting spelling
+    EXPECT_EQ(tree.Path("actual"), accepted.Root().EffectiveName());
+    auto files = Files(std::move(accepted), request.rootPath, CollectionContinuation(resolved.Value()));
+    ASSERT_TRUE(files.HasValue()) << files.Error().message;
+    auto entry = files->begin();
+    ASSERT_NE(entry, files->end());
+    ASSERT_TRUE(entry->HasValue()) << entry->Error().message;
+    EXPECT_EQ(request.rootPath + "/file", entry->Value().path);
+    ASSERT_NE(nullptr, entry->Value().LiveHandle());
+    EXPECT_EQ(tree.Path("actual/file"), entry->Value().LiveHandle()->EffectiveName());
+    EXPECT_TRUE(files->Close().HasValue());
+}
+
+TEST(FilesystemCollectionTest, DetachedAncestorAliasRetainsItsOwnFrozenNamesAndBudget)
+{
+    MockContext context;
+    TestTree tree;
+    tree.Directory("root");
+    tree.Directory("root/a");
+    tree.Directory("root/a/sub");
+    tree.Link("..", "root/a/sub/up");
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    auto resolved = ResolveFilesystemCollectionRequest(request);
+    ASSERT_TRUE(resolved.HasValue()) << resolved.Error().message;
+    auto opened = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), CollectionRootLimits(resolved.Value()));
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    ASSERT_TRUE(opened.Value().Is<Path>());
+    Path path = As<Path>(std::move(opened).Value());
+    const auto rootBytes = path.RetainedBytes();
+    ComplianceEngine::Filesystem::ExtensionPolicy strict;
+    strict.mounts = ComplianceEngine::Filesystem::MountPolicy::AllowCrossing;
+    ASSERT_TRUE(path.Push("a", strict).HasValue());
+    ASSERT_TRUE(path.Push("sub", strict).HasValue());
+    const auto parentBytes = path.RetainedBytes();
+    ComplianceEngine::Filesystem::ExtensionPolicy follow = strict;
+    follow.fileLinks = SymlinkPolicy::Follow;
+    follow.directoryLinks = SymlinkPolicy::Follow;
+    ASSERT_TRUE(path.Push("up", follow).HasValue());
+    EXPECT_EQ(tree.Path("root/a/sub/up"), path.Leaf().LookupName());
+    EXPECT_EQ(tree.Path("root/a"), path.Leaf().EffectiveName());
+    EXPECT_EQ(path.LeafMetadata().mountId, path.Leaf().OriginalMount());
+    EXPECT_GT(path.RetainedBytes(), parentBytes);
+    auto alias = path.Pop();
+    ASSERT_TRUE(alias.HasValue()) << alias.Error().message;
+    EXPECT_EQ(parentBytes, path.RetainedBytes());
+    EXPECT_EQ(tree.Path("root/a/sub/up"), alias.Value().LookupName());
+    ASSERT_TRUE(path.Pop().HasValue());
+    ASSERT_TRUE(path.Pop().HasValue());
+    EXPECT_EQ(rootBytes, path.RetainedBytes());
+    ASSERT_TRUE(path.Push("a", strict).HasValue());
+    auto direct = path.Pop();
+    ASSERT_TRUE(direct.HasValue());
+    EXPECT_EQ(tree.Path("root/a"), direct.Value().LookupName());
+    EXPECT_EQ(alias.Value().AcquiredMetadata().st_ino, direct.Value().AcquiredMetadata().st_ino);
+    EXPECT_EQ(rootBytes, path.RetainedBytes());
+    ASSERT_TRUE(path.Close().HasValue());
+    EXPECT_TRUE(alias.Value().Stat().HasValue());
+    EXPECT_TRUE(direct.Value().Stat().HasValue());
+    EXPECT_TRUE(alias.Value().Close().HasValue());
+    EXPECT_EQ(tree.Path("root/a/sub/up"), alias.Value().LookupName());
+    EXPECT_TRUE(direct.Value().Close().HasValue());
 }
 
 TEST(FilesystemCollectionTest, AcquiredRootAndChildContinuationPoliciesRemainSeparate)
@@ -235,7 +320,7 @@ TEST(FilesystemCollectionTest, AcquiredRootAndChildContinuationPoliciesRemainSep
     ASSERT_TRUE(root.Value().Is<Path>());
     auto strict = CollectionContinuation(resolved.Value());
     strict.childFileLinkAction = SymlinkPolicy::DoNotFollow;
-    auto excluded = Files(As<Path>(std::move(root).Value()), strict);
+    auto excluded = Files(As<Path>(std::move(root).Value()), request.rootPath, strict);
     ASSERT_TRUE(excluded.HasValue()) << excluded.Error().message;
     std::vector<std::string> seen;
     for (const auto& entry : excluded.Value())
@@ -256,7 +341,7 @@ TEST(FilesystemCollectionTest, AcquiredRootAndChildContinuationPoliciesRemainSep
     ASSERT_TRUE(direct.Value().Is<Path>());
     auto followChildren = CollectionContinuation(resolved.Value());
     followChildren.childFileLinkAction = SymlinkPolicy::Follow;
-    auto followed = Files(As<Path>(std::move(direct).Value()), followChildren);
+    auto followed = Files(As<Path>(std::move(direct).Value()), request.rootPath, followChildren);
     ASSERT_TRUE(followed.HasValue()) << followed.Error().message;
     seen.clear();
     for (const auto& entry : followed.Value())
@@ -448,6 +533,115 @@ TEST(FilesystemCollectionTest, CloseAttemptsCursorAndPinsAfterFirstCleanupFailur
     EXPECT_EQ(EACCES, opened->Close().Error().code);
     EXPECT_EQ(1u, cursorCloses);
     EXPECT_EQ(count, pinCloses);
+}
+
+TEST(FilesystemCollectionTest, ThrownCursorCloseReleasesDetachedRangeWhileStillAlive)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.Directory("root/sub");
+    tree.Directory("root/sub/nested");
+    MockContext context;
+    std::set<int> livePins;
+    std::set<DIR*> liveStreams;
+    std::size_t pinCloses = 0;
+    std::size_t cursorCloses = 0;
+    ON_CALL(context, OpenNativePath(testing::_, testing::_)).WillByDefault([&](const char* path, int flags) {
+        const int fd = context.RealOpenNativePath(path, flags);
+        if (fd >= 0)
+            EXPECT_TRUE(livePins.insert(fd).second);
+        return fd;
+    });
+    ON_CALL(context, OpenNativeAt(testing::_, testing::_, testing::_)).WillByDefault([&](int directory, const char* name, int flags) {
+        const int fd = context.RealOpenNativeAt(directory, name, flags);
+        if (fd >= 0)
+            EXPECT_TRUE(livePins.insert(fd).second);
+        return fd;
+    });
+    ON_CALL(context, DuplicateDescriptor(testing::_)).WillByDefault([&](int source) {
+        const int fd = context.RealDuplicateDescriptor(source);
+        if (fd >= 0)
+            EXPECT_TRUE(livePins.insert(fd).second);
+        return fd;
+    });
+    ON_CALL(context, FdOpenDirectory(testing::_)).WillByDefault([&](int fd) {
+        DIR* stream = fdopendir(fd);
+        if (stream)
+        {
+            EXPECT_EQ(1u, livePins.erase(fd)); // cursor now owns the duplicate
+            EXPECT_TRUE(liveStreams.insert(stream).second);
+        }
+        return stream;
+    });
+    ON_CALL(context, CloseFileDescriptor(testing::_)).WillByDefault([&](int fd) {
+        EXPECT_EQ(1u, livePins.erase(fd));
+        ++pinCloses;
+        return ::close(fd);
+    });
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    auto opened = Files(request, context);
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    auto& files = opened.Value();
+    auto entry = files.begin();
+    ASSERT_NE(entry, files.end());
+    ASSERT_TRUE(entry->HasValue());
+    ++entry;
+    ASSERT_NE(entry, files.end());
+    ASSERT_TRUE(entry->HasValue());
+    EXPECT_EQ(tree.Path("root/sub"), entry->Value().path);
+    ++entry;
+    ASSERT_NE(entry, files.end());
+    ASSERT_TRUE(entry->HasValue());
+    EXPECT_EQ(tree.Path("root/sub/nested"), entry->Value().path);
+    ASSERT_EQ(2u, liveStreams.size());
+    ASSERT_FALSE(livePins.empty());
+
+    int reused = -1;
+    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) -> int {
+        ++cursorCloses;
+        EXPECT_EQ(1u, liveStreams.erase(stream));
+        const int fd = dirfd(stream);
+        EXPECT_EQ(0, ::closedir(stream));
+        if (cursorCloses == 1)
+        {
+            const int replacement = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+            EXPECT_GE(replacement, 0);
+            if (replacement >= 0)
+            {
+                reused = fd;
+                if (replacement != fd)
+                {
+                    EXPECT_EQ(fd, ::dup2(replacement, fd));
+                    EXPECT_EQ(0, ::close(replacement));
+                }
+            }
+            throw std::runtime_error("cursor close fault");
+        }
+        return 0;
+    });
+    try
+    {
+        (void)files.Close();
+        FAIL() << "Post-native-close exception must propagate";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_STREQ("cursor close fault", error.what());
+    }
+    // The range and its borrowed iterator are still alive. Only the
+    // unrelated replacement descriptor may remain; no yielded file pins.
+    EXPECT_EQ(2u, cursorCloses);
+    EXPECT_TRUE(liveStreams.empty());
+    EXPECT_TRUE(livePins.empty());
+    EXPECT_GT(pinCloses, 0u);
+    const auto attemptedPins = pinCloses;
+    EXPECT_TRUE(files.Close().HasValue());
+    EXPECT_EQ(2u, cursorCloses);
+    EXPECT_EQ(attemptedPins, pinCloses);
+    ASSERT_GE(reused, 0);
+    EXPECT_GE(::fcntl(reused, F_GETFD), 0);
+    EXPECT_EQ(0, ::close(reused));
 }
 
 TEST(FilesystemCollectionTest, VisitorErrorOutranksPathPinCloseFailure)
@@ -885,7 +1079,7 @@ TEST(FilesystemCollectionTest, ContinuationCannotUnderstateAcquiredRootInspectio
     EXPECT_CALL(context, StatFileDescriptor(testing::_, testing::_)).Times(0);
     EXPECT_CALL(context, ReadFileDescriptor(testing::_, testing::_, testing::_)).Times(0);
     EXPECT_CALL(context, FdOpenDirectory(testing::_)).Times(0);
-    auto rejected = Files(std::move(accepted), continuation);
+    auto rejected = Files(std::move(accepted), request.rootPath, continuation);
     ASSERT_FALSE(rejected.HasValue());
     EXPECT_EQ(EINVAL, rejected.Error().code);
     EXPECT_EQ("Filesystem continuation fdinfo byte limit is below the acquired root's bound inspection limit", rejected.Error().message);

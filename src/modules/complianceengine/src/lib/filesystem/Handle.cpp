@@ -432,10 +432,13 @@ using Detail::SameIdentity;
 using Detail::SavedError;
 using Detail::VerifiedProcfs;
 
-Handle::Handle(Detail::Descriptor&& descriptor, Type type, std::string component, const struct stat& snapshot, std::size_t fdinfoBytes)
+Handle::Handle(Detail::Descriptor&& descriptor, Type type, const struct stat& snapshot, std::size_t fdinfoBytes, std::string lookup,
+    std::string effective, std::uint64_t originalMount)
     : mDescriptor(std::move(descriptor)),
       mType(type),
-      mComponent(std::move(component)),
+      mLookupName(std::move(lookup)),
+      mEffectiveName(std::move(effective)),
+      mOriginalMount(originalMount),
       mAcquiredMetadata(snapshot),
       mFdinfoBytes(fdinfoBytes)
 {
@@ -444,7 +447,9 @@ Handle::Handle(Detail::Descriptor&& descriptor, Type type, std::string component
 Handle::Handle(Handle&& other) noexcept
     : mDescriptor(std::move(other.mDescriptor)),
       mType(other.mType),
-      mComponent(std::move(other.mComponent)),
+      mLookupName(std::move(other.mLookupName)),
+      mEffectiveName(std::move(other.mEffectiveName)),
+      mOriginalMount(other.mOriginalMount),
       mAcquiredMetadata(other.mAcquiredMetadata),
       mFdinfoBytes(other.mFdinfoBytes)
 {
@@ -467,9 +472,19 @@ Handle::Type Handle::AcquiredType() const noexcept
     return mType;
 }
 
-const std::string& Handle::Component() const& noexcept
+const std::string& Handle::LookupName() const& noexcept
 {
-    return mComponent;
+    return mLookupName;
+}
+
+const std::string& Handle::EffectiveName() const& noexcept
+{
+    return mEffectiveName;
+}
+
+std::uint64_t Handle::OriginalMount() const noexcept
+{
+    return mOriginalMount;
 }
 
 struct stat Handle::AcquiredMetadata() const noexcept
@@ -819,7 +834,9 @@ void Handle::Swap(Handle& other) noexcept
     using std::swap;
     swap(mDescriptor, other.mDescriptor);
     swap(mType, other.mType);
-    mComponent.swap(other.mComponent);
+    mLookupName.swap(other.mLookupName);
+    mEffectiveName.swap(other.mEffectiveName);
+    swap(mOriginalMount, other.mOriginalMount);
     swap(mAcquiredMetadata, other.mAcquiredMetadata);
     swap(mFdinfoBytes, other.mFdinfoBytes);
 }
@@ -857,7 +874,7 @@ Result<Handle> Handle::PinProcessRoot(const ContextInterface& context, std::size
         {
             return Error("Process root is not a directory", ENOTDIR);
         }
-        Handle root(std::move(acquired), Handle::Type::Directory, "/", snapshot, fdinfoBytes);
+        Handle root(std::move(acquired), Handle::Type::Directory, snapshot, fdinfoBytes, "/", "/", 0);
         return std::move(root);
     }();
     auto closed = acquired.Close();
