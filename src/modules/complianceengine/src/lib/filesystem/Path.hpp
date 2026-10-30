@@ -182,8 +182,14 @@ private:
         const std::vector<NameBinding>& names, const std::string& logicalRoot, const std::string& effectiveRoot, std::size_t& spent);
     std::vector<NameBinding> Bindings() const;
     Path(const ContextInterface& context, ResolverLimits limits);
+    // The caller checked-closes any duplicate not transferred to the
+    // candidate; the candidate is checked-closed here on recognition failure.
+    static ComplianceEngine::Result<Handle> RetainDuplicatedLeaf(const ContextInterface& context, const ResolverLimits& limits,
+        Detail::ResolvedPath& stage, const Handle& source, Detail::Descriptor& duplicate, int duplicateError);
     static ComplianceEngine::Result<Handle> RetainLeaf(const ContextInterface& context, const ResolverLimits& limits, std::size_t held,
         Detail::ResolvedPath& stage, const Handle& source);
+    // Empty optional accepts the pinned root; a reason rejects the selection.
+    static ComplianceEngine::Result<Optional<RejectionReason>> AcquireInitialRoot(Path& path, const std::string& rootName, const Policy& policy);
     ComplianceEngine::Result<bool> Commit(Detail::ResolvedPath& stage, Handle leaf);
     ComplianceEngine::Result<bool> CommitScratch(Detail::ResolvedPath& stage, Handle leaf);
     ComplianceEngine::Result<bool> CommitStage(Detail::ResolvedPath& stage, Handle leaf, bool logicalLeaf);
