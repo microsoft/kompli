@@ -3,7 +3,7 @@
 
 #include "ReadableFile.hpp"
 
-#include "PathInternal.hpp"
+#include "FilesystemHelpers.hpp"
 
 #include <cerrno>
 #include <limits>

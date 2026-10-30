@@ -4,7 +4,7 @@
 #include <MockContext.h>
 #include <cerrno>
 #include <fcntl.h>
-#include <filesystem/PathInternal.hpp>
+#include <filesystem/Descriptor.hpp>
 #include <filesystem/ProcfsDescriptorAccess.hpp>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>

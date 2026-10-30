@@ -3,7 +3,7 @@
 
 #include "ProcfsDescriptorAccess.hpp"
 
-#include "PathInternal.hpp"
+#include "FilesystemHelpers.hpp"
 
 #include <algorithm>
 #include <cerrno>

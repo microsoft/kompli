@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "PathInternal.hpp"
+#include "Descriptor.hpp"
 
 #include <cerrno>
 

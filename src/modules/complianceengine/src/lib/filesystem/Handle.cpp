@@ -4,8 +4,10 @@
 #include "Handle.hpp"
 
 #include "ContextInterface.h"
+#include "FilesystemHelpers.hpp"
+#include "HandleActivationAccess.hpp"
 #include "Optional.h"
-#include "PathInternal.hpp"
+#include "ProcfsDescriptorAccess.hpp"
 #include "ReadableFile.hpp"
 
 #include <cerrno>
@@ -20,21 +22,6 @@ namespace Filesystem
 {
 namespace Detail
 {
-int SavedError() noexcept
-{
-    return (errno != 0) ? errno : EIO;
-}
-
-void LogSecondaryClose(const ContextInterface& context, int error)
-{
-    OsConfigLogError(context.GetLogHandle(), "Secondary filesystem helper close failure: %d", error);
-}
-
-bool SameIdentity(const struct stat& first, const struct stat& second) noexcept
-{
-    return (first.st_dev == second.st_dev) && (first.st_ino == second.st_ino) && ((first.st_mode & S_IFMT) == (second.st_mode & S_IFMT));
-}
-
 // An inode identity (device/inode/type) does not identify a bind mount:
 // compare procfs mount IDs as well, including for the verified alias.
 // Repeated pin observations bracket sensitive operations but do not freeze

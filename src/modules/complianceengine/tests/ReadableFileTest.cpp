@@ -7,7 +7,7 @@
 #include <fcntl.h>
 #include <filesystem/Handle.hpp>
 #include <filesystem/Path.hpp>
-#include <filesystem/PathInternal.hpp>
+#include <filesystem/ProcfsDescriptorAccess.hpp>
 #include <filesystem/ReadableFile.hpp>
 #include <fstream>
 #include <gtest/gtest.h>

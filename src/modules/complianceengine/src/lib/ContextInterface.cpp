@@ -3,8 +3,8 @@
 
 #include "ContextInterface.h"
 
+#include "filesystem/FilesystemHelpers.hpp"
 #include "filesystem/Handle.hpp"
-#include "filesystem/PathInternal.hpp"
 #include "filesystem/ProcfsDescriptorAccess.hpp"
 
 #include <cerrno>

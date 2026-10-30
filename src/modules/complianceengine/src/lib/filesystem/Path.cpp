@@ -2,7 +2,10 @@
 // Licensed under the MIT License.
 
 #include "ContextInterface.h"
-#include "PathInternal.hpp"
+#include "FilesystemHelpers.hpp"
+#include "PathLinkAccess.hpp"
+#include "PathResolutionStage.hpp"
+#include "ProcfsDescriptorAccess.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -280,12 +283,6 @@ Result<LinkTarget> ReadPinnedLink(const Descriptor& linkPin, std::size_t targetB
         LogSecondaryClose(context, closed.Error().code);
     }
     return inspected;
-}
-
-bool IsSingleChildComponent(const std::string& component) noexcept
-{
-    return !component.empty() && (component != ".") && (component != "..") && (component.find('/') == std::string::npos) &&
-           (component.find('\0') == std::string::npos);
 }
 } // namespace Detail
 

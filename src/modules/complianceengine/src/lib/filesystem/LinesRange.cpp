@@ -5,7 +5,6 @@
 
 #include "ContextInterface.h"
 #include "filesystem/Path.hpp"
-#include "filesystem/PathInternal.hpp"
 
 #include <algorithm>
 #include <cassert>

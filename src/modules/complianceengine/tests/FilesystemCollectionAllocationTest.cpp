@@ -6,7 +6,7 @@
 #include <cerrno>
 #include <cstddef>
 #include <filesystem/FilesystemCollection.hpp>
-#include <filesystem/PathInternal.hpp>
+#include <filesystem/PathResolutionStage.hpp>
 #include <gtest/gtest.h>
 #include <new>
 #include <string>

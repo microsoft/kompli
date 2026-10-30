@@ -9,9 +9,12 @@
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
+#include <filesystem/FilesystemHelpers.hpp>
 #include <filesystem/Handle.hpp>
+#include <filesystem/HandleActivationAccess.hpp>
 #include <filesystem/Path.hpp>
-#include <filesystem/PathInternal.hpp>
+#include <filesystem/PathLinkAccess.hpp>
+#include <filesystem/ProcfsDescriptorAccess.hpp>
 #include <filesystem/ReadableFile.hpp>
 #include <fstream>
 #include <gtest/gtest.h>
