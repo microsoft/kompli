@@ -5,6 +5,7 @@
 
 #include "filesystem/Handle.hpp"
 #include "filesystem/PathInternal.hpp"
+#include "filesystem/ProcfsDescriptorAccess.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -109,7 +110,7 @@ Result<Descriptor> ContextInterface::OpenVerifiedAt(const Descriptor& directory,
     return Descriptor(*this, fd, diagnostic);
 }
 
-Result<Descriptor> ContextInterface::OpenFdinfo(const Filesystem::Detail::VerifiedProcfs& procfs, const Descriptor& target) const&
+Result<Descriptor> ContextInterface::OpenFdinfo(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Descriptor& target) const&
 {
     if (!procfs.VerifyRole(*this, true))
         return Error("Unverified procfs fdinfo directory", EINVAL);
@@ -125,7 +126,7 @@ Result<Descriptor> ContextInterface::OpenFdinfo(const Filesystem::Detail::Verifi
     return OpenVerifiedAt(procfs.fdinfo, alias.c_str(), OpenProfile::ReadFdinfo, CloseDiagnostic::Descriptor);
 }
 
-Result<Descriptor> ContextInterface::OpenAlias(const Filesystem::Detail::VerifiedProcfs& procfs, const Descriptor& target, bool directoryAlias,
+Result<Descriptor> ContextInterface::OpenAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Descriptor& target, bool directoryAlias,
     CloseDiagnostic diagnostic) const&
 {
     if (!procfs.VerifyRole(*this, false))
@@ -142,7 +143,7 @@ Result<Descriptor> ContextInterface::OpenAlias(const Filesystem::Detail::Verifie
     return OpenVerifiedAt(procfs.fd, alias.c_str(), directoryAlias ? OpenProfile::FollowAliasDirectory : OpenProfile::FollowAliasFile, diagnostic);
 }
 
-Result<Descriptor> ContextInterface::OpenPinAlias(const Filesystem::Detail::VerifiedProcfs& procfs, const Descriptor& target, bool directoryAlias) const&
+Result<Descriptor> ContextInterface::OpenPinAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Descriptor& target, bool directoryAlias) const&
 {
     if (!procfs.VerifyRole(*this, false))
         return Error("Unverified procfs fd directory", EINVAL);
@@ -223,7 +224,7 @@ int ContextInterface::ChownPinned(const Descriptor& owner, uid_t user, gid_t gro
     CHECK_OWNER(owner, -1)
     return ChownPinnedFileDescriptor(owner.mDescriptor.Value(), user, group);
 }
-int ContextInterface::ChmodAlias(const Filesystem::Detail::VerifiedProcfs& procfs, const Descriptor& pin, mode_t mode) const
+int ContextInterface::ChmodAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Descriptor& pin, mode_t mode) const
 {
     if (!procfs.VerifyRole(*this, false))
     {

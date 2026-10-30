@@ -8,6 +8,7 @@
 // Handle.hpp or Path.hpp.
 #include "Descriptor.hpp"
 #include "Path.hpp"
+#include "ProcfsDescriptorAccess.hpp"
 
 namespace ComplianceEngine
 {
@@ -16,45 +17,16 @@ namespace Filesystem
 namespace Detail
 {
 // Implementation-only helpers shared by Path acquisition and Handle
-// inspection. Descriptors are never exposed by the public headers.
+// inspection. Procfs descriptor sessions live in ProcfsDescriptorAccess.
+// Descriptors are never exposed by the public headers.
 int SavedError() noexcept;
 // Diagnostics only: callers decide whether a failed close is primary.
 void LogSecondaryClose(const ContextInterface& context, int error);
 bool SameIdentity(const struct stat& first, const struct stat& second) noexcept;
-struct VerifiedProcfs
-{
-    explicit VerifiedProcfs(const ContextInterface& context);
-    VerifiedProcfs(const ContextInterface&&) = delete;
-    Result<bool> Open();
-    Result<bool> Close();
-    const Descriptor& ProcDirectory() const noexcept
-    {
-        return proc;
-    }
-    const Descriptor& FdDirectory() const noexcept
-    {
-        return fd;
-    }
-    const Descriptor& FdinfoDirectory() const noexcept
-    {
-        return fdinfo;
-    }
-
-private:
-    friend class ::ComplianceEngine::ContextInterface;
-    bool VerifyRole(const ContextInterface& context, bool information) const;
-    // Only Open() fills the role owners after verifying /proc/self against
-    // the current PID. Ordinary callers cannot replace or swap these pins.
-    Descriptor proc, self, pid, fd, fdinfo;
-    bool mVerified = false;
-    struct stat mFdIdentity = {}, mFdinfoIdentity = {};
-};
-Result<std::uint64_t> MountId(const ContextInterface& context, const VerifiedProcfs& procfs, const Descriptor& descriptor, std::size_t byteCap);
 
 // A strict child component, not a pathname. Root resolution and any
 // whole-path parsing belong to the separately authorized acquisition layer.
 bool IsSingleChildComponent(const std::string& component) noexcept;
-Result<std::uint64_t> ParseMountId(const std::string& fdinfo);
 
 // Inspection only: no kernel-follow of a link, including procfs magic links.
 // The caller owns and keeps the O_PATH|O_NOFOLLOW link pin live. Acquisition

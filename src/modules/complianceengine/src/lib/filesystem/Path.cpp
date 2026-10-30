@@ -21,10 +21,9 @@ namespace ComplianceEngine
 namespace Filesystem
 {
 using Detail::Descriptor;
-using Detail::MountId;
+using Detail::ProcfsDescriptorAccess;
 using Detail::SameIdentity;
 using Detail::SavedError;
-using Detail::VerifiedProcfs;
 
 namespace
 {
@@ -191,11 +190,11 @@ namespace
 {
 // The acquisition snapshot does not bracket the read: re-observe the pinned
 // object and its mount on both sides of readlinkat, without following its text.
-Result<LinkTarget> ReadVerifiedLinkText(const Descriptor& linkPin, const struct stat& before, const VerifiedProcfs& procfs, std::size_t targetByteCap,
-    std::size_t fdinfoByteCap)
+Result<LinkTarget> ReadVerifiedLinkText(const Descriptor& linkPin, const struct stat& before, const ProcfsDescriptorAccess& procfs,
+    std::size_t targetByteCap, std::size_t fdinfoByteCap)
 {
     const ContextInterface& context = linkPin.Context();
-    auto mount = MountId(context, procfs, linkPin, fdinfoByteCap);
+    auto mount = procfs.ReadMountId(linkPin, fdinfoByteCap);
     if (!mount.HasValue())
         return std::move(mount).Error();
 
@@ -211,7 +210,7 @@ Result<LinkTarget> ReadVerifiedLinkText(const Descriptor& linkPin, const struct 
         return Error("Cannot recheck pinned symlink", SavedError());
     if (!SameIdentity(before, after))
         return Error("Pinned symlink identity changed", EAGAIN);
-    auto retainedMount = MountId(context, procfs, linkPin, fdinfoByteCap);
+    auto retainedMount = procfs.ReadMountId(linkPin, fdinfoByteCap);
     if (!retainedMount.HasValue())
         return std::move(retainedMount).Error();
     if (mount.Value() != retainedMount.Value())
@@ -264,7 +263,7 @@ Result<LinkTarget> ReadPinnedLink(const Descriptor& linkPin, std::size_t targetB
     {
         return Error("Not an ordinary filesystem symlink", ELOOP);
     }
-    VerifiedProcfs procfs(context);
+    ProcfsDescriptorAccess procfs(context);
     auto verified = procfs.Open();
     if (!verified.HasValue())
     {
@@ -383,13 +382,13 @@ public:
             return Error("Resolver work budget exhausted", E2BIG);
         }
         {
-            VerifiedProcfs procfs(mContext);
+            ProcfsDescriptorAccess procfs(mContext);
             auto verified = procfs.Open();
             if (!verified.HasValue())
             {
                 return std::move(verified).Error();
             }
-            auto baseline = MountId(mContext, procfs, mRoot.mDescriptor, mLimits.shared.fdinfoBytes);
+            auto baseline = procfs.ReadMountId(mRoot.mDescriptor, mLimits.shared.fdinfoBytes);
             auto closed = procfs.Close();
             if (!closed.HasValue())
             {
@@ -466,13 +465,13 @@ private:
 
     ComplianceEngine::Result<std::uint64_t> ObservedMount(const Descriptor& descriptor)
     {
-        VerifiedProcfs procfs(mContext);
+        ProcfsDescriptorAccess procfs(mContext);
         auto verified = procfs.Open();
         if (!verified.HasValue())
         {
             return std::move(verified).Error();
         }
-        auto mount = MountId(mContext, procfs, descriptor, mLimits.shared.fdinfoBytes);
+        auto mount = procfs.ReadMountId(descriptor, mLimits.shared.fdinfoBytes);
         auto closed = procfs.Close();
         if (!closed.HasValue())
         {
@@ -1063,13 +1062,13 @@ std::size_t Path::HeldDescriptors() const noexcept
 
 ComplianceEngine::Result<std::uint64_t> Path::RootMountId() const
 {
-    VerifiedProcfs procfs(mContext.get());
+    ProcfsDescriptorAccess procfs(mContext.get());
     auto opened = procfs.Open();
     if (!opened.HasValue())
     {
         return std::move(opened).Error();
     }
-    auto mount = MountId(mContext.get(), procfs, Root().mDescriptor, mLimits.shared.fdinfoBytes);
+    auto mount = procfs.ReadMountId(Root().mDescriptor, mLimits.shared.fdinfoBytes);
     auto closed = procfs.Close();
     if (!closed.HasValue())
     {
@@ -1464,11 +1463,11 @@ ComplianceEngine::Result<Variant<Path, Path::RejectionReason>> Path::Make(const 
         {
             return Error("Root mount-inspection work budget exhausted", E2BIG);
         }
-        VerifiedProcfs procfs(context);
+        ProcfsDescriptorAccess procfs(context);
         auto opened = procfs.Open();
         if (!opened.HasValue())
             return std::move(opened).Error();
-        auto mount = MountId(context, procfs, path.mEntries->front().pin.mDescriptor, limits.shared.fdinfoBytes);
+        auto mount = procfs.ReadMountId(path.mEntries->front().pin.mDescriptor, limits.shared.fdinfoBytes);
         auto closed = procfs.Close();
         if (!closed.HasValue())
         {

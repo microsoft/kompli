@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <filesystem/PathInternal.hpp>
+#include <filesystem/ProcfsDescriptorAccess.hpp>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <stdexcept>
@@ -17,7 +18,7 @@ namespace
 {
 using ComplianceEngine::ContextInterface;
 using ComplianceEngine::Filesystem::Detail::Descriptor;
-using ComplianceEngine::Filesystem::Detail::VerifiedProcfs;
+using ComplianceEngine::Filesystem::Detail::ProcfsDescriptorAccess;
 using Profile = ContextInterface::OpenProfile;
 using testing::_;
 using testing::NiceMock;
@@ -46,9 +47,9 @@ struct Void
 OWNER_FACTORY_CONTRACT(Empty, .EmptyDescriptor());
 OWNER_FACTORY_CONTRACT(Absolute, .OpenAbsolutePin("/"));
 OWNER_FACTORY_CONTRACT(At, .OpenAt(std::declval<const Descriptor&>(), "child", Profile::PinChild));
-OWNER_FACTORY_CONTRACT(Fdinfo, .OpenFdinfo(std::declval<const VerifiedProcfs&>(), std::declval<const Descriptor&>()));
-OWNER_FACTORY_CONTRACT(Alias, .OpenAlias(std::declval<const VerifiedProcfs&>(), std::declval<const Descriptor&>(), false));
-OWNER_FACTORY_CONTRACT(PinAlias, .OpenPinAlias(std::declval<const VerifiedProcfs&>(), std::declval<const Descriptor&>(), false));
+OWNER_FACTORY_CONTRACT(Fdinfo, .OpenFdinfo(std::declval<const ProcfsDescriptorAccess&>(), std::declval<const Descriptor&>()));
+OWNER_FACTORY_CONTRACT(Alias, .OpenAlias(std::declval<const ProcfsDescriptorAccess&>(), std::declval<const Descriptor&>(), false));
+OWNER_FACTORY_CONTRACT(PinAlias, .OpenPinAlias(std::declval<const ProcfsDescriptorAccess&>(), std::declval<const Descriptor&>(), false));
 OWNER_FACTORY_CONTRACT(Duplicate, .Duplicate(std::declval<const Descriptor&>()));
 OWNER_FACTORY_CONTRACT(Cursor, .OpenDirectoryCursor(std::declval<Descriptor&&>()));
 #undef OWNER_FACTORY_CONTRACT
@@ -67,15 +68,15 @@ OWNER_FACTORY_CONTRACT(Cursor, .OpenDirectoryCursor(std::declval<Descriptor&&>()
 REJECT_EPHEMERAL_DIAGNOSTIC(EmptyDiagnostic, .EmptyDescriptor(std::declval<std::string>().c_str()));
 REJECT_EPHEMERAL_DIAGNOSTIC(AtDiagnostic, .OpenAt(std::declval<const Descriptor&>(), "child", Profile::PinChild, std::declval<std::string>().c_str()));
 REJECT_EPHEMERAL_DIAGNOSTIC(AliasDiagnostic,
-    .OpenAlias(std::declval<const VerifiedProcfs&>(), std::declval<const Descriptor&>(), false, std::declval<std::string>().c_str()));
+    .OpenAlias(std::declval<const ProcfsDescriptorAccess&>(), std::declval<const Descriptor&>(), false, std::declval<std::string>().c_str()));
 #undef REJECT_EPHEMERAL_DIAGNOSTIC
 static_assert(!std::is_constructible<Descriptor, const ContextInterface&, int, const char*>::value, "Native adoption cannot retain a caller pointer");
-static_assert(!std::is_constructible<VerifiedProcfs, const ContextInterface&, Descriptor&&, Descriptor&&>::value,
+static_assert(!std::is_constructible<ProcfsDescriptorAccess, const ContextInterface&, Descriptor&&, Descriptor&&>::value,
     "Generic directory owners cannot mint a verified procfs role");
-static_assert(!std::is_constructible<VerifiedProcfs, MockContext&&>::value && !std::is_constructible<VerifiedProcfs, const MockContext&&>::value,
+static_assert(!std::is_constructible<ProcfsDescriptorAccess, MockContext&&>::value && !std::is_constructible<ProcfsDescriptorAccess, const MockContext&&>::value,
     "The verified helper cannot borrow a temporary concrete context");
-static_assert(std::is_same<decltype(std::declval<VerifiedProcfs&>().FdDirectory()), const Descriptor&>::value &&
-                  std::is_same<decltype(std::declval<VerifiedProcfs&>().FdinfoDirectory()), const Descriptor&>::value,
+static_assert(std::is_same<decltype(std::declval<ProcfsDescriptorAccess&>().FdDirectory()), const Descriptor&>::value &&
+                  std::is_same<decltype(std::declval<ProcfsDescriptorAccess&>().FdinfoDirectory()), const Descriptor&>::value,
     "Verified directory roles have no mutable owner accessor");
 template <typename T, typename = void>
 struct CanReplaceVerifiedFd : std::false_type
@@ -85,7 +86,7 @@ template <typename T>
 struct CanReplaceVerifiedFd<T, typename Void<decltype(std::declval<T&>().fd = std::declval<Descriptor&&>())>::type> : std::true_type
 {
 };
-static_assert(!CanReplaceVerifiedFd<VerifiedProcfs>::value, "Verified role owners cannot be swapped by ordinary callers");
+static_assert(!CanReplaceVerifiedFd<ProcfsDescriptorAccess>::value, "Verified role owners cannot be swapped by ordinary callers");
 
 #define REJECT_GENERIC_ROLE(name, expression)                                                                                                          \
     template <typename T, typename = void>                                                                                                             \
@@ -142,7 +143,7 @@ TEST(DescriptorBoundaryTest, ChildPinsRejectTraversalBeforeNativeDispatch)
 TEST(DescriptorBoundaryTest, AliasProfilesRequireVerifiedRoles)
 {
     NiceMock<MockContext> context;
-    VerifiedProcfs procfs(context);
+    ProcfsDescriptorAccess procfs(context);
     auto pinResult = context.OpenAbsolutePin(context.GetTempdirPath().c_str());
     ASSERT_TRUE(pinResult.HasValue());
     Descriptor pin = std::move(pinResult).Value();
@@ -182,6 +183,7 @@ TEST(DescriptorBoundaryTest, AliasProfilesRequireVerifiedRoles)
             ASSERT_FALSE(denied.HasValue());
             EXPECT_EQ(EINVAL, denied.Error().code);
         }
+
         testing::Mock::VerifyAndClearExpectations(&context);
     };
 
@@ -209,6 +211,26 @@ TEST(DescriptorBoundaryTest, AliasProfilesRequireVerifiedRoles)
     errno = 0;
     EXPECT_EQ(-1, context.ChmodAlias(procfs, pin, 0700));
     EXPECT_EQ(EINVAL, errno);
+}
+
+TEST(DescriptorBoundaryTest, ProcfsDescriptorAccessBindsContextAndChecksReadLifetime)
+{
+    NiceMock<MockContext> context;
+    NiceMock<MockContext> foreign;
+    auto owned = context.OpenAbsolutePin("/");
+    auto other = foreign.OpenAbsolutePin("/");
+    ASSERT_TRUE(owned.HasValue());
+    ASSERT_TRUE(other.HasValue());
+    ProcfsDescriptorAccess access(context);
+    EXPECT_EQ(EINVAL, access.ReadMountId(owned.Value(), 4096).Error().code);
+    ASSERT_TRUE(access.Open().HasValue());
+    EXPECT_EQ(EINVAL, access.ReadMountId(owned.Value(), 0).Error().code);
+    EXPECT_EQ(EINVAL, access.ReadMountId(other.Value(), 4096).Error().code);
+    auto mount = access.ReadMountId(owned.Value(), 4096);
+    ASSERT_TRUE(mount.HasValue()) << mount.Error().message;
+    EXPECT_GT(mount.Value(), 0U);
+    ASSERT_TRUE(access.Close().HasValue());
+    EXPECT_EQ(EINVAL, access.ReadMountId(owned.Value(), 4096).Error().code);
 }
 
 TEST(DescriptorBoundaryTest, MovedDescriptorLogsFailedCloseOnlyOnce)

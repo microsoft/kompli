@@ -25,7 +25,7 @@ namespace Filesystem
 namespace Detail
 {
 class Descriptor;
-struct VerifiedProcfs;
+class ProcfsDescriptorAccess;
 } // namespace Detail
 class DirectoryCursor;
 } // namespace Filesystem
@@ -74,15 +74,15 @@ public:
         CloseDiagnostic = CloseDiagnostic::Descriptor) const&& = delete;
     // The verified helper supplies the fd/fdinfo role; a generic directory
     // owner cannot select a procfs alias or descriptor-information target.
-    Result<Filesystem::Detail::Descriptor> OpenFdinfo(const Filesystem::Detail::VerifiedProcfs& procfs, const Filesystem::Detail::Descriptor& target) const&;
-    Result<Filesystem::Detail::Descriptor> OpenFdinfo(const Filesystem::Detail::VerifiedProcfs&, const Filesystem::Detail::Descriptor&) const&& = delete;
-    Result<Filesystem::Detail::Descriptor> OpenAlias(const Filesystem::Detail::VerifiedProcfs& procfs, const Filesystem::Detail::Descriptor& target,
-        bool directoryAlias, CloseDiagnostic diagnostic = CloseDiagnostic::Descriptor) const&;
-    Result<Filesystem::Detail::Descriptor> OpenAlias(const Filesystem::Detail::VerifiedProcfs&, const Filesystem::Detail::Descriptor&, bool,
+    Result<Filesystem::Detail::Descriptor> OpenFdinfo(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Filesystem::Detail::Descriptor& target) const&;
+    Result<Filesystem::Detail::Descriptor> OpenFdinfo(const Filesystem::Detail::ProcfsDescriptorAccess&, const Filesystem::Detail::Descriptor&) const&& = delete;
+    Result<Filesystem::Detail::Descriptor> OpenAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs,
+        const Filesystem::Detail::Descriptor& target, bool directoryAlias, CloseDiagnostic diagnostic = CloseDiagnostic::Descriptor) const&;
+    Result<Filesystem::Detail::Descriptor> OpenAlias(const Filesystem::Detail::ProcfsDescriptorAccess&, const Filesystem::Detail::Descriptor&, bool,
         CloseDiagnostic = CloseDiagnostic::Descriptor) const&& = delete;
-    Result<Filesystem::Detail::Descriptor> OpenPinAlias(const Filesystem::Detail::VerifiedProcfs& procfs, const Filesystem::Detail::Descriptor& target,
-        bool directoryAlias) const&;
-    Result<Filesystem::Detail::Descriptor> OpenPinAlias(const Filesystem::Detail::VerifiedProcfs&, const Filesystem::Detail::Descriptor&, bool) const&& = delete;
+    Result<Filesystem::Detail::Descriptor> OpenPinAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs,
+        const Filesystem::Detail::Descriptor& target, bool directoryAlias) const&;
+    Result<Filesystem::Detail::Descriptor> OpenPinAlias(const Filesystem::Detail::ProcfsDescriptorAccess&, const Filesystem::Detail::Descriptor&, bool) const&& = delete;
     Result<Filesystem::Detail::Descriptor> Duplicate(const Filesystem::Detail::Descriptor& source) const&;
     Result<Filesystem::Detail::Descriptor> Duplicate(const Filesystem::Detail::Descriptor&) const&& = delete;
     int StatFile(const Filesystem::Detail::Descriptor& owner, struct stat* metadata) const;
@@ -92,7 +92,7 @@ public:
     int StatusFlags(const Filesystem::Detail::Descriptor& owner) const;
     int DescriptorFlags(const Filesystem::Detail::Descriptor& owner) const;
     int ChownPinned(const Filesystem::Detail::Descriptor& owner, uid_t user, gid_t group) const;
-    int ChmodAlias(const Filesystem::Detail::VerifiedProcfs& procfs, const Filesystem::Detail::Descriptor& pin, mode_t mode) const;
+    int ChmodAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Filesystem::Detail::Descriptor& pin, mode_t mode) const;
     Result<Filesystem::DirectoryCursor> OpenDirectoryCursor(Filesystem::Detail::Descriptor&& owner) const&;
     Result<Filesystem::DirectoryCursor> OpenDirectoryCursor(Filesystem::Detail::Descriptor&&) const&& = delete;
     // Relinquish before the single native close attempt (even if it throws).

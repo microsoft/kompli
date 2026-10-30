@@ -188,6 +188,7 @@ add_library(complianceenginelib STATIC
     filesystem/LinesRange.cpp
     filesystem/FilesystemCollection.cpp
     filesystem/Handle.cpp
+    filesystem/ProcfsDescriptorAccess.cpp
     filesystem/Path.cpp
     filesystem/ReadableFile.cpp
     filesystem/Descriptor.cpp

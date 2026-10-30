@@ -22,6 +22,10 @@ class ContextInterface;
 
 namespace Filesystem
 {
+namespace Detail
+{
+class ProcfsDescriptorAccess;
+}
 class Path;
 class Handle;
 class ReadableFile;
@@ -129,8 +133,8 @@ private:
         std::uint64_t originalMount);
     static Result<Handle> PinProcessRoot(const ContextInterface& context, std::size_t fdinfoBytes);
     static Result<bool> RecognizeAcceptedRoot(const Handle& acceptedRoot, const Handle& candidate, std::size_t fdinfoByteCap);
-    Result<PinObservation> InspectWithProcfs(const Detail::VerifiedProcfs& procfs) const;
-    Result<bool> SetModeWithProcfs(const Detail::VerifiedProcfs& procfs, mode_t mode) const;
+    Result<PinObservation> InspectWithProcfs(const Detail::ProcfsDescriptorAccess& procfs) const;
+    Result<bool> SetModeWithProcfs(const Detail::ProcfsDescriptorAccess& procfs, mode_t mode) const;
     void Swap(Handle& other) noexcept;
 
     Detail::Descriptor mDescriptor;

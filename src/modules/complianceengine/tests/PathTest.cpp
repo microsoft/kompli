@@ -46,8 +46,8 @@ using ComplianceEngine::Filesystem::UnsupportedTypeAction;
 using ComplianceEngine::Filesystem::Detail::Descriptor;
 using ComplianceEngine::Filesystem::Detail::IsSingleChildComponent;
 using ComplianceEngine::Filesystem::Detail::ParseMountId;
+using ComplianceEngine::Filesystem::Detail::ProcfsDescriptorAccess;
 using ComplianceEngine::Filesystem::Detail::ReadPinnedLink;
-using ComplianceEngine::Filesystem::Detail::VerifiedProcfs;
 using testing::_;
 using testing::NiceMock;
 
@@ -479,10 +479,10 @@ TEST_F(PathAliasTest, ProcfsHelpersCloseCheckedOnceAndFirstFailureWins)
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
-TEST_F(PathAliasTest, VerifiedProcfsCloseAttemptsEveryOwnerAndDoesNotRetry)
+TEST_F(PathAliasTest, ProcfsDescriptorAccessCloseAttemptsEveryOwnerAndDoesNotRetry)
 {
     const auto before = CountOpenDescriptors();
-    ComplianceEngine::Filesystem::Detail::VerifiedProcfs procfs(context);
+    ComplianceEngine::Filesystem::Detail::ProcfsDescriptorAccess procfs(context);
     ASSERT_TRUE(procfs.Open().HasValue());
     std::size_t attempted = 0;
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(5).WillRepeatedly([&](int descriptor) {
@@ -601,7 +601,7 @@ TEST_F(PathAliasTest, DirectoryTransferConsumesOwnerOnce)
     auto acquired = context.OpenAbsolutePin(context.GetTempdirPath().c_str());
     ASSERT_TRUE(acquired.HasValue());
     Descriptor owner = std::move(acquired).Value();
-    VerifiedProcfs procfs(context);
+    ProcfsDescriptorAccess procfs(context);
     ASSERT_TRUE(procfs.Open().HasValue());
     auto operational = context.OpenAlias(procfs, owner, true);
     ASSERT_TRUE(operational.HasValue());
@@ -626,7 +626,7 @@ TEST_F(PathAliasTest, DirectoryTransferFailureLeavesOwnerForExactlyOneClose)
     auto opened = context.OpenAbsolutePin(context.GetTempdirPath().c_str());
     ASSERT_TRUE(opened.HasValue());
     Descriptor pin = std::move(opened).Value();
-    VerifiedProcfs procfs(context);
+    ProcfsDescriptorAccess procfs(context);
     ASSERT_TRUE(procfs.Open().HasValue());
     auto active = context.OpenAlias(procfs, pin, true);
     ASSERT_TRUE(active.HasValue());

@@ -32,7 +32,7 @@ using ComplianceEngine::Filesystem::ReadableFile;
 using ComplianceEngine::Filesystem::ResolverLimits;
 using ComplianceEngine::Filesystem::SymlinkPolicy;
 using ComplianceEngine::Filesystem::Detail::Descriptor;
-using ComplianceEngine::Filesystem::Detail::VerifiedProcfs;
+using ComplianceEngine::Filesystem::Detail::ProcfsDescriptorAccess;
 using testing::_;
 using testing::NiceMock;
 
