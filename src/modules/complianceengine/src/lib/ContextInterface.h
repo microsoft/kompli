@@ -61,6 +61,9 @@ public:
         Descriptor,
         DirectoryActivation
     };
+    // Fail closed when the caller's native process or task identity cannot be read.
+    Result<pid_t> CurrentProcessId() const;
+    Result<pid_t> CurrentThreadId() const;
     // Only the context syscall boundary extracts native descriptor numbers.
     // Open/duplicate atomically set CLOEXEC. Duplicate shares the open-file
     // description (including offset); it is not an independent reader.
@@ -148,6 +151,8 @@ protected:
     virtual int CloseFileDescriptor(int descriptor) const;
     virtual int ChownPinnedFileDescriptor(int descriptor, uid_t owner, gid_t group) const;
     virtual int ChmodPinnedAlias(int procfsDirectory, const char* decimalAlias, mode_t mode) const;
+    virtual pid_t NativeProcessId() const;
+    virtual pid_t NativeThreadId() const;
 
 private:
     Result<Filesystem::Detail::Descriptor> OpenVerifiedAt(const Filesystem::Detail::Descriptor& directory, const char* name, OpenProfile profile,

@@ -488,7 +488,7 @@ TEST_F(PathAliasTest, ProcfsDescriptorAccessCloseAttemptsEveryOwnerAndDoesNotRet
     ComplianceEngine::Filesystem::Detail::ProcfsDescriptorAccess procfs(context);
     ASSERT_TRUE(procfs.Open().HasValue());
     std::size_t attempted = 0;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(5).WillRepeatedly([&](int descriptor) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(3).WillRepeatedly([&](int descriptor) {
         EXPECT_EQ(0, ::close(descriptor));
         if (attempted++ < 2)
         {
@@ -500,7 +500,7 @@ TEST_F(PathAliasTest, ProcfsDescriptorAccessCloseAttemptsEveryOwnerAndDoesNotRet
     auto closed = procfs.Close();
     ASSERT_FALSE(closed.HasValue());
     EXPECT_EQ(EACCES, closed.Error().code);
-    EXPECT_EQ(5U, attempted);
+    EXPECT_EQ(3U, attempted);
     EXPECT_TRUE(procfs.Close().Value());
     EXPECT_FALSE(procfs.FdinfoDirectory().HasValue());
     EXPECT_FALSE(procfs.ProcDirectory().HasValue());
@@ -1041,65 +1041,104 @@ TEST_F(PathAliasTest, DirectoryCursorExplicitLogExceptionPropagatesWithoutRetry)
     EXPECT_TRUE(path.Close().HasValue());
 }
 
-TEST_F(PathAliasTest, InspectionActivationAndMutationRejectMismatchedMountRecords)
+TEST_F(PathAliasTest, HeldTargetsReadMountOnlyAtAcquisition)
 {
     const std::string file = context.MakeTempfile("held");
+    const std::string name = file.substr(file.find_last_of('/') + 1);
+    int records = 0;
+    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).WillRepeatedly([&](int fd, void* buffer, std::size_t count) {
+        const ssize_t bytes = context.RealReadFileDescriptor(fd, buffer, count);
+        if (bytes > 0 && DescriptorTarget(fd).find("/fdinfo/") != std::string::npos &&
+            std::string(static_cast<char*>(buffer), static_cast<std::size_t>(bytes)).find("mnt_id:") != std::string::npos)
+            ++records;
+        return bytes;
+    });
     auto opened = SelectAcceptedPath(context, file, CrossMountPathPolicy(), AmpleLimits());
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
-    int records = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t count) {
-        const ssize_t bytes = context.RealReadFileDescriptor(fd, buffer, count);
-        if (bytes > 0 && std::string(static_cast<char*>(buffer), static_cast<std::size_t>(bytes)).find("mnt_id:") != std::string::npos)
-        {
-            if (++records == 2)
-                AlterFdinfoMountId(buffer, bytes);
-        }
-        return bytes;
-    });
-    auto inspected = path.Leaf().Stat();
-    ASSERT_FALSE(inspected.HasValue());
-    EXPECT_EQ(EAGAIN, inspected.Error().code);
-    records = 0;
-    auto activated = path.Leaf().OpenReadOnly();
-    ASSERT_FALSE(activated.HasValue());
-    EXPECT_EQ(EAGAIN, activated.Error().code);
-    records = 0;
-    EXPECT_CALL(context, ChmodPinnedAlias(_, _, _)).Times(0);
-    auto mode = path.Leaf().SetMode(0400);
-    ASSERT_FALSE(mode.HasValue());
-    EXPECT_EQ(EAGAIN, mode.Error().code);
-    records = 0;
-    EXPECT_CALL(context, ChownPinnedFileDescriptor(_, _, _)).Times(0);
-    auto owner = path.Leaf().SetOwnership(static_cast<uid_t>(-1), static_cast<gid_t>(-1));
-    ASSERT_FALSE(owner.HasValue());
-    EXPECT_EQ(EAGAIN, owner.Error().code);
+    const int afterAcquisition = records;
+    EXPECT_GE(afterAcquisition, 2); // Process root and independently acquired components.
+    EXPECT_TRUE(path.Leaf().MountIdentity().HasValue());
+    EXPECT_TRUE(path.Leaf().Stat().HasValue());
+    auto active = path.Leaf().OpenReadOnly();
+    ASSERT_TRUE(active.HasValue()) << active.Error().message;
+    EXPECT_TRUE(active.Value().Close().HasValue());
+    EXPECT_TRUE(path.Leaf().SetMode(0600).HasValue());
+    EXPECT_TRUE(path.Leaf().SetOwnership(::geteuid(), ::getegid()).HasValue());
+    EXPECT_EQ(afterAcquisition, records);
+    auto popped = path.Pop();
+    ASSERT_TRUE(popped.HasValue());
+    Handle moved = std::move(popped).Value();
+    EXPECT_TRUE(moved.MountIdentity().HasValue());
+    EXPECT_TRUE(moved.OpenReadOnly().HasValue());
+    EXPECT_EQ(afterAcquisition, records);
+    EXPECT_TRUE(moved.Close().HasValue());
+    EXPECT_EQ(EBADF, moved.MountIdentity().Error().code);
+    auto root = SelectAcceptedPath(context, context.GetTempdirPath(), CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(root.HasValue());
+    const int beforeChild = records;
+    ASSERT_TRUE(root.Value().Push(name, ChildPolicy(SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing)).HasValue());
+    EXPECT_EQ(beforeChild + 1, records); // Distinct newly acquired target.
+    EXPECT_TRUE(root.Value().Leaf().OpenReadOnly().HasValue());
+    EXPECT_EQ(beforeChild + 1, records);
 }
 
-TEST_F(PathAliasTest, PostMutationMountVerificationFailureIsExplicit)
+TEST_F(PathAliasTest, ProcessRootAndChildEachHaveOneMountObservation)
+{
+    int observations = 0;
+    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).WillRepeatedly([&](int fd, void* buffer, std::size_t count) {
+        const ssize_t bytes = context.RealReadFileDescriptor(fd, buffer, count);
+        if (bytes > 0 && DescriptorTarget(fd).find("/fdinfo/") != std::string::npos &&
+            std::string(static_cast<char*>(buffer), static_cast<std::size_t>(bytes)).find("mnt_id:") != std::string::npos)
+            ++observations;
+        return bytes;
+    });
+    auto opened = SelectAcceptedPath(context, "/", CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+    EXPECT_EQ(1, observations);
+    EXPECT_TRUE(path.Root().MountIdentity().HasValue());
+    EXPECT_TRUE(path.Root().OpenChildren().HasValue());
+    EXPECT_EQ(1, observations);
+    auto child = path.Push("proc", ChildPolicy(SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing));
+    ASSERT_TRUE(child.HasValue()) << child.Error().message;
+    EXPECT_EQ(2, observations);
+    EXPECT_TRUE(path.Leaf().MountIdentity().HasValue());
+    EXPECT_EQ(2, observations);
+    EXPECT_TRUE(path.Pop().HasValue());
+    EXPECT_TRUE(path.Root().OpenChildren().HasValue());
+    EXPECT_EQ(2, observations);
+}
+
+TEST_F(PathAliasTest, WrongObjectProcfdAliasesAreRejectedBeforeMutation)
 {
     const std::string file = context.MakeTempfile("held");
+    const std::string other = context.MakeTempfile("different");
     auto opened = SelectAcceptedPath(context, file, CrossMountPathPolicy(), AmpleLimits());
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
-    int records = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t count) {
-        const ssize_t bytes = context.RealReadFileDescriptor(fd, buffer, count);
-        if (bytes > 0 && std::string(static_cast<char*>(buffer), static_cast<std::size_t>(bytes)).find("mnt_id:") != std::string::npos)
+    int substituted = 0;
+    EXPECT_CALL(context, OpenNativeAt(_, _, _)).WillRepeatedly([&](int directory, const char* name, int flags) {
+        const std::string parent = DescriptorTarget(directory);
+        if (parent.find("/fd") != std::string::npos && parent.find("/fdinfo") == std::string::npos &&
+            std::string(name).find_first_not_of("0123456789") == std::string::npos)
         {
-            if (++records == 6)
-                AlterFdinfoMountId(buffer, bytes);
+            ++substituted;
+            return context.RealOpenNativePath(other.c_str(), flags);
         }
-        return bytes;
+        return context.RealOpenNativeAt(directory, name, flags);
     });
-    EXPECT_CALL(context, ChmodPinnedAlias(_, _, _)).Times(1);
+    auto read = path.Leaf().OpenReadOnly();
+    ASSERT_FALSE(read.HasValue());
+    EXPECT_EQ(EAGAIN, read.Error().code);
+    EXPECT_CALL(context, ChmodPinnedAlias(_, _, _)).Times(0);
     auto changed = path.Leaf().SetMode(0400);
     ASSERT_FALSE(changed.HasValue());
     EXPECT_EQ(EAGAIN, changed.Error().code);
+    EXPECT_EQ(2, substituted);
     struct stat after = {};
     ASSERT_EQ(0, ::stat(file.c_str(), &after));
-    EXPECT_EQ(0400, after.st_mode & 0777);
-    EXPECT_GE(records, 6);
+    EXPECT_NE(0400, after.st_mode & 0777);
 }
 
 TEST_F(PathAliasTest, InspectionBudgetIsValidatedBeforeAcquisitionAndSurvivesPopMove)
@@ -3632,19 +3671,8 @@ TEST_F(PathAliasTest, MetadataPreflightFailureMakesNoChangeAndPostcheckReportsPa
         ASSERT_TRUE(path.Push(component, ChildPolicy(SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing)).HasValue());
         const Handle& pinned = path.Leaf();
         ASSERT_EQ(0, ::chmod(file.c_str(), 0600));
-        EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(2).WillRepeatedly([](int, void*, std::size_t) {
-            errno = E2BIG;
-            return -1;
-        });
-        EXPECT_CALL(context, ChmodPinnedAlias(_, _, _)).Times(0);
-        EXPECT_CALL(context, ChownPinnedFileDescriptor(_, _, _)).Times(0);
-        auto shortInfo = pinned.SetMode(0400);
-        ASSERT_FALSE(shortInfo.HasValue());
-        EXPECT_EQ(E2BIG, shortInfo.Error().code);
-        auto noChown = pinned.SetOwnership(static_cast<uid_t>(-1), static_cast<gid_t>(-1));
-        ASSERT_FALSE(noChown.HasValue());
-        EXPECT_EQ(E2BIG, noChown.Error().code);
-        ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+        // The acquired mount no longer needs a second fdinfo read here.
+        // Fresh metadata preflight failures still block both mutations.
         struct stat still = {};
         ASSERT_EQ(0, ::stat(file.c_str(), &still));
         EXPECT_EQ(0600, still.st_mode & 07777);
@@ -3741,7 +3769,10 @@ TEST_F(PathAliasTest, DeniedOwnershipAndModeSyscallsLeaveHeldAndReplacementObjec
         EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
         EXPECT_EQ(heldDescriptors, CountOpenDescriptors());
 
-        EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(21); // Includes procfs role re-verification and pin/alias preflights.
+        // 11 procfs bootstrap stats, two pin preflights, one alias-role check,
+        // one alias-target stat, two retained-pin checks and one chmod-role
+        // check. The denied syscall has no postcheck or redundant fdinfo reads.
+        EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(18);
         EXPECT_CALL(context, ChmodPinnedAlias(_, _, 0400)).Times(1).WillOnce([&](int procfsDirectory, const char* alias, mode_t) {
             struct stat directory = {}, pin = {};
             EXPECT_EQ(0, ::fstat(procfsDirectory, &directory));
@@ -4069,7 +4100,28 @@ TEST_F(PathAliasTest, FdinfoReadOverreportRejectsActualRequestAndClosesHelpers)
         {
             const std::size_t requested = (4096U == cap) ? 256U : 2U;
             std::size_t overreports = 0;
-            std::set<int> closed;
+            std::set<int> live;
+            std::size_t acquired = 0, closed = 0, peak = 0;
+            EXPECT_CALL(context, OpenNativePath(_, _)).WillRepeatedly([&](const char* path, int flags) {
+                const int descriptor = context.RealOpenNativePath(path, flags);
+                if (descriptor >= 0)
+                {
+                    EXPECT_TRUE(live.insert(descriptor).second);
+                    ++acquired;
+                    peak = std::max(peak, live.size());
+                }
+                return descriptor;
+            });
+            EXPECT_CALL(context, OpenNativeAt(_, _, _)).WillRepeatedly([&](int directory, const char* name, int flags) {
+                const int descriptor = context.RealOpenNativeAt(directory, name, flags);
+                if (descriptor >= 0)
+                {
+                    EXPECT_TRUE(live.insert(descriptor).second);
+                    ++acquired;
+                    peak = std::max(peak, live.size());
+                }
+                return descriptor;
+            });
             EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).WillRepeatedly([&](int descriptor, void* buffer, std::size_t size) -> ssize_t {
                 const std::string target = DescriptorTarget(descriptor);
                 if ((0 == target.find("/proc/")) && (std::string::npos != target.find("/fdinfo/")))
@@ -4081,14 +4133,18 @@ TEST_F(PathAliasTest, FdinfoReadOverreportRejectsActualRequestAndClosesHelpers)
                 return context.RealReadFileDescriptor(descriptor, buffer, size);
             });
             EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) {
-                EXPECT_TRUE(closed.insert(descriptor).second);
+                EXPECT_EQ(1U, live.erase(descriptor));
+                ++closed;
                 return context.RealCloseFileDescriptor(descriptor);
             });
             auto activated = ComplianceEngine::Filesystem::Detail::ActivateReadOnly(context, pinned, snapshot, false, cap);
             ASSERT_FALSE(activated.HasValue());
             EXPECT_EQ(EIO, activated.Error().code);
             EXPECT_EQ(1U, overreports);
-            EXPECT_EQ(6U, closed.size()); // fdinfo file and all five verified procfs directories.
+            EXPECT_EQ(8U, acquired); // fdinfo file and seven bootstrap/role directories.
+            EXPECT_EQ(acquired, closed);
+            EXPECT_TRUE(live.empty());
+            EXPECT_LE(peak, 5U); // Four concurrent procfs pins plus one fdinfo reader at most.
             EXPECT_EQ(withPin, CountOpenDescriptors());
             ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
         }

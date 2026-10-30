@@ -22,14 +22,14 @@ namespace Filesystem
 {
 namespace Detail
 {
-// An inode identity (device/inode/type) does not identify a bind mount:
-// compare procfs mount IDs as well, including for the verified alias.
-// Repeated pin observations bracket sensitive operations but do not freeze
-// metadata or namespace state; checked helper closes gate published success.
+// The live O_PATH pin holds its kernel path (including mount). A verified
+// current-task procfd alias of that pin opens the same path; inode/type checks
+// still reject a wrong-object alias. Direct-test pins without an acquisition
+// mount retain the independent fdinfo comparisons below.
 static Result<bool> OpenAndVerifyAlias(const ContextInterface& context, const ProcfsDescriptorAccess& procfs, const Descriptor& pin,
-    Descriptor& aliasOwner, const struct stat& before, bool directory, std::size_t fdinfoByteCap)
+    Descriptor& aliasOwner, const struct stat& before, bool directory, std::size_t fdinfoByteCap, const std::uint64_t* heldMount)
 {
-    auto pinnedMount = procfs.ReadMountId(pin, fdinfoByteCap);
+    Result<std::uint64_t> pinnedMount = heldMount ? Result<std::uint64_t>(*heldMount) : procfs.ReadMountId(pin, fdinfoByteCap);
     if (!pinnedMount.HasValue())
     {
         return std::move(pinnedMount).Error();
@@ -56,25 +56,22 @@ static Result<bool> OpenAndVerifyAlias(const ContextInterface& context, const Pr
     {
         return Error("Activated object does not match live pin", EAGAIN);
     }
-    auto activatedMount = procfs.ReadMountId(aliasOwner, fdinfoByteCap);
-    if (!activatedMount.HasValue())
+    if (!heldMount)
     {
-        return std::move(activatedMount).Error();
-    }
-    auto retainedMount = procfs.ReadMountId(pin, fdinfoByteCap);
-    if (!retainedMount.HasValue())
-    {
-        return std::move(retainedMount).Error();
-    }
-
-    if ((pinnedMount.Value() != activatedMount.Value()) || (pinnedMount.Value() != retainedMount.Value()))
-    {
-        return Error("Activated object mount does not match live pin", EAGAIN);
+        auto activatedMount = procfs.ReadMountId(aliasOwner, fdinfoByteCap);
+        if (!activatedMount.HasValue())
+            return std::move(activatedMount).Error();
+        auto retainedMount = procfs.ReadMountId(pin, fdinfoByteCap);
+        if (!retainedMount.HasValue())
+            return std::move(retainedMount).Error();
+        if ((pinnedMount.Value() != activatedMount.Value()) || (pinnedMount.Value() != retainedMount.Value()))
+            return Error("Activated object mount does not match live pin", EAGAIN);
     }
     return true;
 }
 
-Result<Descriptor> ActivateReadOnly(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory, std::size_t fdinfoByteCap)
+static Result<Descriptor> ActivateReadOnlyImpl(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory,
+    std::size_t fdinfoByteCap, const std::uint64_t* heldMount)
 {
     if (!pin.HasValue())
     {
@@ -123,7 +120,7 @@ Result<Descriptor> ActivateReadOnly(const ContextInterface& context, const Descr
         return std::move(verified).Error();
     }
     Descriptor aliasOwner = context.EmptyDescriptor(ContextInterface::CloseDiagnostic::DirectoryActivation);
-    auto inspected = OpenAndVerifyAlias(context, procfs, pin, aliasOwner, before, directory, fdinfoByteCap);
+    auto inspected = OpenAndVerifyAlias(context, procfs, pin, aliasOwner, before, directory, fdinfoByteCap, heldMount);
     auto procfsClose = procfs.Close();
     if (!procfsClose.HasValue())
     {
@@ -151,6 +148,11 @@ Result<Descriptor> ActivateReadOnly(const ContextInterface& context, const Descr
     return std::move(aliasOwner);
 }
 
+Result<Descriptor> ActivateReadOnly(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory, std::size_t fdinfoByteCap)
+{
+    return ActivateReadOnlyImpl(context, pin, snapshot, directory, fdinfoByteCap, nullptr);
+}
+
 } // namespace Detail
 
 using Detail::Descriptor;
@@ -159,12 +161,13 @@ using Detail::SameIdentity;
 using Detail::SavedError;
 
 Handle::Handle(Detail::Descriptor&& descriptor, Type type, const struct stat& snapshot, std::size_t fdinfoBytes, std::string lookup,
-    std::string effective, std::uint64_t originalMount)
+    std::string effective, std::uint64_t originalMount, std::uint64_t targetMount)
     : mDescriptor(std::move(descriptor)),
       mType(type),
       mLookupName(std::move(lookup)),
       mEffectiveName(std::move(effective)),
       mOriginalMount(originalMount),
+      mTargetMount(targetMount),
       mAcquiredMetadata(snapshot),
       mFdinfoBytes(fdinfoBytes)
 {
@@ -176,6 +179,7 @@ Handle::Handle(Handle&& other) noexcept
       mLookupName(std::move(other.mLookupName)),
       mEffectiveName(std::move(other.mEffectiveName)),
       mOriginalMount(other.mOriginalMount),
+      mTargetMount(other.mTargetMount),
       mAcquiredMetadata(other.mAcquiredMetadata),
       mFdinfoBytes(other.mFdinfoBytes)
 {
@@ -225,7 +229,6 @@ Result<Handle::PinObservation> Handle::InspectWithProcfs(const ProcfsDescriptorA
         return Error("Metadata inspection requires a live pin", EBADF);
     }
     const auto& context = mDescriptor.Context();
-    const std::size_t fdinfoByteCap = mFdinfoBytes;
     const int flags = context.StatusFlags(mDescriptor);
     if (flags < 0)
     {
@@ -252,12 +255,6 @@ Result<Handle::PinObservation> Handle::InspectWithProcfs(const ProcfsDescriptorA
     {
         return Error("Pinned metadata has an unexpected identity or type", EAGAIN);
     }
-    auto observedMount = procfs.ReadMountId(mDescriptor, fdinfoByteCap);
-    if (!observedMount.HasValue())
-    {
-        return std::move(observedMount).Error();
-    }
-
     if (context.StatFile(mDescriptor, &after) != 0)
     {
         return Error("Cannot recheck pinned metadata", SavedError());
@@ -267,17 +264,11 @@ Result<Handle::PinObservation> Handle::InspectWithProcfs(const ProcfsDescriptorA
     {
         return Error("Pinned metadata identity changed", EAGAIN);
     }
-    auto retainedMount = procfs.ReadMountId(mDescriptor, fdinfoByteCap);
-    if (!retainedMount.HasValue())
-    {
-        return std::move(retainedMount).Error();
-    }
-
-    if (observedMount.Value() != retainedMount.Value())
-    {
-        return Error("Pinned metadata mount changed", EAGAIN);
-    }
-    return PinObservation{after, observedMount.Value()};
+    // Stat remains fresh; mount identity is held by the live O_PATH owner.
+    // The verified procfs session is still opened/closed by callers, so
+    // caller/role failures and cleanup precedence are unchanged.
+    (void)procfs;
+    return PinObservation{after};
 }
 
 Result<struct stat> Handle::Stat() const
@@ -337,7 +328,7 @@ Result<std::uint64_t> Handle::MountIdentity() const
     {
         return std::move(inspected).Error();
     }
-    return inspected.Value().mountId;
+    return mTargetMount;
 }
 
 Result<bool> Handle::SetOwnership(uid_t owner, gid_t group) const
@@ -371,10 +362,6 @@ Result<bool> Handle::SetOwnership(uid_t owner, gid_t group) const
             return std::move(after).Error(); // The ownership syscall may already have succeeded.
         }
 
-        if (beforeMutation.Value().mountId != after.Value().mountId)
-        {
-            return Error("Pinned mount changed after ownership mutation", EAGAIN);
-        }
         return true;
     }();
     auto closed = procfs.Close();
@@ -392,7 +379,6 @@ Result<bool> Handle::SetOwnership(uid_t owner, gid_t group) const
 Result<bool> Handle::SetModeWithProcfs(const ProcfsDescriptorAccess& procfs, mode_t mode) const
 {
     const auto& context = mDescriptor.Context();
-    const std::size_t fdinfoByteCap = mFdinfoBytes;
     auto beforeMutation = InspectWithProcfs(procfs);
     if (!beforeMutation.HasValue())
     {
@@ -422,26 +408,14 @@ Result<bool> Handle::SetModeWithProcfs(const ProcfsDescriptorAccess& procfs, mod
         {
             return Error("Pinned mode alias identity differs", EAGAIN);
         }
-        auto targetMount = procfs.ReadMountId(modeAlias, fdinfoByteCap);
-        if (!targetMount.HasValue())
-        {
-            return std::move(targetMount).Error();
-        }
-
-        if (beforeMutation.Value().mountId != targetMount.Value())
-        {
-            return Error("Pinned mode alias mount differs", EAGAIN);
-        }
+        // A genuine current-task procfd alias of this live owner has the
+        // same mount; the stat comparison above rejects wrong-object mocks.
         auto retained = InspectWithProcfs(procfs);
         if (!retained.HasValue())
         {
             return std::move(retained).Error();
         }
 
-        if (beforeMutation.Value().mountId != retained.Value().mountId)
-        {
-            return Error("Pinned mount changed before mode mutation", EAGAIN);
-        }
         // Linux's baseline fchmodat follows the procfd magic link, rather
         // than attempting fchmod on O_PATH or requiring a readable fd.
         if (context.ChmodAlias(procfs, mDescriptor, mode) != 0)
@@ -454,10 +428,6 @@ Result<bool> Handle::SetModeWithProcfs(const ProcfsDescriptorAccess& procfs, mod
             return std::move(after).Error(); // The chmod syscall may already have succeeded.
         }
 
-        if (beforeMutation.Value().mountId != after.Value().mountId)
-        {
-            return Error("Pinned mount changed after mode mutation", EAGAIN);
-        }
         return true;
     }();
     auto aliasClose = modeAlias.Close();
@@ -514,7 +484,7 @@ Result<ReadableFile> Handle::OpenReadOnly(ReadableFile::Policy policy) const
     {
         return Error("Read-only activation requires a regular file", EINVAL);
     }
-    auto activated = Detail::ActivateReadOnly(mDescriptor.Context(), mDescriptor, mAcquiredMetadata, false, mFdinfoBytes);
+    auto activated = Detail::ActivateReadOnlyImpl(mDescriptor.Context(), mDescriptor, mAcquiredMetadata, false, mFdinfoBytes, &mTargetMount);
     if (!activated.HasValue())
     {
         return std::move(activated).Error();
@@ -533,7 +503,7 @@ Result<DirectoryCursor> Handle::OpenChildren() const
         return Error("Directory enumeration requires a directory pin", EINVAL);
     }
     const auto& context = mDescriptor.Context();
-    auto activated = Detail::ActivateReadOnly(context, mDescriptor, mAcquiredMetadata, true, mFdinfoBytes);
+    auto activated = Detail::ActivateReadOnlyImpl(context, mDescriptor, mAcquiredMetadata, true, mFdinfoBytes, &mTargetMount);
     if (!activated.HasValue())
     {
         return std::move(activated).Error();
@@ -563,6 +533,7 @@ void Handle::Swap(Handle& other) noexcept
     mLookupName.swap(other.mLookupName);
     mEffectiveName.swap(other.mEffectiveName);
     swap(mOriginalMount, other.mOriginalMount);
+    swap(mTargetMount, other.mTargetMount);
     swap(mAcquiredMetadata, other.mAcquiredMetadata);
     swap(mFdinfoBytes, other.mFdinfoBytes);
 }
@@ -600,7 +571,22 @@ Result<Handle> Handle::PinProcessRoot(const ContextInterface& context, std::size
         {
             return Error("Process root is not a directory", ENOTDIR);
         }
-        Handle root(std::move(acquired), Handle::Type::Directory, snapshot, fdinfoBytes, "/", "/", 0);
+        ProcfsDescriptorAccess procfs(context);
+        auto verified = procfs.Open();
+        if (!verified.HasValue())
+            return std::move(verified).Error();
+        auto mount = procfs.ReadMountId(acquired, fdinfoBytes);
+        auto closed = procfs.Close();
+        if (!closed.HasValue())
+        {
+            if (mount.HasValue())
+                mount = std::move(closed).Error();
+            else
+                Detail::LogSecondaryClose(context, closed.Error().code);
+        }
+        if (!mount.HasValue())
+            return std::move(mount).Error();
+        Handle root(std::move(acquired), Handle::Type::Directory, snapshot, fdinfoBytes, "/", "/", 0, mount.Value());
         return std::move(root);
     }();
     auto closed = acquired.Close();
@@ -650,16 +636,6 @@ Result<bool> Handle::RecognizeAcceptedRoot(const Handle& acceptedRoot, const Han
         return std::move(verified).Error();
     }
     auto compared = [&]() -> Result<bool> {
-        auto rootMount = procfs.ReadMountId(acceptedRoot.mDescriptor, fdinfoByteCap);
-        if (!rootMount.HasValue())
-        {
-            return std::move(rootMount).Error();
-        }
-        auto candidateMount = procfs.ReadMountId(candidate.mDescriptor, fdinfoByteCap);
-        if (!candidateMount.HasValue())
-        {
-            return std::move(candidateMount).Error();
-        }
         struct stat retainedRoot = {}, retainedCandidate = {};
         if ((context.StatFile(acceptedRoot.mDescriptor, &retainedRoot) != 0) || (context.StatFile(candidate.mDescriptor, &retainedCandidate) != 0))
         {
@@ -670,7 +646,7 @@ Result<bool> Handle::RecognizeAcceptedRoot(const Handle& acceptedRoot, const Han
         {
             return Error("Root or candidate pin changed during comparison", EAGAIN);
         }
-        return rootMount.Value() == candidateMount.Value();
+        return acceptedRoot.mTargetMount == candidate.mTargetMount;
     }();
     auto closed = procfs.Close();
     if (!closed.HasValue())

@@ -44,6 +44,14 @@ struct MockContext : public ComplianceEngine::ContextInterface
     {
         return ContextInterface::DuplicateDescriptor(fd);
     }
+    pid_t RealNativeProcessId() const
+    {
+        return ContextInterface::NativeProcessId();
+    }
+    pid_t RealNativeThreadId() const
+    {
+        return ContextInterface::NativeThreadId();
+    }
     MOCK_METHOD(ComplianceEngine::Result<std::string>, ExecuteCommand, (const std::string& cmd), (const, override));
     MOCK_METHOD(ComplianceEngine::Result<std::string>, GetFileContents, (const std::string& filePath), (const, override));
     MOCK_METHOD(int, OpenNativePath, (const char* path, int flags), (const, override));
@@ -59,6 +67,8 @@ struct MockContext : public ComplianceEngine::ContextInterface
     MOCK_METHOD(int, CloseFileDescriptor, (int descriptor), (const, override));
     MOCK_METHOD(int, ChownPinnedFileDescriptor, (int descriptor, uid_t owner, gid_t group), (const, override));
     MOCK_METHOD(int, ChmodPinnedAlias, (int procfsDirectory, const char* decimalAlias, mode_t mode), (const, override));
+    MOCK_METHOD(pid_t, NativeProcessId, (), (const, override));
+    MOCK_METHOD(pid_t, NativeThreadId, (), (const, override));
     MOCK_METHOD(DIR*, OpenDirectory, (const char* path), (const, override));
     MOCK_METHOD(struct dirent*, ReadDirectory, (DIR * directory), (const, override));
     MOCK_METHOD(int, CloseDirectory, (DIR * directory), (const, override));
@@ -98,6 +108,8 @@ struct MockContext : public ComplianceEngine::ContextInterface
         : mTempOwner(CreateTempdir()),
           mTempdir(mTempOwner.Path())
     {
+        ON_CALL(*this, NativeProcessId()).WillByDefault([this] { return ContextInterface::NativeProcessId(); });
+        ON_CALL(*this, NativeThreadId()).WillByDefault([this] { return ContextInterface::NativeThreadId(); });
         ON_CALL(*this, OpenNativePath(testing::_, testing::_)).WillByDefault([this](const char* path, int flags) {
             return ContextInterface::OpenNativePath(path, flags);
         });

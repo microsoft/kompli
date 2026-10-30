@@ -99,8 +99,9 @@ public:
     // concurrent writes, race-free authorization or exclusive hardlink
     // membership. Uses the acquisition-bound inspection budget and trusted procfs.
     Result<struct stat> Stat() const;
-    // Mount identity of this held descriptor, verified with its inode/type.
-    // Unlike st_dev, this distinguishes a same-device bind mount.
+    // Mount identity observed when this target was acquired, while its pin
+    // remains live and its inode/type is rechecked. Unlike st_dev, this
+    // distinguishes a same-device bind mount.
     Result<std::uint64_t> MountIdentity() const;
     // One syscall per method; callers retain existing rule mask, ordering and
     // hardlink checks. No ownership/mode transaction or rollback is implied.
@@ -124,13 +125,12 @@ private:
     struct PinObservation
     {
         struct stat metadata;
-        std::uint64_t mountId;
     };
     // Path owns composition. The checked acquisition methods below are
     // private: no consumer can supply an fd.
     friend class Path;
     Handle(Detail::Descriptor&& descriptor, Type type, const struct stat& snapshot, std::size_t fdinfoBytes, std::string lookup, std::string effective,
-        std::uint64_t originalMount);
+        std::uint64_t originalMount, std::uint64_t targetMount);
     static Result<Handle> PinProcessRoot(const ContextInterface& context, std::size_t fdinfoBytes);
     static Result<bool> RecognizeAcceptedRoot(const Handle& acceptedRoot, const Handle& candidate, std::size_t fdinfoByteCap);
     Result<PinObservation> InspectWithProcfs(const Detail::ProcfsDescriptorAccess& procfs) const;
@@ -142,6 +142,9 @@ private:
     std::string mLookupName;
     std::string mEffectiveName;
     std::uint64_t mOriginalMount = 0;
+    // The O_PATH owner retains the resolved target's kernel mount/path.
+    // This is distinct from the original lookup/link mount above.
+    std::uint64_t mTargetMount = 0;
     struct stat mAcquiredMetadata = {};
     std::size_t mFdinfoBytes;
 };

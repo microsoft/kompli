@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 namespace ComplianceEngine
@@ -20,6 +21,22 @@ namespace ComplianceEngine
 ContextInterface::~ContextInterface() = default;
 
 using Filesystem::Detail::Descriptor;
+
+Result<pid_t> ContextInterface::CurrentProcessId() const
+{
+    const pid_t id = NativeProcessId();
+    if (0 >= id)
+        return Error("Cannot identify current process", (0 > id) ? (errno ? errno : EIO) : EPROTO);
+    return id;
+}
+
+Result<pid_t> ContextInterface::CurrentThreadId() const
+{
+    const pid_t id = NativeThreadId();
+    if (0 >= id)
+        return Error("Cannot identify current task", (0 > id) ? (errno ? errno : EIO) : EPROTO);
+    return id;
+}
 
 Descriptor ContextInterface::EmptyDescriptor(CloseDiagnostic diagnostic) const& noexcept
 {
@@ -319,6 +336,16 @@ int ContextInterface::ChownPinnedFileDescriptor(int descriptor, uid_t owner, gid
 int ContextInterface::ChmodPinnedAlias(int procfsDirectory, const char* decimalAlias, mode_t mode) const
 {
     return ::fchmodat(procfsDirectory, decimalAlias, mode, 0);
+}
+
+pid_t ContextInterface::NativeProcessId() const
+{
+    return ::getpid();
+}
+
+pid_t ContextInterface::NativeThreadId() const
+{
+    return static_cast<pid_t>(::syscall(SYS_gettid));
 }
 
 DIR* ContextInterface::OpenDirectory(const char* path) const

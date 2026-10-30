@@ -17,8 +17,10 @@ namespace Filesystem
 {
 namespace Detail
 {
-// One scoped, context-bound session for verified /proc/self/fd and fdinfo
-// access. Only the native ContextInterface boundary can consume its roles.
+// One scoped, context- and current-task-bound session for verified
+// /proc/self/task/<tid>/{fd,fdinfo} access. Only the native ContextInterface
+// boundary can consume its roles. Callers synchronize against external
+// close/dup2/reuse; PID/TID checks do not freeze the task's fd table.
 class ProcfsDescriptorAccess
 {
 public:
@@ -43,9 +45,10 @@ public:
 private:
     friend class ::ComplianceEngine::ContextInterface;
     bool VerifyRole(const ContextInterface& context, bool information) const;
-    // Only Open() fills the role owners after verifying /proc/self against
-    // the current PID. Ordinary callers cannot replace or swap these pins.
-    Descriptor proc, self, pid, fd, fdinfo;
+    // Bootstrap owners are checked-closed during Open to keep the peak
+    // descriptor count bounded. Ordinary callers cannot replace role pins.
+    Descriptor proc, self, pid, task, tid, fd, fdinfo;
+    pid_t mPid = 0, mTid = 0;
     bool mVerified = false;
     struct stat mFdIdentity = {}, mFdinfoIdentity = {};
 };

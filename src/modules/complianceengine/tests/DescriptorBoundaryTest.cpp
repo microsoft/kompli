@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 #include <MockContext.h>
+#include <atomic>
 #include <cerrno>
 #include <fcntl.h>
 #include <filesystem/Descriptor.hpp>
@@ -10,6 +11,7 @@
 #include <gtest/gtest.h>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <unistd.h>
 #include <utility>
@@ -231,6 +233,140 @@ TEST(DescriptorBoundaryTest, ProcfsDescriptorAccessBindsContextAndChecksReadLife
     EXPECT_GT(mount.Value(), 0U);
     ASSERT_TRUE(access.Close().HasValue());
     EXPECT_EQ(EINVAL, access.ReadMountId(owned.Value(), 4096).Error().code);
+}
+
+TEST(DescriptorBoundaryTest, CurrentTaskIdentityGuardsEveryRoleBeforeNativeDispatch)
+{
+    NiceMock<MockContext> context;
+    ProcfsDescriptorAccess access(context);
+    auto opened = context.OpenAbsolutePin("/");
+    ASSERT_TRUE(opened.HasValue());
+    Descriptor pin = std::move(opened).Value();
+    ASSERT_TRUE(access.Open().HasValue());
+
+    auto rejectAll = [&]() {
+        EXPECT_CALL(context, OpenNativeAt(_, _, _)).Times(0);
+        EXPECT_CALL(context, ChmodPinnedAlias(_, _, _)).Times(0);
+        EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(0);
+        EXPECT_EQ(EINVAL, context.OpenFdinfo(access, pin).Error().code);
+        EXPECT_EQ(EINVAL, context.OpenAlias(access, pin, true).Error().code);
+        EXPECT_EQ(EINVAL, context.OpenPinAlias(access, pin, true).Error().code);
+        errno = 0;
+        EXPECT_EQ(-1, context.ChmodAlias(access, pin, 0700));
+        EXPECT_EQ(EINVAL, errno);
+        ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+    };
+    ON_CALL(context, NativeProcessId()).WillByDefault([&] { return context.RealNativeProcessId() + 1; });
+    rejectAll(); // inherited fork-like process identity
+    ON_CALL(context, NativeProcessId()).WillByDefault([&] { return context.RealNativeProcessId(); });
+    ON_CALL(context, NativeThreadId()).WillByDefault([&] { return context.RealNativeThreadId() + 1; });
+    rejectAll(); // other task in the same process
+    ON_CALL(context, NativeThreadId()).WillByDefault([] {
+        errno = ENOSYS;
+        return static_cast<pid_t>(-1);
+    });
+    rejectAll(); // no PID fallback when gettid fails
+    ON_CALL(context, NativeThreadId()).WillByDefault([&] { return context.RealNativeThreadId(); });
+    ON_CALL(context, NativeProcessId()).WillByDefault([] {
+        errno = EIO;
+        return static_cast<pid_t>(-1);
+    });
+    rejectAll();
+    ON_CALL(context, NativeProcessId()).WillByDefault([&] { return context.RealNativeProcessId(); });
+    EXPECT_TRUE(access.Close().HasValue());
+}
+
+TEST(DescriptorBoundaryTest, CurrentTaskAcquisitionFailsClosedAndCleansBootstrap)
+{
+    NiceMock<MockContext> context;
+    auto pin = context.OpenAbsolutePin("/");
+    ASSERT_TRUE(pin.HasValue());
+    const auto unavailable = [&](pid_t pid, pid_t tid, int expected) {
+        ProcfsDescriptorAccess access(context);
+        ON_CALL(context, NativeProcessId()).WillByDefault([pid, expected] {
+            if (pid < 0)
+                errno = expected;
+            return pid;
+        });
+        ON_CALL(context, NativeThreadId()).WillByDefault([tid, expected] {
+            if (tid < 0)
+                errno = expected;
+            return tid;
+        });
+        auto result = access.Open();
+        EXPECT_FALSE(result.HasValue());
+        EXPECT_EQ(expected, result.Error().code);
+        EXPECT_FALSE(access.ProcDirectory().HasValue());
+        EXPECT_FALSE(access.FdDirectory().HasValue());
+        EXPECT_FALSE(access.FdinfoDirectory().HasValue());
+    };
+    EXPECT_CALL(context, OpenNativePath(_, _)).Times(0);
+    unavailable(-1, context.RealNativeThreadId(), ENOSYS);
+    unavailable(context.RealNativeProcessId(), -1, ENOSYS);
+    testing::Mock::VerifyAndClearExpectations(&context);
+
+    ON_CALL(context, NativeProcessId()).WillByDefault([&] { return context.RealNativeProcessId(); });
+    ON_CALL(context, NativeThreadId()).WillByDefault([&] { return context.RealNativeThreadId(); });
+    ProcfsDescriptorAccess missingTask(context);
+    {
+        testing::InSequence bootstrapOrder;
+        EXPECT_CALL(context, OpenNativeAt(_, testing::StrEq("self"), O_PATH | O_DIRECTORY | O_CLOEXEC)).WillOnce([&](int directory, const char* name, int flags) {
+            return context.RealOpenNativeAt(directory, name, flags);
+        });
+        EXPECT_CALL(context, OpenNativeAt(_, testing::StrEq(std::to_string(context.RealNativeProcessId())), O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC))
+            .WillOnce([&](int directory, const char* name, int flags) { return context.RealOpenNativeAt(directory, name, flags); });
+        EXPECT_CALL(context, OpenNativeAt(_, testing::StrEq("task"), O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)).WillOnce([](int, const char*, int) {
+            errno = ENOENT;
+            return -1;
+        });
+    }
+    auto missing = missingTask.Open();
+    ASSERT_FALSE(missing.HasValue());
+    EXPECT_EQ(ENOENT, missing.Error().code);
+    EXPECT_FALSE(missingTask.ProcDirectory().HasValue());
+    testing::Mock::VerifyAndClearExpectations(&context);
+
+    ProcfsDescriptorAccess changed(context);
+    EXPECT_CALL(context, NativeThreadId()).WillOnce([&] { return context.RealNativeThreadId(); }).WillOnce([&] {
+        return context.RealNativeThreadId() + 1;
+    });
+    auto rejected = changed.Open();
+    ASSERT_FALSE(rejected.HasValue());
+    EXPECT_EQ(EPROTO, rejected.Error().code);
+    EXPECT_FALSE(changed.ProcDirectory().HasValue());
+    testing::Mock::VerifyAndClearExpectations(&context);
+    ProcfsDescriptorAccess fresh(context);
+    ASSERT_TRUE(fresh.Open().HasValue());
+    auto info = context.OpenFdinfo(fresh, pin.Value());
+    ASSERT_TRUE(info.HasValue());
+    EXPECT_TRUE(info.Value().Close().HasValue());
+    EXPECT_TRUE(fresh.Close().HasValue());
+}
+
+TEST(DescriptorBoundaryTest, OtherRealThreadCannotUseSessionButCanOpenFreshOne)
+{
+    NiceMock<MockContext> context;
+    auto opened = context.OpenAbsolutePin("/");
+    ASSERT_TRUE(opened.HasValue());
+    Descriptor pin = std::move(opened).Value();
+    ProcfsDescriptorAccess inherited(context);
+    ASSERT_TRUE(inherited.Open().HasValue());
+    std::atomic<bool> wrongCallerRejected(false), freshSucceeded(false);
+    std::thread worker([&] {
+        auto denied = context.OpenFdinfo(inherited, pin);
+        wrongCallerRejected = !denied.HasValue() && denied.Error().code == EINVAL;
+        ProcfsDescriptorAccess fresh(context);
+        auto ready = fresh.Open();
+        if (ready.HasValue())
+        {
+            auto info = context.OpenFdinfo(fresh, pin);
+            freshSucceeded = info.HasValue() && info.Value().Close().HasValue() && fresh.Close().HasValue();
+        }
+    });
+    worker.join();
+    EXPECT_TRUE(wrongCallerRejected);
+    EXPECT_TRUE(freshSucceeded);
+    EXPECT_TRUE(inherited.Close().HasValue());
 }
 
 TEST(DescriptorBoundaryTest, MovedDescriptorLogsFailedCloseOnlyOnce)

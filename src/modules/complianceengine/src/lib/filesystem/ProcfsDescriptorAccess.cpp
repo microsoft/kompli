@@ -36,6 +36,8 @@ ProcfsDescriptorAccess::ProcfsDescriptorAccess(const ContextInterface& context)
     : proc(context.EmptyDescriptor()),
       self(context.EmptyDescriptor()),
       pid(context.EmptyDescriptor()),
+      task(context.EmptyDescriptor()),
+      tid(context.EmptyDescriptor()),
       fd(context.EmptyDescriptor()),
       fdinfo(context.EmptyDescriptor())
 {
@@ -48,6 +50,14 @@ Result<bool> ProcfsDescriptorAccess::Open()
         {
             return Error("Procfs directory verification was already attempted", EINVAL);
         }
+        auto currentPid = proc.Context().CurrentProcessId();
+        if (!currentPid.HasValue())
+            return std::move(currentPid).Error();
+        auto currentTid = proc.Context().CurrentThreadId();
+        if (!currentTid.HasValue())
+            return std::move(currentTid).Error();
+        mPid = currentPid.Value();
+        mTid = currentTid.Value();
         auto openedProc = proc.Context().OpenAbsolutePin("/proc");
         if (!openedProc.HasValue())
         {
@@ -68,7 +78,7 @@ Result<bool> ProcfsDescriptorAccess::Open()
         {
             return Error("Procfs self directory cannot be verified", EPROTO);
         }
-        auto openedPid = proc.Context().OpenAt(proc, std::to_string(::getpid()).c_str(), ContextInterface::OpenProfile::PinDirectory);
+        auto openedPid = proc.Context().OpenAt(proc, std::to_string(mPid).c_str(), ContextInterface::OpenProfile::PinDirectory);
         if (!openedPid.HasValue())
         {
             return Error("Procfs self directory cannot be verified", openedPid.Error().code);
@@ -80,7 +90,28 @@ Result<bool> ProcfsDescriptorAccess::Open()
         {
             return Error("Procfs self directory cannot be verified", EPROTO);
         }
-        auto openedFd = proc.Context().OpenAt(self, "fd", ContextInterface::OpenProfile::PinDirectory);
+        auto closedPid = pid.Close();
+        if (!closedPid.HasValue())
+            return std::move(closedPid).Error();
+        auto openedTask = proc.Context().OpenAt(self, "task", ContextInterface::OpenProfile::PinDirectory);
+        if (!openedTask.HasValue())
+            return Error("Procfs task directory cannot be verified", openedTask.Error().code);
+        task = std::move(openedTask).Value();
+        if (!task.HasValue() || !IsProcfsDirectory(proc.Context(), task))
+            return Error("Procfs task directory cannot be verified", EPROTO);
+        auto openedTid = proc.Context().OpenAt(task, std::to_string(mTid).c_str(), ContextInterface::OpenProfile::PinDirectory);
+        if (!openedTid.HasValue())
+            return Error("Procfs current task cannot be verified", openedTid.Error().code);
+        tid = std::move(openedTid).Value();
+        if (!tid.HasValue() || !IsProcfsDirectory(proc.Context(), tid))
+            return Error("Procfs current task cannot be verified", EPROTO);
+        auto closedTask = task.Close();
+        if (!closedTask.HasValue())
+            return std::move(closedTask).Error();
+        auto closedSelf = self.Close();
+        if (!closedSelf.HasValue())
+            return std::move(closedSelf).Error();
+        auto openedFd = proc.Context().OpenAt(tid, "fd", ContextInterface::OpenProfile::PinDirectory);
         if (!openedFd.HasValue())
         {
             return Error("Procfs descriptor directories cannot be verified", openedFd.Error().code);
@@ -90,7 +121,7 @@ Result<bool> ProcfsDescriptorAccess::Open()
         {
             return Error("Procfs descriptor directories cannot be verified", EPROTO);
         }
-        auto openedFdinfo = proc.Context().OpenAt(self, "fdinfo", ContextInterface::OpenProfile::PinDirectory);
+        auto openedFdinfo = proc.Context().OpenAt(tid, "fdinfo", ContextInterface::OpenProfile::PinDirectory);
         if (!openedFdinfo.HasValue())
         {
             return Error("Procfs descriptor directories cannot be verified", openedFdinfo.Error().code);
@@ -104,6 +135,17 @@ Result<bool> ProcfsDescriptorAccess::Open()
         {
             return Error("Procfs descriptor directory identity cannot be verified", SavedError());
         }
+        auto closedTid = tid.Close();
+        if (!closedTid.HasValue())
+            return std::move(closedTid).Error();
+        currentPid = proc.Context().CurrentProcessId();
+        if (!currentPid.HasValue())
+            return std::move(currentPid).Error();
+        currentTid = proc.Context().CurrentThreadId();
+        if (!currentTid.HasValue())
+            return std::move(currentTid).Error();
+        if (currentPid.Value() != mPid || currentTid.Value() != mTid)
+            return Error("Procfs current task changed during verification", EPROTO);
         mVerified = true;
         return true;
     }();
@@ -122,7 +164,7 @@ Result<bool> ProcfsDescriptorAccess::Close()
 {
     mVerified = false;
     Optional<Error> firstError;
-    Descriptor* resources[] = {&fdinfo, &fd, &pid, &self, &proc};
+    Descriptor* resources[] = {&fdinfo, &fd, &tid, &task, &pid, &self, &proc};
     for (Descriptor* resource : resources)
     {
         auto closed = resource->Close();
@@ -148,6 +190,12 @@ Result<bool> ProcfsDescriptorAccess::Close()
 bool ProcfsDescriptorAccess::VerifyRole(const ContextInterface& context, bool information) const
 {
     if (!mVerified || &proc.Context() != &context)
+        return false;
+    auto currentPid = context.CurrentProcessId();
+    if (!currentPid.HasValue() || currentPid.Value() != mPid)
+        return false;
+    auto currentTid = context.CurrentThreadId();
+    if (!currentTid.HasValue() || currentTid.Value() != mTid)
         return false;
     const Descriptor& role = information ? fdinfo : fd;
     if (!role.HasValue() || &role.Context() != &context)
