@@ -9,6 +9,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <linux/limits.h>
+#include <regex>
 #include <string>
 #include <unistd.h>
 
@@ -64,7 +65,7 @@ TEST_F(FileRegexMatchTest, NumericBoundsCheckEverySelectedLine)
 {
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = "^freq=([^ ]+)";
     params.minimumValue = "1";
     params.maximumValue = "100";
@@ -90,7 +91,7 @@ TEST_F(FileRegexMatchTest, IntegerConversionBoundaries)
 {
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = "^value=(.*)$";
     params.minimumValue = "-9223372036854775808";
     params.maximumValue = "9223372036854775807";
@@ -114,7 +115,7 @@ TEST_F(FileRegexMatchTest, AllSelectedSettingsRespectOptionalExistence)
 {
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex(".*");
+    params.filenamePattern = std::regex(".*");
     params.matchPattern = "^rounds=([0-9]+)$";
     params.minimumValue = "100000";
     params.allMatches = true;
@@ -152,7 +153,7 @@ TEST_F(FileRegexMatchTest, WholeFileEvaluatesEverySelectedSection)
 {
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex(".*\\.repo$");
+    params.filenamePattern = std::regex(".*\\.repo$");
     params.matchPattern = R"(^[ \t]*\[[^\]]+\][ \t]*\n(?:[^\[]*\n)*)";
     params.statePattern = R"(\n[ \t]*gpgcheck[ \t]*=[ \t]*(True|1|yes)[ \t]*(\n|$))";
     params.allMatches = true;
@@ -177,7 +178,7 @@ TEST_F(FileRegexMatchTest, WholeFileCanRequireNoSelectedSectionToMatch)
 {
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex(".*\\.repo$");
+    params.filenamePattern = std::regex(".*\\.repo$");
     params.matchPattern = R"(^[ \t]*\[[^\]]+\][ \t]*\n(?:[^\[]*\n)*)";
     params.statePattern = R"(\n[ \t]*gpgcheck[ \t]*=[ \t]*(False|0|no)[ \t]*(\n|$))";
     params.wholeFile = true;
@@ -202,7 +203,7 @@ TEST_F(FileRegexMatchTest, WholeFilePreservesSearchBoundaries)
 {
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.statePattern = "^b$";
     params.wholeFile = true;
     params.noneMatches = true;
@@ -220,7 +221,7 @@ TEST_F(FileRegexMatchTest, WholeFileEmptyMatchesDoNotSkipNonemptyAlternatives)
 {
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = "x*|bad";
     params.statePattern = "^bad$";
     params.wholeFile = true;
@@ -239,7 +240,7 @@ TEST_F(FileRegexMatchTest, WholeFileVisitsEmptyMatchAtEndOfInput)
 {
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = "value|$";
     params.statePattern = "^value$";
     params.wholeFile = true;
@@ -255,7 +256,7 @@ TEST_F(FileRegexMatchTest, Audit_InvalidArguments_1)
     FileRegexMatchParams params;
     MakeTempfile("test");
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = "(?i)"; // invalid regex pattern
     params.matchOperation = Operation::Match;
     auto result = AuditFileRegexMatch(params, mIndicators, mContext);
@@ -267,7 +268,7 @@ TEST_F(FileRegexMatchTest, Audit_EmptyFile_1)
 {
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = "test";
     params.matchOperation = Operation::Match;
     auto result = AuditFileRegexMatch(params, mIndicators, mContext);
@@ -280,7 +281,7 @@ TEST_F(FileRegexMatchTest, Audit_Match_1)
     MakeTempfile("test");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = "test";
     params.matchOperation = Operation::Match;
     auto result = AuditFileRegexMatch(params, mIndicators, mContext);
@@ -293,7 +294,7 @@ TEST_F(FileRegexMatchTest, Audit_Match_2)
     MakeTempfile("tests");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = "test";
     params.matchOperation = Operation::Match;
     params.behavior = Behavior::NoneExist;
@@ -307,7 +308,7 @@ TEST_F(FileRegexMatchTest, Audit_Match_3)
     MakeTempfile("test");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = "tests";
     params.matchOperation = Operation::Match;
     auto result = AuditFileRegexMatch(params, mIndicators, mContext);
@@ -320,7 +321,7 @@ TEST_F(FileRegexMatchTest, Audit_Match_4)
     MakeTempfile("test");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = "te.t";
     params.matchOperation = Operation::Match;
     auto result = AuditFileRegexMatch(params, mIndicators, mContext);
@@ -333,7 +334,7 @@ TEST_F(FileRegexMatchTest, Audit_Match_5)
     MakeTempfile("test");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = "^te.t$";
     params.matchOperation = Operation::Match;
     auto result = AuditFileRegexMatch(params, mIndicators, mContext);
@@ -346,7 +347,7 @@ TEST_F(FileRegexMatchTest, Audit_Match_6)
     MakeTempfile(" \ttesting");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^[[:space:]]*te[a-z]t.*$)";
     params.matchOperation = Operation::Match;
     auto result = AuditFileRegexMatch(params, mIndicators, mContext);
@@ -359,7 +360,7 @@ TEST_F(FileRegexMatchTest, Audit_CaseInsensitive_1)
     MakeTempfile(" \ttesTing");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^[[:space:]]*Te[a-z]t.*$)";
     params.matchOperation = Operation::Match;
     params.ignoreCase = ComplianceEngine::IgnoreCase::MatchPattern;
@@ -373,7 +374,7 @@ TEST_F(FileRegexMatchTest, Audit_State_1)
     MakeTempfile("key=foo");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^key=.*$)";
     params.statePattern = string(R"(^key=foo$)");
     params.behavior = Behavior::AllExist;
@@ -387,7 +388,7 @@ TEST_F(FileRegexMatchTest, Audit_State_2_CaseInsensitve)
     MakeTempfile("key=foo");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^key=.*$)";
     params.statePattern = string(R"(^key=FoO$)");
     params.behavior = Behavior::AllExist;
@@ -402,7 +403,7 @@ TEST_F(FileRegexMatchTest, Audit_State_2_CaseInsensitveBoth)
     MakeTempfile("key=foo");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^Key=.*$)";
     params.statePattern = string(R"(^Key=FoO$)");
     params.behavior = Behavior::AllExist;
@@ -417,7 +418,7 @@ TEST_F(FileRegexMatchTest, Audit_State_2_CaseInsensitveBothDiffetnArg)
     MakeTempfile("key=foo");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^Key=.*$)";
     params.statePattern = string(R"(^Key=FoO$)");
     params.behavior = Behavior::AllExist;
@@ -431,7 +432,7 @@ TEST_F(FileRegexMatchTest, Audit_State_2)
     MakeTempfile("key=foo");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^key=.*$)";
     params.matchOperation = Operation::Match;
     params.statePattern = string(R"(^key=bar$)");
@@ -447,7 +448,7 @@ TEST_F(FileRegexMatchTest, Audit_State_3)
     MakeTempfile("key=foo");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^key=.*$)";
     params.matchOperation = Operation::Match;
     params.statePattern = string(R"(^key=bar$)");
@@ -463,7 +464,7 @@ TEST_F(FileRegexMatchTest, Audit_State_4)
     MakeTempfile("key=bar\nkey=foo");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^key=.*$)";
     params.matchOperation = Operation::Match;
     params.statePattern = string(R"(^key=foo$)");
@@ -479,7 +480,7 @@ TEST_F(FileRegexMatchTest, Audit_Multiline_Match_1)
     MakeTempfile("key=foo\nkey=bar\nkey=baz");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^key=.*$)";
     params.matchOperation = Operation::Match;
     params.behavior = Behavior::AllExist;
@@ -493,7 +494,7 @@ TEST_F(FileRegexMatchTest, Audit_Multiline_Match_2)
     MakeTempfile("key=foo\nkey=bar\nkey=baz\nky=typo");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^key=.*$)";
     params.matchOperation = Operation::Match;
     params.behavior = Behavior::AtLeastOneExists;
@@ -507,7 +508,7 @@ TEST_F(FileRegexMatchTest, Audit_Multiline_Match_3)
     MakeTempfile("key=foo\nkey=bar\nkey=baz\nky=typo");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^key=.*$)";
     params.matchOperation = Operation::Match;
     params.behavior = Behavior::AllExist;
@@ -521,7 +522,7 @@ TEST_F(FileRegexMatchTest, Audit_Multiline_State_1)
     MakeTempfile("key=foo\nkey=bar\nkey=baz");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^key=.*$)";
     params.matchOperation = Operation::Match;
     params.statePattern = string(R"(^key=bar$)");
@@ -537,7 +538,7 @@ TEST_F(FileRegexMatchTest, Audit_Multiline_State_2)
     MakeTempfile("key=foo\nkey=bar\nkey=baz");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^key=.*$)";
     params.matchOperation = Operation::Match;
     params.statePattern = string(R"(^key=(foo|bar|baz)$)");
@@ -553,7 +554,7 @@ TEST_F(FileRegexMatchTest, Audit_Multiline_State_4)
     MakeTempfile("key=foo\nkey=bar\nkey=baz");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^key=.*$)";
     params.matchOperation = Operation::Match;
     params.statePattern = string(R"(^key=(foo|bar)$)");
@@ -569,7 +570,7 @@ TEST_F(FileRegexMatchTest, Audit_FilenamePattern_1)
     MakeTempfile("key=foo\nkey=bar\nkey=baz");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^key=.*$)";
     params.statePattern = string(R"(^key=(foo|bar)$)");
     params.behavior = Behavior::AllExist;
@@ -583,7 +584,7 @@ TEST_F(FileRegexMatchTest, Audit_FilenamePattern_2)
     MakeTempfile("key=foo\nkey=bar\nkey=baz");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("2"); // no such file
+    params.filenamePattern = std::regex("2"); // no such file
     params.matchPattern = R"(^key=.*$)";
     params.statePattern = string(R"(^key=(foo|bar)$)");
     params.behavior = Behavior::AllExist;
@@ -599,7 +600,7 @@ TEST_F(FileRegexMatchTest, Audit_FilenamePattern_3)
     MakeTempfile("nothing important here as well");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex(".*");
+    params.filenamePattern = std::regex(".*");
     params.matchPattern = R"(^key=.*$)";
     params.statePattern = string(R"(^key=(foo|bar)$)");
     params.behavior = Behavior::AllExist;
@@ -621,7 +622,7 @@ TEST_F(FileRegexMatchTest, Audit_FilenamePattern_4)
     MakeTempfile("nothing important here as well");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("2");
+    params.filenamePattern = std::regex("2");
     params.matchPattern = R"(^key=.*$)";
     params.statePattern = string(R"(^key=(foo|bar|baz)$)");
     params.behavior = Behavior::AllExist;
@@ -637,7 +638,7 @@ TEST_F(FileRegexMatchTest, Audit_FilenamePattern_5)
     MakeTempfile("nothing important here as well");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex(".*");
+    params.filenamePattern = std::regex(".*");
     params.matchPattern = R"(^key=.*$)";
     params.statePattern = string(R"(^key=(foo|bar|baz)$)");
     params.behavior = Behavior::AtLeastOneExists;
@@ -653,7 +654,7 @@ TEST_F(FileRegexMatchTest, Audit_FilenamePattern_6)
     MakeTempfile("nothing important here as well");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("2");
+    params.filenamePattern = std::regex("2");
     params.matchPattern = R"(^key=(.*)$)";
     params.statePattern = string(R"(^(foo|bar|baz)$)"); // Unlike the previous test, this matches against 'foo', 'bar', and 'baz'
     params.behavior = Behavior::AllExist;
@@ -669,7 +670,7 @@ TEST_F(FileRegexMatchTest, Audit_FilenamePattern_7)
     MakeTempfile("nothing important here as well");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("2");
+    params.filenamePattern = std::regex("2");
     params.matchPattern = R"(^key=(.*)$)";
     params.statePattern = string(R"(^key=(foo|bar|baz)$)"); // This won't work now as we match against 'foo', 'bar', and 'baz'
     params.behavior = Behavior::AllExist;
@@ -685,7 +686,7 @@ TEST_F(FileRegexMatchTest, Audit_FilenamePattern_8)
     MakeTempfile("nothing important here as well");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("2");
+    params.filenamePattern = std::regex("2");
     params.matchPattern = R"(^(key=(.*))$)";
     params.statePattern = string(R"(^key=(foo|bar|baz)$)"); // This should work again as we added a capturing group for the full key=value
     params.behavior = Behavior::AllExist;
@@ -701,7 +702,7 @@ TEST_F(FileRegexMatchTest, Audit_FilenamePatternSuffix)
     std::ofstream(filename) << "setting=true";
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex(R"(\.repo$)");
+    params.filenamePattern = std::regex(R"(\.repo$)");
     params.filenameSearch = true;
     params.matchPattern = R"(^setting=true$)";
 
@@ -717,7 +718,7 @@ TEST_F(FileRegexMatchTest, Audit_RepositoryChecksIgnoreUnselectedFiles)
     MakeTempfile("");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex(".*");
+    params.filenamePattern = std::regex(".*");
     params.matchPattern = R"(^[ \t]*\[[^\]]+\][ \t]*\n(?:[^\[]*\n)*)";
     params.wholeFile = true;
     params.allMatches = true;
@@ -753,7 +754,7 @@ TEST_F(FileRegexMatchTest, Audit_ExactFilenameDoesNotSelectBackup)
     std::ofstream(backup) << "root:unlocked";
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("shadow");
+    params.filenamePattern = std::regex("shadow");
     params.matchPattern = R"(^root:(!|\*|!!))";
 
     const auto result = AuditFileRegexMatch(params, mIndicators, mContext);
@@ -769,7 +770,7 @@ TEST_F(FileRegexMatchTest, Audit_TestPattern)
         "the fallback if no module succeeds\n");
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex("1");
+    params.filenamePattern = std::regex("1");
     params.matchOperation = Operation::Match;
     params.matchPattern = R"(^[ \t]*account[ \t]+[^#\n\r]+[ \t]+pam_unix\.so\b)";
     params.behavior = Behavior::AtLeastOneExists;
@@ -786,7 +787,7 @@ TEST_F(FileRegexMatchTest, Audit_SymlinkFollow_1)
 
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex(".*\\.link");
+    params.filenamePattern = std::regex(".*\\.link");
     params.matchOperation = Operation::Match;
     params.matchPattern = R"(^test$)";
     params.behavior = Behavior::AtLeastOneExists;
@@ -806,7 +807,7 @@ TEST_F(FileRegexMatchTest, Audit_SymlinkFollow_2)
 
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex(".*\\.link");
+    params.filenamePattern = std::regex(".*\\.link");
     params.matchOperation = Operation::Match;
     params.matchPattern = R"(^foo$)"; // pattern mismatch against 'test'
     params.behavior = Behavior::AtLeastOneExists;
@@ -825,7 +826,7 @@ TEST_F(FileRegexMatchTest, Audit_SymlinkFollow_Directory)
 
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex(".*\\.link");
+    params.filenamePattern = std::regex(".*\\.link");
     params.matchOperation = Operation::Match;
     params.matchPattern = R"(.*)";
     params.behavior = Behavior::NoneExist;
@@ -847,7 +848,7 @@ TEST_F(FileRegexMatchTest, Audit_SymlinkFollow_DanglingLink)
 
     FileRegexMatchParams params;
     params.path = mTempdir;
-    params.filenamePattern = regex(".*\\.link");
+    params.filenamePattern = std::regex(".*\\.link");
     params.matchOperation = Operation::Match;
     params.matchPattern = R"(^foo$)"; // pattern mismatch against 'test'
     params.behavior = Behavior::AtLeastOneExists;

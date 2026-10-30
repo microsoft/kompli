@@ -5,8 +5,8 @@
 
 #include <CommonUtils.h>
 #include <Evaluator.h>
-#include <Regex.h>
 #include <StringTools.h>
+#include <regex>
 #include <sstream>
 
 namespace ComplianceEngine
@@ -26,7 +26,7 @@ Result<Status> AuditUfwStatus(const UfwStatusParams& params, IndicatorsTree& ind
     bool matched = false;
     while (std::getline(outputStream, line))
     {
-        if (regex_search(line, params.statusRegex.GetRegex()))
+        if (std::regex_search(line, params.statusRegex.GetRegex()))
         {
             matched = true;
             break;

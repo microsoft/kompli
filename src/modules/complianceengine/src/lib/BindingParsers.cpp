@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <regex>
 
 namespace ComplianceEngine
 {
@@ -34,11 +35,11 @@ Result<int> Parse<int>(const std::string& input)
 }
 
 template <>
-Result<regex> Parse<regex>(const string& input)
+Result<std::regex> Parse<std::regex>(const string& input)
 {
     try
     {
-        return regex(input);
+        return std::regex(input);
     }
     catch (const std::exception& e)
     {

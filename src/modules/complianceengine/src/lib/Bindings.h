@@ -9,7 +9,6 @@
 #include <Evaluator.h>
 #include <Optional.h>
 #include <ProcedureMap.h>
-#include <Regex.h>
 #include <Result.h>
 #include <Separated.h>
 #include <array>

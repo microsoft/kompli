@@ -4,8 +4,8 @@
 #ifndef COMPLIANCEENGINE_PATTERN_H
 #define COMPLIANCEENGINE_PATTERN_H
 
-#include <Regex.h>
 #include <Result.h>
+#include <regex>
 
 namespace ComplianceEngine
 {
@@ -16,7 +16,7 @@ class Pattern
     std::string mPattern;
 
     // The compiled regular expression
-    regex mRegex;
+    std::regex mRegex;
 
     // Constructs the pattern, may frow on incorrect patterns.
     // Use Make(pattern) to get a Result<Pattern> object instead.
@@ -66,13 +66,13 @@ public:
     }
 
     // Get the compiled regex object
-    const regex& GetRegex() const&
+    const std::regex& GetRegex() const&
     {
         return mRegex;
     }
 
     // Get the compiled regex object
-    regex& GetRegex() &
+    std::regex& GetRegex() &
     {
         return mRegex;
     }

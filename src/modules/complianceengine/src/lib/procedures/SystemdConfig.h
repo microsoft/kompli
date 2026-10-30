@@ -5,7 +5,7 @@
 #define COMPLIANCEENGINE_PROCEDURES_SYSTEMD_CONFIG_H
 
 #include <Evaluator.h>
-#include <Regex.h>
+#include <regex>
 
 namespace ComplianceEngine
 {
@@ -33,7 +33,7 @@ struct SystemdConfigValueParams
     std::string parameter;
 
     /// Regex for the value, can be used instead of operator + value comparison
-    Optional<regex> valueRegex;
+    Optional<std::regex> valueRegex;
 
     /// Operator for the value
     Optional<SystemdConfigValueOperator> op;

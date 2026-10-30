@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <regex>
 #include <sys/stat.h>
 
 namespace ComplianceEngine
@@ -34,7 +35,7 @@ Result<Status> AuditFileSymlinkTarget(const FileSymlinkTargetParams& params, Ind
         return Error("Cannot resolve symlink " + params.filename + ": " + std::string(strerror(status)), status);
     }
     const std::string target(canonical.get());
-    if (!regex_search(target, params.targetPattern))
+    if (!std::regex_search(target, params.targetPattern))
     {
         return indicators.NonCompliant("Unexpected symlink target: " + target);
     }

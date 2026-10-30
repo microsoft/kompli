@@ -7,7 +7,6 @@
 #include <Evaluator.h>
 #include <Optional.h>
 #include <Pattern.h>
-#include <Regex.h>
 
 namespace ComplianceEngine
 {
