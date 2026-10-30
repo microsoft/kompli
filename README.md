@@ -42,6 +42,8 @@ pip3 install pre_commit && python3 -m pre_commit install
 
 cmake >= 3.21 is required. vcpkg is used for additional dependencies (googletest, parson) and is bootstrapped automatically.
 
+A C++11 compiler and standard library with working `std::regex` support are required; the legacy POSIX regex fallback is no longer provided.
+
 ### Build
 
 ```bash
