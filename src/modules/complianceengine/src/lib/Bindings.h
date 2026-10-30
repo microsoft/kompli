@@ -280,6 +280,16 @@ struct UnparametrizedProcedureHandler
         return mProcedure(indicators, context);
     }
 };
+
+struct RawParameterProcedureHandler
+{
+    Result<Status> (*mProcedure)(const std::map<std::string, std::string>&, IndicatorsTree&, ContextInterface&);
+
+    Result<Status> operator()(const std::map<std::string, std::string>& args, IndicatorsTree& indicators, ContextInterface& context) const
+    {
+        return mProcedure(args, indicators, context);
+    }
+};
 } // namespace BindingsImpl
 
 // Creates an instance of ProcedureHandler for the given procedure function
@@ -293,6 +303,11 @@ BindingsImpl::ParametrizedProcedureHandler<T> MakeHandler(Result<Status> (*fn)(c
 inline BindingsImpl::UnparametrizedProcedureHandler MakeHandler(Result<Status> (*fn)(IndicatorsTree&, ContextInterface&))
 {
     return BindingsImpl::UnparametrizedProcedureHandler(fn);
+}
+
+inline BindingsImpl::RawParameterProcedureHandler MakeHandler(Result<Status> (*fn)(const std::map<std::string, std::string>&, IndicatorsTree&, ContextInterface&))
+{
+    return BindingsImpl::RawParameterProcedureHandler{fn};
 }
 } // namespace ComplianceEngine
 

@@ -59,6 +59,7 @@ set(PROCEDURES
     procedures/CommandOutputMatch.cpp
     procedures/FileRegexMatch.cpp
     procedures/PackageInstalled.cpp
+    procedures/BenchmarkSettings.cpp
     procedures/SCE.cpp
     procedures/SystemdConfig.cpp
     procedures/SystemdUnitState.cpp
@@ -109,6 +110,7 @@ set(SCHEMAS
     procedures/CommandOutputMatch.schema.json
     procedures/FileRegexMatch.schema.json
     procedures/PackageInstalled.schema.json
+    procedures/BenchmarkSettings.schema.json
     procedures/SCE.schema.json
     procedures/SystemdConfig.schema.json
     procedures/SystemdUnitState.schema.json

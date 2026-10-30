@@ -179,6 +179,21 @@ TEST_F(EvaluatorTest, ExecuteAudit_3)
     EXPECT_EQ(result.Value().status, Status::Compliant);
 }
 
+TEST_F(EvaluatorTest, SetBenchmarkSettingsStoresResolvedArgumentsInContext)
+{
+    mParameters["configuredValue"] = "resolved";
+    auto json = JsonWrapper::FromString(R"({"SetBenchmarkSettings":{"literal":"value","substituted":"$configuredValue"}})");
+    ASSERT_TRUE(json.HasValue());
+    Evaluator evaluator("test", json_value_get_object(json->get()), mParameters, mContext);
+
+    auto result = evaluator.ExecuteAudit(mFormatter);
+
+    ASSERT_TRUE(result);
+    EXPECT_EQ(result.Value().status, Status::Compliant);
+    const std::map<std::string, std::string> expected{{"literal", "value"}, {"substituted", "resolved"}};
+    EXPECT_EQ(mContext.GetBenchmarkSettings(), expected);
+}
+
 TEST_F(EvaluatorTest, ExecuteAudit_4)
 {
     auto json = JsonWrapper::FromString("{\"allOf\":[{\"AuditFailure\":{}}]}");

@@ -6,8 +6,8 @@
 #include <version.h>
 
 // The log file for the NRP
-#define LOG_FILE "/var/log/osconfig_nrp.log"
-#define ROLLED_LOG_FILE "/var/log/osconfig_nrp.bak"
+#define LOG_FILE "/var/log/kompli.log"
+#define ROLLED_LOG_FILE "/var/log/kompli.bak"
 
 #define MAX_PAYLOAD_LENGTH 0
 
@@ -514,10 +514,10 @@ void MI_CALL OsConfigResource_Invoke_GetTargetResource(
     MI_UNREFERENCED_PARAMETER(instanceName);
 
     const char* auditPassed = "Audit passed";
-    const char* auditFailed = "Audit failed. See /var/log/osconfig_nrp.*";
+    const char* auditFailed = "Audit failed. See /var/log/kompli.*";
 
-    const char* auditPassedInvalidResourceOrRuleId = "Audit passed for an invalid resource and/or rule id. See /var/log/osconfig_nrp.*";
-    const char* auditFailedInvalidResourceOrRuleId = "Audit failed for an invalid resource and/or rule id. See /var/log/osconfig_nrp.*";
+    const char* auditPassedInvalidResourceOrRuleId = "Audit passed for an invalid resource and/or rule id. See /var/log/kompli.*";
+    const char* auditFailedInvalidResourceOrRuleId = "Audit failed for an invalid resource and/or rule id. See /var/log/kompli.*";
 
     const char* auditPassedCodeTemplate = "BaselineSettingCompliant:{%s}";
     const char* auditFailedCodeTemplate = "BaselineSettingNotCompliant:{%s}";

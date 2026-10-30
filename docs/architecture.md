@@ -359,6 +359,17 @@ expansion during XML escaping.
 - The positional benchmark-definition filename is checked for path traversal and a writable parent directory, then opened with `O_NOFOLLOW`, before it is read.
 - The `--log-file` path is validated to refuse symlinks and attacker-writable locations before the log handle is opened.
 
+### Log and telemetry paths
+
+The MC adapter writes `/var/log/kompli.log`, and the standalone ComplianceEngine
+module writes `/var/log/kompli_complianceengine.log`. The telemetry helper writes
+`/var/log/kompli_telemetry.log`. Each log rotates to the same basename with a
+`.bak` extension. The CLI continues to log to stderr unless `--log-file` is supplied.
+
+Telemetry-enabled builds use `/var/lib/kompli/telemetry/` for the
+`complianceengine.telemetry` event file and the `cache.db` telemetry cache.
+Existing logs and telemetry data under the old OSConfig paths are not migrated.
+
 # 6. kompli Universal Native Resource Provider (NRP)
 
 The kompli Universal Native Resource Provider (NRP) Adapter links kompli to the [Azure Automanage Machine Configuration (MC)](https://learn.microsoft.com/en-us/azure/governance/machine-configuration/).
