@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <limits>
+#include <regex>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -57,7 +58,7 @@ TEST_F(SystemdConfigTest, NeitherFileNorDirProvided)
 {
     SystemdConfigValueParams params;
     params.parameter = "TestParam";
-    params.valueRegex = regex(".*");
+    params.valueRegex = std::regex(".*");
 
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
@@ -272,7 +273,7 @@ TEST_F(SystemdConfigTest, RemediateRejectsRegexAndAmbiguousTargets)
 {
     SystemdConfigValueParams params;
     params.parameter = "DefaultLimitNOFILE";
-    params.valueRegex = regex("^[0-9]+$");
+    params.valueRegex = std::regex("^[0-9]+$");
     params.file = "/etc/systemd/system.conf";
     params.block = "Manager";
 
@@ -314,7 +315,7 @@ TEST_F(SystemdConfigTest, BothFileAndDirProvided)
 {
     SystemdConfigValueParams params;
     params.parameter = "TestParam";
-    params.valueRegex = regex(".*");
+    params.valueRegex = std::regex(".*");
     params.file = "test.conf";
     params.dir = "/etc/systemd";
 
@@ -330,7 +331,7 @@ TEST_F(SystemdConfigTest, FileCommandExecutionFails)
 
     SystemdConfigValueParams params;
     params.parameter = "TestParam";
-    params.valueRegex = regex(".*");
+    params.valueRegex = std::regex(".*");
     params.file = "test.conf";
 
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
@@ -349,7 +350,7 @@ TEST_F(SystemdConfigTest, FileParameterNotFound)
 
     SystemdConfigValueParams params;
     params.parameter = "TestParam";
-    params.valueRegex = regex(".*");
+    params.valueRegex = std::regex(".*");
     params.file = "test.conf";
 
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
@@ -368,7 +369,7 @@ TEST_F(SystemdConfigTest, FileParameterFoundButRegexMismatch)
 
     SystemdConfigValueParams params;
     params.parameter = "TestParam";
-    params.valueRegex = regex("^correctvalue$");
+    params.valueRegex = std::regex("^correctvalue$");
     params.file = "test.conf";
 
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
@@ -387,7 +388,7 @@ TEST_F(SystemdConfigTest, FileParameterFoundAndRegexMatches)
 
     SystemdConfigValueParams params;
     params.parameter = "TestParam";
-    params.valueRegex = regex("^correctvalue$");
+    params.valueRegex = std::regex("^correctvalue$");
     params.file = "test.conf";
 
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
@@ -406,7 +407,7 @@ TEST_F(SystemdConfigTest, FileParameterWithComplexRegex)
 
     SystemdConfigValueParams params;
     params.parameter = "DefaultLimitNOFILE";
-    params.valueRegex = regex("^[0-9]+$");
+    params.valueRegex = std::regex("^[0-9]+$");
     params.file = "system.conf";
 
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
@@ -427,7 +428,7 @@ TEST_F(SystemdConfigTest, FileWithMultipleConfigSections)
 
     SystemdConfigValueParams params;
     params.parameter = "DefaultLimitNOFILE";
-    params.valueRegex = regex("^65536$");
+    params.valueRegex = std::regex("^65536$");
     params.file = "system.conf";
 
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
@@ -450,7 +451,7 @@ TEST_F(SystemdConfigTest, FileWithCommentsAndEmptyLines)
 
     SystemdConfigValueParams params;
     params.parameter = "TestParam";
-    params.valueRegex = regex("value[0-9]+");
+    params.valueRegex = std::regex("value[0-9]+");
     params.file = "test.conf";
 
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
@@ -470,7 +471,7 @@ TEST_F(SystemdConfigTest, FileWithInvalidLineFormat)
 
     SystemdConfigValueParams params;
     params.parameter = "TestParam";
-    params.valueRegex = regex("correctvalue");
+    params.valueRegex = std::regex("correctvalue");
     params.file = "test.conf";
 
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
@@ -488,7 +489,7 @@ TEST_F(SystemdConfigTest, FileParameterWithAnyValueRegex)
 
     SystemdConfigValueParams params;
     params.parameter = "TestParam";
-    params.valueRegex = regex(".*");
+    params.valueRegex = std::regex(".*");
     params.file = "test.conf";
 
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
@@ -507,7 +508,7 @@ TEST_F(SystemdConfigTest, FileParameterWithEmptyValue)
 
     SystemdConfigValueParams params;
     params.parameter = "TestParam";
-    params.valueRegex = regex("^$");
+    params.valueRegex = std::regex("^$");
     params.file = "test.conf";
 
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
@@ -525,7 +526,7 @@ TEST_F(SystemdConfigTest, FileParameterWithSpecialCharacters)
 
     SystemdConfigValueParams params;
     params.parameter = "TestParam";
-    params.valueRegex = regex("/path/to/file with spaces");
+    params.valueRegex = std::regex("/path/to/file with spaces");
     params.file = "test.conf";
 
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
@@ -566,7 +567,7 @@ TEST_F(SystemdConfigTest, OpWithValueRegexNotAllowed)
     params.parameter = "TestParam";
     params.file = "test.conf";
     params.op = SystemdConfigValueOperator::LessThan;
-    params.valueRegex = regex("^[0-9]+$");
+    params.valueRegex = std::regex("^[0-9]+$");
     // op requires value, not valueRegex
 
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
@@ -580,7 +581,7 @@ TEST_F(SystemdConfigTest, BothValueAndValueRegexProvided)
     params.parameter = "TestParam";
     params.file = "test.conf";
     params.value = std::string("99");
-    params.valueRegex = regex("^42$");
+    params.valueRegex = std::regex("^42$");
 
     auto result = AuditSystemdConfigValue(params, mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
@@ -1007,7 +1008,7 @@ TEST_F(SystemdConfigTest, BlockParameterFoundInCorrectBlock)
 
     SystemdConfigValueParams params;
     params.parameter = "Restart";
-    params.valueRegex = regex("^always$");
+    params.valueRegex = std::regex("^always$");
     params.file = "test.conf";
     params.block = std::string("Service");
 
@@ -1030,7 +1031,7 @@ TEST_F(SystemdConfigTest, BlockParameterNotFoundInWrongBlock)
 
     SystemdConfigValueParams params;
     params.parameter = "Restart";
-    params.valueRegex = regex("^always$");
+    params.valueRegex = std::regex("^always$");
     params.file = "test.conf";
     params.block = std::string("Unit");
 
@@ -1050,7 +1051,7 @@ TEST_F(SystemdConfigTest, BlockParameterNotFoundInNonexistentBlock)
 
     SystemdConfigValueParams params;
     params.parameter = "ExecStart";
-    params.valueRegex = regex(".*");
+    params.valueRegex = std::regex(".*");
     params.file = "test.conf";
     params.block = std::string("Install");
 
@@ -1141,7 +1142,7 @@ TEST_F(SystemdConfigTest, ParameterWithoutBlockHeaderFoundWithoutBlockFilter)
 
     SystemdConfigValueParams params;
     params.parameter = "GlobalParam";
-    params.valueRegex = regex("^globalvalue$");
+    params.valueRegex = std::regex("^globalvalue$");
     params.file = "test.conf";
     // No block filter
 
@@ -1158,7 +1159,7 @@ TEST_F(SystemdConfigTest, JournalCompressUsesPassOnNotFoundWhenOutputHasNoJourna
 
     SystemdConfigValueParams params;
     params.parameter = "Compress";
-    params.valueRegex = regex("^yes$");
+    params.valueRegex = std::regex("^yes$");
     params.file = "journald.conf";
     params.block = std::string("Journal");
     params.passOnNotFound = true;
@@ -1179,7 +1180,7 @@ TEST_F(SystemdConfigTest, JournalCompressUsesPassOnNotFoundWhenJournalSectionHas
 
     SystemdConfigValueParams params;
     params.parameter = "Compress";
-    params.valueRegex = regex("^yes$");
+    params.valueRegex = std::regex("^yes$");
     params.file = "journald.conf";
     params.block = std::string("Journal");
     params.passOnNotFound = true;
@@ -1200,7 +1201,7 @@ TEST_F(SystemdConfigTest, JournalCompressWinsOverPassOnNotFound)
 
     SystemdConfigValueParams params;
     params.parameter = "Compress";
-    params.valueRegex = regex("^yes$");
+    params.valueRegex = std::regex("^yes$");
     params.file = "journald.conf";
     params.block = std::string("Journal");
     params.passOnNotFound = true;
@@ -1221,7 +1222,7 @@ TEST_F(SystemdConfigTest, FileParameterNotFoundButPassOnNotFound)
 
     SystemdConfigValueParams params;
     params.parameter = "TestParam";
-    params.valueRegex = regex(".*");
+    params.valueRegex = std::regex(".*");
     params.file = "test.conf";
     params.passOnNotFound = true;
 

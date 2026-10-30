@@ -13,6 +13,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <map>
+#include <regex>
 #include <string.h>
 #include <string>
 #include <unistd.h>
@@ -463,7 +464,7 @@ TEST_F(SystemdUnitStateTest, SubStateBindingValidatesArguments)
     auto parsed = ComplianceEngine::BindingsImpl::ParseArguments<SystemdUnitStateParams>(args);
     ASSERT_TRUE(parsed.HasValue());
     ASSERT_TRUE(parsed.Value().subState.HasValue());
-    EXPECT_TRUE(regex_match("running", parsed.Value().subState->GetRegex()));
+    EXPECT_TRUE(std::regex_match("running", parsed.Value().subState->GetRegex()));
 
     args["subState"] = "[";
     EXPECT_FALSE(ComplianceEngine::BindingsImpl::ParseArguments<SystemdUnitStateParams>(args).HasValue());

@@ -4,7 +4,6 @@
 #include <CommonUtils.h>
 #include <Evaluator.h>
 #include <FilePermissions.h>
-#include <Regex.h>
 #include <fcntl.h>
 #include <fnmatch.h>
 #include <fts.h>
@@ -12,6 +11,7 @@
 #include <iomanip>
 #include <iostream>
 #include <pwd.h>
+#include <regex>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -49,14 +49,14 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
     {
         return Error("Numeric ownership collections are audit-only", ENOTSUP);
     }
-    Optional<regex> fileRegex;
+    Optional<std::regex> fileRegex;
     if (params.filePatternIsRegex.Value())
     {
         try
         {
-            fileRegex = regex(params.filePattern);
+            fileRegex = std::regex(params.filePattern);
         }
-        catch (const regex_error& error)
+        catch (const std::regex_error& error)
         {
             return Error("Invalid file pattern '" + params.filePattern + "': " + error.what(), EINVAL);
         }
@@ -116,7 +116,7 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
         const bool excludedDirectory = params.excludeDirectories.Value() && entry->fts_info == FTS_D;
         if (selectedType && selectedDepth && !excludedLink && !excludedDirectory)
         {
-            if (fileRegex.HasValue() ? regex_match(entry->fts_name, fileRegex.Value()) : 0 == fnmatch(params.filePattern.c_str(), entry->fts_name, 0))
+            if (fileRegex.HasValue() ? std::regex_match(entry->fts_name, fileRegex.Value()) : 0 == fnmatch(params.filePattern.c_str(), entry->fts_name, 0))
             {
                 const char* fileName = entry->fts_path;
 

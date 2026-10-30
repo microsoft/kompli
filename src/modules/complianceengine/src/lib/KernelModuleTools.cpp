@@ -4,11 +4,11 @@
 #include <CommonUtils.h>
 #include <Evaluator.h>
 #include <KernelModuleTools.h>
-#include <Regex.h>
 #include <algorithm>
 #include <dirent.h>
 #include <fts.h>
 #include <iostream>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
@@ -16,13 +16,13 @@
 namespace ComplianceEngine
 {
 // TODO(wpk) std::regex::multiline is only supported in C++17.
-static bool MultilineRegexSearch(const std::string& str, const regex& pattern)
+static bool MultilineRegexSearch(const std::string& str, const std::regex& pattern)
 {
     std::istringstream oss(str);
     std::string line;
     while (std::getline(oss, line))
     {
-        if (regex_search(line, pattern))
+        if (std::regex_search(line, pattern))
         {
             return true;
         }
@@ -124,12 +124,12 @@ Result<bool> IsKernelModuleLoaded(std::string moduleName, ContextInterface& cont
     {
         return procModules.Error();
     }
-    regex procModulesRegex;
+    std::regex procModulesRegex;
     try
     {
-        procModulesRegex = regex("^" + UnderscoreForRegex(moduleName) + "\\s+");
+        procModulesRegex = std::regex("^" + UnderscoreForRegex(moduleName) + "\\s+");
     }
-    catch (regex_error& e)
+    catch (std::regex_error& e)
     {
         return Error(e.what());
     }
@@ -213,11 +213,11 @@ Result<Status> IsKernelModuleBlocked(std::string moduleName, bool requireMask, I
     if (modprobeOutput.HasValue())
     {
 
-        regex modprobeBlocklistRegex;
+        std::regex modprobeBlocklistRegex;
         try
         {
             // "black" "list" is the literal modprobe config keyword; split to satisfy static analysis
-            modprobeBlocklistRegex = regex(
+            modprobeBlocklistRegex = std::regex(
                 "^black"
                 "list"
                 "\\s+" +
@@ -235,10 +235,10 @@ Result<Status> IsKernelModuleBlocked(std::string moduleName, bool requireMask, I
 
         if (requireMask)
         {
-            regex modprobeInstallRegex;
+            std::regex modprobeInstallRegex;
             try
             {
-                modprobeInstallRegex = regex("^install\\s+" + UnderscoreForRegex(moduleName) + "\\s+(/usr)?/bin/(true|false)");
+                modprobeInstallRegex = std::regex("^install\\s+" + UnderscoreForRegex(moduleName) + "\\s+(/usr)?/bin/(true|false)");
             }
             catch (std::exception& e)
             {

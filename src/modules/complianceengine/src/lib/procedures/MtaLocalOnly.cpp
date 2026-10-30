@@ -5,7 +5,7 @@
 
 #include <Evaluator.h>
 #include <MtaLocalOnly.h>
-#include <Regex.h>
+#include <regex>
 
 namespace ComplianceEngine
 {
@@ -45,10 +45,10 @@ Result<Status> AuditMtaLocalOnly(const MtaLocalOnlyParams& params, IndicatorsTre
             return configuration.Error();
         }
         const auto& interfaces = configuration.Value();
-        const regex allInterfaces(R"(\ball\b)", std::regex_constants::icase);
-        const regex localInterfaces(version == MtaConfigurationVersion::Version1 ? R"(0\.0\.0\.0|::1|loopback-only)" : R"(0\.0\.0\.0|::1|loopback-only|localhost)",
+        const std::regex allInterfaces(R"(\ball\b)", std::regex_constants::icase);
+        const std::regex localInterfaces(version == MtaConfigurationVersion::Version1 ? R"(0\.0\.0\.0|::1|loopback-only)" : R"(0\.0\.0\.0|::1|loopback-only|localhost)",
             std::regex_constants::icase);
-        if (regex_search(interfaces, allInterfaces) || (!interfaces.empty() && !regex_search(interfaces, localInterfaces)))
+        if (std::regex_search(interfaces, allInterfaces) || (!interfaces.empty() && !std::regex_search(interfaces, localInterfaces)))
         {
             return indicators.NonCompliant("MTA is configured to bind to a non-local interface: " + interfaces);
         }

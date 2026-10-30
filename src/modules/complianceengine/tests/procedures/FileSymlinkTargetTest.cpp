@@ -2,6 +2,7 @@
 #include <MockContext.h>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <regex>
 #include <unistd.h>
 
 using namespace ComplianceEngine;
@@ -25,7 +26,7 @@ protected:
     {
         FileSymlinkTargetParams params;
         params.filename = directory + "/" + name;
-        params.targetPattern = regex(pattern);
+        params.targetPattern = std::regex(pattern);
         auto result = AuditFileSymlinkTarget(params, indicators, context);
         EXPECT_TRUE(result.HasValue());
         return result.HasValue() ? result.Value() : Status::NonCompliant;

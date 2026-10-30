@@ -5,7 +5,6 @@
 #include <CommonUtils.h>
 #include <Evaluator.h>
 #include <PasswordEntriesIterator.h>
-#include <Regex.h>
 #include <ScopeGuard.h>
 #include <StringTools.h>
 #include <array>
@@ -13,6 +12,7 @@
 #include <fstream>
 #include <iterator>
 #include <pwd.h>
+#include <regex>
 #include <shadow.h>
 #include <sys/stat.h>
 #include <vector>
@@ -26,13 +26,13 @@ namespace ComplianceEngine
 {
 namespace
 {
-Result<regex> CompileRegex(const std::string& pattern, const ContextInterface& context)
+Result<std::regex> CompileRegex(const std::string& pattern, const ContextInterface& context)
 {
     try
     {
-        return regex(pattern, std::regex_constants::ECMAScript);
+        return std::regex(pattern, std::regex_constants::ECMAScript);
     }
-    catch (const regex_error& e)
+    catch (const std::regex_error& e)
     {
         OsConfigLogInfo(context.GetLogHandle(), "Regex error: %s", e.what());
         return Error("Regex error: " + string(e.what()), EINVAL);
@@ -48,8 +48,8 @@ struct MatchResult
     bool exported = false;
 };
 
-Result<MatchResult> MultilineMatch(const std::string& filename, const regex& valuePattern, const regex& readonlyPattern, const regex& exportPattern,
-    ContextInterface& context)
+Result<MatchResult> MultilineMatch(const std::string& filename, const std::regex& valuePattern, const std::regex& readonlyPattern,
+    const std::regex& exportPattern, ContextInterface& context)
 {
     ifstream input(filename);
     if (!input.is_open())
@@ -63,9 +63,9 @@ Result<MatchResult> MultilineMatch(const std::string& filename, const regex& val
     while (getline(input, line))
     {
         lineNumber++;
-        smatch match;
+        std::smatch match;
 
-        if (regex_search(line, match, valuePattern))
+        if (std::regex_search(line, match, valuePattern))
         {
             OsConfigLogDebug(context.GetLogHandle(), "Matched line %d: %s", lineNumber, line.c_str());
             assert(match.ready());
@@ -94,13 +94,13 @@ Result<MatchResult> MultilineMatch(const std::string& filename, const regex& val
             }
         }
 
-        if (regex_search(line, readonlyPattern))
+        if (std::regex_search(line, readonlyPattern))
         {
             OsConfigLogDebug(context.GetLogHandle(), "Matched line %d: %s", lineNumber, line.c_str());
             result.readonly = true;
         }
 
-        if (regex_search(line, exportPattern))
+        if (std::regex_search(line, exportPattern))
         {
             OsConfigLogDebug(context.GetLogHandle(), "Matched line %d: %s", lineNumber, line.c_str());
             result.exported = true;
@@ -175,10 +175,10 @@ struct TimeoutAssignment
 
 Result<Optional<TimeoutAssignment>> FindTimeoutAssignment(const vector<string>& locations)
 {
-    static const regex auditAssignment(R"(^[ \t]*([^#\n\r]+[ \t]+)?TMOUT=([[:alnum:]]+)\b)");
-    static const regex safeAssignment(R"(^([ \t]*)(export[ \t]+)?TMOUT=[[:alnum:]]+\b[ \t]*(#.*)?$)");
-    static const regex readonlyPattern(R"(^[ \t]*([^#\n]+[ \t]+)?readonly[ \t]+TMOUT\b)");
-    static const regex exportPattern(R"(^([ \t]*|[ \t]*[^#\n]+[ \t]*;[ \t]*)export[ \t]+TMOUT\b)");
+    static const std::regex auditAssignment(R"(^[ \t]*([^#\n\r]+[ \t]+)?TMOUT=([[:alnum:]]+)\b)");
+    static const std::regex safeAssignment(R"(^([ \t]*)(export[ \t]+)?TMOUT=[[:alnum:]]+\b[ \t]*(#.*)?$)");
+    static const std::regex readonlyPattern(R"(^[ \t]*([^#\n]+[ \t]+)?readonly[ \t]+TMOUT\b)");
+    static const std::regex exportPattern(R"(^([ \t]*|[ \t]*[^#\n]+[ \t]*;[ \t]*)export[ \t]+TMOUT\b)");
     Optional<TimeoutAssignment> found;
 
     for (const auto& location : locations)
@@ -207,15 +207,15 @@ Result<Optional<TimeoutAssignment>> FindTimeoutAssignment(const vector<string>& 
             const size_t newline = contents->find('\n', lineStart);
             const size_t lineEnd = newline == string::npos ? contents->size() : newline;
             const string line = contents->substr(lineStart, lineEnd - lineStart);
-            if (regex_search(line, readonlyPattern))
+            if (std::regex_search(line, readonlyPattern))
             {
                 readonlyFound = true;
             }
-            if (regex_search(line, exportPattern))
+            if (std::regex_search(line, exportPattern))
             {
                 exportFound = true;
             }
-            if (regex_search(line, auditAssignment))
+            if (std::regex_search(line, auditAssignment))
             {
                 if (found.HasValue())
                 {
@@ -225,8 +225,8 @@ Result<Optional<TimeoutAssignment>> FindTimeoutAssignment(const vector<string>& 
                 {
                     return Error("Cannot remediate TMOUT after it has been made readonly in " + location, ENOTSUP);
                 }
-                smatch match;
-                if (!regex_match(line, match, safeAssignment))
+                std::smatch match;
+                if (!std::regex_match(line, match, safeAssignment))
                 {
                     return Error("Cannot safely rewrite complex TMOUT definition in " + location, ENOTSUP);
                 }

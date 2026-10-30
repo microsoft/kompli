@@ -5,7 +5,6 @@
 #include <Evaluator.h>
 #include <PasswordChangeDate.h>
 #include <PasswordEntriesIterator.h>
-#include <Regex.h>
 #include <pwd.h>
 #include <shadow.h>
 #include <vector>

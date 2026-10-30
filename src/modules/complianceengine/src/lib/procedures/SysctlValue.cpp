@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include <Regex.h>
 #include <StringTools.h>
 #include <SysctlValue.h>
 #include <algorithm>
 #include <fcntl.h>
 #include <fstream>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
@@ -31,8 +31,8 @@ static bool IsValidSysctlName(const std::string& name)
     }
 
     // Validate characters: only allow alphanumeric, dots, underscores, hyphens, and forward slashes
-    static const regex validPattern("^[a-zA-Z0-9._/-]+$");
-    return regex_match(name, validPattern);
+    static const std::regex validPattern("^[a-zA-Z0-9._/-]+$");
+    return std::regex_match(name, validPattern);
 }
 
 // File paths must be absolute and not contain path traversal sequences
@@ -165,7 +165,7 @@ Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree&
 
     sysctlOutput = TrimWhiteSpaces(sysctlOutput);
 
-    if (regex_search(sysctlOutput, params.value.GetRegex()) == false)
+    if (std::regex_search(sysctlOutput, params.value.GetRegex()) == false)
     {
         return indicators.NonCompliant("Expected '" + params.sysctlName + "' value '" + std::to_string(params.value) + "' got '" + sysctlOutput +
                                        "' in runtime configuration");
@@ -225,7 +225,7 @@ Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree&
     auto lines = sysctlConfigLines.rbegin();
 
     // TODO(kkanas) consider using regex_match when we have all platforms with up to date support
-    static const auto nameValuePattern = regex("\\s*([a-zA-Z0-9_]+[\\.a-zA-Z0-9_-]+)\\s*=\\s*(.*)");
+    static const auto nameValuePattern = std::regex("\\s*([a-zA-Z0-9_]+[\\.a-zA-Z0-9_-]+)\\s*=\\s*(.*)");
 
     // Iterate sysctlConfigLines backwards, when last value matches expected valueRegex
     // we are done.
@@ -242,7 +242,7 @@ Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree&
             continue;
         }
 
-        if (regex_search(line, nameValuePattern))
+        if (std::regex_search(line, nameValuePattern))
         {
             size_t eqPos = line.find('=');
             if (eqPos == std::string::npos)
@@ -258,7 +258,7 @@ Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree&
             if (name == params.sysctlName)
             {
                 found = true;
-                if (not regex_search(runSysctlValue, params.value.GetRegex()))
+                if (not std::regex_search(runSysctlValue, params.value.GetRegex()))
                 {
                     invalid = true;
                 }
@@ -272,14 +272,14 @@ Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree&
     }
 
     // TODO(kkanas) consider using regex_match when we have all platforms with up to date support
-    static const auto fileNamePattern = regex("^\\s*#\\s*(\\/.*\\.conf)$");
+    static const auto fileNamePattern = std::regex("^\\s*#\\s*(\\/.*\\.conf)$");
 
     // lines are iterated backwards so filename is before last value marked by lines
     std::string fileName;
     for (; lines != sysctlConfigLines.rend(); ++lines)
     {
         line = *lines;
-        if (regex_search(line, fileNamePattern))
+        if (std::regex_search(line, fileNamePattern))
         {
             size_t comment = line.find('#');
             if (comment == std::string::npos)
@@ -343,7 +343,7 @@ Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree&
         if (line.find(sysctlPath + "=", 0) == 0)
         {
             auto value = line.substr(params.sysctlName.size() + 1);
-            if (regex_search(value, params.value.GetRegex()))
+            if (std::regex_search(value, params.value.GetRegex()))
             {
                 return indicators.Compliant("Correct value for '" + params.sysctlName + "' in UFW configuration");
             }
