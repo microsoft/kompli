@@ -28,6 +28,20 @@ TEST_F(RegexFallbackTest, NoMatch)
 TEST_F(RegexFallbackTest, RejectsStackedRepetitionOperators)
 {
     EXPECT_THROW(regex("value+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++"), regex_error);
+    EXPECT_THROW(regex(R"([\h++++++++++++++++++++++++++++++++++++++++)"), regex_error);
+    // A backslash is literal inside a bracket expression, so "\]" closes it and the "+" run is stacked
+    EXPECT_THROW(regex(R"(([\\]++++++++++++++++++++++++++++++++++++++++)"), regex_error);
+    EXPECT_NO_THROW(regex(R"([[:alpha:]++]x+)"));
+    for (const char kind : {':', '.', '='})
+    {
+        std::string unterminated = "[";
+        for (int i = 0; i < 20000; ++i)
+        {
+            unterminated += '[';
+            unterminated += kind;
+        }
+        EXPECT_THROW(regex{unterminated}, regex_error);
+    }
     EXPECT_NO_THROW(regex(R"([+*?]+)"));
     EXPECT_NO_THROW(regex(R"([]+*?]+)"));
     EXPECT_NO_THROW(regex(R"([^^]+)"));
