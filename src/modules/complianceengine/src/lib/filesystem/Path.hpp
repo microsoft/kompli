@@ -12,10 +12,12 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <utility>
 #include <vector>
 
 namespace ComplianceEngine
@@ -101,6 +103,121 @@ public:
         struct stat accepted = {}; // retained accepted directory/regular-file pin
         std::uint64_t mountId = 0; // original name's verified mount, before a link target
     };
+    // Path owns each component's pin. A Component is not an independent
+    // descriptor or a copyable snapshot of its acquisition.
+    struct Component
+    {
+        Component(Handle&& owned, std::string source = {}, std::string target = {})
+            : pin(std::move(owned)),
+              lookupPart(std::move(source)),
+              effectivePart(std::move(target))
+        {
+        }
+        Handle pin;
+        // Only the root retains complete frozen names. Other pins retain
+        // component names; Path keeps their ancestry in private entries.
+        std::string lookupPart;
+        std::string effectivePart;
+    };
+
+private:
+    struct Entry
+    {
+        Entry(Handle&& owned, bool leaf, std::string source = {}, std::string target = {})
+            : component(std::move(owned), std::move(source), std::move(target)),
+              logicalLeaf(leaf),
+              lookupLength(component.lookupPart.size()),
+              effectiveLength(component.effectivePart.size())
+        {
+        }
+        Component component;
+        bool logicalLeaf;
+        std::size_t lookupParent = 0;
+        std::size_t effectiveParent = 0;
+        // Continue conservatively charging complete reconstructed spellings
+        // until all temporary/scratch storage has replacement coverage.
+        std::size_t lookupLength;
+        std::size_t effectiveLength;
+        std::size_t generation = 0;
+    };
+
+public:
+    // Borrowed view of the active physical chain, not every owned component.
+    // The range and its iterators are invalidated by Path mutation, move or
+    // destruction. Neither iteration nor dereference duplicates a pin.
+    class ComponentRange
+    {
+    public:
+        class Iterator
+        {
+        public:
+            using iterator_category = std::forward_iterator_tag;
+            using value_type = Component;
+            using difference_type = std::ptrdiff_t;
+            using pointer = const Component*;
+            using reference = const Component&;
+
+            Iterator() = default;
+            reference operator*() const
+            {
+                return (*mEntries)[(*mPhysical)[mPosition]].component;
+            }
+            pointer operator->() const
+            {
+                return &**this;
+            }
+            Iterator& operator++()
+            {
+                ++mPosition;
+                return *this;
+            }
+            Iterator operator++(int)
+            {
+                auto previous = *this;
+                ++*this;
+                return previous;
+            }
+            bool operator==(const Iterator& other) const
+            {
+                return mEntries == other.mEntries && mPhysical == other.mPhysical && mPosition == other.mPosition;
+            }
+            bool operator!=(const Iterator& other) const
+            {
+                return !(*this == other);
+            }
+
+        private:
+            friend class ComponentRange;
+            Iterator(const std::deque<Entry>* entries, const std::vector<std::size_t>* physical, std::size_t position)
+                : mEntries(entries),
+                  mPhysical(physical),
+                  mPosition(position)
+            {
+            }
+            const std::deque<Entry>* mEntries = nullptr;
+            const std::vector<std::size_t>* mPhysical = nullptr;
+            std::size_t mPosition = 0;
+        };
+
+        Iterator begin() const // NOLINT(*-identifier-naming)
+        {
+            return Iterator(mEntries, mPhysical, 0);
+        }
+        Iterator end() const // NOLINT(*-identifier-naming)
+        {
+            return Iterator(mEntries, mPhysical, mPhysical ? mPhysical->size() : 0);
+        }
+
+    private:
+        friend class Path;
+        ComponentRange(const std::deque<Entry>* entries, const std::vector<std::size_t>* physical)
+            : mEntries(entries),
+              mPhysical(physical)
+        {
+        }
+        const std::deque<Entry>* mEntries;
+        const std::vector<std::size_t>* mPhysical;
+    };
     // Pin the initial absolute spelling through the trusted resolver. Before
     // FreezeRoot, acquisition remains bounded by the held process-root pin;
     // selected-root access is unavailable. FreezeRoot narrows the boundary to
@@ -177,6 +294,10 @@ public:
     // On an empty Path these reference-returning accessors throw logic_error.
     const Handle& Root() const;
     const Handle& Leaf() const;
+    // Before FreezeRoot, throws logic_error like Root/Leaf. After the root
+    // is popped or Close(), returns an empty range (never the process root).
+    ComponentRange Components() const&;
+    ComponentRange Components() const&& = delete;
     // Accepted pin metadata and the original component's verified mount ID.
     Metadata LeafMetadata() const;
     std::size_t Size() const noexcept;
@@ -264,31 +385,6 @@ private:
     std::size_t mAcquisitionBytes = 0;
     // One persistent owner deque. Effective names are captured at actual
     // acquisition and tied to the pins; logical leaves delimit Pop steps.
-    struct Entry
-    {
-        Entry(Handle&& owned, bool leaf, std::string source = {}, std::string target = {})
-            : pin(std::move(owned)),
-              logicalLeaf(leaf),
-              lookupPart(std::move(source)),
-              effectivePart(std::move(target)),
-              lookupLength(lookupPart.size()),
-              effectiveLength(effectivePart.size())
-        {
-        }
-        Handle pin;
-        bool logicalLeaf;
-        // Only the root retains complete frozen names. Every other pin
-        // retains one component and explicit lookup/physical parent indexes.
-        std::string lookupPart;
-        std::string effectivePart;
-        std::size_t lookupParent = 0;
-        std::size_t effectiveParent = 0;
-        // Continue conservatively charging complete reconstructed spellings
-        // until all temporary/scratch storage has replacement coverage.
-        std::size_t lookupLength;
-        std::size_t effectiveLength;
-        std::size_t generation = 0;
-    };
     static bool Footprint(std::size_t lookup, std::size_t effective, std::size_t& bytes) noexcept;
     static bool Footprint(const Entry& pin, std::size_t& bytes) noexcept;
     std::string Name(std::size_t index, bool lookup) const;

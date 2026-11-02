@@ -92,35 +92,54 @@ Optional<Error> ValidateLimits(ResolverLimits const& limits)
     return Optional<Error>{};
 }
 
-// Simple validation of enum class to rule out int-cast values
-Optional<Error> ValidatePolicy(Path::Policy const& policy)
+// Shared fields of the absolute and child policies; reject int-cast enum values.
+Optional<Error> ValidateLinkPolicy(MountPolicy mounts, SymlinkPolicy fileLinks, SymlinkPolicy directoryLinks, NonFollowedLinkAction nonFollowedLinks)
 {
-    if (!ValidFollowing(policy.symlinks))
-    {
-        return Error("Invalid symlink policy", EINVAL);
-    }
-
-    if (!ValidFollowing(policy.fileLinks))
+    if (!ValidFollowing(fileLinks))
     {
         return Error("Invalid file link policy", EINVAL);
     }
 
-    if (!ValidFollowing(policy.directoryLinks))
+    if (!ValidFollowing(directoryLinks))
     {
         return Error("Invalid directory link policy", EINVAL);
     }
 
-    if (!ValidNonFollowedLink(policy.nonFollowedLinks))
+    if (!ValidNonFollowedLink(nonFollowedLinks))
     {
         return Error("Invalid non-followed link policy", EINVAL);
     }
 
-    if (((policy.mounts != MountPolicy::AllowCrossing) && (policy.mounts != MountPolicy::StayOnRootMount)))
+    if (mounts != MountPolicy::AllowCrossing && mounts != MountPolicy::StayOnRootMount)
     {
         return Error("Invalid mount policy", EINVAL);
     }
 
-    return Optional<Error>{};
+    return {};
+}
+
+Optional<Error> ValidatePolicy(Path::Policy const& policy)
+{
+    if (!ValidFollowing(policy.symlinks))
+        return Error("Invalid symlink policy", EINVAL);
+    return ValidateLinkPolicy(policy.mounts, policy.fileLinks, policy.directoryLinks, policy.nonFollowedLinks);
+}
+
+Optional<Error> ValidatePolicy(ExtensionPolicy const& policy)
+{
+    auto validation = ValidateLinkPolicy(policy.mounts, policy.fileLinks, policy.directoryLinks, policy.nonFollowedLinks);
+    if (validation.HasValue())
+        return std::move(validation).Value();
+    if (policy.unsupported != UnsupportedTypeAction::Reject && policy.unsupported != UnsupportedTypeAction::Skip)
+        return Error("Invalid unsupported type action", EINVAL);
+    return {};
+}
+
+Optional<Error> ValidateExtendInput(const std::string& component, ExtensionPolicy const& policy)
+{
+    if (!Detail::IsSingleChildComponent(component))
+        return Error("Invalid child component", EINVAL);
+    return ValidatePolicy(policy);
 }
 
 Optional<Error> ValidateAbsolutePath(const std::string& path, Path::Policy const& policy, ResolverLimits const& limits)
@@ -1073,7 +1092,7 @@ ComplianceEngine::Result<bool> Path::Close()
     };
     for (auto entry = entries->rbegin(); entry != entries->rend(); ++entry)
     {
-        release(entry->pin);
+        release(entry->component.pin);
     }
     if (firstError != 0)
     {
@@ -1124,7 +1143,7 @@ ComplianceEngine::Result<bool> Path::Restore(Restoration previous)
         return Error("Invalid held physical restoration point", EINVAL);
     for (std::size_t i = 0; i < previous.physical.size(); ++i)
         if ((i != 0 && previous.physical[i] <= previous.physical[i - 1]) || (*mEntries)[previous.physical[i]].generation != previous.generations[i] ||
-            (*mEntries)[previous.physical[i]].pin.AcquiredType() != Handle::Type::Directory)
+            (*mEntries)[previous.physical[i]].component.pin.AcquiredType() != Handle::Type::Directory)
             return Error("Stale held physical restoration point", EINVAL);
     const std::size_t kept = previous.physical.back() + 1;
     mPhysical.swap(previous.physical);
@@ -1137,7 +1156,7 @@ ComplianceEngine::Result<bool> Path::Restore(Restoration previous)
         std::size_t bytes = 0;
         if (Footprint(entry, bytes) && bytes <= mUsage.retainedBytes)
             mUsage.retainedBytes -= bytes;
-        auto closed = entry.pin.Close();
+        auto closed = entry.component.pin.Close();
         if (!closed.HasValue())
         {
             if (first == 0)
@@ -1183,7 +1202,7 @@ ComplianceEngine::Result<std::uint64_t> Path::RootMountId() const
     {
         return std::move(opened).Error();
     }
-    const std::uint64_t mount = mEntries->front().pin.mTargetMount;
+    const std::uint64_t mount = mEntries->front().component.pin.mTargetMount;
     auto closed = procfs.Close();
     if (!closed.HasValue())
         return std::move(closed).Error();
@@ -1267,7 +1286,7 @@ std::vector<Path::NameBinding> Path::Bindings() const
     for (std::size_t index = 0; index < mEntries->size(); ++index)
     {
         const Entry& entry = (*mEntries)[index];
-        names.push_back({&entry.pin, Name(index, true), Name(index, false), entry.pin.OriginalMount()});
+        names.push_back({&entry.component.pin, Name(index, true), Name(index, false), entry.component.pin.OriginalMount()});
     }
     return names;
 }
@@ -1277,7 +1296,7 @@ std::string Path::Name(std::size_t index, bool lookup) const
     if (!mEntries || index >= mEntries->size())
         throw std::logic_error("Path name has no owned pin");
     if (index == 0)
-        return lookup ? mEntries->front().lookupPart : mEntries->front().effectivePart;
+        return lookup ? mEntries->front().component.lookupPart : mEntries->front().component.effectivePart;
     const Entry& entry = (*mEntries)[index];
     std::vector<std::size_t> ancestry;
     std::size_t parent = lookup ? entry.lookupParent : entry.effectiveParent;
@@ -1289,10 +1308,10 @@ std::string Path::Name(std::size_t index, bool lookup) const
         index = parent;
         parent = (*mEntries)[index].effectiveParent;
     }
-    std::string result = mEntries->front().effectivePart;
+    std::string result = mEntries->front().component.effectivePart;
     for (auto ancestor = ancestry.rbegin(); ancestor != ancestry.rend(); ++ancestor)
-        result = JoinName(result, (*mEntries)[*ancestor].effectivePart);
-    return JoinName(result, lookup ? entry.lookupPart : entry.effectivePart);
+        result = JoinName(result, (*mEntries)[*ancestor].component.effectivePart);
+    return JoinName(result, lookup ? entry.component.lookupPart : entry.component.effectivePart);
 }
 
 ComplianceEngine::Result<std::vector<const Handle*>> Path::PhysicalLineage(const Handle& root, const std::string& rootName, const Handle& target,
@@ -1342,13 +1361,13 @@ ComplianceEngine::Result<std::vector<const Handle*>> Path::Lineage(std::size_t i
         std::vector<const Handle*> pins;
         pins.reserve(mPhysical.size());
         for (std::size_t entry : mPhysical)
-            pins.push_back(&(*mEntries)[entry].pin);
+            pins.push_back(&(*mEntries)[entry].component.pin);
         return pins;
     }
     if (!mEntries || index >= mEntries->size())
         return Error("Invalid acquired directory boundary", EINVAL);
-    return PhysicalLineage(mEntries->front().pin, mEntries->front().effectivePart, (*mEntries)[index].pin, Name(index, false), Bindings(), nullptr,
-        std::numeric_limits<std::size_t>::max());
+    return PhysicalLineage(mEntries->front().component.pin, mEntries->front().component.effectivePart, (*mEntries)[index].component.pin,
+        Name(index, false), Bindings(), nullptr, std::numeric_limits<std::size_t>::max());
 }
 
 bool Path::Footprint(std::size_t lookup, std::size_t effective, std::size_t& bytes) noexcept
@@ -1405,8 +1424,8 @@ ComplianceEngine::Result<bool> Path::CommitStage(Detail::ResolvedPath& stage, Ha
                 return abort(Error("Invalid staged directory index", EINVAL));
             keep[frame.Get<std::size_t>()] = true;
         }
-        else if (frame.Get<const Handle*>() == nullptr ||
-                 std::none_of(mEntries->begin(), mEntries->end(), [&frame](const Entry& entry) { return &entry.pin == frame.Get<const Handle*>(); }))
+        else if (frame.Get<const Handle*>() == nullptr || std::none_of(mEntries->begin(), mEntries->end(),
+                                                              [&frame](const Entry& entry) { return &entry.component.pin == frame.Get<const Handle*>(); }))
             return abort(Error("Invalid borrowed staged ancestor", EINVAL));
     }
     std::size_t append = mEntries->size();
@@ -1427,7 +1446,7 @@ ComplianceEngine::Result<bool> Path::CommitStage(Detail::ResolvedPath& stage, Ha
             else
             {
                 const Handle* held = frame.Get<const Handle*>();
-                auto found = std::find_if(mEntries->begin(), mEntries->end(), [held](const Entry& entry) { return &entry.pin == held; });
+                auto found = std::find_if(mEntries->begin(), mEntries->end(), [held](const Entry& entry) { return &entry.component.pin == held; });
                 next.push_back(static_cast<std::size_t>(found - mEntries->begin()));
             }
         }
@@ -1474,7 +1493,7 @@ ComplianceEngine::Result<bool> Path::CommitStage(Detail::ResolvedPath& stage, Ha
             part = full.substr(slash + 1);
             const std::string prefix = slash == 0 ? "/" : full.substr(0, slash);
             for (std::size_t i = 0; i < mEntries->size(); ++i)
-                if ((*mEntries)[i].pin.AcquiredType() == Handle::Type::Directory && Name(i, false) == prefix)
+                if ((*mEntries)[i].component.pin.AcquiredType() == Handle::Type::Directory && Name(i, false) == prefix)
                     return i;
             for (std::size_t i = 0; i < stage.mPins->size(); ++i)
                 if (keep[i] && stagedIndex[i] != std::numeric_limits<std::size_t>::max() && (*stage.mPins)[i].effective == prefix &&
@@ -1559,22 +1578,22 @@ ComplianceEngine::Result<bool> Path::CommitStage(Detail::ResolvedPath& stage, Ha
     {
         if (!keep[i] || (stage.mLeafTaken && i == stage.mOwnedLeaf))
             continue;
-        (*mEntries)[stagedIndex[i]].pin = std::move((*stage.mPins)[i].handle);
+        (*mEntries)[stagedIndex[i]].component.pin = std::move((*stage.mPins)[i].handle);
         (*mEntries)[stagedIndex[i]].lookupLength = (*stage.mPins)[i].lookup.size();
         (*mEntries)[stagedIndex[i]].effectiveLength = (*stage.mPins)[i].effective.size();
-        (*mEntries)[stagedIndex[i]].lookupPart = std::move(stagedNames[i].source);
-        (*mEntries)[stagedIndex[i]].effectivePart = std::move(stagedNames[i].target);
+        (*mEntries)[stagedIndex[i]].component.lookupPart = std::move(stagedNames[i].source);
+        (*mEntries)[stagedIndex[i]].component.effectivePart = std::move(stagedNames[i].target);
         (*mEntries)[stagedIndex[i]].lookupParent = stagedNames[i].sourceParent;
         (*mEntries)[stagedIndex[i]].effectiveParent = stagedNames[i].targetParent;
     }
     if (appendLeaf)
     {
         leaf.mOriginalMount = stage.mInitialMountId;
-        (*mEntries)[leafIndex].pin = std::move(leaf);
+        (*mEntries)[leafIndex].component.pin = std::move(leaf);
         (*mEntries)[leafIndex].lookupLength = stage.mSourceLookup.size();
         (*mEntries)[leafIndex].effectiveLength = stage.mEffectiveLeaf.size();
-        (*mEntries)[leafIndex].lookupPart = std::move(leafName.source);
-        (*mEntries)[leafIndex].effectivePart = std::move(leafName.target);
+        (*mEntries)[leafIndex].component.lookupPart = std::move(leafName.source);
+        (*mEntries)[leafIndex].component.effectivePart = std::move(leafName.target);
         (*mEntries)[leafIndex].lookupParent = leafName.sourceParent;
         (*mEntries)[leafIndex].effectiveParent = leafName.targetParent;
         (*mEntries)[leafIndex].logicalLeaf = logicalLeaf;
@@ -1605,7 +1624,7 @@ ComplianceEngine::Result<bool> Path::PinProcessRoot()
     mUsage.retainedBytes += sizeof(Entry) + 2;
     mPhysical.push_back(0);
     mSize = 1;
-    mRootMountId = mEntries->front().pin.mTargetMount;
+    mRootMountId = mEntries->front().component.pin.mTargetMount;
     mLeafSourceMount = mRootMountId;
     return true;
 }
@@ -1664,7 +1683,7 @@ ComplianceEngine::Result<bool> Path::FreezeRoot()
     const std::size_t selected = mPhysical.back();
     std::string lookup = mAcquisitionName;
     std::string effective = Name(selected, false);
-    const auto& pin = (*mEntries)[selected].pin;
+    const auto& pin = (*mEntries)[selected].component.pin;
     const std::uint64_t mount = pin.mTargetMount;
     std::size_t record = 0;
     if (!Footprint(lookup.size(), effective.size(), record) || record > mLimits.shared.retainedBytes - mAcquisitionBytes)
@@ -1680,7 +1699,7 @@ ComplianceEngine::Result<bool> Path::FreezeRoot()
     int first = 0;
     for (auto item = scratch.rbegin(); item != scratch.rend(); ++item)
     {
-        auto closed = item->pin.Close();
+        auto closed = item->component.pin.Close();
         if (!closed.HasValue())
         {
             if (first == 0)
@@ -1697,10 +1716,10 @@ ComplianceEngine::Result<bool> Path::FreezeRoot()
         return Error("Cannot close initial root-prefix scratch pins", first);
     }
     Entry& root = mEntries->front();
-    root.lookupPart = std::move(lookup);
-    root.effectivePart = std::move(effective);
-    root.lookupLength = root.lookupPart.size();
-    root.effectiveLength = root.effectivePart.size();
+    root.component.lookupPart = std::move(lookup);
+    root.component.effectivePart = std::move(effective);
+    root.lookupLength = root.component.lookupPart.size();
+    root.effectiveLength = root.component.effectivePart.size();
     root.lookupParent = root.effectiveParent = 0;
     root.logicalLeaf = true;
     mPhysical.swap(frozenPhysical);
@@ -1797,18 +1816,11 @@ ComplianceEngine::Result<Variant<const Path&, Path::RejectionReason>> Path::Exte
         return Error("Path has no accepted root", EINVAL);
     }
 
-    if (!Detail::IsSingleChildComponent(component) || (policy.mounts != MountPolicy::AllowCrossing && policy.mounts != MountPolicy::StayOnRootMount) ||
-        !ValidFollowing(policy.fileLinks) || !ValidFollowing(policy.directoryLinks) || !ValidNonFollowedLink(policy.nonFollowedLinks))
-    {
-        return Error("Invalid child component or extension policy", EINVAL);
-    }
+    auto validation = ValidateExtendInput(component, policy);
+    if (validation.HasValue())
+        return std::move(validation).Value();
 
-    if ((policy.unsupported != UnsupportedTypeAction::Reject) && (policy.unsupported != UnsupportedTypeAction::Skip))
-    {
-        return Error("Invalid unsupported type action", EINVAL);
-    }
-
-    if ((*mEntries)[mPhysical.back()].pin.AcquiredType() != Handle::Type::Directory)
+    if ((*mEntries)[mPhysical.back()].component.pin.AcquiredType() != Handle::Type::Directory)
     {
         return Error("Cannot extend a regular-file leaf", ENOTDIR);
     }
@@ -1846,7 +1858,7 @@ ComplianceEngine::Result<Variant<const Path&, Path::RejectionReason>> Path::Exte
     std::vector<const Handle*> parentLineage = std::move(lineage).Value();
     // The logical root can be reached through aliases: its physical parents
     // are not themselves a permitted ".." escape from the accepted boundary.
-    const Handle& gate = mEntries->front().pin;
+    const Handle& gate = mEntries->front().component.pin;
     auto boundary = std::find(parentLineage.begin(), parentLineage.end(), &gate);
     if (boundary == parentLineage.end())
         return Error("Accepted root is absent from physical ancestry", EINVAL);
@@ -1875,7 +1887,7 @@ ComplianceEngine::Result<Variant<const Path&, Path::RejectionReason>> Path::Exte
     auto resolved = ResolveChild(mContext.get(), gate, parentLineage, component,
         ResolutionPolicy{FollowForClassification(policy.fileLinks, policy.directoryLinks), policy.mounts, mode == ExtensionMode::ChildPush, policy.reportMissingRegularFile,
             policy.nonFollowedLinks == NonFollowedLinkAction::Skip && policy.fileLinks == SymlinkPolicy::DoNotFollow && policy.directoryLinks == SymlinkPolicy::DoNotFollow},
-        available, names, mEntries->front().lookupPart, mEntries->front().effectivePart, mUsage.workSpent, followed);
+        available, names, mEntries->front().component.lookupPart, mEntries->front().component.effectivePart, mUsage.workSpent, followed);
     if (!resolved.HasValue())
     {
         return std::move(resolved).Error();
@@ -1962,7 +1974,7 @@ ComplianceEngine::Result<Handle> Path::Pop()
         detached.push_back(std::move(mEntries->back()));
         mEntries->pop_back();
     }
-    Handle removed(std::move(detached[mEntries->size() + detached.size() - 1 - selected].pin));
+    Handle removed(std::move(detached[mEntries->size() + detached.size() - 1 - selected].component.pin));
     mUsage.retainedBytes = releasedBytes <= mUsage.retainedBytes ? mUsage.retainedBytes - releasedBytes : 0;
     mPhysical.pop_back();
     mSize = mPhysical.size();
@@ -1972,7 +1984,7 @@ ComplianceEngine::Result<Handle> Path::Pop()
     int firstError = 0;
     for (Entry& entry : detached)
     {
-        auto closed = entry.pin.Close();
+        auto closed = entry.component.pin.Close();
         if (!closed.HasValue())
         {
             if (firstError == 0)
@@ -2014,7 +2026,7 @@ const Handle& Path::Root() const
     {
         throw std::logic_error("Path has no accepted root");
     }
-    return mEntries->front().pin;
+    return mEntries->front().component.pin;
 }
 
 const Handle& Path::Leaf() const
@@ -2023,7 +2035,16 @@ const Handle& Path::Leaf() const
     {
         throw std::logic_error("Path has no leaf");
     }
-    return (*mEntries)[mPhysical.back()].pin;
+    return (*mEntries)[mPhysical.back()].component.pin;
+}
+
+Path::ComponentRange Path::Components() const&
+{
+    if (!mFrozen && mSize != 0)
+        throw std::logic_error("Path components are unavailable before FreezeRoot");
+    if (!IsFrozen())
+        return ComponentRange(nullptr, nullptr);
+    return ComponentRange(mEntries.get(), &mPhysical);
 }
 
 std::size_t Path::Size() const noexcept

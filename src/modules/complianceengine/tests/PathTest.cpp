@@ -108,6 +108,45 @@ static_assert(!std::is_copy_assignable<PathOutcome>::value, "A path outcome cann
 static_assert(std::is_nothrow_move_constructible<PathOutcome>::value, "path outcome move construction is nonthrowing");
 static_assert(std::is_nothrow_move_assignable<PathOutcome>::value, "path outcome move assignment is nonthrowing");
 static_assert(std::is_nothrow_destructible<PathOutcome>::value, "path outcome destruction is nonthrowing");
+using PinnedComponents = decltype(std::declval<const Path&>().Components());
+using PinnedIterator = decltype(std::declval<PinnedComponents>().begin());
+static_assert(std::is_same<typename std::iterator_traits<PinnedIterator>::value_type, Path::Component>::value, "Pinned range yields components");
+static_assert(std::is_same<decltype(*std::declval<PinnedIterator>()), const Path::Component&>::value,
+    "Pinned components are borrowed const references");
+static_assert(!std::is_copy_constructible<Path::Component>::value, "Pinned component ownership is not copyable");
+static_assert(std::is_same<decltype((std::declval<const Path::Component&>().pin)), const Handle&>::value,
+    "A borrowed component exposes its acquired pin without transferring it");
+static_assert(std::is_same<decltype((std::declval<const Path::Component&>().lookupPart)), const std::string&>::value &&
+                  std::is_same<decltype((std::declval<const Path::Component&>().effectivePart)), const std::string&>::value,
+    "A borrowed component exposes original and effective names");
+template <typename T, typename = void>
+struct HasLookupParent : std::false_type
+{
+};
+template <typename T>
+struct HasLookupParent<T, std::void_t<decltype(std::declval<T>().lookupParent)>> : std::true_type
+{
+};
+template <typename T, typename = void>
+struct HasGeneration : std::false_type
+{
+};
+template <typename T>
+struct HasGeneration<T, std::void_t<decltype(std::declval<T>().generation)>> : std::true_type
+{
+};
+static_assert(!HasLookupParent<Path::Component>::value && !HasGeneration<Path::Component>::value,
+    "Internal ancestry and restoration generations are not public component state");
+template <typename T, typename = void>
+struct CanBorrowTemporaryComponents : std::false_type
+{
+};
+template <typename T>
+struct CanBorrowTemporaryComponents<T, std::void_t<decltype(std::declval<T>().Components())>> : std::true_type
+{
+};
+static_assert(!CanBorrowTemporaryComponents<Path&&>::value && !CanBorrowTemporaryComponents<const Path&&>::value,
+    "A temporary Path cannot lend its component range");
 
 namespace
 {
@@ -235,6 +274,7 @@ TEST_F(PathAliasTest, ExplicitFreezeNarrowsProcessSentinelAndPoppedRootCannotRea
     EXPECT_EQ(0U, path.Size());
     EXPECT_THROW(path.Root(), std::logic_error);
     EXPECT_THROW(path.Leaf(), std::logic_error);
+    EXPECT_THROW(path.Components(), std::logic_error);
     EXPECT_THROW(path.ToString(), std::logic_error);
     auto beforeFreeze = path.Capture();
     EXPECT_EQ(EINVAL, path.Restore(std::move(beforeFreeze)).Error().code);
@@ -243,6 +283,7 @@ TEST_F(PathAliasTest, ExplicitFreezeNarrowsProcessSentinelAndPoppedRootCannotRea
     auto outside = path.Push("pre-freeze-root", child);
     ASSERT_TRUE(outside.HasValue()) << outside.Error().message;
     ASSERT_TRUE(outside.Value().Is<const Path&>());
+    EXPECT_THROW(path.Components(), std::logic_error);
     ASSERT_TRUE(path.FreezeRoot().HasValue());
     EXPECT_TRUE(path.IsFrozen());
     EXPECT_EQ(directory + "/pre-freeze-root", path.ToString());
@@ -252,10 +293,64 @@ TEST_F(PathAliasTest, ExplicitFreezeNarrowsProcessSentinelAndPoppedRootCannotRea
     ASSERT_TRUE(detached.HasValue()) << detached.Error().message;
     EXPECT_EQ(0U, path.Size());
     EXPECT_EQ(0U, path.RetainedDescriptors());
+    EXPECT_EQ(path.Components().begin(), path.Components().end());
     EXPECT_EQ(EINVAL, path.Push("tmp", child).Error().code);
     EXPECT_EQ(EINVAL, path.Restore(std::move(token)).Error().code);
+    Path moved(std::move(path));
+    EXPECT_EQ(EINVAL, path.Push("tmp", child).Error().code);
+    EXPECT_EQ(path.Components().begin(), path.Components().end());
+    EXPECT_TRUE(moved.Close().HasValue());
     EXPECT_TRUE(detached.Value().Close().HasValue());
     EXPECT_EQ(before, CountOpenDescriptors());
+}
+
+TEST_F(PathAliasTest, ComponentsBorrowActivePhysicalPinsInRootToLeafOrder)
+{
+    const std::string root = context.GetTempdirPath() + "/components";
+    ASSERT_EQ(0, ::mkdir(root.c_str(), 0700));
+    ASSERT_EQ(0, ::mkdir((root + "/a").c_str(), 0700));
+    ASSERT_EQ(0, ::mkdir((root + "/a/b").c_str(), 0700));
+    ASSERT_EQ(0, ::symlink("a/b", (root + "/link").c_str()));
+    auto opened = SelectAcceptedPath(context, root, CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+    const Handle* rootPin = &path.Root();
+    const auto follow = ChildPolicy(SymlinkPolicy::Follow, MountPolicy::AllowCrossing);
+    ASSERT_TRUE(path.Push("link", follow).HasValue());
+    ASSERT_EQ(3U, path.Size());
+    const auto descriptors = CountOpenDescriptors();
+    const auto retained = path.RetainedDescriptors();
+    const auto bytes = path.RetainedBytes();
+    const auto components = path.Components();
+    auto it = components.begin();
+    ASSERT_NE(it, components.end());
+    EXPECT_EQ(rootPin, &it->pin);
+    EXPECT_EQ(root, it->lookupPart);
+    EXPECT_EQ(root, it->effectivePart);
+    ++it;
+    ASSERT_NE(it, components.end());
+    EXPECT_EQ("a", it->lookupPart);
+    EXPECT_EQ("a", it->effectivePart);
+    ++it;
+    ASSERT_NE(it, components.end());
+    EXPECT_EQ(&path.Leaf(), &it->pin);
+    EXPECT_EQ("b", it->effectivePart);
+    EXPECT_EQ((root + "/a/b"), path.ToString());
+    ++it;
+    EXPECT_EQ(components.end(), it);
+    EXPECT_EQ(descriptors, CountOpenDescriptors());
+    EXPECT_EQ(retained, path.RetainedDescriptors());
+    EXPECT_EQ(bytes, path.RetainedBytes());
+    auto removed = path.Pop();
+    ASSERT_TRUE(removed.HasValue()) << removed.Error().message;
+    EXPECT_TRUE(removed.Value().Close().HasValue());
+    auto surviving = path.Components();
+    EXPECT_EQ(2, std::distance(surviving.begin(), surviving.end()));
+    auto ancestor = surviving.begin();
+    ++ancestor;
+    EXPECT_EQ("a", ancestor->effectivePart);
+    ASSERT_TRUE(path.Close().HasValue());
+    EXPECT_EQ(path.Components().begin(), path.Components().end());
 }
 
 TEST_F(PathAliasTest, FreezeFileRootAndRejectPreFreezeSelectedFileAccess)
@@ -267,6 +362,10 @@ TEST_F(PathAliasTest, FreezeFileRootAndRejectPreFreezeSelectedFileAccess)
     EXPECT_EQ(EINVAL, path.DuplicateLeaf().Error().code);
     ASSERT_TRUE(path.FreezeRoot().HasValue());
     EXPECT_EQ(Handle::Type::RegularFile, path.Root().AcquiredType());
+    auto components = path.Components();
+    ASSERT_NE(components.begin(), components.end());
+    EXPECT_EQ(&path.Root(), &components.begin()->pin);
+    EXPECT_EQ(1, std::distance(components.begin(), components.end()));
     EXPECT_EQ(file, path.ToString());
     auto root = path.Pop();
     ASSERT_TRUE(root.HasValue()) << root.Error().message;
@@ -2549,9 +2648,36 @@ TEST_F(PathAliasTest, PushBorrowOutlivesOutcomeWhileOwnerRemainsLive)
     // The pointer is intentionally not used after the owner is closed.
 }
 
+TEST_F(PathAliasTest, InvalidChildComponentIsDistinctAndLeavesAcceptedRootOwned)
+{
+    const std::size_t before = CountOpenDescriptors();
+    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+    const std::size_t bytes = path.RetainedBytes();
+    const std::size_t pins = path.RetainedDescriptors();
+    const std::string root = path.ToString();
+    const ExtensionPolicy policy = ChildPolicy(SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing);
+    const std::string components[] = {"../escape", std::string("x\0y", 3)};
+    for (const std::string& component : components)
+    {
+        auto result = path.Push(component, policy);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EINVAL, result.Error().code);
+        EXPECT_EQ("Invalid child component", result.Error().message);
+        EXPECT_EQ(root, path.ToString());
+        EXPECT_EQ(1U, path.Size());
+        EXPECT_EQ(bytes, path.RetainedBytes());
+        EXPECT_EQ(pins, path.RetainedDescriptors());
+    }
+    ASSERT_TRUE(path.Close().HasValue());
+    EXPECT_EQ(before, CountOpenDescriptors());
+}
+
 TEST_F(PathAliasTest, RejectsInvalidFollowingAndNonFollowedLinkDisposition)
 {
     Path::Policy root = CrossMountPathPolicy();
+    const char* rootMessages[] = {"Invalid symlink policy", "Invalid file link policy", "Invalid directory link policy"};
     for (int field = 0; field < 3; ++field)
     {
         Path::Policy invalid = root;
@@ -2564,32 +2690,46 @@ TEST_F(PathAliasTest, RejectsInvalidFollowingAndNonFollowedLinkDisposition)
         auto result = Path::Make(context, "/", invalid, AmpleLimits());
         ASSERT_FALSE(result.HasValue());
         EXPECT_EQ(EINVAL, result.Error().code);
+        EXPECT_EQ(rootMessages[field], result.Error().message);
     }
     root.nonFollowedLinks = static_cast<NonFollowedLinkAction>(99);
     auto invalidRoot = Path::Make(context, "/", root, AmpleLimits());
     ASSERT_FALSE(invalidRoot.HasValue());
     EXPECT_EQ(EINVAL, invalidRoot.Error().code);
+    EXPECT_EQ("Invalid non-followed link policy", invalidRoot.Error().message);
 
+    const std::size_t before = CountOpenDescriptors();
     auto opened = SelectAcceptedPath(context, "/", CrossMountPathPolicy(), AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     ExtensionPolicy extension = ChildPolicy(SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing);
-    for (int field = 0; field < 2; ++field)
+    const std::size_t bytes = path.RetainedBytes();
+    const std::size_t pins = path.RetainedDescriptors();
+    const char* messages[] = {"Invalid file link policy", "Invalid directory link policy", "Invalid non-followed link policy", "Invalid mount policy",
+        "Invalid unsupported type action"};
+    for (int field = 0; field < 5; ++field)
     {
         ExtensionPolicy invalid = extension;
         if (field == 0)
             invalid.fileLinks = static_cast<SymlinkPolicy>(99);
-        else
+        else if (field == 1)
             invalid.directoryLinks = static_cast<SymlinkPolicy>(99);
+        else if (field == 2)
+            invalid.nonFollowedLinks = static_cast<NonFollowedLinkAction>(99);
+        else if (field == 3)
+            invalid.mounts = static_cast<MountPolicy>(99);
+        else
+            invalid.unsupported = static_cast<UnsupportedTypeAction>(99);
         auto result = path.Push("child", invalid);
         ASSERT_FALSE(result.HasValue());
         EXPECT_EQ(EINVAL, result.Error().code);
+        EXPECT_EQ(messages[field], result.Error().message);
+        EXPECT_EQ(1U, path.Size());
+        EXPECT_EQ(bytes, path.RetainedBytes());
+        EXPECT_EQ(pins, path.RetainedDescriptors());
     }
-    extension.nonFollowedLinks = static_cast<NonFollowedLinkAction>(99);
-    auto invalidChild = path.Push("child", extension);
-    ASSERT_FALSE(invalidChild.HasValue());
-    EXPECT_EQ(EINVAL, invalidChild.Error().code);
     ASSERT_TRUE(path.Close().HasValue());
+    EXPECT_EQ(before, CountOpenDescriptors());
 }
 
 TEST_F(PathAliasTest, MissingFactorySelectionCannotHideCheckedRootCloseFailure)
@@ -2947,6 +3087,48 @@ TEST_F(PathAliasTest, SameDepthAliasRestoresHeldPreviousBranchWithoutNameLookup)
     EXPECT_TRUE(held.Value().Close().HasValue());
 }
 
+TEST_F(PathAliasTest, ComponentsExcludeRetainedInactiveBranchAndFollowRestoration)
+{
+    const std::string root = context.GetTempdirPath() + "/component-branches";
+    ASSERT_EQ(0, ::mkdir(root.c_str(), 0700));
+    ASSERT_EQ(0, ::mkdir((root + "/first").c_str(), 0700));
+    ASSERT_EQ(0, ::mkdir((root + "/second").c_str(), 0700));
+    ASSERT_EQ(0, ::symlink("../second", (root + "/first/shortcut").c_str()));
+    auto opened = SelectAcceptedPath(context, root, CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+    const auto follow = ChildPolicy(SymlinkPolicy::Follow, MountPolicy::AllowCrossing);
+    ASSERT_TRUE(path.Push("first", follow).HasValue());
+    const Handle* first = &path.Leaf();
+    auto point = path.Capture();
+    ASSERT_TRUE(path.Push("shortcut", follow).HasValue());
+    ASSERT_EQ(2U, path.Size());
+    EXPECT_GT(path.RetainedDescriptors(), path.Size());
+    auto active = path.Components();
+    auto item = active.begin();
+    EXPECT_EQ(&path.Root(), &item->pin);
+    ++item;
+    ASSERT_NE(item, active.end());
+    EXPECT_EQ(&path.Leaf(), &item->pin);
+    EXPECT_NE(first, &item->pin);
+    EXPECT_EQ("second", item->effectivePart);
+    ++item;
+    EXPECT_EQ(active.end(), item);
+    // Restoration selects held pins without resolving or reopening names.
+    ASSERT_EQ(0, ::rename((root + "/first").c_str(), (root + "/renamed").c_str()));
+    auto restored = path.Restore(std::move(point));
+    ASSERT_TRUE(restored.HasValue()) << restored.Error().message;
+    auto previous = path.Components();
+    item = previous.begin();
+    ++item;
+    ASSERT_NE(item, previous.end());
+    EXPECT_EQ(first, &item->pin);
+    EXPECT_EQ("first", item->effectivePart);
+    ++item;
+    EXPECT_EQ(previous.end(), item);
+    EXPECT_EQ(root + "/first", path.ToString());
+}
+
 TEST_F(PathAliasTest, StaleRestorationCannotSelectReusedPhysicalSlot)
 {
     const std::string root = context.GetTempdirPath() + "/restoration";
@@ -3193,12 +3375,14 @@ TEST_F(PathAliasTest, IgnoredPopClosesOnceAndEmptyAccessIsExplicit)
         EXPECT_EQ(EINVAL, empty.Error().code);
         EXPECT_THROW(moved.Root(), std::logic_error);
         EXPECT_THROW(moved.Leaf(), std::logic_error);
+        EXPECT_EQ(moved.Components().begin(), moved.Components().end());
         auto cannotPush = moved.Push("etc", allow);
         ASSERT_FALSE(cannotPush.HasValue());
         EXPECT_EQ(EINVAL, cannotPush.Error().code);
         auto movedFrom = path.Pop();
         ASSERT_FALSE(movedFrom.HasValue());
         EXPECT_EQ(EINVAL, movedFrom.Error().code);
+        EXPECT_EQ(path.Components().begin(), path.Components().end());
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }
