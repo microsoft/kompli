@@ -7,12 +7,17 @@
 #include "MockContext.h"
 #include "parson.h"
 
+#include <UserDotFilePermissions.h>
+#include <cerrno>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <sys/stat.h>
 
 using ComplianceEngine::action_func_t;
 using ComplianceEngine::Error;
 using ComplianceEngine::Evaluator;
 using ComplianceEngine::JsonWrapper;
+using ComplianceEngine::NestedListFormatter;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 
@@ -23,6 +28,38 @@ protected:
     MockContext mContext;
     ComplianceEngine::DebugFormatter mFormatter;
 };
+
+TEST_F(EvaluatorTest, UserDotFileRemediationIsDisabledWithoutChangingFiles)
+{
+    const auto& actions = Evaluator::mProcedureMap.at("UserDotFilePermissions");
+    ASSERT_TRUE(actions.audit);
+    ASSERT_TRUE(actions.remediate); // A null handler would fall back to audit in remediation mode.
+
+    const std::string file = mContext.MakeTempfile("unchanged\n");
+    ASSERT_EQ(0, chmod(file.c_str(), 0666));
+    struct stat before = {}, after = {};
+    ASSERT_EQ(0, stat(file.c_str(), &before));
+
+    ComplianceEngine::IndicatorsTree indicators;
+    indicators.Push("UserDotFilePermissions");
+    const auto direct = ComplianceEngine::RemediateUserDotFilePermissions(indicators, mContext);
+    ASSERT_FALSE(direct.HasValue());
+    EXPECT_EQ(ENOTSUP, direct.Error().code);
+    EXPECT_EQ("UserDotFilePermissions remediation is disabled", direct.Error().message);
+    EXPECT_TRUE(indicators.Back().indicators.empty());
+
+    auto json = JsonWrapper::FromString("{\"UserDotFilePermissions\":{}}");
+    ASSERT_TRUE(json.HasValue());
+    Evaluator evaluator("test", json_value_get_object(json->get()), mParameters, mContext);
+    const auto result = evaluator.ExecuteRemediation();
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(ENOTSUP, result.Error().code);
+    EXPECT_EQ("UserDotFilePermissions remediation is disabled", result.Error().message);
+    ASSERT_EQ(0, stat(file.c_str(), &after));
+    EXPECT_EQ(before.st_mode, after.st_mode);
+    EXPECT_EQ(before.st_uid, after.st_uid);
+    EXPECT_EQ(before.st_gid, after.st_gid);
+}
 
 TEST_F(EvaluatorTest, Contructor)
 {
@@ -201,6 +238,41 @@ TEST_F(EvaluatorTest, ExecuteAudit_8)
     auto result = evaluator1.ExecuteAudit(mFormatter);
     ASSERT_TRUE(result);
     EXPECT_EQ(result.Value().status, Status::NonCompliant);
+}
+
+TEST_F(EvaluatorTest, NestedListFormatter_AllOfPreservesFailuresAfterCompliantLimit)
+{
+    auto json = JsonWrapper::FromString(R"({"allOf":[
+        {"AuditSuccess":{"message":"pass 1"}},
+        {"AuditSuccess":{"message":"pass 2"}},
+        {"AuditSuccess":{"message":"pass 3"}},
+        {"AuditNotApplicable":{"message":"not applicable before limit"}},
+        {"AuditSuccess":{"message":"pass 4"}},
+        {"AuditSuccess":{"message":"pass 5"}},
+        {"AuditSuccess":{"message":"pass 6"}},
+        {"AuditSuccess":{"message":"pass 7"}},
+        {"AuditNotApplicable":{"message":"not applicable after limit"}},
+        {"not":{"AuditSuccess":{"message":"inner passed"}}}
+    ]})");
+    ASSERT_TRUE(json.HasValue());
+    Evaluator evaluator("rule", json_value_get_object(json->get()), mParameters, mContext);
+    const NestedListFormatter formatter;
+
+    const auto result = evaluator.ExecuteAudit(formatter);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value().status);
+    const auto& output = result.Value().payload;
+    EXPECT_NE(std::string::npos, output.find("✅ pass 1"));
+    EXPECT_NE(std::string::npos, output.find("✅ pass 2"));
+    EXPECT_NE(std::string::npos, output.find("✅ pass 3"));
+    EXPECT_NE(std::string::npos, output.find("✅ pass 4"));
+    EXPECT_NE(std::string::npos, output.find("✅ pass 5"));
+    EXPECT_EQ(std::string::npos, output.find("pass 6"));
+    EXPECT_EQ(std::string::npos, output.find("pass 7"));
+    EXPECT_NE(std::string::npos, output.find("➖ AuditNotApplicable\n\t\t\t➖ not applicable before limit"));
+    EXPECT_NE(std::string::npos, output.find("➖ AuditNotApplicable\n\t\t\t➖ not applicable after limit"));
+    EXPECT_NE(std::string::npos, output.find("❌ not\n\t\t\t✓ AuditSuccess\n\t\t\t\t✓ inner passed"));
+    EXPECT_LT(output.find("not applicable after limit"), output.find("❌ not"));
 }
 
 TEST_F(EvaluatorTest, ExecuteAudit_9)
