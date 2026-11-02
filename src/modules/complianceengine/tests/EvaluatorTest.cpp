@@ -17,6 +17,7 @@ using ComplianceEngine::action_func_t;
 using ComplianceEngine::Error;
 using ComplianceEngine::Evaluator;
 using ComplianceEngine::JsonWrapper;
+using ComplianceEngine::NestedListFormatter;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
 
@@ -237,6 +238,41 @@ TEST_F(EvaluatorTest, ExecuteAudit_8)
     auto result = evaluator1.ExecuteAudit(mFormatter);
     ASSERT_TRUE(result);
     EXPECT_EQ(result.Value().status, Status::NonCompliant);
+}
+
+TEST_F(EvaluatorTest, NestedListFormatter_AllOfPreservesFailuresAfterCompliantLimit)
+{
+    auto json = JsonWrapper::FromString(R"({"allOf":[
+        {"AuditSuccess":{"message":"pass 1"}},
+        {"AuditSuccess":{"message":"pass 2"}},
+        {"AuditSuccess":{"message":"pass 3"}},
+        {"AuditNotApplicable":{"message":"not applicable before limit"}},
+        {"AuditSuccess":{"message":"pass 4"}},
+        {"AuditSuccess":{"message":"pass 5"}},
+        {"AuditSuccess":{"message":"pass 6"}},
+        {"AuditSuccess":{"message":"pass 7"}},
+        {"AuditNotApplicable":{"message":"not applicable after limit"}},
+        {"not":{"AuditSuccess":{"message":"inner passed"}}}
+    ]})");
+    ASSERT_TRUE(json.HasValue());
+    Evaluator evaluator("rule", json_value_get_object(json->get()), mParameters, mContext);
+    const NestedListFormatter formatter;
+
+    const auto result = evaluator.ExecuteAudit(formatter);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value().status);
+    const auto& output = result.Value().payload;
+    EXPECT_NE(std::string::npos, output.find("✅ pass 1"));
+    EXPECT_NE(std::string::npos, output.find("✅ pass 2"));
+    EXPECT_NE(std::string::npos, output.find("✅ pass 3"));
+    EXPECT_NE(std::string::npos, output.find("✅ pass 4"));
+    EXPECT_NE(std::string::npos, output.find("✅ pass 5"));
+    EXPECT_EQ(std::string::npos, output.find("pass 6"));
+    EXPECT_EQ(std::string::npos, output.find("pass 7"));
+    EXPECT_NE(std::string::npos, output.find("➖ AuditNotApplicable\n\t\t\t➖ not applicable before limit"));
+    EXPECT_NE(std::string::npos, output.find("➖ AuditNotApplicable\n\t\t\t➖ not applicable after limit"));
+    EXPECT_NE(std::string::npos, output.find("❌ not\n\t\t\t✓ AuditSuccess\n\t\t\t\t✓ inner passed"));
+    EXPECT_LT(output.find("not applicable after limit"), output.find("❌ not"));
 }
 
 TEST_F(EvaluatorTest, ExecuteAudit_9)
