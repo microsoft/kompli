@@ -111,6 +111,9 @@ practice, but kompli intends to support user-authored custom rule sets too,
 which can't be guaranteed unique against anything else on the system.
 See "Multiple definition files in one `plan`" below — each block is still
 independently scoped to its own file; there is no cross-file rule identity.
+`title` is display data and may repeat within a file; it is printed verbatim,
+including an existing `id` prefix. Select rules by `id`, never by `title`
+or the non-unique procedure-dispatch `ruleName`.
 
 ### `kompli plan <file>`
 

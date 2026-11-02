@@ -61,6 +61,10 @@ stable `ruleId` for external correlation. Framework is required and
 participates in identity, but it does not select parsing or execution behavior;
 all frameworks use the same definition shape. The Machine Configuration path
 continues to carry the same tuple plus its rule section in each payload key.
+The human-readable `title` is preserved verbatim (including any existing
+`id` prefix) and need not be unique. `ruleName` dispatches the engine procedure
+and is not a rule identity or uniqueness guarantee; distinct rules remain
+distinguished by `id` within their benchmark.
 
 ### 2.2.1. Ephemeral CLI state
 
