@@ -212,7 +212,100 @@ ComplianceEngine::Result<Path> SelectAcceptedPath(const ComplianceEngine::Contex
     if (!selected.Value().Is<Path>())
         return ComplianceEngine::Error("Test requires an accepted path",
             As<Path::RejectionReason>(selected.Value()) == Path::RejectionReason::Missing ? ENOENT : ELOOP);
-    return As<Path>(std::move(selected.Value()));
+    Path accepted = As<Path>(std::move(selected.Value()));
+    auto frozen = accepted.FreezeRoot();
+    if (!frozen.HasValue())
+        return std::move(frozen).Error();
+    return std::move(accepted);
+}
+
+TEST_F(PathAliasTest, ExplicitFreezeNarrowsProcessSentinelAndPoppedRootCannotReactivate)
+{
+    const std::string directory = context.GetTempdirPath();
+    ASSERT_EQ(0, ::mkdir((directory + "/pre-freeze-root").c_str(), 0700));
+    const std::size_t before = CountOpenDescriptors();
+    auto acquired = Path::Make(context, directory, CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
+    ASSERT_TRUE(acquired.Value().Is<Path>());
+    Path path = As<Path>(std::move(acquired).Value());
+    EXPECT_FALSE(path.IsFrozen());
+    EXPECT_EQ(0U, path.Size());
+    EXPECT_THROW(path.Root(), std::logic_error);
+    EXPECT_THROW(path.Leaf(), std::logic_error);
+    EXPECT_THROW(path.ToString(), std::logic_error);
+    auto beforeFreeze = path.Capture();
+    EXPECT_EQ(EINVAL, path.Restore(std::move(beforeFreeze)).Error().code);
+    EXPECT_EQ(EINVAL, path.Pop().Error().code);
+    ExtensionPolicy child = ChildPolicy(SymlinkPolicy::DoNotFollow, MountPolicy::AllowCrossing);
+    auto outside = path.Push("pre-freeze-root", child);
+    ASSERT_TRUE(outside.HasValue()) << outside.Error().message;
+    ASSERT_TRUE(outside.Value().Is<const Path&>());
+    ASSERT_TRUE(path.FreezeRoot().HasValue());
+    EXPECT_TRUE(path.IsFrozen());
+    EXPECT_EQ(directory + "/pre-freeze-root", path.ToString());
+    EXPECT_EQ(EINVAL, path.FreezeRoot().Error().code);
+    auto token = path.Capture();
+    auto detached = path.Pop();
+    ASSERT_TRUE(detached.HasValue()) << detached.Error().message;
+    EXPECT_EQ(0U, path.Size());
+    EXPECT_EQ(0U, path.RetainedDescriptors());
+    EXPECT_EQ(EINVAL, path.Push("tmp", child).Error().code);
+    EXPECT_EQ(EINVAL, path.Restore(std::move(token)).Error().code);
+    EXPECT_TRUE(detached.Value().Close().HasValue());
+    EXPECT_EQ(before, CountOpenDescriptors());
+}
+
+TEST_F(PathAliasTest, FreezeFileRootAndRejectPreFreezeSelectedFileAccess)
+{
+    const std::string file = context.MakeTempfile("file");
+    auto acquired = Path::Make(context, file, CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
+    Path path = As<Path>(std::move(acquired).Value());
+    EXPECT_EQ(EINVAL, path.DuplicateLeaf().Error().code);
+    ASSERT_TRUE(path.FreezeRoot().HasValue());
+    EXPECT_EQ(Handle::Type::RegularFile, path.Root().AcquiredType());
+    EXPECT_EQ(file, path.ToString());
+    auto root = path.Pop();
+    ASSERT_TRUE(root.HasValue()) << root.Error().message;
+    EXPECT_TRUE(root.Value().Close().HasValue());
+    auto trailing = Path::Make(context, file + "/", CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_FALSE(trailing.HasValue());
+    EXPECT_EQ(ENOTDIR, trailing.Error().code);
+}
+
+TEST_F(PathAliasTest, FailedFreezeCleanupLeavesNoBoundaryAndDoesNotRetryClose)
+{
+    const std::size_t before = CountOpenDescriptors();
+    auto acquired = Path::Make(context, context.GetTempdirPath(), CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
+    Path path = As<Path>(std::move(acquired).Value());
+    struct stat root = {};
+    ASSERT_EQ(0, ::stat("/", &root));
+    int rootCloses = 0;
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+        struct stat held = {};
+        const bool rootPin = ::fstat(fd, &held) == 0 && held.st_dev == root.st_dev && held.st_ino == root.st_ino;
+        const int result = context.RealCloseFileDescriptor(fd);
+        if (rootPin)
+        {
+            ++rootCloses;
+            errno = EIO;
+            return -1;
+        }
+        return result;
+    });
+    auto frozen = path.FreezeRoot();
+    ASSERT_FALSE(frozen.HasValue());
+    EXPECT_EQ(EIO, frozen.Error().code);
+    EXPECT_EQ(1, rootCloses);
+    EXPECT_FALSE(path.IsFrozen());
+    EXPECT_EQ(0U, path.Size());
+    EXPECT_EQ(0U, path.RetainedDescriptors());
+    EXPECT_EQ(EINVAL, path.Push("child", ExtensionPolicy{}).Error().code);
+    EXPECT_EQ(EINVAL, path.Restore(path.Capture()).Error().code);
+    EXPECT_TRUE(path.Close().HasValue());
+    EXPECT_EQ(1, rootCloses);
+    EXPECT_EQ(before, CountOpenDescriptors());
 }
 TEST_F(PathAliasTest, MakeSharesFollowLimitAcrossRootComponentsAndPushResetsIt)
 {
@@ -234,6 +327,10 @@ TEST_F(PathAliasTest, MakeSharesFollowLimitAcrossRootComponentsAndPushResetsIt)
     auto accepted = SelectAcceptedPath(context, root + "/first/second", CrossMountPathPolicy(SymlinkPolicy::Follow), limits);
     ASSERT_TRUE(accepted.HasValue()) << accepted.Error().message;
     EXPECT_EQ(root + "/target/final", accepted.Value().ToString());
+    limits.linkExpansions = 3;
+    auto surplus = SelectAcceptedPath(context, root + "/first/second", CrossMountPathPolicy(SymlinkPolicy::Follow), limits);
+    ASSERT_TRUE(surplus.HasValue()) << surplus.Error().message;
+    EXPECT_EQ(root + "/target/final", surplus.Value().ToString());
 
     limits.linkExpansions = 1;
     auto parent = SelectAcceptedPath(context, root, CrossMountPathPolicy(SymlinkPolicy::Follow), limits);
@@ -1936,10 +2033,12 @@ TEST_F(PathAliasTest, AbsoluteFactoryNormalizesSeparatorsAndHonorsLinkPolicy)
     auto opened = Path::Make(context, repeated, follow, AmpleLimits());
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     ASSERT_TRUE(opened.Value().Is<Path>());
+    ASSERT_TRUE(As<Path>(opened.Value()).FreezeRoot().HasValue());
     EXPECT_EQ(Handle::Type::RegularFile, As<Path>(opened.Value()).Leaf().AcquiredType());
     auto processRoot = Path::Make(context, "/", strict, AmpleLimits());
     ASSERT_TRUE(processRoot.HasValue());
     ASSERT_TRUE(processRoot.Value().Is<Path>());
+    ASSERT_TRUE(As<Path>(processRoot.Value()).FreezeRoot().HasValue());
     EXPECT_EQ(1U, As<Path>(processRoot.Value()).Size());
     ASSERT_TRUE(As<Path>(processRoot.Value()).Close().HasValue());
     PathOutcome moved(std::move(opened.Value()));
@@ -1974,6 +2073,7 @@ TEST_F(PathAliasTest, MakeOutcomesDispatchAndRejectWrongTypedAccess)
     auto opened = Path::Make(context, "/", CrossMountPathPolicy(), AmpleLimits());
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     ASSERT_TRUE(opened.Value().Is<Path>());
+    ASSERT_TRUE(As<Path>(opened.Value()).FreezeRoot().HasValue());
     const PathOutcome& constAccepted = opened.Value();
     EXPECT_EQ(1U, As<Path>(constAccepted).Size());
     EXPECT_THROW((void)As<Path::RejectionReason>(constAccepted), std::logic_error);
@@ -1988,6 +2088,7 @@ TEST_F(PathAliasTest, OutcomeMovesAndExtractionKeepAcceptedPinsUntilDestinationC
     {
         auto opened = Path::Make(context, "/", CrossMountPathPolicy(), AmpleLimits());
         ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+        ASSERT_TRUE(As<Path>(opened.Value()).FreezeRoot().HasValue());
         PathOutcome destination(std::move(opened.Value()));
         ASSERT_TRUE(destination.Is<Path>());
         retained.reset(new Path(As<Path>(std::move(destination))));
@@ -2010,6 +2111,8 @@ TEST_F(PathAliasTest, OutcomeMoveAssignmentsReplaceAlternativesAndCloseAcceptedP
     auto second = Path::Make(context, "/", CrossMountPathPolicy(), AmpleLimits());
     ASSERT_TRUE(first.HasValue()) << first.Error().message;
     ASSERT_TRUE(second.HasValue()) << second.Error().message;
+    ASSERT_TRUE(As<Path>(first.Value()).FreezeRoot().HasValue());
+    ASSERT_TRUE(As<Path>(second.Value()).FreezeRoot().HasValue());
     PathOutcome destination(std::move(first.Value()));
     PathOutcome incoming(std::move(second.Value()));
     const std::size_t replacedPins = As<Path>(destination).RetainedDescriptors();
@@ -2036,6 +2139,7 @@ TEST_F(PathAliasTest, OutcomeMoveAssignmentsReplaceAlternativesAndCloseAcceptedP
 
     auto third = Path::Make(context, "/", CrossMountPathPolicy(), AmpleLimits());
     ASSERT_TRUE(third.HasValue()) << third.Error().message;
+    ASSERT_TRUE(As<Path>(third.Value()).FreezeRoot().HasValue());
     marker = std::move(third.Value()); // excluded -> accepted
     EXPECT_TRUE(marker.Is<Path>());
     const std::size_t finalPins = As<Path>(marker).RetainedDescriptors();
@@ -2084,6 +2188,7 @@ TEST_F(PathAliasTest, NonFollowedLinksSkipOnlySelectedFinalLinks)
     auto followedDirectory = Path::Make(context, root + "/directory-link", policy, AmpleLimits());
     ASSERT_TRUE(followedDirectory.HasValue()) << followedDirectory.Error().message;
     ASSERT_TRUE(followedDirectory.Value().Is<Path>());
+    ASSERT_TRUE(As<Path>(followedDirectory.Value()).FreezeRoot().HasValue());
     ASSERT_TRUE(As<Path>(followedDirectory.Value()).Close().HasValue());
 
     auto opened = SelectAcceptedPath(context, root, CrossMountPathPolicy(), AmpleLimits());

@@ -112,6 +112,7 @@ TEST(FilesystemCollectionAllocationTest, PathMoveAndResultTransferDoNotAllocate)
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     ASSERT_TRUE(opened.Value().Is<ComplianceEngine::Filesystem::Path>());
     auto path = ComplianceEngine::As<ComplianceEngine::Filesystem::Path>(std::move(opened.Value()));
+    ASSERT_TRUE(path.FreezeRoot().HasValue());
     faultTransfers = true;
     ComplianceEngine::Filesystem::Path moved(std::move(path));
     using Path = ComplianceEngine::Filesystem::Path;

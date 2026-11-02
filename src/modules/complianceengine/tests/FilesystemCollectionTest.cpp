@@ -191,6 +191,7 @@ TEST(FilesystemCollectionTest, CoreNoRootReplayAfterAcceptedDirectoryRenameAndRe
     ASSERT_TRUE(root.HasValue()) << root.Error().message;
     ASSERT_TRUE(root.Value().Is<Path>());
     Path accepted = As<Path>(std::move(root).Value());
+    ASSERT_TRUE(accepted.FreezeRoot().HasValue());
     const ino_t acceptedInode = accepted.Root().AcquiredMetadata().st_ino;
     ASSERT_EQ(0, ::rename(tree.Path("root").c_str(), tree.Path("moved").c_str()));
     tree.Directory("root");
@@ -235,6 +236,7 @@ TEST(FilesystemCollectionTest, MovedRootReportsOriginalSpellingWithoutUsingItAsA
     ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
     ASSERT_TRUE(acquired.Value().Is<Path>());
     Path accepted = As<Path>(std::move(acquired).Value());
+    ASSERT_TRUE(accepted.FreezeRoot().HasValue());
     EXPECT_EQ(tree.Path("actual"), accepted.ToString());
     auto files = Files(std::move(accepted), request.rootPath, CollectionContinuation(resolved.Value()));
     ASSERT_TRUE(files.HasValue()) << files.Error().message;
@@ -261,6 +263,7 @@ TEST(FilesystemCollectionTest, HeldAncestorRestoresLogicalTraversalAndDetachedOw
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     ASSERT_TRUE(opened.Value().Is<Path>());
     Path path = As<Path>(std::move(opened).Value());
+    ASSERT_TRUE(path.FreezeRoot().HasValue());
     const auto rootBytes = path.RetainedBytes();
     ComplianceEngine::Filesystem::ExtensionPolicy strict;
     strict.mounts = ComplianceEngine::Filesystem::MountPolicy::AllowCrossing;
@@ -313,6 +316,7 @@ TEST(FilesystemCollectionTest, AcquiredRootAndChildContinuationPoliciesRemainSep
     auto root = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), CollectionRootLimits(resolved.Value()));
     ASSERT_TRUE(root.HasValue()) << root.Error().message;
     ASSERT_TRUE(root.Value().Is<Path>());
+    ASSERT_TRUE(As<Path>(root.Value()).FreezeRoot().HasValue());
     auto strict = CollectionContinuation(resolved.Value());
     strict.childFileLinkAction = SymlinkPolicy::DoNotFollow;
     auto excluded = Files(As<Path>(std::move(root).Value()), request.rootPath, strict);
@@ -334,6 +338,7 @@ TEST(FilesystemCollectionTest, AcquiredRootAndChildContinuationPoliciesRemainSep
     auto direct = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), CollectionRootLimits(resolved.Value()));
     ASSERT_TRUE(direct.HasValue());
     ASSERT_TRUE(direct.Value().Is<Path>());
+    ASSERT_TRUE(As<Path>(direct.Value()).FreezeRoot().HasValue());
     auto followChildren = CollectionContinuation(resolved.Value());
     followChildren.childFileLinkAction = SymlinkPolicy::Follow;
     auto followed = Files(As<Path>(std::move(direct).Value()), request.rootPath, followChildren);
@@ -1066,6 +1071,7 @@ TEST(FilesystemCollectionTest, ContinuationCannotUnderstateAcquiredRootInspectio
     ASSERT_TRUE(root.HasValue()) << root.Error().message;
     ASSERT_TRUE(root.Value().Is<Path>());
     Path accepted = As<Path>(std::move(root).Value());
+    ASSERT_TRUE(accepted.FreezeRoot().HasValue());
     ASSERT_EQ(4096u, accepted.Limits().shared.fdinfoBytes);
     auto continuation = CollectionContinuation(resolved.Value());
     continuation.limits.fdinfoBytes = 1;
@@ -1079,6 +1085,23 @@ TEST(FilesystemCollectionTest, ContinuationCannotUnderstateAcquiredRootInspectio
     EXPECT_EQ(EINVAL, rejected.Error().code);
     EXPECT_EQ("Filesystem continuation fdinfo byte limit is below the acquired root's bound inspection limit", rejected.Error().message);
     EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+}
+
+TEST(FilesystemCollectionTest, PathContinuationRejectsUnfrozenProcessRoot)
+{
+    MockContext context;
+    FilesystemCollectionRequest request("/", FilesystemRootKind::Directory);
+    request.scope = FilesystemScope::All;
+    auto resolved = ResolveFilesystemCollectionRequest(request);
+    ASSERT_TRUE(resolved.HasValue()) << resolved.Error().message;
+    auto acquired = Path::Make(context, "/", CollectionRootPolicy(resolved.Value()), CollectionRootLimits(resolved.Value()));
+    ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
+    ASSERT_TRUE(acquired.Value().Is<Path>());
+    Path path = As<Path>(std::move(acquired).Value());
+    EXPECT_FALSE(path.IsFrozen());
+    auto files = Files(std::move(path), "/", CollectionContinuation(resolved.Value()));
+    ASSERT_FALSE(files.HasValue());
+    EXPECT_EQ(EINVAL, files.Error().code);
 }
 
 TEST(FilesystemCollectionTest, AppliesExactRootPathBudgetIncludingTerminator)

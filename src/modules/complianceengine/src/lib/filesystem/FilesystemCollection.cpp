@@ -884,7 +884,7 @@ FileRange::~FileRange() = default;
 Result<bool> ValidateContinuation(const Path& root, const std::string& reportingName, const FilesystemTraversalPolicy& policy)
 {
     const auto& limits = policy.limits;
-    if (root.Size() != 1 || reportingName.empty() || reportingName.front() != '/' || reportingName.find('\0') != std::string::npos)
+    if (!root.IsFrozen() || root.Size() != 1 || reportingName.empty() || reportingName.front() != '/' || reportingName.find('\0') != std::string::npos)
         return Error("Continuation requires one accepted absolute root", EINVAL);
     if (policy.direction == FilesystemDirection::Up)
         return Error("Upward filesystem collection is not supported", ENOTSUP);
@@ -964,6 +964,9 @@ Result<FileRange> Files(const FilesystemCollectionRequest& policy, ContextInterf
         if (acquired.Value().Is<Path>())
         {
             Path accepted = As<Path>(std::move(acquired).Value());
+            auto frozen = accepted.FreezeRoot();
+            if (!frozen.HasValue())
+                return std::move(frozen).Error();
             if (request.rootKind == FilesystemRootKind::Directory && accepted.Root().AcquiredType() != Handle::Type::Directory)
                 return Error("Expected directory root at '" + request.rootPath + "'", ENOTDIR);
             if (request.rootKind == FilesystemRootKind::File && accepted.Root().AcquiredType() != Handle::Type::RegularFile)

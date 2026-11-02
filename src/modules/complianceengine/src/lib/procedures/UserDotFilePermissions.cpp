@@ -194,6 +194,9 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
             return root.Error();
         if (root.Value().Is<Filesystem::Path::RejectionReason>())
             continue; // missing/excluded home: no dotfiles to inspect
+        auto frozen = As<Filesystem::Path>(root.Value()).FreezeRoot();
+        if (!frozen.HasValue())
+            return std::move(frozen).Error();
         if (As<Filesystem::Path>(root.Value()).Root().AcquiredType() != Filesystem::Handle::Type::Directory)
             return Error("Expected directory root at '" + policy.rootPath + "'", ENOTDIR);
         auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), resolved.Value().rootPath,

@@ -102,6 +102,9 @@ protected:
             return ComplianceEngine::Error("Fixture directory is unavailable", ENOENT);
         }
         Path path = ComplianceEngine::As<Path>(std::move(root.Value()));
+        auto frozen = path.FreezeRoot();
+        if (!frozen.HasValue())
+            return std::move(frozen).Error();
         ExtensionPolicy extension;
         extension.mounts = MountPolicy::AllowCrossing;
         auto pushed = path.Push(component, extension);
@@ -900,6 +903,7 @@ TEST_F(ReadableFileTest, CheckedLeafAndPathReleasePreservesIndependentReadable)
     ASSERT_TRUE(opened.HasValue());
     ASSERT_TRUE(opened.Value().Is<Path>());
     Path path = ComplianceEngine::As<Path>(std::move(opened.Value()));
+    ASSERT_TRUE(path.FreezeRoot().HasValue());
     ASSERT_TRUE(path.Push(Component(source), CrossMountExtension()).HasValue());
     auto popped = path.Pop();
     ASSERT_TRUE(popped.HasValue());
@@ -952,6 +956,7 @@ TEST_F(ReadableFileTest, RejectsDirectoryInvalidCapAndPinInspectionFailureWithou
         auto directory = Path::Make(context, context.GetTempdirPath(), policy, limits);
         ASSERT_TRUE(directory.HasValue());
         ASSERT_TRUE(directory.Value().Is<Path>());
+        ASSERT_TRUE(ComplianceEngine::As<Path>(directory.Value()).FreezeRoot().HasValue());
         auto wrongType = ComplianceEngine::As<Path>(directory.Value()).Leaf().OpenReadOnly();
         ASSERT_FALSE(wrongType.HasValue());
         EXPECT_EQ(EINVAL, wrongType.Error().code);

@@ -101,16 +101,23 @@ public:
         struct stat accepted = {}; // retained accepted directory/regular-file pin
         std::uint64_t mountId = 0; // original name's verified mount, before a link target
     };
-    // Pin the initial absolute spelling through the trusted resolver, close
-    // its scratch ancestors before acceptance, then resolve descendants only
-    // through the selected root pin. Complete logical/effective root names
-    // select this frozen binding, not a fresh process-root lookup.
+    // Pin the initial absolute spelling through the trusted resolver. Before
+    // FreezeRoot, acquisition remains bounded by the held process-root pin;
+    // selected-root access is unavailable. FreezeRoot narrows the boundary to
+    // the selected pin and checked-closes acquisition ancestors.
     // The Path alternative is accepted. Missing is reported only for a
     // directly missing path component; helper and confined-resolution ENOENT
     // remain errors. Excluded means an explicit final-link policy omission,
     // never an unsupported root; UnsupportedType is only a Push skip.
     static ComplianceEngine::Result<Variant<Path, Path::RejectionReason>> Make(const ContextInterface& context, std::string absolutePath, Policy policy,
         ResolverLimits limits);
+    // A second freeze is an error. On cleanup failure the Path is empty and
+    // unusable; no uncertain boundary is published.
+    ComplianceEngine::Result<bool> FreezeRoot();
+    bool IsFrozen() const noexcept
+    {
+        return mFrozen && mSize != 0;
+    }
     Path(Path&&) noexcept;
     Path& operator=(Path&&) noexcept;
     ~Path() noexcept;
@@ -154,6 +161,7 @@ public:
         const void* owner = nullptr;
         std::vector<std::size_t> generations;
     };
+    // Before freezing, Capture returns an invalid token; Restore rejects it.
     Restoration Capture() const;
     ComplianceEngine::Result<bool> Restore(Restoration previous);
     // Retain a selected leaf independently while a walker restores its
@@ -210,8 +218,9 @@ private:
         Detail::ResolvedPath& stage, const Handle& source);
     // Empty optional accepts the pinned root; a reason rejects the selection.
     static ComplianceEngine::Result<Optional<RejectionReason>> AcquireInitialRoot(Path& path, const std::string& rootName, const Policy& policy);
+    ComplianceEngine::Result<Variant<const Path&, RejectionReason>> Extend(std::string component, ExtensionPolicy policy, bool acquisition,
+        bool requireDirectory, std::size_t& followed);
     ComplianceEngine::Result<bool> Commit(Detail::ResolvedPath& stage, Handle leaf);
-    ComplianceEngine::Result<bool> CommitScratch(Detail::ResolvedPath& stage, Handle leaf);
     ComplianceEngine::Result<bool> CommitStage(Detail::ResolvedPath& stage, Handle leaf, bool logicalLeaf);
     static ComplianceEngine::Result<std::vector<const Handle*>> PhysicalLineage(const Handle& root, const std::string& rootName, const Handle& target,
         const std::string& targetName, const std::vector<NameBinding>& names, const Detail::ResolvedPath* stage, std::size_t depth);
@@ -230,6 +239,9 @@ private:
     Usage mUsage;
     std::uint64_t mRootMountId = 0;
     std::uint64_t mLeafSourceMount = 0;
+    bool mFrozen = false;
+    std::string mAcquisitionName;
+    std::size_t mAcquisitionBytes = 0;
     // One persistent owner deque. Effective names are captured at actual
     // acquisition and tied to the pins; logical leaves delimit Pop steps.
     struct Entry

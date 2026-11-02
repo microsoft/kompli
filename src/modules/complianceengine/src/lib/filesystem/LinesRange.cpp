@@ -316,6 +316,9 @@ Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string
         return primary;
     };
 
+    auto frozen = pins.FreezeRoot();
+    if (!frozen.HasValue())
+        return fail(std::move(frozen).Error());
     if (pins.Leaf().AcquiredType() != Filesystem::Handle::Type::RegularFile)
         return fail(Error("File target is not regular", EINVAL));
 

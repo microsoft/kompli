@@ -178,6 +178,9 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
         return root.Error();
     if (root.Value().Is<Filesystem::Path::RejectionReason>())
         return Status::Compliant;
+    auto frozen = As<Filesystem::Path>(root.Value()).FreezeRoot();
+    if (!frozen.HasValue())
+        return std::move(frozen).Error();
     if (As<Filesystem::Path>(root.Value()).Root().AcquiredType() != Filesystem::Handle::Type::Directory)
         return Error("Expected directory root at '" + baseDir + "'", ENOTDIR);
     auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), resolved.Value().rootPath,
