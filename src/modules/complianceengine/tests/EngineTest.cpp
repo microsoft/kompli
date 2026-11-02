@@ -198,6 +198,19 @@ TEST_F(EngineTest, GetParametersForUnknownRuleIsEmpty)
     EXPECT_TRUE(mEngine.GetParameters("NeverSet").empty());
 }
 
+TEST_F(EngineTest, DistinctFilenameNamesAndRepeatedNamesUseCurrentPayload)
+{
+    ASSERT_TRUE(mEngine.MmiSet("procedureCheckEtcPasswd", R"({"audit":{}, "parameters":{"path":"/etc/passwd"}})"));
+    ASSERT_TRUE(mEngine.MmiSet("procedureCheckEtcPasswdDash", R"({"audit":{}, "parameters":{"path":"/etc/passwd-"}})"));
+    EXPECT_EQ(mEngine.GetParameters("CheckEtcPasswd")["path"], "/etc/passwd");
+    EXPECT_EQ(mEngine.GetParameters("CheckEtcPasswdDash")["path"], "/etc/passwd-");
+
+    ASSERT_TRUE(mEngine.MmiSet("procedureSameTitle", R"({"audit":{}, "parameters":{"rule":"SV-1"}})"));
+    EXPECT_EQ(mEngine.GetParameters("SameTitle")["rule"], "SV-1");
+    ASSERT_TRUE(mEngine.MmiSet("procedureSameTitle", R"({"audit":{}, "parameters":{"rule":"SV-2"}})"));
+    EXPECT_EQ(mEngine.GetParameters("SameTitle")["rule"], "SV-2");
+}
+
 // The allOf status algebra shared by the engine's Evaluator and kompli's
 // overall aggregation: NonCompliant dominates, NotApplicable is sticky over
 // Compliant, and the operation is commutative.
