@@ -3,6 +3,8 @@
 
 #include "FilesystemCollection.hpp"
 
+#include "FilesystemHelpers.hpp"
+
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
@@ -354,6 +356,9 @@ struct FileRange::State
     {
         std::string path;
         Optional<Filesystem::DirectoryCursor> cursor;
+        // The logical parent may differ from the selected physical parent
+        // after a link. Path retains these held pins until this frame unwinds.
+        Optional<Path::Restoration> prior;
         std::size_t width = 0;
         std::size_t bytes = 0;
         dev_t device = 0;
@@ -520,11 +525,10 @@ struct FileRange::State
         {
             return Error("Filesystem pin retention exceeds descriptor budget", EMFILE);
         }
+        auto prior = path->Capture();
         auto pushed = path->Push(child.name, extension);
         if (!pushed.HasValue())
-        {
             return std::move(pushed).Error();
-        }
         if (pushed.Value().Is<Path::RejectionReason>())
         {
             switch (As<Path::RejectionReason>(pushed.Value()))
@@ -543,11 +547,9 @@ struct FileRange::State
         entry.metadata = metadata.accepted;
         if ((FilesystemScope::All != request.scope) && (baseline != metadata.mountId))
         {
-            auto dropped = path->Pop();
-            if (!dropped.HasValue())
-            {
-                return std::move(dropped).Error();
-            }
+            auto restored = path->Restore(std::move(prior));
+            if (!restored.HasValue())
+                return std::move(restored).Error();
             return Exclude(entry.path, "filesystem scope");
         }
         auto mount = handle.MountIdentity();
@@ -557,11 +559,9 @@ struct FileRange::State
         }
         if ((FilesystemScope::All != request.scope) && (baseline != mount.Value()))
         {
-            auto dropped = path->Pop();
-            if (!dropped.HasValue())
-            {
-                return std::move(dropped).Error();
-            }
+            auto restored = path->Restore(std::move(prior));
+            if (!restored.HasValue())
+                return std::move(restored).Error();
             return Exclude(entry.path, "filesystem scope");
         }
         const bool directory = Filesystem::Handle::Type::Directory == handle.AcquiredType();
@@ -592,9 +592,13 @@ struct FileRange::State
                 }
                 Frame frame;
                 frame.path = entry.path;
+                if (frame.path.size() >= request.limits.retainedPathBytes || prior.StorageBytes() > request.limits.retainedPathBytes - frame.path.size() - 1)
+                    return Error("Filesystem restoration storage exceeds retained path budget", E2BIG);
                 frame.bytes = frame.path.size() + 1;
+                frame.bytes += prior.StorageBytes();
                 frame.device = handle.AcquiredMetadata().st_dev;
                 frame.inode = handle.AcquiredMetadata().st_ino;
+                frame.prior = std::move(prior);
                 auto charged = Charge(frame.bytes, entry.path);
                 if (!charged.HasValue())
                 {
@@ -605,23 +609,29 @@ struct FileRange::State
             entry.BorrowHandle(handle);
             if (!descend)
             {
-                auto dropped = path->Pop();
-                if (!dropped.HasValue())
+                auto detached = path->DuplicateLeaf();
+                if (!detached.HasValue())
                 {
-                    return std::move(dropped).Error();
+                    return std::move(detached).Error();
                 }
                 // Non-descended directories still need an owned live pin.
-                entry.OwnHandle(std::move(dropped).Value());
+                entry.OwnHandle(std::move(detached).Value());
+                auto restored = path->Restore(std::move(prior));
+                if (!restored.HasValue())
+                    return std::move(restored).Error();
             }
         }
         else
         {
-            auto detached = path->Pop();
+            auto detached = path->DuplicateLeaf();
             if (!detached.HasValue())
             {
                 return std::move(detached).Error();
             }
             entry.OwnHandle(std::move(detached).Value());
+            auto restored = path->Restore(std::move(prior));
+            if (!restored.HasValue())
+                return std::move(restored).Error();
         }
         return Offer(std::move(entry));
     }
@@ -681,15 +691,14 @@ struct FileRange::State
                 {
                     return std::move(closedCursor).Error();
                 }
+                auto prior = std::move(frame.prior);
                 retained -= frame.bytes;
                 frames.pop_back();
-                if (!frames.empty())
+                if (prior.HasValue())
                 {
-                    auto popped = path->Pop();
-                    if (!popped.HasValue())
-                    {
-                        return std::move(popped).Error();
-                    }
+                    auto restored = path->Restore(std::move(prior).Value());
+                    if (!restored.HasValue())
+                        return std::move(restored).Error();
                 }
                 continue;
             }

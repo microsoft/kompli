@@ -34,11 +34,15 @@ private:
     friend struct ResolvedPathAllocationProbe; // focused allocator-failure test
     struct Pin
     {
-        explicit Pin(Handle&& handle)
-            : handle(std::move(handle))
+        explicit Pin(Handle&& handle, std::string lookup = {}, std::string effective = {})
+            : handle(std::move(handle)),
+              lookup(std::move(lookup)),
+              effective(std::move(effective))
         {
         }
         Handle handle;
+        std::string lookup;
+        std::string effective;
     };
     ResolvedPath()
         : mPins(new std::deque<Pin>())

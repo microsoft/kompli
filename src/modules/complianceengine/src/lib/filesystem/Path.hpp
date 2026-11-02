@@ -49,7 +49,7 @@ struct ResolverLimits
 {
     PrefixLimits shared;
     std::size_t linkTargetBytes = 4096; // each pinned symlink read
-    std::size_t linkExpansions = 128;   // per confined ResolveChild call
+    std::size_t linkExpansions = 128;   // total followed links per Make or Push, including held aliases
     std::size_t depth = 128;            // physical directory stack per confined ResolveChild call
 };
 enum class UnsupportedTypeAction
@@ -139,6 +139,26 @@ public:
     // owners and remain valid; close popped handles explicitly if required.
     // Destruction logs an unobserved first failure if Close was not called.
     ComplianceEngine::Result<bool> Close();
+    // The consumer holds logical history; Path keeps the physical pins alive
+    // until restoration. This token is valid only for this live Path owner.
+    struct Restoration
+    {
+        std::size_t StorageBytes() const noexcept
+        {
+            return physical.size() * sizeof(std::size_t) + generations.size() * sizeof(std::size_t);
+        }
+
+    private:
+        friend class Path;
+        std::vector<std::size_t> physical;
+        const void* owner = nullptr;
+        std::vector<std::size_t> generations;
+    };
+    Restoration Capture() const;
+    ComplianceEngine::Result<bool> Restore(Restoration previous);
+    // Retain a selected leaf independently while a walker restores its
+    // physical ancestry. The duplicate shares the held object, not its name.
+    ComplianceEngine::Result<Handle> DuplicateLeaf() const;
     // On an empty Path these reference-returning accessors throw logic_error.
     const Handle& Root() const;
     const Handle& Leaf() const;
@@ -165,8 +185,8 @@ private:
     struct NameBinding
     {
         const Handle* pin;
-        const std::string* lookup;
-        const std::string* effective;
+        std::string lookup;
+        std::string effective;
         std::uint64_t mount;
     };
     struct ResolutionPolicy
@@ -179,7 +199,7 @@ private:
     };
     static ComplianceEngine::Result<Variant<Detail::ResolvedPath, RejectionReason>> ResolveChild(const ContextInterface& context, const Handle& root,
         const std::vector<const Handle*>& parentLineage, std::string component, ResolutionPolicy policy, const ResolverLimits& limits,
-        const std::vector<NameBinding>& names, const std::string& logicalRoot, const std::string& effectiveRoot, std::size_t& spent);
+        const std::vector<NameBinding>& names, const std::string& logicalRoot, const std::string& effectiveRoot, std::size_t& spent, std::size_t& followed);
     std::vector<NameBinding> Bindings() const;
     Path(const ContextInterface& context, ResolverLimits limits);
     // The caller checked-closes any duplicate not transferred to the
@@ -209,25 +229,46 @@ private:
     };
     Usage mUsage;
     std::uint64_t mRootMountId = 0;
+    std::uint64_t mLeafSourceMount = 0;
     // One persistent owner deque. Effective names are captured at actual
     // acquisition and tied to the pins; logical leaves delimit Pop steps.
     struct Entry
     {
-        Entry(Handle&& owned, bool leaf)
+        Entry(Handle&& owned, bool leaf, std::string source = {}, std::string target = {})
             : pin(std::move(owned)),
-              logicalLeaf(leaf)
+              logicalLeaf(leaf),
+              lookupPart(std::move(source)),
+              effectivePart(std::move(target)),
+              lookupLength(lookupPart.size()),
+              effectiveLength(effectivePart.size())
         {
         }
         Handle pin;
         bool logicalLeaf;
+        // Only the root retains complete frozen names. Every other pin
+        // retains one component and explicit lookup/physical parent indexes.
+        std::string lookupPart;
+        std::string effectivePart;
+        std::size_t lookupParent = 0;
+        std::size_t effectiveParent = 0;
+        // Continue conservatively charging complete reconstructed spellings
+        // until all temporary/scratch storage has replacement coverage.
+        std::size_t lookupLength;
+        std::size_t effectiveLength;
+        std::size_t generation = 0;
     };
     static bool Footprint(std::size_t lookup, std::size_t effective, std::size_t& bytes) noexcept;
-    static bool Footprint(const Handle& pin, std::size_t& bytes) noexcept;
+    static bool Footprint(const Entry& pin, std::size_t& bytes) noexcept;
+    std::string Name(std::size_t index, bool lookup) const;
     // Own the deque allocation separately: moving a deque itself may allocate
     // an empty map even when its declared move constructor is noexcept.
     // A moved-from Path has no deque and remains a valid empty owner.
     std::unique_ptr<std::deque<Entry>> mEntries;
+    // Indexes into the owning deque in physical ancestor order. Entries not
+    // selected after a branch remain owned until checked Pop/Close cleanup.
+    std::vector<std::size_t> mPhysical;
     std::size_t mSize = 0;
+    std::size_t mNextGeneration = 1;
 };
 
 } // namespace Filesystem

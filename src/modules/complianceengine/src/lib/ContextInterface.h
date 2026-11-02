@@ -136,6 +136,13 @@ public:
     virtual std::string GetStatePath() const = 0;
 
 protected:
+    // The test context may narrow this value; production contexts use 256.
+    // Raising a test value cannot exceed the production or kernel ceiling.
+    virtual std::size_t ManagedDescriptorAllowance() const noexcept
+    {
+        return 256;
+    }
+    ContextInterface();
     // Native-only override seams: subclasses receive integers solely for
     // system-call simulation, never through an owner-access API.
     virtual int OpenNativePath(const char* path, int flags) const;
@@ -155,6 +162,20 @@ protected:
     virtual pid_t NativeThreadId() const;
 
 private:
+    class Reservation;
+    struct ManagedDescriptorBudget
+    {
+        std::size_t owned = 0;
+        std::size_t initialCapacity = 0;
+        int initializationError = 0;
+    };
+    Result<bool> ReserveManagedDescriptor() const;
+    void ReleaseManagedDescriptor() const noexcept;
+    mutable ManagedDescriptorBudget mManagedDescriptors;
+    friend class Filesystem::DirectoryCursor;
+    // The fdopendir transfer keeps the charge held by its input Descriptor;
+    // closedir releases it exactly once even when the native close fails.
+    int CloseOwnedDirectoryCursor(DIR* stream) const;
     Result<Filesystem::Detail::Descriptor> OpenVerifiedAt(const Filesystem::Detail::Descriptor& directory, const char* name, OpenProfile profile,
         CloseDiagnostic diagnostic) const&;
 };

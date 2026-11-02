@@ -235,9 +235,7 @@ TEST(FilesystemCollectionTest, MovedRootReportsOriginalSpellingWithoutUsingItAsA
     ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
     ASSERT_TRUE(acquired.Value().Is<Path>());
     Path accepted = As<Path>(std::move(acquired).Value());
-    EXPECT_EQ(tree.Path("alias"), accepted.Root().LookupName());
-    EXPECT_NE(request.rootPath, accepted.Root().LookupName()); // binding normalization never changes reporting spelling
-    EXPECT_EQ(tree.Path("actual"), accepted.Root().EffectiveName());
+    EXPECT_EQ(tree.Path("actual"), accepted.ToString());
     auto files = Files(std::move(accepted), request.rootPath, CollectionContinuation(resolved.Value()));
     ASSERT_TRUE(files.HasValue()) << files.Error().message;
     auto entry = files->begin();
@@ -245,11 +243,10 @@ TEST(FilesystemCollectionTest, MovedRootReportsOriginalSpellingWithoutUsingItAsA
     ASSERT_TRUE(entry->HasValue()) << entry->Error().message;
     EXPECT_EQ(request.rootPath + "/file", entry->Value().path);
     ASSERT_NE(nullptr, entry->Value().LiveHandle());
-    EXPECT_EQ(tree.Path("actual/file"), entry->Value().LiveHandle()->EffectiveName());
     EXPECT_TRUE(files->Close().HasValue());
 }
 
-TEST(FilesystemCollectionTest, DetachedAncestorAliasRetainsItsOwnFrozenNamesAndBudget)
+TEST(FilesystemCollectionTest, HeldAncestorRestoresLogicalTraversalAndDetachedOwnerSurvives)
 {
     MockContext context;
     TestTree tree;
@@ -270,32 +267,30 @@ TEST(FilesystemCollectionTest, DetachedAncestorAliasRetainsItsOwnFrozenNamesAndB
     ASSERT_TRUE(path.Push("a", strict).HasValue());
     ASSERT_TRUE(path.Push("sub", strict).HasValue());
     const auto parentBytes = path.RetainedBytes();
+    auto prior = path.Capture();
     ComplianceEngine::Filesystem::ExtensionPolicy follow = strict;
     follow.fileLinks = SymlinkPolicy::Follow;
     follow.directoryLinks = SymlinkPolicy::Follow;
     ASSERT_TRUE(path.Push("up", follow).HasValue());
-    EXPECT_EQ(tree.Path("root/a/sub/up"), path.Leaf().LookupName());
-    EXPECT_EQ(tree.Path("root/a"), path.Leaf().EffectiveName());
-    EXPECT_EQ(path.LeafMetadata().mountId, path.Leaf().OriginalMount());
-    EXPECT_GT(path.RetainedBytes(), parentBytes);
-    auto alias = path.Pop();
+    EXPECT_EQ(tree.Path("root/a"), path.ToString());
+    EXPECT_EQ(2U, path.Size());                   // physical Pop would remove a, not the logical link
+    EXPECT_EQ(parentBytes, path.RetainedBytes()); // no duplicate full-name or alias owner
+    auto alias = path.DuplicateLeaf();
     ASSERT_TRUE(alias.HasValue()) << alias.Error().message;
+    ASSERT_TRUE(path.Restore(std::move(prior)).HasValue());
     EXPECT_EQ(parentBytes, path.RetainedBytes());
-    EXPECT_EQ(tree.Path("root/a/sub/up"), alias.Value().LookupName());
     ASSERT_TRUE(path.Pop().HasValue());
     ASSERT_TRUE(path.Pop().HasValue());
     EXPECT_EQ(rootBytes, path.RetainedBytes());
     ASSERT_TRUE(path.Push("a", strict).HasValue());
     auto direct = path.Pop();
     ASSERT_TRUE(direct.HasValue());
-    EXPECT_EQ(tree.Path("root/a"), direct.Value().LookupName());
     EXPECT_EQ(alias.Value().AcquiredMetadata().st_ino, direct.Value().AcquiredMetadata().st_ino);
     EXPECT_EQ(rootBytes, path.RetainedBytes());
     ASSERT_TRUE(path.Close().HasValue());
     EXPECT_TRUE(alias.Value().Stat().HasValue());
     EXPECT_TRUE(direct.Value().Stat().HasValue());
     EXPECT_TRUE(alias.Value().Close().HasValue());
-    EXPECT_EQ(tree.Path("root/a/sub/up"), alias.Value().LookupName());
     EXPECT_TRUE(direct.Value().Close().HasValue());
 }
 

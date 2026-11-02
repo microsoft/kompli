@@ -80,13 +80,6 @@ public:
     ~Handle() noexcept;
 
     Type AcquiredType() const noexcept;
-    // Frozen names of this acquisition, not live canonical paths or authority
-    // for a new lookup. Available after Close, but not on moved-from owners.
-    // References expire when this owner is moved or destroyed.
-    const std::string& LookupName() const& noexcept;
-    const std::string& LookupName() const&& = delete;
-    const std::string& EffectiveName() const& noexcept;
-    const std::string& EffectiveName() const&& = delete;
     // Mount of the originally looked-up name, before following a link; it
     // need not be the mount of the held target.
     std::uint64_t OriginalMount() const noexcept;
@@ -129,8 +122,7 @@ private:
     // Path owns composition. The checked acquisition methods below are
     // private: no consumer can supply an fd.
     friend class Path;
-    Handle(Detail::Descriptor&& descriptor, Type type, const struct stat& snapshot, std::size_t fdinfoBytes, std::string lookup, std::string effective,
-        std::uint64_t originalMount, std::uint64_t targetMount);
+    Handle(Detail::Descriptor&& descriptor, Type type, const struct stat& snapshot, std::size_t fdinfoBytes, std::uint64_t originalMount, std::uint64_t targetMount);
     static Result<Handle> PinProcessRoot(const ContextInterface& context, std::size_t fdinfoBytes);
     static Result<bool> RecognizeAcceptedRoot(const Handle& acceptedRoot, const Handle& candidate, std::size_t fdinfoByteCap);
     Result<PinObservation> InspectWithProcfs(const Detail::ProcfsDescriptorAccess& procfs) const;
@@ -139,8 +131,6 @@ private:
 
     Detail::Descriptor mDescriptor;
     Type mType = Type::Directory;
-    std::string mLookupName;
-    std::string mEffectiveName;
     std::uint64_t mOriginalMount = 0;
     // The O_PATH owner retains the resolved target's kernel mount/path.
     // This is distinct from the original lookup/link mount above.

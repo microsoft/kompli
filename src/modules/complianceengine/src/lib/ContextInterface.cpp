@@ -7,9 +7,11 @@
 #include "filesystem/Handle.hpp"
 #include "filesystem/ProcfsDescriptorAccess.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
 #include <sys/syscall.h>
@@ -17,6 +19,73 @@
 
 namespace ComplianceEngine
 {
+ContextInterface::ContextInterface()
+{
+    // Each context owns one budget throughout the lifetime of its borrowed
+    // Descriptor/Handle/cursor owners. A failed RLIMIT query is retained as
+    // an explicit error on every attempted managed acquisition.
+    struct rlimit limit = {};
+    if (::getrlimit(RLIMIT_NOFILE, &limit) != 0)
+        mManagedDescriptors.initializationError = errno ? errno : EIO;
+    else
+        mManagedDescriptors.initialCapacity = static_cast<std::size_t>(std::min(limit.rlim_cur, static_cast<rlim_t>(256)));
+}
+
+Result<bool> ContextInterface::ReserveManagedDescriptor() const
+{
+    if (mManagedDescriptors.initializationError != 0)
+        return Error("Cannot inspect initial soft descriptor limit", mManagedDescriptors.initializationError);
+    struct rlimit limit = {};
+    if (::getrlimit(RLIMIT_NOFILE, &limit) != 0)
+        return Error("Cannot inspect current soft descriptor limit", errno ? errno : EIO);
+    const std::size_t effective = std::min({mManagedDescriptors.initialCapacity, ManagedDescriptorAllowance(),
+        static_cast<std::size_t>(std::min(limit.rlim_cur, static_cast<rlim_t>(256)))});
+    if (mManagedDescriptors.owned >= effective)
+        return Error("Managed descriptor allowance exhausted", EMFILE);
+    ++mManagedDescriptors.owned;
+    return true;
+}
+
+void ContextInterface::ReleaseManagedDescriptor() const noexcept
+{
+    --mManagedDescriptors.owned; // only an owned descriptor/cursor relinquishes
+}
+
+class ContextInterface::Reservation
+{
+public:
+    explicit Reservation(const ContextInterface& context)
+        : mContext(context)
+    {
+        auto reserved = context.ReserveManagedDescriptor();
+        if (reserved.HasValue())
+            mReserved = true;
+        else
+            mError = std::move(reserved).Error();
+    }
+    ~Reservation() noexcept
+    {
+        if (mReserved)
+            mContext.ReleaseManagedDescriptor();
+    }
+    bool Acquired() const noexcept
+    {
+        return mReserved;
+    }
+    const Error& Failure() const
+    {
+        return mError.Value();
+    }
+    void Transfer() noexcept
+    {
+        mReserved = false;
+    }
+
+private:
+    const ContextInterface& mContext;
+    bool mReserved = false;
+    Optional<Error> mError;
+};
 // Provide a definition for the virtual destructor
 ContextInterface::~ContextInterface() = default;
 
@@ -49,11 +118,15 @@ Result<Descriptor> ContextInterface::OpenAbsolutePin(const char* path, bool dire
     {
         return Error("Unsupported absolute pin path", EINVAL);
     }
+    Reservation charge(*this);
+    if (!charge.Acquired())
+        return charge.Failure();
     const int fd = OpenNativePath(path, O_PATH | O_NOFOLLOW | O_CLOEXEC | (directory ? O_DIRECTORY : 0));
     if (fd < 0)
     {
         return Error("Cannot open absolute pin", errno ? errno : EIO);
     }
+    charge.Transfer();
     return Descriptor(*this, fd, CloseDiagnostic::Descriptor);
 }
 
@@ -119,11 +192,15 @@ Result<Descriptor> ContextInterface::OpenVerifiedAt(const Descriptor& directory,
         default:
             return Error("Unsupported descriptor open profile", EINVAL);
     }
+    Reservation charge(*this);
+    if (!charge.Acquired())
+        return charge.Failure();
     const int fd = OpenNativeAt(directory.mDescriptor.Value(), name, flags);
     if (fd < 0)
     {
         return Error("Cannot open relative descriptor", errno ? errno : EIO);
     }
+    charge.Transfer();
     return Descriptor(*this, fd, diagnostic);
 }
 
@@ -186,11 +263,15 @@ Result<Descriptor> ContextInterface::Duplicate(const Descriptor& source) const&
     {
         return Error("Cannot duplicate a foreign descriptor", EINVAL);
     }
+    Reservation charge(*this);
+    if (!charge.Acquired())
+        return charge.Failure();
     const int fd = DuplicateDescriptor(source.mDescriptor.Value());
     if (fd < 0)
     {
         return Error("Cannot duplicate descriptor", errno ? errno : EIO);
     }
+    charge.Transfer();
     return Descriptor(*this, fd, CloseDiagnostic::Descriptor);
 }
 
@@ -257,7 +338,13 @@ int ContextInterface::CloseOwnedDescriptor(Descriptor& owner) const
     CHECK_OWNER(owner, -1)
     const int fd = owner.mDescriptor.Value();
     owner.mDescriptor.Reset();
+    ReleaseManagedDescriptor();
     return CloseFileDescriptor(fd);
+}
+int ContextInterface::CloseOwnedDirectoryCursor(DIR* stream) const
+{
+    ReleaseManagedDescriptor();
+    return CloseDirectory(stream);
 }
 Result<Filesystem::DirectoryCursor> ContextInterface::OpenDirectoryCursor(Descriptor&& owner) const&
 {

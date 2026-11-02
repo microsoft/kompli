@@ -104,6 +104,14 @@ struct MockContext : public ComplianceEngine::ContextInterface
         mLogHandle = logHandle;
     }
 
+    // Test-only context limit. Lowering below currently owned pins blocks
+    // further acquisition until enough owners are closed; existing owners
+    // retain their charges. Values above 256 cannot raise production capacity.
+    void SetManagedDescriptorAllowanceForTesting(std::size_t limit) noexcept
+    {
+        mTestDescriptorAllowance = limit;
+    }
+
     MockContext()
         : mTempOwner(CreateTempdir()),
           mTempdir(mTempOwner.Path())
@@ -218,6 +226,12 @@ struct MockContext : public ComplianceEngine::ContextInterface
         return mTempdir;
     }
 
+protected:
+    std::size_t ManagedDescriptorAllowance() const noexcept override
+    {
+        return mTestDescriptorAllowance;
+    }
+
 private:
     // throws as it's used by the constructor
     static ComplianceEngine::TemporaryDirectory CreateTempdir()
@@ -234,6 +248,7 @@ private:
     std::string mTempdir;
     std::string mTempRootDir;
     std::size_t mTempfileCount{0};
+    std::size_t mTestDescriptorAllowance = 256;
     std::map<std::string, std::string> mSpecialFilesMap;
     std::unique_ptr<ComplianceEngine::FilesystemScanner> mFsScannerp;
     ComplianceEngine::Result<std::string> mRunningKernelRelease{std::string("5.15.test")};

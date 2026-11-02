@@ -160,12 +160,9 @@ using Detail::ProcfsDescriptorAccess;
 using Detail::SameIdentity;
 using Detail::SavedError;
 
-Handle::Handle(Detail::Descriptor&& descriptor, Type type, const struct stat& snapshot, std::size_t fdinfoBytes, std::string lookup,
-    std::string effective, std::uint64_t originalMount, std::uint64_t targetMount)
+Handle::Handle(Detail::Descriptor&& descriptor, Type type, const struct stat& snapshot, std::size_t fdinfoBytes, std::uint64_t originalMount, std::uint64_t targetMount)
     : mDescriptor(std::move(descriptor)),
       mType(type),
-      mLookupName(std::move(lookup)),
-      mEffectiveName(std::move(effective)),
       mOriginalMount(originalMount),
       mTargetMount(targetMount),
       mAcquiredMetadata(snapshot),
@@ -176,8 +173,6 @@ Handle::Handle(Detail::Descriptor&& descriptor, Type type, const struct stat& sn
 Handle::Handle(Handle&& other) noexcept
     : mDescriptor(std::move(other.mDescriptor)),
       mType(other.mType),
-      mLookupName(std::move(other.mLookupName)),
-      mEffectiveName(std::move(other.mEffectiveName)),
       mOriginalMount(other.mOriginalMount),
       mTargetMount(other.mTargetMount),
       mAcquiredMetadata(other.mAcquiredMetadata),
@@ -200,16 +195,6 @@ Handle::~Handle() noexcept = default;
 Handle::Type Handle::AcquiredType() const noexcept
 {
     return mType;
-}
-
-const std::string& Handle::LookupName() const& noexcept
-{
-    return mLookupName;
-}
-
-const std::string& Handle::EffectiveName() const& noexcept
-{
-    return mEffectiveName;
 }
 
 std::uint64_t Handle::OriginalMount() const noexcept
@@ -530,8 +515,6 @@ void Handle::Swap(Handle& other) noexcept
     using std::swap;
     swap(mDescriptor, other.mDescriptor);
     swap(mType, other.mType);
-    mLookupName.swap(other.mLookupName);
-    mEffectiveName.swap(other.mEffectiveName);
     swap(mOriginalMount, other.mOriginalMount);
     swap(mTargetMount, other.mTargetMount);
     swap(mAcquiredMetadata, other.mAcquiredMetadata);
@@ -586,7 +569,7 @@ Result<Handle> Handle::PinProcessRoot(const ContextInterface& context, std::size
         }
         if (!mount.HasValue())
             return std::move(mount).Error();
-        Handle root(std::move(acquired), Handle::Type::Directory, snapshot, fdinfoBytes, "/", "/", 0, mount.Value());
+        Handle root(std::move(acquired), Handle::Type::Directory, snapshot, fdinfoBytes, 0, mount.Value());
         return std::move(root);
     }();
     auto closed = acquired.Close();
@@ -715,7 +698,7 @@ Result<bool> DirectoryCursor::Close()
     }
     DIR* stream = mStream;
     mStream = nullptr;
-    const int error = mContext->CloseDirectory(stream) != 0 ? SavedError() : 0;
+    const int error = mContext->CloseOwnedDirectoryCursor(stream) != 0 ? SavedError() : 0;
 
     if (error != 0)
     {

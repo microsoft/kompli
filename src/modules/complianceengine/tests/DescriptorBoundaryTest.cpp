@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <filesystem/Descriptor.hpp>
+#include <filesystem/Handle.hpp>
 #include <filesystem/ProcfsDescriptorAccess.hpp>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -441,5 +442,148 @@ TEST(DescriptorBoundaryTest, NativeCloseExceptionRelinquishesDescriptorBeforeReu
     ASSERT_GE(reused, 0);
     EXPECT_GE(::fcntl(reused, F_GETFD), 0);
     EXPECT_EQ(0, ::close(reused));
+}
+
+TEST(DescriptorBoundaryTest, ContextAllowanceIncludesDetachedOwnersAndDoesNotResetOnTransfer)
+{
+    NiceMock<MockContext> first;
+    NiceMock<MockContext> second;
+    std::vector<Descriptor> owners;
+    owners.reserve(256);
+    for (std::size_t i = 0; i < 256; ++i)
+    {
+        auto opened = first.OpenAbsolutePin("/");
+        ASSERT_TRUE(opened.HasValue()) << i << ": " << opened.Error().message;
+        owners.push_back(std::move(opened).Value());
+    }
+    EXPECT_CALL(first, OpenNativePath(_, _)).Times(0);
+    EXPECT_CALL(first, DuplicateDescriptor(_)).Times(0);
+    auto full = first.OpenAbsolutePin("/");
+    ASSERT_FALSE(full.HasValue());
+    EXPECT_EQ(EMFILE, full.Error().code);
+    auto duplicate = first.Duplicate(owners.back());
+    ASSERT_FALSE(duplicate.HasValue());
+    EXPECT_EQ(EMFILE, duplicate.Error().code);
+    testing::Mock::VerifyAndClearExpectations(&first);
+    auto independent = second.OpenAbsolutePin("/");
+    ASSERT_TRUE(independent.HasValue()); // another context has its own owner
+
+    Descriptor detached(std::move(owners.front()));
+    EXPECT_FALSE(owners.front().HasValue());
+    EXPECT_EQ(EMFILE, first.OpenAbsolutePin("/").Error().code);
+    ASSERT_TRUE(detached.Close().HasValue());
+    auto replacement = first.Duplicate(owners.back());
+    ASSERT_TRUE(replacement.HasValue());
+    EXPECT_EQ(EMFILE, first.OpenAbsolutePin("/").Error().code);
+    ASSERT_TRUE(replacement.Value().Close().HasValue());
+
+    EXPECT_CALL(first, OpenNativePath(_, _)).WillOnce([](const char*, int) {
+        errno = EACCES;
+        return -1;
+    });
+    auto failed = first.OpenAbsolutePin("/");
+    ASSERT_FALSE(failed.HasValue());
+    EXPECT_EQ(EACCES, failed.Error().code);
+    testing::Mock::VerifyAndClearExpectations(&first);
+    EXPECT_CALL(first, DuplicateDescriptor(_)).WillOnce([](int) {
+        errno = EBADF;
+        return -1;
+    });
+    auto failedDuplicate = first.Duplicate(owners.back());
+    ASSERT_FALSE(failedDuplicate.HasValue());
+    EXPECT_EQ(EBADF, failedDuplicate.Error().code);
+    testing::Mock::VerifyAndClearExpectations(&first);
+    EXPECT_TRUE(first.OpenAbsolutePin("/").HasValue()); // temporary closes on result destruction
+    EXPECT_TRUE(independent.Value().Close().HasValue());
+}
+
+TEST(DescriptorBoundaryTest, NarrowTestAllowanceHonorsLiveOwnersAndCannotRaiseProductionLimit)
+{
+    NiceMock<MockContext> context;
+    context.SetManagedDescriptorAllowanceForTesting(2);
+    auto first = context.OpenAbsolutePin("/");
+    auto second = context.OpenAbsolutePin("/");
+    ASSERT_TRUE(first.HasValue());
+    ASSERT_TRUE(second.HasValue());
+    EXPECT_CALL(context, OpenNativePath(_, _)).Times(0);
+    EXPECT_EQ(EMFILE, context.OpenAbsolutePin("/").Error().code);
+    testing::Mock::VerifyAndClearExpectations(&context);
+
+    context.SetManagedDescriptorAllowanceForTesting(1);
+    EXPECT_EQ(EMFILE, context.Duplicate(first.Value()).Error().code);
+    ASSERT_TRUE(first.Value().Close().HasValue());
+    EXPECT_EQ(EMFILE, context.OpenAbsolutePin("/").Error().code);
+    ASSERT_TRUE(second.Value().Close().HasValue());
+    auto recovered = context.OpenAbsolutePin("/");
+    ASSERT_TRUE(recovered.HasValue());
+    ASSERT_TRUE(recovered.Value().Close().HasValue());
+    context.SetManagedDescriptorAllowanceForTesting(512);
+    std::vector<Descriptor> held;
+    held.reserve(256);
+    for (std::size_t i = 0; i < 256; ++i)
+    {
+        auto opened = context.OpenAbsolutePin("/");
+        ASSERT_TRUE(opened.HasValue()) << i << ": " << opened.Error().message;
+        held.push_back(std::move(opened).Value());
+    }
+    EXPECT_EQ(EMFILE, context.OpenAbsolutePin("/").Error().code);
+}
+
+TEST(DescriptorBoundaryTest, CursorTransferRetainsChargeUntilClosed)
+{
+    NiceMock<MockContext> context;
+    auto root = context.OpenAbsolutePin("/");
+    ASSERT_TRUE(root.HasValue());
+    ProcfsDescriptorAccess procfs(context);
+    ASSERT_TRUE(procfs.Open().HasValue());
+    auto alias = context.OpenAlias(procfs, root.Value(), true);
+    ASSERT_TRUE(alias.HasValue());
+    ASSERT_TRUE(procfs.Close().HasValue());
+    ASSERT_TRUE(root.Value().Close().HasValue());
+    auto cursor = context.OpenDirectoryCursor(std::move(alias).Value());
+    ASSERT_TRUE(cursor.HasValue());
+    std::vector<Descriptor> owners;
+    owners.reserve(255);
+    for (std::size_t i = 0; i < 255; ++i)
+    {
+        auto opened = context.OpenAbsolutePin("/");
+        ASSERT_TRUE(opened.HasValue()) << i;
+        owners.push_back(std::move(opened).Value());
+    }
+    EXPECT_EQ(EMFILE, context.OpenAbsolutePin("/").Error().code);
+    ASSERT_TRUE(cursor.Value().Close().HasValue());
+    auto available = context.OpenAbsolutePin("/");
+    ASSERT_TRUE(available.HasValue());
+    EXPECT_EQ(EMFILE, context.OpenAbsolutePin("/").Error().code);
+}
+
+TEST(DescriptorBoundaryTest, FailedProcfsBootstrapReturnsAllTemporaryReservations)
+{
+    NiceMock<MockContext> context;
+    std::vector<Descriptor> owners;
+    owners.reserve(254);
+    for (std::size_t i = 0; i < 254; ++i)
+    {
+        auto opened = context.OpenAbsolutePin("/");
+        ASSERT_TRUE(opened.HasValue()) << i;
+        owners.push_back(std::move(opened).Value());
+    }
+    ProcfsDescriptorAccess procfs(context);
+    auto failure = procfs.Open();
+    ASSERT_FALSE(failure.HasValue());
+    EXPECT_EQ(EMFILE, failure.Error().code);
+    auto first = context.OpenAbsolutePin("/");
+    auto second = context.OpenAbsolutePin("/");
+    ASSERT_TRUE(first.HasValue());
+    ASSERT_TRUE(second.HasValue());
+    EXPECT_EQ(EMFILE, context.OpenAbsolutePin("/").Error().code);
+    ASSERT_TRUE(first.Value().Close().HasValue());
+    ASSERT_TRUE(second.Value().Close().HasValue());
+    ASSERT_TRUE(owners.back().Close().HasValue());
+    auto recovered = procfs.Open();
+    // At 253 held pins there is still insufficient room for all verified
+    // procfs roles; no partial helper owner may remain on failure.
+    ASSERT_FALSE(recovered.HasValue());
+    EXPECT_EQ(EMFILE, recovered.Error().code);
 }
 } // namespace
