@@ -128,6 +128,13 @@ public:
     // on owner destruction/move and reflects subsequent owner mutations; it is
     // not an immutable snapshot. Rejections leave the stack unchanged.
     ComplianceEngine::Result<Variant<const Path&, RejectionReason>> Push(std::string component, ExtensionPolicy policy);
+    // Acquire an absolute selection only from the pristine, unfrozen process
+    // root sentinel (including a Path returned by Make("/")). Invalid input
+    // leaves it unchanged. After a later component fails or is rejected,
+    // already accepted prefix pins remain above "/" and may be frozen or
+    // closed; this is not a whole-path rollback or permission to replace them.
+    // Success borrows this Path, as with child Push.
+    ComplianceEngine::Result<Variant<const Path&, RejectionReason>> Push(std::string absolutePath, Policy policy);
     // Transfers the last pin, including the root, without reacquiring its
     // name. The removed element's borrows expire; surviving borrows do not.
     // Popping releases hidden pins acquired for this logical step immediately.
@@ -190,6 +197,16 @@ public:
 
 private:
     class Resolver;
+    enum class ExtensionMode
+    {
+        RootAcquisition,
+        ChildPush
+    };
+    enum class DirectoryRequirement
+    {
+        DirectoryOnly,
+        FileOrDirectory
+    };
     struct NameBinding
     {
         const Handle* pin;
@@ -216,17 +233,20 @@ private:
         Detail::ResolvedPath& stage, const Handle& source, Detail::Descriptor& duplicate, int duplicateError);
     static ComplianceEngine::Result<Handle> RetainLeaf(const ContextInterface& context, const ResolverLimits& limits, std::size_t held,
         Detail::ResolvedPath& stage, const Handle& source);
-    // Empty optional accepts the pinned root; a reason rejects the selection.
-    static ComplianceEngine::Result<Optional<RejectionReason>> AcquireInitialRoot(Path& path, const std::string& rootName, const Policy& policy);
-    ComplianceEngine::Result<Variant<const Path&, RejectionReason>> Extend(std::string component, ExtensionPolicy policy, bool acquisition,
-        bool requireDirectory, std::size_t& followed);
+    // Fallible bootstrap after input validation; constructor itself only
+    // initializes local state. Charges the exact spelling and sentinel entry.
+    ComplianceEngine::Result<bool> PinProcessRoot();
+    ComplianceEngine::Result<Variant<const Path&, RejectionReason>> Extend(std::string component, ExtensionPolicy policy, ExtensionMode mode,
+        DirectoryRequirement directoryRequirement, std::size_t& followed);
     ComplianceEngine::Result<bool> Commit(Detail::ResolvedPath& stage, Handle leaf);
     ComplianceEngine::Result<bool> CommitStage(Detail::ResolvedPath& stage, Handle leaf, bool logicalLeaf);
     static ComplianceEngine::Result<std::vector<const Handle*>> PhysicalLineage(const Handle& root, const std::string& rootName, const Handle& target,
         const std::string& targetName, const std::vector<NameBinding>& names, const Detail::ResolvedPath* stage, std::size_t depth);
     ComplianceEngine::Result<std::vector<const Handle*>> Lineage(std::size_t index) const;
     std::size_t HeldDescriptors() const noexcept;
-    bool ChargeWork() noexcept;
+    // Charge work before checking optional retained headroom; failed
+    // headroom checks do not refund an attempted operation.
+    Optional<Error> ChargeWork(std::size_t retainedHeadroom = 0);
     ComplianceEngine::Result<std::uint64_t> RootMountId() const;
 
     std::reference_wrapper<const ContextInterface> mContext;

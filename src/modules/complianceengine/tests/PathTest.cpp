@@ -189,6 +189,9 @@ protected:
 static_assert(std::is_same<decltype(std::declval<Path&>().Push(std::declval<std::string>(), std::declval<ExtensionPolicy>())),
                   ComplianceEngine::Result<Variant<const Path&, Path::RejectionReason>>>::value,
     "Push returns a borrowed accepted path or a rejection");
+static_assert(std::is_same<decltype(std::declval<Path&>().Push(std::declval<std::string>(), std::declval<Path::Policy>())),
+                  ComplianceEngine::Result<Variant<const Path&, Path::RejectionReason>>>::value,
+    "Absolute acquisition Push returns a borrowed accepted path or a rejection");
 static_assert(!std::is_copy_constructible<Variant<const Path&, Path::RejectionReason>>::value, "Push outcome is move-only");
 
 namespace
@@ -271,6 +274,100 @@ TEST_F(PathAliasTest, FreezeFileRootAndRejectPreFreezeSelectedFileAccess)
     auto trailing = Path::Make(context, file + "/", CrossMountPathPolicy(), AmpleLimits());
     ASSERT_FALSE(trailing.HasValue());
     EXPECT_EQ(ENOTDIR, trailing.Error().code);
+}
+
+TEST_F(PathAliasTest, AbsolutePushSelectsLeafOnlyFromPristineProcessSentinel)
+{
+    const std::string file = context.MakeTempfile("absolute-push");
+    const std::size_t before = CountOpenDescriptors();
+    auto opened = Path::Make(context, "/", CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = As<Path>(std::move(opened).Value());
+    auto acquired = path.Push(file, CrossMountPathPolicy());
+    ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
+    ASSERT_TRUE(acquired.Value().Is<const Path&>());
+    EXPECT_EQ(&path, &acquired.Value().Get<const Path&>());
+    EXPECT_FALSE(path.IsFrozen());
+    EXPECT_EQ(EINVAL, path.Push(file, CrossMountPathPolicy()).Error().code);
+    ASSERT_TRUE(path.FreezeRoot().HasValue());
+    EXPECT_EQ(file, path.ToString());
+    EXPECT_EQ(Handle::Type::RegularFile, path.Leaf().AcquiredType());
+    EXPECT_EQ(EINVAL, path.Push("/", CrossMountPathPolicy()).Error().code);
+    auto detached = path.Pop();
+    ASSERT_TRUE(detached.HasValue()) << detached.Error().message;
+    EXPECT_EQ(EINVAL, path.Push(file, CrossMountPathPolicy()).Error().code);
+    ASSERT_TRUE(detached.Value().Close().HasValue());
+    EXPECT_EQ(before, CountOpenDescriptors());
+}
+
+TEST_F(PathAliasTest, AbsolutePushValidatesBeforeMutationAndKeepsPartialPrefixConfined)
+{
+    const std::string directory = context.GetTempdirPath();
+    auto opened = Path::Make(context, "/", CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = As<Path>(std::move(opened).Value());
+    const std::size_t initialBytes = path.RetainedBytes();
+    const std::size_t initialPins = path.RetainedDescriptors();
+    EXPECT_EQ(EINVAL, path.Push("relative", CrossMountPathPolicy()).Error().code);
+    EXPECT_EQ(EINVAL, path.Push(directory + "/../other", CrossMountPathPolicy()).Error().code);
+    EXPECT_EQ(EINVAL, path.Push(directory + std::string("\0bad", 4), CrossMountPathPolicy()).Error().code);
+    auto badPolicy = CrossMountPathPolicy();
+    badPolicy.symlinks = static_cast<SymlinkPolicy>(-1);
+    EXPECT_EQ(EINVAL, path.Push(directory, badPolicy).Error().code);
+    EXPECT_EQ(initialBytes, path.RetainedBytes());
+    EXPECT_EQ(initialPins, path.RetainedDescriptors());
+    const std::string missing = directory + "/absent-absolute-push";
+    auto rejected = path.Push(missing, CrossMountPathPolicy());
+    ASSERT_TRUE(rejected.HasValue()) << rejected.Error().message;
+    ASSERT_TRUE(rejected.Value().Is<Path::RejectionReason>());
+    EXPECT_EQ(Path::RejectionReason::Missing, rejected.Value().Get<Path::RejectionReason>());
+    EXPECT_EQ(EINVAL, path.Push(directory, CrossMountPathPolicy()).Error().code);
+    EXPECT_LE(path.RetainedBytes(), path.Limits().shared.retainedBytes);
+    ASSERT_TRUE(path.FreezeRoot().HasValue());
+    EXPECT_EQ(directory, path.ToString());
+    ASSERT_TRUE(path.Close().HasValue());
+}
+
+TEST_F(PathAliasTest, AbsolutePushSharesFollowCounterAndEnforcesTrailingDirectory)
+{
+    const std::string root = context.GetTempdirPath() + "/absolute-push-links";
+    ASSERT_EQ(0, ::mkdir(root.c_str(), 0700));
+    ASSERT_EQ(0, ::mkdir((root + "/target").c_str(), 0700));
+    ASSERT_EQ(0, ::mkdir((root + "/target/final").c_str(), 0700));
+    ASSERT_EQ(0, ::symlink("target", (root + "/first").c_str()));
+    ASSERT_EQ(0, ::symlink("final", (root + "/target/second").c_str()));
+    ResolverLimits limits = AmpleLimits();
+    limits.linkExpansions = 1;
+    auto opened = Path::Make(context, "/", CrossMountPathPolicy(), limits);
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = As<Path>(std::move(opened).Value());
+    auto exceeded = path.Push(root + "/first/second", CrossMountPathPolicy(SymlinkPolicy::Follow));
+    ASSERT_FALSE(exceeded.HasValue());
+    EXPECT_EQ(ELOOP, exceeded.Error().code);
+    EXPECT_EQ(EINVAL, path.Push("/", CrossMountPathPolicy()).Error().code);
+    ASSERT_TRUE(path.FreezeRoot().HasValue());
+    EXPECT_EQ(root + "/target", path.ToString());
+    ASSERT_TRUE(path.Close().HasValue());
+
+    limits.linkExpansions = 2;
+    auto fresh = Path::Make(context, "/", CrossMountPathPolicy(), limits);
+    ASSERT_TRUE(fresh.HasValue()) << fresh.Error().message;
+    Path selected = As<Path>(std::move(fresh).Value());
+    auto success = selected.Push(root + "/first/second/", CrossMountPathPolicy(SymlinkPolicy::Follow));
+    ASSERT_TRUE(success.HasValue()) << success.Error().message;
+    ASSERT_TRUE(selected.FreezeRoot().HasValue());
+    EXPECT_EQ(root + "/target/final", selected.ToString());
+    ASSERT_TRUE(selected.Close().HasValue());
+
+    const std::string file = context.MakeTempfile("trailing-push");
+    auto forFile = Path::Make(context, "/", CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(forFile.HasValue()) << forFile.Error().message;
+    Path filePath = As<Path>(std::move(forFile).Value());
+    auto trailing = filePath.Push(file + "/", CrossMountPathPolicy());
+    ASSERT_FALSE(trailing.HasValue());
+    EXPECT_EQ(ENOTDIR, trailing.Error().code);
+    EXPECT_EQ(EINVAL, filePath.Push(file, CrossMountPathPolicy()).Error().code);
+    ASSERT_TRUE(filePath.Close().HasValue());
 }
 
 TEST_F(PathAliasTest, FailedFreezeCleanupLeavesNoBoundaryAndDoesNotRetryClose)
@@ -2257,6 +2354,52 @@ TEST_F(PathAliasTest, ResolverAndExtensionDefaultsAreIndependentAndBounded)
     ASSERT_FALSE(root.HasValue());
     EXPECT_EQ(E2BIG, root.Error().code);
     EXPECT_EQ(100000U, limits.shared.work); // overrides cannot mutate other requests
+}
+
+TEST_F(PathAliasTest, InitialRootRetainedHeadroomHasExactBoundary)
+{
+    ResolverLimits limits = AmpleLimits();
+    auto baseline = Path::Make(context, "/", CrossMountPathPolicy(), limits);
+    ASSERT_TRUE(baseline.HasValue()) << baseline.Error().message;
+    ASSERT_TRUE(baseline.Value().Is<Path>());
+    // The acquisition ledger includes the root spelling and the full
+    // process-root entry footprint; bootstrap must reserve that entire total.
+    const std::size_t exactBudget = As<Path>(baseline.Value()).RetainedBytes();
+    ASSERT_LE(exactBudget, limits.shared.retainedBytes);
+    limits.shared.retainedBytes = exactBudget - 1;
+    auto insufficient = Path::Make(context, "/", CrossMountPathPolicy(), limits);
+    ASSERT_FALSE(insufficient.HasValue());
+    EXPECT_EQ(E2BIG, insufficient.Error().code);
+    EXPECT_EQ("Path retained-memory budget exhausted", insufficient.Error().message);
+
+    limits.shared.retainedBytes = exactBudget;
+    auto exact = Path::Make(context, "/", CrossMountPathPolicy(), limits);
+    ASSERT_TRUE(exact.HasValue()) << exact.Error().message;
+    ASSERT_TRUE(exact.Value().Is<Path>());
+    EXPECT_EQ(exactBudget, As<Path>(exact.Value()).RetainedBytes());
+    EXPECT_LE(As<Path>(exact.Value()).RetainedBytes(), limits.shared.retainedBytes);
+}
+
+TEST_F(PathAliasTest, InitialRootWorkChargePrecedesRetainedHeadroomAndFreezeCharge)
+{
+    const std::size_t charge = 128 + 4 * (4096 / 256);
+    ResolverLimits limits = AmpleLimits();
+    limits.shared.work = charge - 1;
+    limits.shared.retainedBytes = 1;
+    auto insufficientWork = Path::Make(context, "/", CrossMountPathPolicy(), limits);
+    ASSERT_FALSE(insufficientWork.HasValue());
+    EXPECT_EQ(E2BIG, insufficientWork.Error().code);
+    EXPECT_EQ("Path work budget exhausted", insufficientWork.Error().message);
+
+    limits.shared.work = charge;
+    limits.shared.retainedBytes = AmpleLimits().shared.retainedBytes;
+    auto exact = Path::Make(context, "/", CrossMountPathPolicy(), limits);
+    ASSERT_TRUE(exact.HasValue()) << exact.Error().message;
+    ASSERT_TRUE(exact.Value().Is<Path>());
+    auto freeze = As<Path>(exact.Value()).FreezeRoot();
+    ASSERT_FALSE(freeze.HasValue());
+    EXPECT_EQ(E2BIG, freeze.Error().code);
+    EXPECT_EQ("Path work budget exhausted", freeze.Error().message);
 }
 
 TEST_F(PathAliasTest, CachedAliasRestoresHeldPhysicalAncestryBeforeDotDot)
