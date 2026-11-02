@@ -162,6 +162,10 @@ protected:
     virtual pid_t NativeThreadId() const;
 
 private:
+    friend class Filesystem::Detail::ProcfsDescriptorAccess;
+    // The only followed bootstrap link is /proc/self, reached from the
+    // helper's verified procfs pin; generic OpenAt cannot request it.
+    Result<Filesystem::Detail::Descriptor> OpenProcfsSelf(const Filesystem::Detail::Descriptor& proc) const&;
     class Reservation;
     struct ManagedDescriptorBudget
     {

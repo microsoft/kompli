@@ -10,12 +10,14 @@
 #include <filesystem/ProcfsDescriptorAccess.hpp>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <type_traits>
 #include <unistd.h>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -180,7 +182,8 @@ TEST(DescriptorBoundaryTest, AliasProfilesRequireVerifiedRoles)
         EXPECT_CALL(context, OpenNativeAt(_, _, _)).Times(0);
         EXPECT_CALL(context, ChmodPinnedAlias(_, _, _)).Times(0);
         EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
-        for (Profile profile : {Profile::ReadFdinfo, Profile::FollowAliasFile, Profile::FollowAliasDirectory, Profile::FollowAliasPin, Profile::FollowAliasPinDirectory})
+        for (Profile profile : {Profile::PinSelfDirectory, Profile::ReadFdinfo, Profile::FollowAliasFile, Profile::FollowAliasDirectory,
+                 Profile::FollowAliasPin, Profile::FollowAliasPinDirectory})
         {
             auto denied = context.OpenAt(directory, alias.c_str(), profile);
             ASSERT_FALSE(denied.HasValue());
@@ -214,6 +217,159 @@ TEST(DescriptorBoundaryTest, AliasProfilesRequireVerifiedRoles)
     errno = 0;
     EXPECT_EQ(-1, context.ChmodAlias(procfs, pin, 0700));
     EXPECT_EQ(EINVAL, errno);
+}
+
+TEST(DescriptorBoundaryTest, RelativeAndVerifiedAliasOpensAtomicallySetCloexec)
+{
+    NiceMock<MockContext> context;
+    auto root = context.OpenAbsolutePin("/proc");
+    ASSERT_TRUE(root.HasValue());
+    int relativeOpens = 0, aliasOpens = 0;
+    EXPECT_CALL(context, OpenNativeAt(_, _, _)).WillRepeatedly([&](int directory, const char* name, int flags) {
+        const int opened = context.RealOpenNativeAt(directory, name, flags);
+        if (std::string(name) == "self" || std::string(name) == "fdinfo")
+        {
+            EXPECT_NE(0, flags & O_CLOEXEC);
+            if (opened >= 0)
+                EXPECT_NE(0, ::fcntl(opened, F_GETFD) & FD_CLOEXEC);
+            ++relativeOpens;
+        }
+        return opened;
+    });
+    auto relative = context.OpenAt(root.Value(), "self", Profile::PinChild);
+    ASSERT_TRUE(relative.HasValue());
+    struct stat identity = {};
+    ASSERT_EQ(0, context.StatFile(relative.Value(), &identity));
+    EXPECT_TRUE(S_ISLNK(identity.st_mode)); // generic child pins do not follow
+    ProcfsDescriptorAccess procfs(context);
+    ASSERT_TRUE(procfs.Open().HasValue());
+    EXPECT_CALL(context, OpenNativeAt(_, _, _)).WillRepeatedly([&](int directory, const char* name, int flags) {
+        const int opened = context.RealOpenNativeAt(directory, name, flags);
+        if ((flags & O_NOFOLLOW) == 0 && std::string(name) != "self")
+        {
+            EXPECT_NE(0, flags & O_CLOEXEC);
+            if (opened >= 0)
+                EXPECT_NE(0, ::fcntl(opened, F_GETFD) & FD_CLOEXEC);
+            ++aliasOpens;
+        }
+        return opened;
+    });
+    auto alias = context.OpenPinAlias(procfs, root.Value(), true);
+    ASSERT_TRUE(alias.HasValue());
+    EXPECT_EQ(3, relativeOpens); // child pin, self bootstrap and fdinfo role
+    EXPECT_EQ(1, aliasOpens);
+    EXPECT_TRUE(alias.Value().Close().HasValue());
+    EXPECT_TRUE(relative.Value().Close().HasValue());
+    EXPECT_TRUE(procfs.Close().HasValue());
+    EXPECT_TRUE(root.Value().Close().HasValue());
+}
+
+TEST(DescriptorBoundaryTest, ProcfsCloseDetachesAllRolesBeforeThrowAndNeverRetriesReusedFd)
+{
+    NiceMock<MockContext> context;
+    NiceMock<MockContext> foreign;
+    ProcfsDescriptorAccess access(context);
+    int procFd = -1, fdRole = -1, fdinfoRole = -1, reused = -1;
+    ON_CALL(context, OpenNativePath(_, _)).WillByDefault([&](const char* path, int flags) {
+        const int opened = context.RealOpenNativePath(path, flags);
+        if (std::string(path) == "/proc")
+            procFd = opened;
+        return opened;
+    });
+    ON_CALL(context, OpenNativeAt(_, _, _)).WillByDefault([&](int directory, const char* name, int flags) {
+        const int opened = context.RealOpenNativeAt(directory, name, flags);
+        if (std::string(name) == "fd")
+            fdRole = opened;
+        if (std::string(name) == "fdinfo")
+            fdinfoRole = opened;
+        return opened;
+    });
+    ASSERT_TRUE(access.Open().HasValue());
+    ASSERT_GE(procFd, 0);
+    ASSERT_GE(fdRole, 0);
+    ASSERT_GE(fdinfoRole, 0);
+    std::map<int, int> closes;
+    EXPECT_CALL(foreign, CloseFileDescriptor(_)).Times(0);
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> int {
+        ++closes[descriptor];
+        const int closed = context.RealCloseFileDescriptor(descriptor);
+        if (descriptor == fdinfoRole)
+        {
+            const int replacement = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+            EXPECT_GE(replacement, 0);
+            if (replacement >= 0)
+            {
+                reused = descriptor;
+                if (replacement != descriptor)
+                {
+                    EXPECT_EQ(descriptor, ::dup2(replacement, descriptor));
+                    ::close(replacement);
+                }
+            }
+            throw std::runtime_error("original role close fault");
+        }
+        return closed;
+    });
+    try
+    {
+        (void)access.Close();
+        FAIL() << "The original exception must propagate";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_STREQ("original role close fault", error.what());
+        EXPECT_FALSE(access.ProcDirectory().HasValue());
+        EXPECT_FALSE(access.FdDirectory().HasValue());
+        EXPECT_FALSE(access.FdinfoDirectory().HasValue());
+    }
+    EXPECT_EQ(1, closes[fdinfoRole]);
+    EXPECT_EQ(1, closes[fdRole]);
+    EXPECT_EQ(1, closes[procFd]);
+    EXPECT_TRUE(access.Close().HasValue());
+    EXPECT_EQ(1, closes[fdinfoRole]);
+    ASSERT_GE(reused, 0);
+    EXPECT_GE(::fcntl(reused, F_GETFD), 0);
+    EXPECT_EQ(0, ::close(reused));
+}
+
+TEST(DescriptorBoundaryTest, ProcfsCloseReportsFirstNativeFailureAndAttemptsAllRoles)
+{
+    NiceMock<MockContext> context;
+    ProcfsDescriptorAccess access(context);
+    int procFd = -1, fdRole = -1, fdinfoRole = -1;
+    ON_CALL(context, OpenNativePath(_, _)).WillByDefault([&](const char* path, int flags) {
+        const int opened = context.RealOpenNativePath(path, flags);
+        if (std::string(path) == "/proc")
+            procFd = opened;
+        return opened;
+    });
+    ON_CALL(context, OpenNativeAt(_, _, _)).WillByDefault([&](int directory, const char* name, int flags) {
+        const int opened = context.RealOpenNativeAt(directory, name, flags);
+        if (std::string(name) == "fd")
+            fdRole = opened;
+        if (std::string(name) == "fdinfo")
+            fdinfoRole = opened;
+        return opened;
+    });
+    ASSERT_TRUE(access.Open().HasValue());
+    std::vector<int> order;
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) {
+        order.push_back(descriptor);
+        const int closed = context.RealCloseFileDescriptor(descriptor);
+        if (descriptor == fdinfoRole || descriptor == fdRole || descriptor == procFd)
+        {
+            errno = descriptor == fdinfoRole ? EBUSY : (descriptor == fdRole ? EACCES : ENOSPC);
+            return -1;
+        }
+        return closed;
+    });
+    auto result = access.Close();
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EBUSY, result.Error().code);
+    EXPECT_EQ((std::vector<int>{fdinfoRole, fdRole, procFd}), order);
+    EXPECT_FALSE(access.FdDirectory().HasValue());
+    EXPECT_TRUE(access.Close().HasValue());
+    EXPECT_EQ(3U, order.size());
 }
 
 TEST(DescriptorBoundaryTest, ProcfsDescriptorAccessBindsContextAndChecksReadLifetime)

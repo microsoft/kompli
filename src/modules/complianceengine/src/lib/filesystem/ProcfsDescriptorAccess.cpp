@@ -6,6 +6,7 @@
 #include "FilesystemHelpers.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <limits>
 #include <linux/magic.h>
@@ -68,7 +69,7 @@ Result<bool> ProcfsDescriptorAccess::Open()
         {
             return Error("Trusted procfs directory is unavailable", EPROTO);
         }
-        auto openedSelf = proc.Context().OpenAt(proc, "self", ContextInterface::OpenProfile::PinSelfDirectory);
+        auto openedSelf = proc.Context().OpenProcfsSelf(proc);
         if (!openedSelf.HasValue())
         {
             return Error("Procfs self directory cannot be verified", openedSelf.Error().code);
@@ -163,11 +164,14 @@ Result<bool> ProcfsDescriptorAccess::Open()
 Result<bool> ProcfsDescriptorAccess::Close()
 {
     mVerified = false;
+    const ContextInterface& context = proc.Context();
+    // Detach every role before any fallible close or logging. If one throws,
+    // the remaining local owners still close while this helper is retained.
+    std::array<Descriptor, 7> resources = {std::move(fdinfo), std::move(fd), std::move(tid), std::move(task), std::move(pid), std::move(self), std::move(proc)};
     Optional<Error> firstError;
-    Descriptor* resources[] = {&fdinfo, &fd, &tid, &task, &pid, &self, &proc};
-    for (Descriptor* resource : resources)
+    for (Descriptor& resource : resources)
     {
-        auto closed = resource->Close();
+        auto closed = resource.Close();
         if (!closed.HasValue())
         {
             if (!firstError.HasValue())
@@ -176,7 +180,7 @@ Result<bool> ProcfsDescriptorAccess::Close()
             }
             else
             {
-                LogSecondaryClose(proc.Context(), closed.Error().code);
+                LogSecondaryClose(context, closed.Error().code);
             }
         }
     }

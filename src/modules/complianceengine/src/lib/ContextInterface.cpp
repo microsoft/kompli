@@ -134,15 +134,21 @@ Result<Descriptor> ContextInterface::OpenAt(const Descriptor& directory, const c
 {
     switch (profile)
     {
+        case OpenProfile::PinSelfDirectory:
         case OpenProfile::ReadFdinfo:
         case OpenProfile::FollowAliasFile:
         case OpenProfile::FollowAliasDirectory:
         case OpenProfile::FollowAliasPin:
         case OpenProfile::FollowAliasPinDirectory:
-            return Error("Procfs alias profiles require verified directories", EINVAL);
+            return Error("Procfs following and alias profiles require verified directories", EINVAL);
         default:
             return OpenVerifiedAt(directory, name, profile, diagnostic);
     }
+}
+
+Result<Descriptor> ContextInterface::OpenProcfsSelf(const Descriptor& proc) const&
+{
+    return OpenVerifiedAt(proc, "self", OpenProfile::PinSelfDirectory, CloseDiagnostic::Descriptor);
 }
 
 Result<Descriptor> ContextInterface::OpenVerifiedAt(const Descriptor& directory, const char* name, OpenProfile profile, CloseDiagnostic diagnostic) const&
