@@ -361,6 +361,10 @@ expansion during XML escaping.
 
 ### Log and telemetry paths
 
+Telemetry-enabled MC shell packages include the executable `kompliTelemetry`
+beside `libOsConfigResource.so`. The adapter invokes this helper on unload;
+downstream benchmark packages must preserve it when present.
+
 The MC adapter writes `/var/log/kompli/kompli.log`, and the telemetry helper
 writes `/var/log/kompli/telemetry.log`. The `/var/log/kompli/` directory is
 created if needed. Each log rotates to the same basename with a `.bak`
