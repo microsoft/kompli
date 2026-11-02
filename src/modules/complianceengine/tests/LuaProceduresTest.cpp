@@ -369,25 +369,38 @@ TEST_F(LuaProceduresTest, Indicators_Add_LimitedIndicatorsOutput)
     const std::string script = R"(
         ce.indicators.compliant("A")
         ce.indicators.compliant("B")
+        ce.indicators.noncompliant("early failure")
         ce.indicators.compliant("C")
         ce.indicators.compliant("D")
         ce.indicators.compliant("E")
+        ce.indicators.compliant("F")
+        ce.indicators.compliant("G")
+        ce.indicators.noncompliant("late failure")
         return false
     )";
     const auto result = evaluator.Evaluate(script, mIndicators, mContext, Action::Audit);
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(result.Value(), Status::NonCompliant);
+    mIndicators.NotApplicable("not applicable");
 
     const NestedListFormatter formatter;
     const auto msg = formatter.Format(mIndicators);
     ASSERT_TRUE(msg.HasValue());
     EXPECT_NE(msg.Value().find("✅ A"), std::string::npos);
     EXPECT_NE(msg.Value().find("✅ B"), std::string::npos);
+    EXPECT_NE(msg.Value().find("❌ early failure"), std::string::npos);
     EXPECT_NE(msg.Value().find("✅ C"), std::string::npos);
     EXPECT_NE(msg.Value().find("✅ D"), std::string::npos);
     EXPECT_NE(msg.Value().find("✅ E"), std::string::npos);
-    // F must be taken out by positive indicators limiting
+    // Only the sixth and seventh compliant messages are limited.
     EXPECT_EQ(msg.Value().find("✅ F"), std::string::npos);
+    EXPECT_EQ(msg.Value().find("✅ G"), std::string::npos);
+    EXPECT_NE(msg.Value().find("❌ late failure"), std::string::npos);
     // Negative indicator must stay
     EXPECT_NE(msg.Value().find("❌ Lua script completed"), std::string::npos);
+    EXPECT_NE(msg.Value().find("➖ not applicable"), std::string::npos);
+    EXPECT_LT(msg.Value().find("✅ B"), msg.Value().find("❌ early failure"));
+    EXPECT_LT(msg.Value().find("❌ early failure"), msg.Value().find("✅ E"));
+    EXPECT_LT(msg.Value().find("❌ late failure"), msg.Value().find("❌ Lua script completed"));
+    EXPECT_LT(msg.Value().find("❌ Lua script completed"), msg.Value().find("➖ not applicable"));
 }
