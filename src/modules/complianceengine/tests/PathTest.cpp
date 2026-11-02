@@ -2630,6 +2630,41 @@ TEST_F(PathAliasTest, MissingFactorySelectionCannotHideCheckedRootCloseFailure)
     EXPECT_NE(std::string::npos, text.find("Failed to close internal filesystem descriptor: " + std::to_string(EACCES)));
 }
 
+TEST_F(PathAliasTest, FactoryAcquisitionErrorOutranksCloseFailureAndLogsPath)
+{
+    const std::string requested = context.MakeTempfile("not-a-directory") + "/";
+    const std::string logPath = context.GetTempdirPath() + "/factory-acquisition-close.log";
+    OsConfigLogHandle log = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, log);
+    context.SetLogHandle(log);
+    struct stat root = {};
+    ASSERT_EQ(0, ::stat("/", &root));
+    int rootCloses = 0;
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+        struct stat held = {};
+        const bool rootPin = ::fstat(fd, &held) == 0 && held.st_dev == root.st_dev && held.st_ino == root.st_ino;
+        const int result = context.RealCloseFileDescriptor(fd);
+        if (rootPin)
+        {
+            ++rootCloses;
+            errno = EACCES;
+            return -1;
+        }
+        return result;
+    });
+
+    auto opened = Path::Make(context, requested, CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_FALSE(opened.HasValue());
+    EXPECT_EQ(ENOTDIR, opened.Error().code);
+    EXPECT_EQ(1, rootCloses);
+    CloseLog(&log);
+    context.SetLogHandle(nullptr);
+    std::ifstream contents(logPath);
+    ASSERT_TRUE(contents.is_open());
+    const std::string text((std::istreambuf_iterator<char>(contents)), std::istreambuf_iterator<char>());
+    EXPECT_NE(std::string::npos, text.find("Failed to close pinned descriptors for " + requested + ": " + std::to_string(EACCES)));
+}
+
 TEST_F(PathAliasTest, ExplicitAdministrativeRootLinkAndMovedPath)
 {
     const std::string rootPath = context.GetTempdirPath() + "/accepted";

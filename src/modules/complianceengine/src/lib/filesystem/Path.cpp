@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <limits>
 #include <linux/magic.h>
+#include <ranges/PathComponents.hpp>
 #include <stdexcept>
 #include <sys/statfs.h>
 #include <unistd.h>
@@ -1300,11 +1301,11 @@ ComplianceEngine::Result<std::vector<const Handle*>> Path::PhysicalLineage(const
     if (root.AcquiredType() != Handle::Type::Directory || target.AcquiredType() != Handle::Type::Directory || !AtBoundary(targetName, rootName))
         return Error("Acquired directory outside physical root", EXDEV);
     std::vector<const Handle*> pins{&root};
-    std::size_t start = rootName == "/" ? 1 : rootName.size() + 1;
-    while (start < targetName.size())
+    std::size_t position = rootName == "/" ? 1 : rootName.size() + 1;
+    for (const auto& component : Ranges::PathComponents(targetName, position))
     {
-        const std::size_t slash = targetName.find('/', start);
-        const std::string prefix = targetName.substr(0, slash);
+        position = targetName.find_first_not_of('/', position) + component.size();
+        const std::string prefix = targetName.substr(0, position);
         const Handle* selected = nullptr;
         auto consider = [&](const Handle& pin) -> bool {
             if (selected != nullptr && !SameIdentity(selected->AcquiredMetadata(), pin.AcquiredMetadata()))
@@ -1330,9 +1331,6 @@ ComplianceEngine::Result<std::vector<const Handle*>> Path::PhysicalLineage(const
         if (pins.size() >= depth)
             return Error("Held physical ancestor exceeds depth budget", E2BIG);
         pins.push_back(selected);
-        if (slash == std::string::npos)
-            break;
-        start = slash + 1;
     }
     return pins;
 }
@@ -1630,27 +1628,21 @@ ComplianceEngine::Result<Variant<Path, Path::RejectionReason>> Path::Make(const 
         return std::move(bootstrapped).Error();
     }
     auto acquired = path.Push(absolutePath, policy);
-    if (!acquired.HasValue() || acquired.Value().Is<RejectionReason>())
+    if (!acquired.HasValue())
     {
-        Optional<Error> primary;
-        if (!acquired.HasValue())
-        {
-            primary = std::move(acquired).Error();
-        }
+        auto primary = std::move(acquired).Error();
         auto closed = path.Close();
         if (!closed.HasValue())
-        {
-            if (!primary.HasValue())
-            {
-                return std::move(closed).Error();
-            }
             OsConfigLogError(context.GetLogHandle(), "Failed to close pinned descriptors for %s: %d", absolutePath.c_str(), closed.Error().code);
-        }
-        if (primary.HasValue())
-        {
-            return std::move(primary.Value());
-        }
-        return Variant<Path, RejectionReason>(InPlaceType<RejectionReason>{}, acquired.Value().Get<RejectionReason>());
+        return primary;
+    }
+    if (acquired.Value().Is<RejectionReason>())
+    {
+        const auto reason = acquired.Value().Get<RejectionReason>();
+        auto closed = path.Close();
+        if (!closed.HasValue())
+            return std::move(closed).Error();
+        return Variant<Path, RejectionReason>(InPlaceType<RejectionReason>{}, reason);
     }
     return Variant<Path, RejectionReason>(InPlaceType<Path>{}, std::move(path));
 }
@@ -1744,13 +1736,10 @@ ComplianceEngine::Result<Variant<const Path&, Path::RejectionReason>> Path::Push
     if (validation.HasValue())
         return std::move(validation).Value();
     // Validate every component before reserving bytes or touching a pin.
-    for (std::size_t position = 1; position < absolutePath.size();)
+    for (const auto& component : Ranges::PathComponents(absolutePath))
     {
-        const std::size_t slash = absolutePath.find('/', position);
-        const std::size_t end = slash == std::string::npos ? absolutePath.size() : slash;
-        if (end != position && !Detail::IsSingleChildComponent(absolutePath.substr(position, end - position)))
+        if (!Detail::IsSingleChildComponent(component))
             return Error("Root contains an invalid component", EINVAL);
-        position = slash == std::string::npos ? absolutePath.size() : slash + 1;
     }
     // Reserve the entire supplied spelling for the operation; successful
     // prefix commits then carry their own normalized spelling if it fails.
@@ -1766,18 +1755,14 @@ ComplianceEngine::Result<Variant<const Path&, Path::RejectionReason>> Path::Push
         mAcquisitionBytes = used;
     };
     std::size_t followed = 0; // one counter across all components and nested expansions
-    for (std::size_t position = 1; position < absolutePath.size();)
+    const Ranges::PathComponents components(absolutePath);
+    for (auto current = components.begin(); current != components.end();)
     {
-        const std::size_t slash = absolutePath.find('/', position);
-        const std::size_t end = slash == std::string::npos ? absolutePath.size() : slash;
-        if (end == position)
-        {
-            position = end + 1;
-            continue;
-        }
-        std::string component = absolutePath.substr(position, end - position);
+        auto nextComponent = current;
+        ++nextComponent;
+        const bool finalComponent = nextComponent == components.end();
+        std::string component = *current;
         std::string acceptedName = JoinName(mAcquisitionName, component);
-        const bool finalComponent = absolutePath.find_first_not_of('/', end) == std::string::npos;
         ExtensionPolicy extension;
         extension.mounts = policy.mounts;
         extension.fileLinks = finalComponent ? policy.fileLinks : policy.symlinks;
@@ -1798,7 +1783,7 @@ ComplianceEngine::Result<Variant<const Path&, Path::RejectionReason>> Path::Push
             return Variant<const Path&, RejectionReason>(InPlaceType<RejectionReason>{}, reason);
         }
         mAcquisitionName.swap(acceptedName);
-        position = slash == std::string::npos ? absolutePath.size() : slash + 1;
+        current = nextComponent;
     }
     mAcquisitionName = CollapseSeparators(absolutePath);
     return Variant<const Path&, RejectionReason>(InPlaceType<const Path&>{}, static_cast<const Path&>(*this));
