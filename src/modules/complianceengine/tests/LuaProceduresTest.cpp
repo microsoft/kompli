@@ -411,6 +411,7 @@ TEST_F(LuaProceduresTest, Indicators_Add_LimitedIndicatorsOutput)
     EXPECT_EQ(msg.Value().find("✅ F"), std::string::npos);
     EXPECT_EQ(msg.Value().find("✅ G"), std::string::npos);
     EXPECT_NE(msg.Value().find("❌ late failure"), std::string::npos);
+    // Negative indicator must stay
     EXPECT_NE(msg.Value().find("❌ Lua script completed"), std::string::npos);
     EXPECT_NE(msg.Value().find("➖ not applicable"), std::string::npos);
     EXPECT_LT(msg.Value().find("✅ B"), msg.Value().find("❌ early failure"));
