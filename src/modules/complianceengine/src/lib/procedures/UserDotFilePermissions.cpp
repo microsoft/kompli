@@ -147,8 +147,14 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
                 params.owner = {{std::move(pwdPattern.Value())}};
                 params.group = {{std::move(groupPattern.Value())}};
                 params.mask = mask;
+                auto pin = entry.LiveComponent();
+                if (!pin.HasValue())
+                {
+                    result = Error("Dotfile collection requires an acquired file", EBADF);
+                    return;
+                }
                 indicators.Push("AuditFilePermissions");
-                auto subResult = CheckPinnedFilePermissions(params, *entry.LiveHandle(), indicators, context);
+                auto subResult = CheckPinnedFilePermissions(params, pin, indicators, context);
                 if (!subResult.HasValue())
                 {
                     OsConfigLogError(context.GetLogHandle(), "Failed to check permissions for file '%s': %s", path.c_str(), subResult.Error().message.c_str());

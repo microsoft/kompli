@@ -72,10 +72,15 @@ bool IsLinkPin(int fd, const std::string& path)
     return ::fstat(fd, &held) == 0 && ::lstat(path.c_str(), &link) == 0 && S_ISLNK(held.st_mode) && held.st_dev == link.st_dev && held.st_ino == link.st_ino;
 }
 
-bool IsAliasDirectory(int fd)
+bool IsAliasDirectory(int fd, const ComplianceEngine::ContextInterface& context)
 {
     struct stat held = {}, procfs = {};
-    return ::fstat(fd, &held) == 0 && ::stat("/proc/self/fd", &procfs) == 0 && held.st_dev == procfs.st_dev && held.st_ino == procfs.st_ino;
+    const auto task = context.CurrentThreadId();
+    if (!task.HasValue())
+        return false;
+    // The verified alias belongs to the current task, not /proc/self/fd.
+    const auto path = "/proc/self/task/" + std::to_string(task.Value()) + "/fd";
+    return ::fstat(fd, &held) == 0 && ::stat(path.c_str(), &procfs) == 0 && held.st_dev == procfs.st_dev && held.st_ino == procfs.st_ino;
 }
 
 bool IsFixtureParent(int fd, const std::string& path)
@@ -789,7 +794,7 @@ TEST(FileObjectCollectorTest, FailedDataOpenFinalizesPinWithoutReopeningPath)
     int aliasOpens = 0;
     int pinCloses = 0;
     ON_CALL(context, OpenNativeAt(_, _, _)).WillByDefault([&](int directory, const char* name, int flags) {
-        if (IsAliasDirectory(directory) && (flags & O_ACCMODE) == O_RDONLY && !(flags & O_PATH) && !(flags & O_NOFOLLOW))
+        if (IsAliasDirectory(directory, context) && (flags & O_ACCMODE) == O_RDONLY && !(flags & O_PATH) && !(flags & O_NOFOLLOW))
         {
             ++aliasOpens;
             errno = EACCES;
@@ -832,7 +837,8 @@ TEST(FileObjectCollectorTest, ReportsCleanupFailuresOnEveryAcquiredFailureExit)
         int dataCloses = 0;
         int aliasOpens = 0;
         ON_CALL(context, OpenNativeAt(_, _, _)).WillByDefault([&](int directory, const char* name, int flags) {
-            if (failure == FailurePoint::DataOpen && IsAliasDirectory(directory) && (flags & O_ACCMODE) == O_RDONLY && !(flags & O_PATH) && !(flags & O_NOFOLLOW))
+            if (failure == FailurePoint::DataOpen && IsAliasDirectory(directory, context) && (flags & O_ACCMODE) == O_RDONLY && !(flags & O_PATH) &&
+                !(flags & O_NOFOLLOW))
             {
                 ++aliasOpens;
                 errno = EACCES;

@@ -9,6 +9,7 @@
 #include <Pattern.h>
 #include <Separated.h>
 #include <cstddef>
+#include <filesystem/Path.hpp>
 #include <sys/types.h>
 
 namespace ComplianceEngine
@@ -115,7 +116,11 @@ class Handle;
 // throughout inspection/mutation. path is diagnostic only, never reopened.
 // requireUnique retains the dotfile rule's fresh hard-link safeguard.
 Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, IndicatorsTree& indicators, ContextInterface& context);
+Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Path::Component& component, IndicatorsTree& indicators,
+    ContextInterface& context);
 Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, bool requireUnique,
+    IndicatorsTree& indicators, ContextInterface& context);
+Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Path::Component& component, bool requireUnique,
     IndicatorsTree& indicators, ContextInterface& context);
 } // namespace ComplianceEngine
 #endif // COMPLIANCEENGINE_PROCEDURES_FILE_PERMISSIONS_H

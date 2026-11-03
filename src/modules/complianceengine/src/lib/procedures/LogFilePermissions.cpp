@@ -173,8 +173,11 @@ Result<Status> ProcessLogfile(const FilesystemCollectionEntry& entry, const Daem
 
     // The path is diagnostic/argument provenance only. Both operations use
     // the live file pin supplied by Files, never a pathname re-open.
-    Result<Status> result = remediate ? EnforcePinnedFilePermissions(params, *entry.LiveHandle(), false, indicators, context) :
-                                        CheckPinnedFilePermissions(params, *entry.LiveHandle(), indicators, context);
+    auto pin = entry.LiveComponent();
+    if (!pin.HasValue())
+        return Error("Logfile collection requires an acquired file", EBADF);
+    Result<Status> result =
+        remediate ? EnforcePinnedFilePermissions(params, pin, false, indicators, context) : CheckPinnedFilePermissions(params, pin, indicators, context);
     if (!result.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to %s permissions for logfile '%s': %s", remediate ? "remediate" : "audit", fullPath.c_str(),

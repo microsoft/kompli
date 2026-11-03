@@ -38,7 +38,7 @@ struct ResolvedPathAllocationProbe
     static ResolvedPath Staged()
     {
         ResolvedPath stage;
-        stage.mFrames.emplace_back(InPlaceType<const Handle*>{}, static_cast<const Handle*>(nullptr));
+        stage.mFrames.emplace_back(0);
         stage.mAccountedBytes = 160;
         return stage;
     }

@@ -36,12 +36,12 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
     // So: treat provided numbers as masks of forbidden bits.
 
     auto processFile = [&](const Filesystem::FilesystemCollectionEntry& entry) -> Result<Status> {
-        const auto* pin = entry.LiveHandle();
-        if (pin == nullptr || entry.missing)
+        auto pin = entry.LiveComponent();
+        if (!pin.HasValue() || entry.missing)
         {
             return Error("SSH key collection requires a live regular-file pin", EBADF);
         }
-        auto opened = pin->OpenReadOnly();
+        auto opened = pin.OpenReadOnly();
         if (!opened.HasValue())
         {
             return std::move(opened).Error();
@@ -150,8 +150,8 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
             params.mask = 0137; // private key stricter forbidden bits
         }
 
-        Result<Status> result = isRemediation ? EnforcePinnedFilePermissions(params, *pin, false, indicators, context) :
-                                                CheckPinnedFilePermissions(params, *pin, indicators, context);
+        Result<Status> result = isRemediation ? EnforcePinnedFilePermissions(params, pin, false, indicators, context) :
+                                                CheckPinnedFilePermissions(params, pin, indicators, context);
         if (!result.HasValue())
         {
             return result.Error();

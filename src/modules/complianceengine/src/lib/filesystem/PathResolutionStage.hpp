@@ -49,12 +49,13 @@ private:
     {
     }
     Handle TakeOwnedLeaf();
-    using Frame = Variant<const Handle*, std::size_t>;
+    // Indexes below the binding count select the location snapshot; indexes
+    // at/above it select mPins. No pointers into either deque survive growth.
     // The heap-owned deques move by pointer transfer, not by deque move.
     std::unique_ptr<std::deque<Pin>> mPins;
     std::string mEffectiveLeaf;
     std::string mSourceLookup;
-    std::vector<Frame> mFrames;
+    std::vector<std::size_t> mFrames;
     std::size_t mOwnedLeaf = 0;
     bool mLeafTaken = false;
     std::size_t mAccountedBytes = 0;

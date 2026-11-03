@@ -83,7 +83,7 @@ protected:
     NiceMock<MockContext> context;
     static constexpr std::size_t fdinfoCap = 4096;
 
-    ComplianceEngine::Result<Handle> Pin(MockContext& selectedContext, const std::string& component)
+    ComplianceEngine::Result<Path::Component> Pin(MockContext& selectedContext, const std::string& component)
     {
         ResolverLimits limits;
         limits.shared.components = 100;
@@ -115,7 +115,7 @@ protected:
         return path.Pop();
     }
 
-    ComplianceEngine::Result<Handle> Pin(const std::string& component)
+    ComplianceEngine::Result<Path::Component> Pin(const std::string& component)
     {
         return Pin(context, component);
     }
@@ -907,7 +907,7 @@ TEST_F(ReadableFileTest, CheckedLeafAndPathReleasePreservesIndependentReadable)
     ASSERT_TRUE(path.Push(Component(source), CrossMountExtension()).HasValue());
     auto popped = path.Pop();
     ASSERT_TRUE(popped.HasValue());
-    Handle leaf = std::move(popped).Value();
+    Path::Component leaf = std::move(popped).Value();
     EXPECT_GT(path.RetainedDescriptors(), 0U);
     auto activated = leaf.OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
@@ -921,9 +921,25 @@ TEST_F(ReadableFileTest, CheckedLeafAndPathReleasePreservesIndependentReadable)
     EXPECT_EQ(0U, path.RetainedDescriptors()); // the popped handle belongs to the caller
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
     EXPECT_TRUE(leaf.Stat().HasValue());
+    const auto acquiredType = leaf.AcquiredType();
+    const auto originalMount = leaf.OriginalMount();
+    const auto acquiredMetadata = leaf.AcquiredMetadata();
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int fd) { return ::close(fd); });
     EXPECT_TRUE(leaf.Close().HasValue());
+    EXPECT_FALSE(leaf.HasValue());
+    EXPECT_EQ(acquiredType, leaf.AcquiredType());
+    EXPECT_EQ(originalMount, leaf.OriginalMount());
+    EXPECT_EQ(acquiredMetadata.st_ino, leaf.AcquiredMetadata().st_ino);
+    EXPECT_EQ(EBADF, leaf.Stat().Error().code);
+    EXPECT_EQ(EBADF, leaf.MountIdentity().Error().code);
+    EXPECT_EQ(EBADF, leaf.SetOwnership(0, 0).Error().code);
+    EXPECT_EQ(EBADF, leaf.SetMode(0600).Error().code);
     EXPECT_EQ(EBADF, leaf.OpenReadOnly().Error().code);
+    EXPECT_EQ(EBADF, leaf.OpenReadOnly(ReadableFile::Policy{}).Error().code);
+    EXPECT_EQ(EBADF, leaf.OpenChildren().Error().code);
+    Path::Component empty;
+    EXPECT_EQ(EBADF, empty.Stat().Error().code);
+    EXPECT_EQ(0u, empty.OriginalMount());
     EXPECT_EQ(0U, path.RetainedDescriptors());
     EXPECT_EQ(0U, path.RetainedBytes());
     EXPECT_EQ(EINVAL, path.Push("other", CrossMountExtension()).Error().code);

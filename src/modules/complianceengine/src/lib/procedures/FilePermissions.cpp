@@ -231,7 +231,8 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
     }
 }
 
-static Result<Status> AuditFilePermissionsImpl(const FilePermissionsParams& params, const Filesystem::Handle* pin, IndicatorsTree& indicators, ContextInterface& context)
+template <typename Pin>
+static Result<Status> AuditFilePermissionsImpl(const FilePermissionsParams& params, const Pin* pin, IndicatorsTree& indicators, ContextInterface& context)
 {
     assert(params.behavior.HasValue());
     if (params.groupId.HasValue() && (params.group.HasValue() || params.groupId.Value() < 0))
@@ -389,12 +390,19 @@ static Result<Status> AuditFilePermissionsImpl(const FilePermissionsParams& para
 
 Result<Status> AuditFilePermissions(const FilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
-    return AuditFilePermissionsImpl(params, nullptr, indicators, context);
+    return AuditFilePermissionsImpl<Filesystem::Handle>(params, nullptr, indicators, context);
 }
 
 Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, IndicatorsTree& indicators, ContextInterface& context)
 {
     return AuditFilePermissionsImpl(params, &handle, indicators, context);
+}
+Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Path::Component& component, IndicatorsTree& indicators,
+    ContextInterface& context)
+{
+    if (!component.HasValue())
+        return Error("No acquired file component", EBADF);
+    return AuditFilePermissionsImpl(params, &component, indicators, context);
 }
 
 namespace
@@ -402,8 +410,9 @@ namespace
 // Shared remediation body. The pinned caller borrows its already acquired
 // target; the compatibility path caller opens once and may additionally check
 // a historical identity. Only the pinned caller preserves collector continuity.
-Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params, const Optional<FileIdentity>& expectedIdentity,
-    const Filesystem::Handle* pin, bool requireUnique, IndicatorsTree& indicators, ContextInterface& context)
+template <typename Pin>
+Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params, const Optional<FileIdentity>& expectedIdentity, const Pin* pin,
+    bool requireUnique, IndicatorsTree& indicators, ContextInterface& context)
 {
     if (params.groupId.HasValue() && (params.group.HasValue() || params.groupId.Value() < 0))
     {
@@ -671,19 +680,26 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
 
 Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
-    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(), nullptr, false, indicators, context);
+    return RemediateFilePermissionsImpl<Filesystem::Handle>(params, Optional<FileIdentity>(), nullptr, false, indicators, context);
 }
 
 Result<Status> EnforceFilePermissionsAtIdentity(const FilePermissionsParams& params, const FileIdentity& expectedIdentity, IndicatorsTree& indicators,
     ContextInterface& context)
 {
-    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(expectedIdentity), nullptr, false, indicators, context);
+    return RemediateFilePermissionsImpl<Filesystem::Handle>(params, Optional<FileIdentity>(expectedIdentity), nullptr, false, indicators, context);
 }
 
 Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, bool requireUnique,
     IndicatorsTree& indicators, ContextInterface& context)
 {
     return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(), &handle, requireUnique, indicators, context);
+}
+Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Path::Component& component, bool requireUnique,
+    IndicatorsTree& indicators, ContextInterface& context)
+{
+    if (!component.HasValue())
+        return Error("No acquired file component", EBADF);
+    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(), &component, requireUnique, indicators, context);
 }
 
 Result<Status> AuditFilePermissionsCollection(const FilePermissionsCollectionParams& params, IndicatorsTree& indicators, ContextInterface& context)

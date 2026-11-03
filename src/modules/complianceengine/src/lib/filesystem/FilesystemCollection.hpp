@@ -177,36 +177,28 @@ struct FilesystemCollectionEntry
     // A regular-file name observed in readdir but lost before acquisition;
     // this is not a stat snapshot, file identity, or mutation authority.
     bool missing = false;
-    // Live pin for a regular file or directory only. A directory pin borrows
-    // from the range and expires at its next advancement or Close(); a
-    // regular-file pin is owned by this entry and can outlive the range.
-    // Snapshot adapters deliberately leave both empty. Paths/stat snapshots
-    // are never mutation authority.
-    const Handle* LiveHandle() const noexcept
+    // Owning acquired object, independent of range advancement and closure.
+    // Snapshots and missing observations have no component authority.
+    Path::Component LiveComponent() const noexcept
     {
-        return mOwnedHandle.HasValue() ? &mOwnedHandle.Value() : mBorrowedHandle;
+        return mComponent.HasValue() ? mComponent.Value() : Path::Component{};
     }
-    void OwnHandle(Handle handle)
+    void OwnComponent(Path::Component component)
     {
-        mOwnedHandle = std::move(handle);
-    }
-    void BorrowHandle(const Handle& handle) noexcept
-    {
-        mBorrowedHandle = &handle;
+        mComponent = std::move(component);
     }
     // Checked release is only for a pin not yet transferred to a caller.
-    bool OwnsHandle() const noexcept
+    bool OwnsComponent() const noexcept
     {
-        return mOwnedHandle.HasValue();
+        return mComponent.HasValue();
     }
-    Result<bool> CloseHandle()
+    Result<bool> CloseComponent()
     {
-        return mOwnedHandle.Value().Close();
+        return mComponent.Value().Close();
     }
 
 private:
-    Optional<Handle> mOwnedHandle;
-    const Handle* mBorrowedHandle = nullptr;
+    Optional<Path::Component> mComponent;
 };
 
 struct FilesystemCollectionExclusion

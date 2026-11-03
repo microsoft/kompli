@@ -156,8 +156,8 @@ TEST(FilesystemCollectionTest, UnifiedRangeRetainsLiveLeafAndSupportsRootDeviceS
     ASSERT_NE(entry, followed->end());
     ASSERT_TRUE(entry->HasValue()) << entry->Error().message;
     EXPECT_EQ(tree.Path("administrative") + "/.settings", entry->Value().path);
-    ASSERT_NE(nullptr, entry->Value().LiveHandle());
-    EXPECT_EQ(ComplianceEngine::Filesystem::Handle::Type::RegularFile, entry->Value().LiveHandle()->AcquiredType());
+    ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
+    EXPECT_EQ(ComplianceEngine::Filesystem::Handle::Type::RegularFile, entry->Value().LiveComponent().AcquiredType());
     ASSERT_TRUE(followed.Value().Close().HasValue());
 
     request.rootDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
@@ -206,11 +206,11 @@ TEST(FilesystemCollectionTest, CoreNoRootReplayAfterAcceptedDirectoryRenameAndRe
     for (const auto& entry : files.Value())
     {
         ASSERT_TRUE(entry.HasValue()) << entry.Error().message;
-        ASSERT_NE(nullptr, entry.Value().LiveHandle());
+        ASSERT_TRUE(entry.Value().LiveComponent().HasValue());
         seen.push_back(entry.Value().path);
         struct stat original = {};
         ASSERT_EQ(0, ::stat(tree.Path("moved/original").c_str(), &original));
-        EXPECT_EQ(original.st_ino, entry.Value().LiveHandle()->AcquiredMetadata().st_ino);
+        EXPECT_EQ(original.st_ino, entry.Value().LiveComponent().AcquiredMetadata().st_ino);
     }
     EXPECT_EQ((std::vector<std::string>{tree.Path("root/original")}), seen);
     EXPECT_NE(0, acceptedInode);
@@ -244,11 +244,11 @@ TEST(FilesystemCollectionTest, MovedRootReportsOriginalSpellingWithoutUsingItAsA
     ASSERT_NE(entry, files->end());
     ASSERT_TRUE(entry->HasValue()) << entry->Error().message;
     EXPECT_EQ(request.rootPath + "/file", entry->Value().path);
-    ASSERT_NE(nullptr, entry->Value().LiveHandle());
+    ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
     EXPECT_TRUE(files->Close().HasValue());
 }
 
-TEST(FilesystemCollectionTest, HeldAncestorRestoresLogicalTraversalAndDetachedOwnerSurvives)
+TEST(FilesystemCollectionTest, IndependentChildRetainsAncestorAndOwnerSurvives)
 {
     MockContext context;
     TestTree tree;
@@ -270,30 +270,32 @@ TEST(FilesystemCollectionTest, HeldAncestorRestoresLogicalTraversalAndDetachedOw
     ASSERT_TRUE(path.Push("a", strict).HasValue());
     ASSERT_TRUE(path.Push("sub", strict).HasValue());
     const auto parentBytes = path.RetainedBytes();
-    auto prior = path.Capture();
     ComplianceEngine::Filesystem::ExtensionPolicy follow = strict;
     follow.fileLinks = SymlinkPolicy::Follow;
     follow.directoryLinks = SymlinkPolicy::Follow;
-    ASSERT_TRUE(path.Push("up", follow).HasValue());
-    EXPECT_EQ(tree.Path("root/a"), path.ToString());
-    EXPECT_EQ(2U, path.Size());                   // physical Pop would remove a, not the logical link
-    EXPECT_EQ(parentBytes, path.RetainedBytes()); // no duplicate full-name or alias owner
-    auto alias = path.DuplicateLeaf();
-    ASSERT_TRUE(alias.HasValue()) << alias.Error().message;
-    ASSERT_TRUE(path.Restore(std::move(prior)).HasValue());
+    auto aliasLocation = path.AcquireChild("up", follow);
+    ASSERT_TRUE(aliasLocation.HasValue()) << aliasLocation.Error().message;
+    ASSERT_TRUE(aliasLocation.Value().Is<Path>());
+    Path aliasPath = As<Path>(std::move(aliasLocation).Value());
+    EXPECT_EQ(tree.Path("root/a"), aliasPath.ToString());
+    EXPECT_EQ(2U, aliasPath.Size());
+    EXPECT_EQ(tree.Path("root/a/sub"), path.ToString()); // parent stays put
     EXPECT_EQ(parentBytes, path.RetainedBytes());
+    auto alias = aliasPath.Leaf();
+    ASSERT_TRUE(aliasPath.Close().HasValue());
+    EXPECT_TRUE(alias.Stat().HasValue());
     ASSERT_TRUE(path.Pop().HasValue());
     ASSERT_TRUE(path.Pop().HasValue());
     EXPECT_EQ(rootBytes, path.RetainedBytes());
     ASSERT_TRUE(path.Push("a", strict).HasValue());
     auto direct = path.Pop();
     ASSERT_TRUE(direct.HasValue());
-    EXPECT_EQ(alias.Value().AcquiredMetadata().st_ino, direct.Value().AcquiredMetadata().st_ino);
+    EXPECT_EQ(alias.AcquiredMetadata().st_ino, direct.Value().AcquiredMetadata().st_ino);
     EXPECT_EQ(rootBytes, path.RetainedBytes());
     ASSERT_TRUE(path.Close().HasValue());
-    EXPECT_TRUE(alias.Value().Stat().HasValue());
+    EXPECT_TRUE(alias.Stat().HasValue());
     EXPECT_TRUE(direct.Value().Stat().HasValue());
-    EXPECT_TRUE(alias.Value().Close().HasValue());
+    EXPECT_TRUE(alias.Close().HasValue());
     EXPECT_TRUE(direct.Value().Close().HasValue());
 }
 
@@ -362,25 +364,27 @@ TEST(FilesystemCollectionTest, OwnedLiveEntryOutlivesRangeButCollectedSnapshotHa
     auto snapshot = CollectFilesystem(request);
     ASSERT_TRUE(snapshot.HasValue());
     ASSERT_EQ(1u, snapshot->entries.size());
-    EXPECT_EQ(nullptr, snapshot->entries.front().LiveHandle());
+    EXPECT_FALSE(snapshot->entries.front().LiveComponent().HasValue());
 
     MockContext context;
-    ComplianceEngine::Filesystem::FTW::FileRange::Iterator entry;
+    Path::Component owned;
     ino_t inode = 0;
     {
         auto opened = Files(request, context);
         ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
-        entry = opened->begin();
+        auto entry = opened->begin();
         ASSERT_NE(entry, opened->end());
         ASSERT_TRUE(entry->HasValue());
-        ASSERT_NE(nullptr, entry->Value().LiveHandle());
-        inode = entry->Value().LiveHandle()->AcquiredMetadata().st_ino;
+        ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
+        owned = entry->Value().LiveComponent();
+        inode = owned.AcquiredMetadata().st_ino;
         ASSERT_TRUE(opened->Close().HasValue());
     }
     ASSERT_EQ(0, unlink(tree.Path("file").c_str()));
-    auto inspected = entry->Value().LiveHandle()->Stat();
+    auto inspected = owned.Stat();
     ASSERT_TRUE(inspected.HasValue()) << inspected.Error().message;
     EXPECT_EQ(inode, inspected.Value().st_ino);
+    EXPECT_TRUE(owned.Close().HasValue());
 }
 
 TEST(FilesystemCollectionTest, ClosingBeforeFirstPullChecksUnyieldedFilePinAndAllPathPinsOnce)
@@ -629,16 +633,21 @@ TEST(FilesystemCollectionTest, ThrownCursorCloseReleasesDetachedRangeWhileStillA
     {
         EXPECT_STREQ("cursor close fault", error.what());
     }
-    // The range and its borrowed iterator are still alive. Only the
-    // unrelated replacement descriptor may remain; no yielded file pins.
+    // Closing the range releases its frames and cursors, but the last
+    // yielded entry owns its independent pin until the entry is released.
     EXPECT_EQ(2u, cursorCloses);
     EXPECT_TRUE(liveStreams.empty());
-    EXPECT_TRUE(livePins.empty());
+    ASSERT_TRUE(entry->Value().OwnsComponent());
+    EXPECT_TRUE(entry->Value().LiveComponent().Stat().HasValue());
+    EXPECT_EQ(1u, livePins.size());
     EXPECT_GT(pinCloses, 0u);
     const auto attemptedPins = pinCloses;
     EXPECT_TRUE(files.Close().HasValue());
     EXPECT_EQ(2u, cursorCloses);
     EXPECT_EQ(attemptedPins, pinCloses);
+    entry = files.end();
+    EXPECT_TRUE(livePins.empty());
+    EXPECT_EQ(attemptedPins + 1, pinCloses);
     ASSERT_GE(reused, 0);
     EXPECT_GE(::fcntl(reused, F_GETFD), 0);
     EXPECT_EQ(0, ::close(reused));
@@ -698,7 +707,7 @@ TEST(FilesystemCollectionTest, MissingRegularNameReportsWithoutFabricatingAMetad
     ASSERT_TRUE(missing->HasValue()) << missing->Error().message;
     EXPECT_TRUE(missing->Value().missing);
     EXPECT_EQ(tree.Path("root/vanishing"), missing->Value().path);
-    EXPECT_EQ(nullptr, missing->Value().LiveHandle());
+    EXPECT_FALSE(missing->Value().LiveComponent().HasValue());
     EXPECT_EQ(0, missing->Value().metadata.st_mode); // no accepted stat exists
     ASSERT_TRUE(opened->Close().HasValue());
 
@@ -2011,8 +2020,8 @@ TEST(FilesystemCollectionTest, FactoryAcquiresRootButReadsDescendantsOnePullAtAT
     ASSERT_NE(entry, files.end());
     ASSERT_TRUE(entry->HasValue());
     EXPECT_EQ(tree.Path("root"), entry->Value().path);
-    ASSERT_NE(nullptr, entry->Value().LiveHandle());
-    auto rootIdentity = entry->Value().LiveHandle()->Stat();
+    ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
+    auto rootIdentity = entry->Value().LiveComponent().Stat();
     ASSERT_TRUE(rootIdentity.HasValue()) << rootIdentity.Error().message;
     EXPECT_EQ(0u, stats);
     EXPECT_EQ(0u, reads);
@@ -2023,8 +2032,8 @@ TEST(FilesystemCollectionTest, FactoryAcquiresRootButReadsDescendantsOnePullAtAT
     EXPECT_EQ(tree.Path("root/item"), entry->Value().path);
     EXPECT_EQ(0u, stats);
     EXPECT_EQ(1u, reads);
-    ASSERT_NE(nullptr, entry->Value().LiveHandle());
-    EXPECT_EQ(ComplianceEngine::Filesystem::Handle::Type::RegularFile, entry->Value().LiveHandle()->AcquiredType());
+    ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
+    EXPECT_EQ(ComplianceEngine::Filesystem::Handle::Type::RegularFile, entry->Value().LiveComponent().AcquiredType());
 
     ++entry;
     EXPECT_EQ(entry, files.end());
@@ -2055,10 +2064,10 @@ TEST(FilesystemCollectionTest, RangeForRetainsEachRegularFilePinWithoutReacquiri
     {
         ASSERT_TRUE(item.HasValue()) << item.Error().message;
         const auto& entry = item.Value();
-        ASSERT_NE(nullptr, entry.LiveHandle());
-        const auto inode = entry.LiveHandle()->AcquiredMetadata().st_ino;
+        ASSERT_TRUE(entry.LiveComponent().HasValue());
+        const auto inode = entry.LiveComponent().AcquiredMetadata().st_ino;
         ASSERT_EQ(0, unlink(entry.path.c_str()));
-        auto inspected = entry.LiveHandle()->Stat();
+        auto inspected = entry.LiveComponent().Stat();
         ASSERT_TRUE(inspected.HasValue()) << inspected.Error().message;
         EXPECT_EQ(inode, inspected.Value().st_ino);
         seen.push_back(entry.path);
@@ -2271,8 +2280,8 @@ TEST(FilesystemCollectionTest, DescendantOpenFailureIsDeferredUntilAfterItsEntry
     ASSERT_NE(entry, files.end());
     ASSERT_TRUE(entry->HasValue());
     EXPECT_EQ(tree.Path("root/child"), entry->Value().path);
-    ASSERT_NE(nullptr, entry->Value().LiveHandle());
-    const auto childInode = entry->Value().LiveHandle()->AcquiredMetadata().st_ino;
+    ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
+    const auto childInode = entry->Value().LiveComponent().AcquiredMetadata().st_ino;
     EXPECT_EQ(expectedChild.st_ino, childInode);
     ++entry;
     ASSERT_NE(entry, files.end());

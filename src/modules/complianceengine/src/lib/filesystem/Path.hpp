@@ -8,6 +8,7 @@
 #include "Handle.hpp"
 #include "Variant.hpp"
 
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -36,7 +37,7 @@ class ResolvedPath;
 struct PrefixLimits
 {
     std::size_t targetBytes = 4096;                       // each absolute symlink target
-    std::size_t components = 128;                         // resolution steps per confined ResolveChild call
+    std::size_t components = 128;                         // resolution steps per confined child acquisition
     std::size_t work = 100000;                            // cumulative for Make and subsequent Push calls, including failed attempts
     std::size_t liveDescriptors = 256;                    // held Path pins plus current resolution and helper headroom
     std::size_t retainedBytes = std::size_t{1024} * 1024; // Path-owned state and current resolution's transient storage
@@ -52,7 +53,7 @@ struct ResolverLimits
     PrefixLimits shared;
     std::size_t linkTargetBytes = 4096; // each pinned symlink read
     std::size_t linkExpansions = 128;   // total followed links per Make or Push, including held aliases
-    std::size_t depth = 128;            // physical directory stack per confined ResolveChild call
+    std::size_t depth = 128;            // physical directory stack per confined child acquisition
 };
 enum class UnsupportedTypeAction
 {
@@ -79,8 +80,8 @@ struct ExtensionPolicy
 // The caller's explicit choice of a configured absolute directory is its
 // authorization under the trusted service/mount-namespace assumption.
 // Authorization is not inferred from path ownership or from successful opens.
-// Context and all borrowed handles must outlive their users; end insertion
-// preserves references to existing stack elements. No public fd escapes.
+// Context outlives all owners. Components retain their particular pins;
+// no public fd escapes.
 class Path
 {
 public:
@@ -103,21 +104,111 @@ public:
         struct stat accepted = {}; // retained accepted directory/regular-file pin
         std::uint64_t mountId = 0; // original name's verified mount, before a link target
     };
-    // Path owns each component's pin. A Component is not an independent
-    // descriptor or a copyable snapshot of its acquisition.
-    struct Component
+    // Copies retain the particular acquired object, independently of the
+    // location that produced them. Only the last owner closes its native pin.
+    class Component
     {
+    private:
+        std::shared_ptr<Handle> mAcquisition;
+        friend class Path;
         Component(Handle&& owned, std::string source = {}, std::string target = {})
-            : pin(std::move(owned)),
-              lookupPart(std::move(source)),
-              effectivePart(std::move(target))
+            : mAcquisition(std::make_shared<Handle>(std::move(owned))),
+              mType(mAcquisition->AcquiredType()),
+              mOriginalMount(mAcquisition->OriginalMount()),
+              mMetadata(mAcquisition->AcquiredMetadata()),
+              lookupName(std::move(source)),
+              effectiveName(std::move(target))
         {
         }
-        Handle pin;
-        // Only the root retains complete frozen names. Other pins retain
-        // component names; Path keeps their ancestry in private entries.
-        std::string lookupPart;
-        std::string effectivePart;
+        Handle::Type mType = Handle::Type::Directory;
+        std::uint64_t mOriginalMount = 0;
+        struct stat mMetadata = {};
+        const Handle& Pin() const
+        {
+            return *mAcquisition;
+        }
+        Handle& Pin()
+        {
+            return *mAcquisition;
+        }
+        void RefreshAcquisition() noexcept
+        {
+            mType = Pin().AcquiredType();
+            mOriginalMount = Pin().OriginalMount();
+            mMetadata = Pin().AcquiredMetadata();
+        }
+
+    public:
+        Component() = default;
+        bool HasValue() const noexcept
+        {
+            return bool(mAcquisition);
+        }
+        // Historical acquisition observations survive Close; the default
+        // empty facade has zero/sentinel values, not descriptor authority.
+        Handle::Type AcquiredType() const
+        {
+            return mType;
+        }
+        std::uint64_t OriginalMount() const
+        {
+            return mOriginalMount;
+        }
+        struct stat AcquiredMetadata() const
+        {
+            return mMetadata;
+        }
+        ComplianceEngine::Result<struct stat> Stat() const
+        {
+            if (!mAcquisition)
+                return ComplianceEngine::Error("Component has no acquired pin", EBADF);
+            return Pin().Stat();
+        }
+        ComplianceEngine::Result<std::uint64_t> MountIdentity() const
+        {
+            if (!mAcquisition)
+                return ComplianceEngine::Error("Component has no acquired pin", EBADF);
+            return Pin().MountIdentity();
+        }
+        ComplianceEngine::Result<bool> SetOwnership(uid_t owner, gid_t group) const
+        {
+            if (!mAcquisition)
+                return ComplianceEngine::Error("Component has no acquired pin", EBADF);
+            return Pin().SetOwnership(owner, group);
+        }
+        ComplianceEngine::Result<bool> SetMode(mode_t mode) const
+        {
+            if (!mAcquisition)
+                return ComplianceEngine::Error("Component has no acquired pin", EBADF);
+            return Pin().SetMode(mode);
+        }
+        ComplianceEngine::Result<ReadableFile> OpenReadOnly() const
+        {
+            if (!mAcquisition)
+                return ComplianceEngine::Error("Component has no acquired pin", EBADF);
+            return Pin().OpenReadOnly();
+        }
+        ComplianceEngine::Result<ReadableFile> OpenReadOnly(ReadableFile::Policy policy) const
+        {
+            if (!mAcquisition)
+                return ComplianceEngine::Error("Component has no acquired pin", EBADF);
+            return Pin().OpenReadOnly(policy);
+        }
+        ComplianceEngine::Result<DirectoryCursor> OpenChildren() const
+        {
+            if (!mAcquisition)
+                return ComplianceEngine::Error("Component has no acquired pin", EBADF);
+            return Pin().OpenChildren();
+        }
+        ComplianceEngine::Result<bool> Close()
+        {
+            auto owned = std::move(mAcquisition);
+            if (owned && owned.use_count() == 1)
+                return owned->Close();
+            return true;
+        }
+        std::string lookupName;
+        std::string effectiveName;
     };
 
 private:
@@ -126,8 +217,8 @@ private:
         Entry(Handle&& owned, bool leaf, std::string source = {}, std::string target = {})
             : component(std::move(owned), std::move(source), std::move(target)),
               logicalLeaf(leaf),
-              lookupLength(component.lookupPart.size()),
-              effectiveLength(component.effectivePart.size())
+              lookupLength(component.lookupName.size()),
+              effectiveLength(component.effectiveName.size())
         {
         }
         Component component;
@@ -138,86 +229,9 @@ private:
         // until all temporary/scratch storage has replacement coverage.
         std::size_t lookupLength;
         std::size_t effectiveLength;
-        std::size_t generation = 0;
     };
 
 public:
-    // Borrowed view of the active physical chain, not every owned component.
-    // The range and its iterators are invalidated by Path mutation, move or
-    // destruction. Neither iteration nor dereference duplicates a pin.
-    class ComponentRange
-    {
-    public:
-        class Iterator
-        {
-        public:
-            using iterator_category = std::forward_iterator_tag;
-            using value_type = Component;
-            using difference_type = std::ptrdiff_t;
-            using pointer = const Component*;
-            using reference = const Component&;
-
-            Iterator() = default;
-            reference operator*() const
-            {
-                return (*mEntries)[(*mPhysical)[mPosition]].component;
-            }
-            pointer operator->() const
-            {
-                return &**this;
-            }
-            Iterator& operator++()
-            {
-                ++mPosition;
-                return *this;
-            }
-            Iterator operator++(int)
-            {
-                auto previous = *this;
-                ++*this;
-                return previous;
-            }
-            bool operator==(const Iterator& other) const
-            {
-                return mEntries == other.mEntries && mPhysical == other.mPhysical && mPosition == other.mPosition;
-            }
-            bool operator!=(const Iterator& other) const
-            {
-                return !(*this == other);
-            }
-
-        private:
-            friend class ComponentRange;
-            Iterator(const std::deque<Entry>* entries, const std::vector<std::size_t>* physical, std::size_t position)
-                : mEntries(entries),
-                  mPhysical(physical),
-                  mPosition(position)
-            {
-            }
-            const std::deque<Entry>* mEntries = nullptr;
-            const std::vector<std::size_t>* mPhysical = nullptr;
-            std::size_t mPosition = 0;
-        };
-
-        Iterator begin() const // NOLINT(*-identifier-naming)
-        {
-            return Iterator(mEntries, mPhysical, 0);
-        }
-        Iterator end() const // NOLINT(*-identifier-naming)
-        {
-            return Iterator(mEntries, mPhysical, mPhysical ? mPhysical->size() : 0);
-        }
-
-    private:
-        friend class Path;
-        ComponentRange(const std::deque<Entry>* entries, const std::vector<std::size_t>* physical)
-            : mEntries(entries),
-              mPhysical(physical)
-        {
-        }
-        const std::deque<Entry>* mEntries;
-        const std::vector<std::size_t>* mPhysical;
-    };
     // Pin the initial absolute spelling through the trusted resolver. Before
     // FreezeRoot, acquisition remains bounded by the held process-root pin;
     // selected-root access is unavailable. FreezeRoot narrows the boundary to
@@ -261,7 +275,7 @@ public:
     // The transferred pin immediately stops counting toward Path's budgets;
     // the consumer must bound retained handles independently.
     // An empty (also moved-from) Path returns EINVAL.
-    ComplianceEngine::Result<Handle> Pop();
+    ComplianceEngine::Result<Component> Pop();
     // Release every pin still owned by this Path, including hidden
     // symlink-resolution pins. Attempt all closes;
     // return the first error and log subsequent failures. No native close is
@@ -272,32 +286,11 @@ public:
     ComplianceEngine::Result<bool> Close();
     // The consumer holds logical history; Path keeps the physical pins alive
     // until restoration. This token is valid only for this live Path owner.
-    struct Restoration
-    {
-        std::size_t StorageBytes() const noexcept
-        {
-            return physical.size() * sizeof(std::size_t) + generations.size() * sizeof(std::size_t);
-        }
-
-    private:
-        friend class Path;
-        std::vector<std::size_t> physical;
-        const void* owner = nullptr;
-        std::vector<std::size_t> generations;
-    };
-    // Before freezing, Capture returns an invalid token; Restore rejects it.
-    Restoration Capture() const;
-    ComplianceEngine::Result<bool> Restore(Restoration previous);
-    // Retain a selected leaf independently while a walker restores its
-    // physical ancestry. The duplicate shares the held object, not its name.
-    ComplianceEngine::Result<Handle> DuplicateLeaf() const;
-    // On an empty Path these reference-returning accessors throw logic_error.
-    const Handle& Root() const;
-    const Handle& Leaf() const;
-    // Before FreezeRoot, throws logic_error like Root/Leaf. After the root
-    // is popped or Close(), returns an empty range (never the process root).
-    ComponentRange Components() const&;
-    ComponentRange Components() const&& = delete;
+    // The parent remains unchanged even when acquisition rejects or fails.
+    ComplianceEngine::Result<Variant<Path, RejectionReason>> AcquireChild(std::string component, ExtensionPolicy policy) const&;
+    Component Root() const;
+    Component Leaf() const;
+    std::vector<Component> Components() const;
     // Accepted pin metadata and the original component's verified mount ID.
     Metadata LeafMetadata() const;
     std::size_t Size() const noexcept;
@@ -330,7 +323,7 @@ private:
     };
     struct NameBinding
     {
-        const Handle* pin;
+        Component component;
         std::string lookup;
         std::string effective;
         std::uint64_t mount;
@@ -343,9 +336,6 @@ private:
         bool allowMissing;
         bool excludeLinks;
     };
-    static ComplianceEngine::Result<Variant<Detail::ResolvedPath, RejectionReason>> ResolveChild(const ContextInterface& context, const Handle& root,
-        const std::vector<const Handle*>& parentLineage, std::string component, ResolutionPolicy policy, const ResolverLimits& limits,
-        const std::vector<NameBinding>& names, const std::string& logicalRoot, const std::string& effectiveRoot, std::size_t& spent, std::size_t& followed);
     std::vector<NameBinding> Bindings() const;
     Path(const ContextInterface& context, ResolverLimits limits);
     // The caller checked-closes any duplicate not transferred to the
@@ -361,9 +351,6 @@ private:
         DirectoryRequirement directoryRequirement, std::size_t& followed);
     ComplianceEngine::Result<bool> Commit(Detail::ResolvedPath& stage, Handle leaf);
     ComplianceEngine::Result<bool> CommitStage(Detail::ResolvedPath& stage, Handle leaf, bool logicalLeaf);
-    static ComplianceEngine::Result<std::vector<const Handle*>> PhysicalLineage(const Handle& root, const std::string& rootName, const Handle& target,
-        const std::string& targetName, const std::vector<NameBinding>& names, const Detail::ResolvedPath* stage, std::size_t depth);
-    ComplianceEngine::Result<std::vector<const Handle*>> Lineage(std::size_t index) const;
     std::size_t HeldDescriptors() const noexcept;
     // Charge work before checking optional retained headroom; failed
     // headroom checks do not refund an attempted operation.
@@ -374,10 +361,17 @@ private:
     ResolverLimits mLimits;
     struct Usage
     {
-        std::size_t workSpent = 0;
         std::size_t retainedBytes = 0;
     };
     Usage mUsage;
+    // Until a traversal-owned cumulative allowance is selected, independent
+    // child locations share the initial acquisition's checked work allowance.
+    // This owner holds no pins or locations; rejected attempts still charge it.
+    struct WorkAllowance
+    {
+        std::size_t spent = 0;
+    };
+    std::shared_ptr<WorkAllowance> mWorkAllowance;
     std::uint64_t mRootMountId = 0;
     std::uint64_t mLeafSourceMount = 0;
     bool mFrozen = false;
@@ -396,7 +390,6 @@ private:
     // selected after a branch remain owned until checked Pop/Close cleanup.
     std::vector<std::size_t> mPhysical;
     std::size_t mSize = 0;
-    std::size_t mNextGeneration = 1;
 };
 
 } // namespace Filesystem
