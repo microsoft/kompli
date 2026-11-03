@@ -3,7 +3,7 @@
 
 #include <AksCommand.h>
 #include <JsonWrapper.h>
-#include <Regex.h>
+#include <regex>
 #include <sstream>
 
 namespace ComplianceEngine
@@ -14,13 +14,13 @@ constexpr size_t MaxPatternLength = 1024;
 
 bool IsAzureIdentifier(const std::string& value)
 {
-    static const regex identifier("[A-Za-z0-9][A-Za-z0-9_.-]{0,89}");
-    return regex_match(value, identifier);
+    static const std::regex identifier("[A-Za-z0-9][A-Za-z0-9_.-]{0,89}");
+    return std::regex_match(value, identifier);
 }
 
 bool IsKubernetesDnsSubdomain(const std::string& value)
 {
-    static const regex label("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?");
+    static const std::regex label("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?");
     if (value.empty() || value.size() > 253)
     {
         return false;
@@ -30,7 +30,7 @@ bool IsKubernetesDnsSubdomain(const std::string& value)
     std::string current;
     while (std::getline(labels, current, '.'))
     {
-        if (!regex_match(current, label))
+        if (!std::regex_match(current, label))
         {
             return false;
         }
@@ -40,8 +40,8 @@ bool IsKubernetesDnsSubdomain(const std::string& value)
 
 bool IsKubernetesNamespace(const std::string& value)
 {
-    static const regex label("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?");
-    return regex_match(value, label);
+    static const std::regex label("[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?");
+    return std::regex_match(value, label);
 }
 
 Result<std::string> AzCommand(const AksCommandParams& params, const std::string& query)
@@ -246,13 +246,13 @@ Result<std::string> FilterPodSecurityOutput(const std::string& output)
     return findings.str();
 }
 
-bool OutputMatches(const std::string& output, const regex& pattern)
+bool OutputMatches(const std::string& output, const std::regex& pattern)
 {
     std::istringstream lines(output);
     std::string line;
     while (std::getline(lines, line))
     {
-        if (regex_search(line, pattern))
+        if (std::regex_search(line, pattern))
         {
             return true;
         }
@@ -260,7 +260,7 @@ bool OutputMatches(const std::string& output, const regex& pattern)
     return false;
 }
 
-Result<bool> PrivateNodePoolsComply(const std::string& output, const regex& pattern, bool matchMeansCompliant)
+Result<bool> PrivateNodePoolsComply(const std::string& output, const std::regex& pattern, bool matchMeansCompliant)
 {
     auto document = JsonWrapper::FromString(output);
     if (!document.HasValue())
@@ -306,12 +306,12 @@ Result<Status> AuditAksCommand(const AksCommandParams& params, IndicatorsTree& i
         return command.Error();
     }
 
-    regex outputPattern;
+    std::regex outputPattern;
     try
     {
-        outputPattern = regex(params.pattern, std::regex_constants::extended);
+        outputPattern = std::regex(params.pattern, std::regex_constants::extended);
     }
-    catch (const regex_error& error)
+    catch (const std::regex_error& error)
     {
         return Error("Invalid output pattern: " + std::string(error.what()), EINVAL);
     }

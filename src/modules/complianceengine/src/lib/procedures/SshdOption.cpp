@@ -4,13 +4,13 @@
 #include "StringTools.h"
 
 #include <ProcedureMap.h> // Adds std::to_string() for enum classes
-#include <Regex.h>
 #include <SshdOption.h>
 #include <TypedComparison.h>
 #include <cerrno>
 #include <cstdlib>
 #include <fnmatch.h>
 #include <fts.h>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -272,7 +272,7 @@ static Result<Status> EvaluateDelimitedNumericLimits(const std::string& option, 
 // Helper that evaluates a single sshd option against the provided operation/value.
 // valueRegexes are only used (and must be valid) when op is regex, match, or not_match.
 static Result<Status> EvaluateSshdOption(const std::map<std::string, std::string>& sshdConfig, const std::string& option, const std::string& value,
-    const std::string& op, const std::vector<regex>& valueRegexes, const Optional<std::string>& matchContext, IndicatorsTree& indicators)
+    const std::string& op, const std::vector<std::regex>& valueRegexes, const Optional<std::string>& matchContext, IndicatorsTree& indicators)
 {
     // When evaluating a specific Match block (all_matches mode), qualify every message with the
     // connection context (e.g. "user=*@*") so results from different Match contexts are
@@ -309,7 +309,7 @@ static Result<Status> EvaluateSshdOption(const std::map<std::string, std::string
         }
         for (const auto& valueRegex : valueRegexes)
         {
-            if (regex_search(realValue, valueRegex))
+            if (std::regex_search(realValue, valueRegex))
             {
                 return indicators.Compliant("Option '" + option + "' has a compliant value '" + realValue + "'" + ctx);
             }
@@ -324,7 +324,7 @@ static Result<Status> EvaluateSshdOption(const std::map<std::string, std::string
         }
         for (const auto& valueRegex : valueRegexes)
         {
-            if (regex_search(realValue, valueRegex))
+            if (std::regex_search(realValue, valueRegex))
             {
                 return indicators.NonCompliant("Option '" + option + "' has value '" + realValue + "' which matches forbidden pattern '" + value + "'" + ctx);
             }
@@ -401,16 +401,16 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
         option = ToLower(option);
     }
 
-    std::vector<regex> valueRegexes;
+    std::vector<std::regex> valueRegexes;
     auto op = params.op.Value();
     if (op == SshdOptionOperation::Regex)
     {
         try
         {
             // CIS patterns use ECMAScript escapes such as \b for word boundaries.
-            valueRegexes.push_back(regex(params.value, std::regex_constants::icase));
+            valueRegexes.push_back(std::regex(params.value, std::regex_constants::icase));
         }
-        catch (const regex_error& e)
+        catch (const std::regex_error& e)
         {
             OsConfigLogError(log, "Regex error: %s", e.what());
             return Error("Failed to compile regex error: " + std::string(e.what()), EINVAL);
@@ -424,9 +424,9 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
         {
             try
             {
-                valueRegexes.push_back(regex(valuePart, std::regex_constants::icase));
+                valueRegexes.push_back(std::regex(valuePart, std::regex_constants::icase));
             }
-            catch (const regex_error& e)
+            catch (const std::regex_error& e)
             {
                 OsConfigLogError(log, "Regex error: %s", e.what());
                 return Error("Failed to compile regex '" + valuePart + "' error: " + e.what(), EINVAL);

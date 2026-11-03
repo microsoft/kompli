@@ -3,7 +3,6 @@
 
 #include <Evaluator.h>
 #include <MountPointExists.h>
-#include <Regex.h>
 #include <iostream>
 #include <string>
 

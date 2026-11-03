@@ -5,7 +5,7 @@
 
 #include <Behavior.h>
 #include <Evaluator.h>
-#include <Regex.h>
+#include <regex>
 
 namespace ComplianceEngine
 {
@@ -38,7 +38,7 @@ struct FileRegexMatchParams
     std::string path;
 
     /// A pattern to match file names in the provided path
-    regex filenamePattern;
+    std::regex filenamePattern;
 
     /// Search file names for filenamePattern instead of requiring a complete match
     Optional<bool> filenameSearch = false;

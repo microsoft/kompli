@@ -5,11 +5,11 @@
 #include <BenchmarkInfo.h>
 #include <DistributionInfo.h>
 #include <Evaluator.h>
-#include <Regex.h>
 #include <Resource.hpp>
 #include <gtest/gtest.h>
 #include <map>
 #include <parson.h>
+#include <regex>
 #include <string>
 
 using ComplianceEngine::Action;
@@ -108,7 +108,7 @@ TEST(BenchmarkFormatterTest, EnvelopeContainsRequiredTopLevelFields)
     {
         const char* ts = json_object_get_string(doc.object, "timestamp");
         ASSERT_NE(ts, nullptr);
-        EXPECT_TRUE(regex_match(ts, regex(R"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)"))) << "timestamp not ISO 8601 UTC: " << ts;
+        EXPECT_TRUE(std::regex_match(ts, std::regex(R"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)"))) << "timestamp not ISO 8601 UTC: " << ts;
     }
     // `action` is per-rule now (a single `run` can mix audit/remediate across
     // rules), not a top-level field - see AddEntryEmitsPerRuleAction below.
