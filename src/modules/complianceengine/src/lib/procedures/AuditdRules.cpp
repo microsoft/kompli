@@ -4,7 +4,6 @@
 #include <AuditdRules.h>
 #include <Evaluator.h>
 #include <Optional.h>
-#include <Regex.h>
 #include <StringTools.h>
 #include <Users.h>
 #include <cctype>
@@ -13,6 +12,7 @@
 #include <fstream>
 #include <fts.h>
 #include <iostream>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -25,15 +25,15 @@ namespace
 {
 std::string ReplaceAuidPlaceholder(const std::string& option, uid_t uidMin)
 {
-    regex auidRegex(R"(auid>=[0-9]+\b)");
-    smatch m;
+    std::regex auidRegex(R"(auid>=[0-9]+\b)");
+    std::smatch m;
     std::string replaced = option;
     // Replace all matches of auidRegex with the new value
     size_t offset = 0;
     while (offset < replaced.size())
     {
         std::string sub = std::string(replaced.begin() + offset, replaced.end());
-        if (!regex_search(sub, m, auidRegex))
+        if (!std::regex_search(sub, m, auidRegex))
         {
             break;
         }
@@ -153,9 +153,9 @@ Result<std::string> FindSudoLogfile(ContextInterface& context)
     auto sudoersResult = context.ExecuteCommand("grep -E '^[[:space:]]*[Dd]efaults.*logfile' /etc/sudoers 2>/dev/null | tail -1");
     if (sudoersResult.HasValue() && !sudoersResult.Value().empty())
     {
-        regex logfileRegex(R"(logfile[[:space:]]*=[[:space:]]*([^,[[:space:]]+))");
-        smatch match;
-        if (regex_search(sudoersResult.Value(), match, logfileRegex))
+        std::regex logfileRegex(R"(logfile[[:space:]]*=[[:space:]]*([^,[[:space:]]+))");
+        std::smatch match;
+        if (std::regex_search(sudoersResult.Value(), match, logfileRegex))
         {
             std::string logfile = match[1].str();
             if (logfile.front() == '"' && logfile.back() == '"')
@@ -169,9 +169,9 @@ Result<std::string> FindSudoLogfile(ContextInterface& context)
     auto sudoersDResult = context.ExecuteCommand("grep -h -E '^[[:space:]]*[Dd]efaults.*logfile' /etc/sudoers.d/* 2>/dev/null | tail -1");
     if (sudoersDResult.HasValue() && !sudoersDResult.Value().empty())
     {
-        regex logfileRegex(R"(logfile[[:space:]]*=[[:space:]]*([^,[[:space:]]+))");
-        smatch match;
-        if (regex_search(sudoersDResult.Value(), match, logfileRegex))
+        std::regex logfileRegex(R"(logfile[[:space:]]*=[[:space:]]*([^,[[:space:]]+))");
+        std::smatch match;
+        if (std::regex_search(sudoersDResult.Value(), match, logfileRegex))
         {
             std::string logfile = match[1].str();
             if (logfile.length() > 2 && logfile.front() == '"' && logfile.back() == '"')
@@ -185,18 +185,19 @@ Result<std::string> FindSudoLogfile(ContextInterface& context)
     return Error("Sudo logfile setting not found", ENOENT);
 }
 
-bool IsDifferentRuleVariant(const std::string& rule, const std::vector<std::pair<regex, std::string>>& requiredRegexes)
+bool IsDifferentRuleVariant(const std::string& rule, const std::vector<std::pair<std::regex, std::string>>& requiredRegexes)
 {
-    const std::vector<std::pair<std::string, regex>> variantOptions = {{"-F arch=", regex(R"(-F[[:space:]]+arch=)")}, {"-F exit=", regex(R"(-F[[:space:]]+exit=)")}};
+    const std::vector<std::pair<std::string, std::regex>> variantOptions = {
+        {"-F arch=", std::regex(R"(-F[[:space:]]+arch=)")}, {"-F exit=", std::regex(R"(-F[[:space:]]+exit=)")}};
     for (const auto& req : requiredRegexes)
     {
-        if (regex_search(rule, req.first))
+        if (std::regex_search(rule, req.first))
         {
             continue;
         }
         for (const auto& variant : variantOptions)
         {
-            if (req.second.find(variant.first) == 0 && regex_search(rule, variant.second))
+            if (req.second.find(variant.first) == 0 && std::regex_search(rule, variant.second))
             {
                 return true;
             }
@@ -205,16 +206,16 @@ bool IsDifferentRuleVariant(const std::string& rule, const std::vector<std::pair
     return false;
 }
 
-Status CheckRuleInList(const std::vector<std::string>& rules, const std::string& searchItem, const Optional<regex>& excludeRegex,
-    const std::vector<std::pair<regex, std::string>>& requiredRegexes, ContextInterface& context, IndicatorsTree& indicators)
+Status CheckRuleInList(const std::vector<std::string>& rules, const std::string& searchItem, const Optional<std::regex>& excludeRegex,
+    const std::vector<std::pair<std::regex, std::string>>& requiredRegexes, ContextInterface& context, IndicatorsTree& indicators)
 {
-    regex searchItemRegex;
-    regex suppressingActionRegex(R"(-a[[:space:]]+(never,exit|exit,never)([[:space:]]|$))", std::regex_constants::icase | std::regex_constants::extended);
+    std::regex searchItemRegex;
+    std::regex suppressingActionRegex(R"(-a[[:space:]]+(never,exit|exit,never)([[:space:]]|$))", std::regex_constants::icase | std::regex_constants::extended);
     try
     {
-        searchItemRegex = regex(searchItem);
+        searchItemRegex = std::regex(searchItem);
     }
-    catch (const regex_error& e)
+    catch (const std::regex_error& e)
     {
         OsConfigLogError(context.GetLogHandle(), "Invalid searchItem regex: %s", e.what());
         return indicators.NonCompliant("Invalid searchItem regex: " + std::string(e.what()));
@@ -222,8 +223,8 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
     std::vector<std::string> incompleteRules;
     for (const auto& rule : rules)
     {
-        smatch searchMatch;
-        if (!regex_search(rule, searchMatch, searchItemRegex))
+        std::smatch searchMatch;
+        if (!std::regex_search(rule, searchMatch, searchItemRegex))
         {
             continue;
         }
@@ -233,7 +234,7 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
         {
             continue;
         }
-        if (excludeRegex.HasValue() && regex_search(rule, excludeRegex.Value()))
+        if (excludeRegex.HasValue() && std::regex_search(rule, excludeRegex.Value()))
         {
             continue;
         }
@@ -241,14 +242,14 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
         {
             continue;
         }
-        if (regex_search(rule, suppressingActionRegex))
+        if (std::regex_search(rule, suppressingActionRegex))
         {
             return indicators.NonCompliant("Rule '" + rule + "' suppresses auditing for '" + searchItem + "'");
         }
         bool optionMissing = false;
         for (const auto& req : requiredRegexes)
         {
-            if (!regex_search(rule, req.first))
+            if (!std::regex_search(rule, req.first))
             {
                 incompleteRules.push_back("Rule '" + rule + "' matching '" + searchItem + "' is missing required option " + req.second);
                 optionMissing = true;
@@ -270,14 +271,14 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
 
 Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
-    Optional<regex> excludeOption;
+    Optional<std::regex> excludeOption;
     if (params.excludeOption.HasValue() && !params.excludeOption.Value().empty())
     {
         try
         {
-            excludeOption = regex(params.excludeOption.Value(), std::regex_constants::icase | std::regex_constants::extended);
+            excludeOption = std::regex(params.excludeOption.Value(), std::regex_constants::icase | std::regex_constants::extended);
         }
-        catch (const regex_error& e)
+        catch (const std::regex_error& e)
         {
             return Error("Invalid excludeOptions regex: " + std::string(e.what()), EINVAL);
         }
@@ -300,7 +301,7 @@ Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree&
         OsConfigLogWarning(context.GetLogHandle(), "UID_MIN not found in /etc/login.defs, using default ");
     }
 
-    std::vector<std::pair<regex, std::string>> requiredOptions;
+    std::vector<std::pair<std::regex, std::string>> requiredOptions;
     for (auto option : params.requiredOptions.items)
     {
         option = TrimWhiteSpaces(option);
@@ -309,9 +310,9 @@ Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree&
             option = ReplaceAuidPlaceholder(option, uidMin.Value());
             try
             {
-                requiredOptions.push_back(std::make_pair(regex(option, std::regex_constants::icase | std::regex_constants::extended), option));
+                requiredOptions.push_back(std::make_pair(std::regex(option, std::regex_constants::icase | std::regex_constants::extended), option));
             }
-            catch (const regex_error& e)
+            catch (const std::regex_error& e)
             {
                 return Error("Invalid requiredOptions regex: " + std::string(e.what()), EINVAL);
             }

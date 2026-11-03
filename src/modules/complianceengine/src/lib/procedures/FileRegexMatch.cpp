@@ -4,13 +4,13 @@
 #include <FileRegexMatch.h>
 #include <Optional.h>
 #include <ProcedureMap.h>
-#include <Regex.h>
 #include <Result.h>
 #include <cerrno>
 #include <cstdlib>
 #include <dirent.h>
 #include <fstream>
 #include <iterator>
+#include <regex>
 
 namespace ComplianceEngine
 {
@@ -63,8 +63,8 @@ Result<MultilineMatchResult> MultilineMatch(const std::string& filename, const s
 {
     // We still need to manually consume the patterns as strings as the case sensitivity is handled
     // dynamically depending on the ignoreCase field value.
-    Optional<regex> matchRegex;
-    Optional<regex> stateRegex;
+    Optional<std::regex> matchRegex;
+    Optional<std::regex> stateRegex;
 
     ifstream input(filename);
     if (!input.is_open())
@@ -73,13 +73,13 @@ Result<MultilineMatchResult> MultilineMatch(const std::string& filename, const s
     }
     try
     {
-        matchRegex = regex(matchPattern, syntaxOptions.first);
+        matchRegex = std::regex(matchPattern, syntaxOptions.first);
         if (statePattern.HasValue())
         {
-            stateRegex = regex(statePattern.Value(), syntaxOptions.second);
+            stateRegex = std::regex(statePattern.Value(), syntaxOptions.second);
         }
     }
-    catch (const regex_error& e)
+    catch (const std::regex_error& e)
     {
         OsConfigLogInfo(context.GetLogHandle(), "Regex error: %s", e.what());
         return Error("Regex error: " + string(e.what()), EINVAL);
@@ -88,7 +88,7 @@ Result<MultilineMatchResult> MultilineMatch(const std::string& filename, const s
     bool matchingValueFound = false;
     bool selected = false;
 
-    const auto evaluateMatch = [&](const smatch& match) -> Optional<bool> {
+    const auto evaluateMatch = [&](const std::smatch& match) -> Optional<bool> {
         selected = true;
         const auto capturedValue = match.size() > 1 ? match[1].str() : match[0].str();
         bool valueMatches = true;
@@ -100,7 +100,7 @@ Result<MultilineMatchResult> MultilineMatch(const std::string& filename, const s
         }
         if (valueMatches && stateRegex.HasValue())
         {
-            valueMatches = regex_search(capturedValue, stateRegex.Value());
+            valueMatches = std::regex_search(capturedValue, stateRegex.Value());
         }
         return valueMatches;
     };
@@ -108,7 +108,7 @@ Result<MultilineMatchResult> MultilineMatch(const std::string& filename, const s
     if (wholeFile)
     {
         const string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-        const auto evaluateWholeFileMatch = [&](const smatch& match) -> Optional<MultilineMatchResult> {
+        const auto evaluateWholeFileMatch = [&](const std::smatch& match) -> Optional<MultilineMatchResult> {
             const bool valueMatches = evaluateMatch(match).Value();
             if (noneMatches && valueMatches)
             {
@@ -130,9 +130,9 @@ Result<MultilineMatchResult> MultilineMatch(const std::string& filename, const s
         {
             for (size_t offset = 0; offset <= contents.size();)
             {
-                smatch match;
+                std::smatch match;
                 const auto begin = contents.cbegin() + offset;
-                if (regex_search(begin, contents.cend(), match, matchRegex.Value(), std::regex_constants::match_continuous))
+                if (std::regex_search(begin, contents.cend(), match, matchRegex.Value(), std::regex_constants::match_continuous))
                 {
                     const auto result = evaluateWholeFileMatch(match);
                     if (result.HasValue())
@@ -154,8 +154,8 @@ Result<MultilineMatchResult> MultilineMatch(const std::string& filename, const s
         {
             auto begin = contents.cbegin();
             auto flags = std::regex_constants::match_default;
-            smatch match;
-            while (regex_search(begin, contents.cend(), match, matchRegex.Value(), flags))
+            std::smatch match;
+            while (std::regex_search(begin, contents.cend(), match, matchRegex.Value(), flags))
             {
                 const auto result = evaluateWholeFileMatch(match);
                 if (result.HasValue())
@@ -170,7 +170,8 @@ Result<MultilineMatchResult> MultilineMatch(const std::string& filename, const s
                         break;
                     }
                     flags = begin == contents.cbegin() ? std::regex_constants::match_default : std::regex_constants::match_prev_avail;
-                    if (regex_search(begin, contents.cend(), match, matchRegex.Value(), flags | std::regex_constants::match_not_null | std::regex_constants::match_continuous))
+                    if (std::regex_search(begin, contents.cend(), match, matchRegex.Value(),
+                            flags | std::regex_constants::match_not_null | std::regex_constants::match_continuous))
                     {
                         const auto nonemptyResult = evaluateWholeFileMatch(match);
                         if (nonemptyResult.HasValue())
@@ -198,8 +199,8 @@ Result<MultilineMatchResult> MultilineMatch(const std::string& filename, const s
     {
         lineNumber++;
         OsConfigLogDebug(context.GetLogHandle(), "Matching line %d: '%s', pattern: '%s'", lineNumber, line.c_str(), matchPattern.c_str());
-        smatch match;
-        if (regex_search(line, match, matchRegex.Value()))
+        std::smatch match;
+        if (std::regex_search(line, match, matchRegex.Value()))
         {
             const bool valueMatches = evaluateMatch(match).Value();
             if (noneMatches && valueMatches)
@@ -346,8 +347,8 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
             }
         }
 
-        const bool filenameMatches =
-            params.filenameSearch.Value() ? regex_search(entry->d_name, params.filenamePattern) : regex_match(entry->d_name, params.filenamePattern);
+        const bool filenameMatches = params.filenameSearch.Value() ? std::regex_search(entry->d_name, params.filenamePattern) :
+                                                                     std::regex_match(entry->d_name, params.filenamePattern);
         if (!filenameMatches)
         {
             OsConfigLogDebug(context.GetLogHandle(), "Ignoring file '%s' in directory '%s'", entry->d_name, params.path.c_str());

@@ -2,11 +2,11 @@
 // Licensed under the MIT License.
 
 #include <CommonUtils.h>
-#include <Regex.h>
 #include <StringTools.h>
 #include <SystemdUnitState.h>
 #include <algorithm>
 #include <iostream>
+#include <regex>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -121,7 +121,7 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
             }
             param.observed = true;
             param.observedValue = value;
-            if (!regex_match(value, param.pattern->GetRegex()))
+            if (!std::regex_match(value, param.pattern->GetRegex()))
             {
                 // OsConfigLogDebug(log, "Failed to match systemctl unit name '%s' for name '%s' for pattern '%s'  for value '%s' ",
                 // params.unitName.c_str(), name.c_str(), param.value.c_str(), value.c_str());

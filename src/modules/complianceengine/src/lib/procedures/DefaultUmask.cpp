@@ -5,7 +5,6 @@
 #include <CommonUtils.h>
 #include <Evaluator.h>
 #include <PasswordEntriesIterator.h>
-#include <Regex.h>
 #include <ScopeGuard.h>
 #include <StringTools.h>
 #include <algorithm>
@@ -14,6 +13,7 @@
 #include <fstream>
 #include <iterator>
 #include <pwd.h>
+#include <regex>
 #include <shadow.h>
 #include <sys/stat.h>
 #include <vector>
@@ -27,13 +27,13 @@ namespace ComplianceEngine
 {
 namespace
 {
-Result<regex> CompileRegex(const std::string& pattern, const ContextInterface& context)
+Result<std::regex> CompileRegex(const std::string& pattern, const ContextInterface& context)
 {
     try
     {
-        return regex(pattern, std::regex_constants::ECMAScript | std::regex_constants::icase);
+        return std::regex(pattern, std::regex_constants::ECMAScript | std::regex_constants::icase);
     }
-    catch (const regex_error& e)
+    catch (const std::regex_error& e)
     {
         OsConfigLogInfo(context.GetLogHandle(), "Regex error: %s", e.what());
         return Error("Regex error: " + string(e.what()), EINVAL);
@@ -92,7 +92,7 @@ mode_t ParseSymbolicValue(const std::string& user, const std::string& group, con
     return ~value;
 }
 
-Result<MatchResult> MultilineMatch(const std::string& filename, const regex& valuePattern, const regex& pamPattern, ContextInterface& context)
+Result<MatchResult> MultilineMatch(const std::string& filename, const std::regex& valuePattern, const std::regex& pamPattern, ContextInterface& context)
 {
     ifstream input(filename);
     if (!input.is_open())
@@ -106,9 +106,9 @@ Result<MatchResult> MultilineMatch(const std::string& filename, const regex& val
     {
         const mode_t expected = 027;
         lineNumber++;
-        smatch match;
+        std::smatch match;
 
-        if (regex_search(line, match, valuePattern))
+        if (std::regex_search(line, match, valuePattern))
         {
             OsConfigLogDebug(context.GetLogHandle(), "Matched line %d: %s", lineNumber, line.c_str());
             assert(match.ready());
@@ -145,7 +145,7 @@ Result<MatchResult> MultilineMatch(const std::string& filename, const regex& val
             return MatchResult::Correct;
         }
 
-        if (regex_search(line, match, pamPattern))
+        if (std::regex_search(line, match, pamPattern))
         {
             OsConfigLogDebug(context.GetLogHandle(), "Matched line %d: %s", lineNumber, line.c_str());
 
@@ -224,7 +224,7 @@ struct UmaskChange
     string updated;
 };
 
-Result<Optional<UmaskChange>> FindUmaskChange(const vector<string>& locations, const regex& valuePattern, const regex& pamPattern)
+Result<Optional<UmaskChange>> FindUmaskChange(const vector<string>& locations, const std::regex& valuePattern, const std::regex& pamPattern)
 {
     for (const auto& location : locations)
     {
@@ -251,15 +251,15 @@ Result<Optional<UmaskChange>> FindUmaskChange(const vector<string>& locations, c
             const size_t newline = original.find('\n', lineStart);
             const size_t lineEnd = newline == string::npos ? original.size() : newline;
             const string line = original.substr(lineStart, lineEnd - lineStart);
-            smatch match;
+            std::smatch match;
             size_t valueStart = string::npos;
             size_t valueLength = 0;
-            if (regex_search(line, match, valuePattern))
+            if (std::regex_search(line, match, valuePattern))
             {
                 valueStart = lineStart + static_cast<size_t>(match.position(1));
                 valueLength = static_cast<size_t>(match.length(1));
             }
-            else if (regex_search(line, match, pamPattern))
+            else if (std::regex_search(line, match, pamPattern))
             {
                 valueStart = lineStart + static_cast<size_t>(match.position(3));
                 valueLength = static_cast<size_t>(match.length(3));
@@ -366,9 +366,9 @@ Result<Status> RemediateDefaultUmask(IndicatorsTree& indicators, ContextInterfac
         return audit;
     }
 
-    static const regex valuePattern(R"(^[ \t]*umask[ \t]+(([0-7]{3,4})|u=([rwx]{0,3}),g=([rwx]{0,3}),o=([rwx]{0,3}))([ \t]*#.*)?$)",
+    static const std::regex valuePattern(R"(^[ \t]*umask[ \t]+(([0-7]{3,4})|u=([rwx]{0,3}),g=([rwx]{0,3}),o=([rwx]{0,3}))([ \t]*#.*)?$)",
         std::regex_constants::ECMAScript | std::regex_constants::icase);
-    static const regex pamPattern(R"(^[ \t]*session[ \t]+([^#\n\r]+[ \t]+)?pam_umask\.so[ \t]+([^#\n\r]+[ \t]+)?umask=([0-7]{3,4})\b)",
+    static const std::regex pamPattern(R"(^[ \t]*session[ \t]+([^#\n\r]+[ \t]+)?pam_umask\.so[ \t]+([^#\n\r]+[ \t]+)?umask=([0-7]{3,4})\b)",
         std::regex_constants::ECMAScript | std::regex_constants::icase);
     auto locations = GetUmaskLocations(context);
     if (!locations.HasValue())

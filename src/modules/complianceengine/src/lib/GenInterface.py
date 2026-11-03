@@ -77,7 +77,7 @@ class Model:
     # A dictonary of enum name to Enum objects
     enums: dict
 
-    # A set of supported types, e.g. int, std::string, regex, bool, mode_t, and any enum names
+    # A set of supported types, e.g. int, std::string, std::regex, bool, mode_t, and any enum names
     supported_types: set
 
     # A dictonary of parameters struct name to Parameters objects
@@ -551,7 +551,7 @@ def main():
     # Supported types are used in model validation
     model.supported_types.add("int")
     model.supported_types.add("std::string")
-    model.supported_types.add("regex")
+    model.supported_types.add("std::regex")
     model.supported_types.add("bool")
     model.supported_types.add("mode_t")
     model.supported_types.add("Pattern")

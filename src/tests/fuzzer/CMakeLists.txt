@@ -8,9 +8,7 @@ project(kompli-fuzzer)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=fuzzer")
 
-add_executable(kompli-fuzzer
-    RegexFallbackTarget.cpp
-    target.cpp)
+add_executable(kompli-fuzzer target.cpp)
 target_link_libraries(kompli-fuzzer PRIVATE
     complianceenginelib
     commonutils
