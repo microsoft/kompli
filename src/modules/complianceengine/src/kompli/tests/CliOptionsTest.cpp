@@ -146,6 +146,17 @@ TEST(CliOptionsSmokeTest, UnknownOptionIsError)
     EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
 }
 
+TEST(CliOptionsSmokeTest, OperatorSuppliedLogFileIsRejected)
+{
+    // The CLI must never open an operator-supplied log path as root; logging
+    // goes to stderr instead of accepting the retired --log-file option.
+    ArgvHelper run{"prog", "--log-file", "/tmp/unsafe.log", "run", "plan.json"};
+    EXPECT_FALSE(ParseCommandLine(run.Argc(), run.Argv()).HasValue());
+
+    ArgvHelper plan{"prog", "--log-file=/tmp/unsafe.log", "plan", "bench.json"};
+    EXPECT_FALSE(ParseCommandLine(plan.Argc(), plan.Argv()).HasValue());
+}
+
 TEST(CliOptionsSmokeTest, PlanWithToggles)
 {
     ArgvHelper a{"prog", "--audit=1.1", "--remediate=1.2", "--enforce=1.3", "plan", "bench.json"};
