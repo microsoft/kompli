@@ -81,8 +81,8 @@ using ComplianceEngine::Kompli::WritePlanFile;
 using std::string;
 
 #ifdef BUILD_TELEMETRY
-static constexpr const char* telemetry_log_dir = "/var/lib/osconfig/telemetry/";
-static constexpr const char* telemetry_log_file = "complianceengine.telemetry";
+static constexpr const char* telemetry_log_dir = "/var/lib/kompli/";
+static constexpr const char* telemetry_log_file = "telemetry.events.json";
 #endif
 namespace
 {

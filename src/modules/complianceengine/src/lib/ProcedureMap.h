@@ -9,6 +9,7 @@
 #include <AksCommand.h>
 #include <ApparmorProfileState.h>
 #include <AuditdRules.h>
+#include <BenchmarkSettings.h>
 #include <CommandOutputMatch.h>
 #include <DconfValue.h>
 #include <DefaultUmask.h>

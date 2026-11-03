@@ -165,6 +165,9 @@
           "$ref": "procedures/AuditdRules.schema.json#/definitions/audit"
         },
         {
+          "$ref": "procedures/BenchmarkSettings.schema.json#/definitions/audit"
+        },
+        {
           "$ref": "procedures/CommandOutputMatch.schema.json#/definitions/audit"
         },
         {
@@ -311,6 +314,9 @@
         },
         {
           "$ref": "procedures/AuditdRules.schema.json#/definitions/remediation"
+        },
+        {
+          "$ref": "procedures/BenchmarkSettings.schema.json#/definitions/remediation"
         },
         {
           "$ref": "procedures/CommandOutputMatch.schema.json#/definitions/remediation"

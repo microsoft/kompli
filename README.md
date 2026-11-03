@@ -74,7 +74,7 @@ cd build && ctest
 
 ## Configuration
 
-ComplianceEngine is configured via `/etc/osconfig/osconfig.json`:
+ComplianceEngine is configured via `/etc/kompli/kompli.json`:
 
 ```json
 {
@@ -86,7 +86,7 @@ ComplianceEngine is configured via `/etc/osconfig/osconfig.json`:
 
 ### Distribution override
 
-To override automatic OS detection (useful for testing), create `/etc/osconfig/system_id.override`:
+To override automatic OS detection (useful for testing), create `/etc/kompli/system_id.override`:
 
 ```
 OS="Linux" ARCH="x86_64" DISTRO="ubuntu" VERSION="24.04"
