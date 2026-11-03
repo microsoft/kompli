@@ -4,7 +4,7 @@
 #include <CommonContext.h>
 #include <Users.h>
 #include <cerrno>
-#include <parsers/LoginDefs.h>
+#include <parsers/LoginDefs.hpp>
 
 namespace ComplianceEngine
 {

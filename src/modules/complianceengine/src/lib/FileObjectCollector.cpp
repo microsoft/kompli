@@ -5,7 +5,7 @@
 #include <FileObjectCollector.h>
 #include <cerrno>
 #include <filesystem/LinesRange.hpp>
-#include <parsers/ResolvConf.h>
+#include <parsers/ResolvConf.hpp>
 #include <string>
 #include <utility>
 
@@ -19,9 +19,9 @@ Result<bool> AppendNameserver(const ResolvConf::Entry& entry, const FileCollecti
     // Only first-column, space/tab-delimited directives match glibc's lexer.
     // Unknown spellings (including indentation and bare keywords) are not
     // nameserver evidence; the parser retains their original bytes.
-    if (ResolvConf::Directive::Nameserver != entry.record.directive)
+    if (!entry.directive.Is<ResolvConf::Nameserver>())
         return true;
-    const auto& span = entry.projections.front().token;
+    const auto& span = entry.directive.Get<ResolvConf::Nameserver>().token;
     if (collection.items.size() >= policy.occurrences || collection.items.size() >= policy.values)
         return Error("Nameserver value limit exceeded", E2BIG);
     if (collection.items.size() >= collection.items.max_size())

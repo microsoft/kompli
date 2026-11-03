@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include <parsers/ResolvConf.h>
+#include <parsers/ResolvConf.hpp>
 
 #include <cerrno>
 #include <cstddef>
@@ -41,6 +41,69 @@ void CheckSpan(rc::Span span, const rc::Entry& entry)
     Require(span.length <= entry.text.size() - (span.column - 1));
 }
 
+void CheckOperand(rc::Span span, const rc::Entry& entry, std::size_t& previous)
+{
+    CheckSpan(span, entry);
+    Require((span.length > 0) && (span.column > previous));
+    previous = span.column;
+    bool found = false;
+    for (const auto& token : entry.record.tokens)
+        found |= SameSpan(token, span);
+    Require(found);
+}
+
+struct CheckDirective
+{
+    const rc::Entry& entry;
+    std::size_t previous = 0;
+
+    explicit CheckDirective(const rc::Entry& value) : entry(value) {}
+
+    void operator()(const rc::Blank&) { Require(entry.record.tokens.empty()); }
+    void operator()(const rc::Comment&) { Require(entry.record.tokens.empty()); }
+    void operator()(const rc::Unknown&) { Require(entry.text.find(" nameserver") != 0 || entry.record.tokens.size() > 0); }
+    void operator()(const rc::Nameserver& value)
+    {
+        CheckOperand(value.token, entry, previous);
+        Require(value.address.Is<rc::Ipv4>() || value.address.Is<rc::Ipv6>());
+    }
+    void operator()(const rc::Domain& value)
+    {
+        if (value.token.HasValue())
+            CheckOperand(value.token.Value(), entry, previous);
+    }
+    void operator()(const rc::Search& value)
+    {
+        for (auto span : value.names)
+            CheckOperand(span, entry, previous);
+    }
+    void operator()(const rc::Sortlist& value)
+    {
+        const auto terminator = entry.text.find(';');
+        for (const auto& item : value.entries)
+        {
+            const auto span = item.Is<rc::Ipv4Sort>() ? item.Get<rc::Ipv4Sort>().token : item.Get<rc::UnverifiedIpv6Sort>().token;
+            CheckOperand(span, entry, previous);
+            if (terminator != std::string::npos)
+                Require(span.column - 1 + span.length <= terminator);
+            if (item.Is<rc::UnverifiedIpv6Sort>() && item.Get<rc::UnverifiedIpv6Sort>().mask.HasValue())
+                CheckSpan(item.Get<rc::UnverifiedIpv6Sort>().mask.Value(), entry);
+        }
+    }
+    void operator()(const rc::Options& value)
+    {
+        for (const auto& item : value.entries)
+        {
+            if (item.Is<rc::NumericOption>())
+                CheckOperand(item.Get<rc::NumericOption>().token, entry, previous);
+            else if (item.Is<rc::FlagOption>())
+                CheckOperand(item.Get<rc::FlagOption>().token, entry, previous);
+            else
+                CheckOperand(item.Get<rc::UnknownOption>().token, entry, previous);
+        }
+    }
+};
+
 void CheckEntry(const rc::Entry& entry, const std::string& supplied, std::size_t line, const rc::Limits& limits,
     std::size_t& tokens)
 {
@@ -54,51 +117,95 @@ void CheckEntry(const rc::Entry& entry, const std::string& supplied, std::size_t
         Require((token.length > 0) && (token.column > end));
         end = token.column - 1 + token.length;
     }
-    std::size_t previous = 0;
-    for (const auto& projection : entry.projections)
+    CheckDirective check{entry};
+    entry.directive.Visit<void>(check);
+}
+
+bool Same(const rc::Ipv4& a, const rc::Ipv4& b) { return a.bytes == b.bytes; }
+bool Same(const rc::Ipv6& a, const rc::Ipv6& b) { return a.bytes == b.bytes; }
+// Forward declarations keep the C++11 dependent visitor lookup explicit.
+bool Same(const rc::Ipv4Sort& a, const rc::Ipv4Sort& b);
+bool Same(const rc::UnverifiedIpv6Sort& a, const rc::UnverifiedIpv6Sort& b);
+bool Same(const rc::NumericOption& a, const rc::NumericOption& b);
+bool Same(const rc::FlagOption& a, const rc::FlagOption& b);
+bool Same(const rc::UnknownOption& a, const rc::UnknownOption& b);
+bool Same(const rc::Blank&, const rc::Blank&);
+bool Same(const rc::Comment&, const rc::Comment&);
+bool Same(const rc::Unknown&, const rc::Unknown&);
+bool Same(const rc::Nameserver& a, const rc::Nameserver& b);
+bool Same(const rc::Domain& a, const rc::Domain& b);
+bool Same(const rc::Search& a, const rc::Search& b);
+bool Same(const rc::Sortlist& a, const rc::Sortlist& b);
+bool Same(const rc::Options& a, const rc::Options& b);
+
+template <typename V>
+struct Compare
+{
+    const V& right;
+    template <typename T>
+    bool operator()(const T& left) const
     {
-        CheckSpan(projection.token, entry);
-        Require((projection.token.length > 0) && (projection.token.column > previous));
-        previous = projection.token.column;
-        bool found = false;
-        for (const auto& token : entry.record.tokens)
-            found |= SameSpan(token, projection.token);
-        Require(found);
-        Require((projection.addressBytes == 0) || (projection.addressBytes == 4) || (projection.addressBytes == 16));
+        return right.template Is<T>() && Same(left, right.template Get<T>());
     }
-    Require(entry.record.directive != rc::Directive::Nameserver ||
-        ((entry.projections.size() == 1) && (entry.projections.front().status == rc::Status::Parsed)));
-    if ((entry.record.directive == rc::Directive::Nameserver) || (entry.record.directive == rc::Directive::Domain))
-        Require(entry.projections.size() <= 1);
-    if ((entry.record.directive == rc::Directive::Unknown) && (supplied.find(" nameserver") == 0))
-        Require(entry.projections.empty());
-    if (entry.record.directive == rc::Directive::Sortlist)
-    {
-        const auto terminator = supplied.find(';');
-        if (terminator != std::string::npos)
-        {
-            for (const auto& projection : entry.projections)
-                Require(projection.token.column - 1 + projection.token.length <= terminator);
-        }
-    }
+};
+
+bool Same(const rc::Ipv4Sort& a, const rc::Ipv4Sort& b)
+{
+    return SameSpan(a.token, b.token) && Same(a.address, b.address) &&
+        (a.mask.HasValue() == b.mask.HasValue()) && (!a.mask.HasValue() || Same(a.mask.Value(), b.mask.Value()));
+}
+bool Same(const rc::UnverifiedIpv6Sort& a, const rc::UnverifiedIpv6Sort& b)
+{
+    return SameSpan(a.token, b.token) && Same(a.address, b.address) &&
+        (a.mask.HasValue() == b.mask.HasValue()) && (!a.mask.HasValue() || SameSpan(a.mask.Value(), b.mask.Value()));
+}
+bool Same(const rc::NumericOption& a, const rc::NumericOption& b)
+{
+    return SameSpan(a.token, b.token) && a.value == b.value && a.documentedCap == b.documentedCap;
+}
+bool Same(const rc::FlagOption& a, const rc::FlagOption& b) { return SameSpan(a.token, b.token); }
+bool Same(const rc::UnknownOption& a, const rc::UnknownOption& b) { return SameSpan(a.token, b.token); }
+bool Same(const rc::Blank&, const rc::Blank&) { return true; }
+bool Same(const rc::Comment&, const rc::Comment&) { return true; }
+bool Same(const rc::Unknown&, const rc::Unknown&) { return true; }
+bool Same(const rc::Nameserver& a, const rc::Nameserver& b)
+{
+    return SameSpan(a.token, b.token) && a.address.Visit<bool>(Compare<rc::Address>{b.address});
+}
+bool Same(const rc::Domain& a, const rc::Domain& b)
+{
+    return a.token.HasValue() == b.token.HasValue() && (!a.token.HasValue() || SameSpan(a.token.Value(), b.token.Value()));
+}
+bool Same(const rc::Search& a, const rc::Search& b)
+{
+    if (a.names.size() != b.names.size()) return false;
+    for (std::size_t i = 0; i < a.names.size(); ++i)
+        if (!SameSpan(a.names[i], b.names[i])) return false;
+    return true;
+}
+bool Same(const rc::Sortlist& a, const rc::Sortlist& b)
+{
+    if (a.entries.size() != b.entries.size()) return false;
+    for (std::size_t i = 0; i < a.entries.size(); ++i)
+        if (!a.entries[i].Visit<bool>(Compare<rc::SortEntry>{b.entries[i]})) return false;
+    return true;
+}
+bool Same(const rc::Options& a, const rc::Options& b)
+{
+    if (a.entries.size() != b.entries.size()) return false;
+    for (std::size_t i = 0; i < a.entries.size(); ++i)
+        if (!a.entries[i].Visit<bool>(Compare<rc::Option>{b.entries[i]})) return false;
+    return true;
 }
 
 void SameEntry(const rc::Entry& left, const rc::Entry& right)
 {
     Require((left.source == right.source) && (left.text == right.text));
-    Require((left.record.directive == right.record.directive) && (left.record.line == right.record.line));
+    Require(left.record.line == right.record.line);
     Require(left.record.tokens.size() == right.record.tokens.size());
     for (std::size_t i = 0; i < left.record.tokens.size(); ++i)
         Require(SameSpan(left.record.tokens[i], right.record.tokens[i]));
-    Require(left.projections.size() == right.projections.size());
-    for (std::size_t i = 0; i < left.projections.size(); ++i)
-    {
-        const auto& a = left.projections[i];
-        const auto& b = right.projections[i];
-        Require((a.kind == b.kind) && (a.status == b.status) && SameSpan(a.token, b.token));
-        Require((a.addressBytes == b.addressBytes) && (a.address == b.address) && (a.hasMask == b.hasMask) && (a.mask == b.mask));
-        Require((a.number == b.number) && (a.documentedCap == b.documentedCap));
-    }
+    Require(left.directive.Visit<bool>(Compare<rc::DirectiveValue>{right.directive}));
 }
 
 template <typename T>
@@ -206,8 +313,8 @@ void Run(const std::string& input, const rc::Limits& limits)
         Require(retained.source == "resolv-fuzz");
         for (const auto& token : retained.record.tokens)
             CheckSpan(token, retained); // Evidence survives both parsers.
-        for (const auto& projection : retained.projections)
-            CheckSpan(projection.token, retained);
+        CheckDirective check(retained);
+        retained.directive.Visit<void>(check);
     }
 }
 } // namespace

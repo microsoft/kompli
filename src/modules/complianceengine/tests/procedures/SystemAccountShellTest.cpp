@@ -7,7 +7,7 @@
 #include <Optional.h>
 #include <SystemAccountShell.h>
 #include <fstream>
-#include <parsers/LoginDefs.h>
+#include <parsers/LoginDefs.hpp>
 #include <sys/stat.h>
 
 using ComplianceEngine::AuditSystemAccountShell;

@@ -4,7 +4,7 @@
 #include <array>
 #include <cerrno>
 #include <gtest/gtest.h>
-#include <parsers/ResolvConf.h>
+#include <parsers/ResolvConf.hpp>
 #include <string>
 #include <utility>
 #include <vector>
@@ -19,9 +19,45 @@ struct Snapshot
 {
     std::string source;
     std::vector<std::string> entries;
-    std::vector<rc::Record> records;
-    std::vector<rc::Projection> projections;
+    std::vector<rc::Entry> records;
+    std::vector<rc::Span> operands;
 };
+
+// Flatten only operand spans for the old lexical-evidence assertions; all
+// decoded value assertions below inspect typed alternatives directly.
+std::vector<rc::Span> Operands(const rc::Entry& entry)
+{
+    std::vector<rc::Span> spans;
+    const auto& directive = entry.directive;
+    if (directive.Is<rc::Nameserver>())
+        spans.push_back(directive.Get<rc::Nameserver>().token);
+    else if (directive.Is<rc::Domain>())
+    {
+        const auto& token = directive.Get<rc::Domain>().token;
+        if (token.HasValue())
+            spans.push_back(token.Value());
+    }
+    else if (directive.Is<rc::Search>())
+        spans = directive.Get<rc::Search>().names;
+    else if (directive.Is<rc::Sortlist>())
+    {
+        for (const auto& item : directive.Get<rc::Sortlist>().entries)
+            spans.push_back(item.Is<rc::Ipv4Sort>() ? item.Get<rc::Ipv4Sort>().token : item.Get<rc::UnverifiedIpv6Sort>().token);
+    }
+    else if (directive.Is<rc::Options>())
+    {
+        for (const auto& item : directive.Get<rc::Options>().entries)
+        {
+            if (item.Is<rc::NumericOption>())
+                spans.push_back(item.Get<rc::NumericOption>().token);
+            else if (item.Is<rc::FlagOption>())
+                spans.push_back(item.Get<rc::FlagOption>().token);
+            else
+                spans.push_back(item.Get<rc::UnknownOption>().token);
+        }
+    }
+    return spans;
+}
 
 ComplianceEngine::Result<Snapshot> ParseFixture(const std::vector<std::string>& lines, std::string source, rc::Limits limits = {})
 {
@@ -33,10 +69,10 @@ ComplianceEngine::Result<Snapshot> ParseFixture(const std::vector<std::string>& 
         auto entry = parser.Next(line);
         if (!entry.HasValue())
             return entry.Error();
-        snapshot.entries.push_back(std::move(entry.Value().text));
-        snapshot.records.push_back(std::move(entry.Value().record));
-        for (auto& projection : entry.Value().projections)
-            snapshot.projections.push_back(std::move(projection));
+        snapshot.entries.push_back(entry.Value().text);
+        for (auto span : Operands(entry.Value()))
+            snapshot.operands.push_back(span);
+        snapshot.records.push_back(std::move(entry.Value()));
     }
     auto finished = parser.Finish(rc::Acquisition::EofAndClosed);
     if (!finished.HasValue())
@@ -62,18 +98,17 @@ TEST(ResolvConfTest, EmptySuccessAndOwnedLFStrippedEntries)
     const auto& doc = parsed.Value();
     EXPECT_EQ(input, doc.entries);
     EXPECT_EQ(5U, doc.records.size());
-    EXPECT_EQ(rc::Directive::Blank, doc.records[0].directive);
-    EXPECT_EQ(rc::Directive::Comment, doc.records[1].directive);
-    EXPECT_EQ(rc::Directive::Comment, doc.records[2].directive);
-    ASSERT_EQ(1U, doc.projections.size());
-    EXPECT_EQ(rc::Status::Parsed, doc.projections[0].status);
-    EXPECT_EQ(4U, doc.projections[0].addressBytes);
-    EXPECT_EQ(4U, doc.projections[0].token.line);
-    EXPECT_EQ("192.0.2.1", Text(doc, doc.projections[0].token));
-    EXPECT_EQ(1U, doc.records[3].tokens[0].column);
-    EXPECT_EQ(12U, doc.records[3].tokens[1].column);
+    EXPECT_TRUE(doc.records[0].directive.Is<rc::Blank>());
+    EXPECT_TRUE(doc.records[1].directive.Is<rc::Comment>());
+    EXPECT_TRUE(doc.records[2].directive.Is<rc::Comment>());
+    ASSERT_EQ(1U, doc.operands.size());
+    const auto& server = doc.records[3].directive.Get<rc::Nameserver>();
+    EXPECT_TRUE(server.address.Is<rc::Ipv4>());
+    EXPECT_EQ(4U, server.token.line);
+    EXPECT_EQ("192.0.2.1", Text(doc, server.token));
+    EXPECT_EQ(1U, doc.records[3].record.tokens[0].column);
+    EXPECT_EQ(12U, doc.records[3].record.tokens[1].column);
     EXPECT_EQ(input, std::vector<std::string>({"", "# hello", "; comment", "nameserver\t192.0.2.1  ", ""}));
-    // The caller supplies entries, not LF/EOF information: no final-LF claim.
     EXPECT_EQ("", doc.entries.back());
 }
 
@@ -86,29 +121,30 @@ TEST(ResolvConfTest, AllDirectivesDuplicatesAndNoEffectiveMerge)
     ASSERT_TRUE(parsed.HasValue());
     const auto& doc = parsed.Value();
     ASSERT_EQ(7U, doc.records.size());
-    EXPECT_EQ(rc::Directive::Search, doc.records[4].directive);
-    ASSERT_EQ(13U, doc.projections.size());
-    EXPECT_EQ(16U, doc.projections[1].addressBytes);
-    EXPECT_EQ((std::array<unsigned char, 16>{{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}}), doc.projections[1].address);
-    EXPECT_EQ((std::array<unsigned char, 16>{{192, 0, 2, 1}}), doc.projections[0].address);
-    EXPECT_EQ(rc::ValueKind::DomainName, doc.projections[4].kind);
-    EXPECT_EQ(rc::Status::Unverified, doc.projections[4].status);
-    EXPECT_EQ(rc::ValueKind::SortPair, doc.projections[6].kind);
-    EXPECT_TRUE(doc.projections[6].hasMask);
-    EXPECT_EQ(4U, doc.projections[6].addressBytes);
-    EXPECT_EQ((std::array<unsigned char, 16>{{130, 155, 160, 0}}), doc.projections[6].address);
-    EXPECT_EQ((std::array<unsigned char, 16>{{255, 255, 240, 0}}), doc.projections[6].mask);
-    EXPECT_FALSE(doc.projections[7].hasMask);
-    EXPECT_EQ((std::array<unsigned char, 16>{{130, 155, 0, 0}}), doc.projections[7].address);
-    EXPECT_EQ(16U, doc.projections[8].number);
-    EXPECT_EQ(15U, doc.projections[8].documentedCap);
-    EXPECT_EQ("ndots:016", Text(doc, doc.projections[8].token));
-    EXPECT_EQ(31U, doc.projections[9].number);
-    EXPECT_EQ(30U, doc.projections[9].documentedCap);
-    EXPECT_EQ(5U, doc.projections[10].documentedCap);
-    EXPECT_EQ(rc::ValueKind::FlagOption, doc.projections[11].kind);
-    EXPECT_EQ(2U, doc.projections[12].number);
-    // Caps are documented metadata, not an effective resolver state.
+    EXPECT_TRUE(doc.records[4].directive.Is<rc::Search>());
+    ASSERT_EQ(13U, doc.operands.size());
+    EXPECT_EQ((std::array<unsigned char, 16>{{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}}),
+        doc.records[1].directive.Get<rc::Nameserver>().address.Get<rc::Ipv6>().bytes);
+    EXPECT_EQ((std::array<unsigned char, 4>{{192, 0, 2, 1}}), doc.records[0].directive.Get<rc::Nameserver>().address.Get<rc::Ipv4>().bytes);
+    EXPECT_EQ("old.example", Text(doc, doc.records[3].directive.Get<rc::Domain>().token.Value()));
+    const auto& sort = doc.records[5].directive.Get<rc::Sortlist>().entries;
+    ASSERT_EQ(2U, sort.size());
+    const auto& first = sort[0].Get<rc::Ipv4Sort>();
+    EXPECT_TRUE(first.mask.HasValue());
+    EXPECT_EQ((std::array<unsigned char, 4>{{130, 155, 160, 0}}), first.address.bytes);
+    EXPECT_EQ((std::array<unsigned char, 4>{{255, 255, 240, 0}}), first.mask.Value().bytes);
+    EXPECT_FALSE(sort[1].Get<rc::Ipv4Sort>().mask.HasValue());
+    EXPECT_EQ((std::array<unsigned char, 4>{{130, 155, 0, 0}}), sort[1].Get<rc::Ipv4Sort>().address.bytes);
+    const auto& options = doc.records[6].directive.Get<rc::Options>().entries;
+    ASSERT_EQ(5U, options.size());
+    EXPECT_EQ(16U, options[0].Get<rc::NumericOption>().value);
+    EXPECT_EQ(15U, options[0].Get<rc::NumericOption>().documentedCap);
+    EXPECT_EQ("ndots:016", Text(doc, options[0].Get<rc::NumericOption>().token));
+    EXPECT_EQ(31U, options[1].Get<rc::NumericOption>().value);
+    EXPECT_EQ(30U, options[1].Get<rc::NumericOption>().documentedCap);
+    EXPECT_EQ(5U, options[2].Get<rc::NumericOption>().documentedCap);
+    EXPECT_TRUE(options[3].Is<rc::FlagOption>());
+    EXPECT_EQ(2U, options[4].Get<rc::NumericOption>().value);
 }
 
 TEST(ResolvConfTest, Glibc239KnownFlagsRemainIndividualOrderedEvidence)
@@ -120,12 +156,12 @@ TEST(ResolvConfTest, Glibc239KnownFlagsRemainIndividualOrderedEvidence)
         line += " " + flag;
     const auto parsed = ParseFixture({line}, "resolver");
     ASSERT_TRUE(parsed.HasValue());
-    ASSERT_EQ(flags.size(), parsed.Value().projections.size());
+    const auto& options = parsed.Value().records[0].directive.Get<rc::Options>().entries;
+    ASSERT_EQ(flags.size(), options.size());
     for (std::size_t i = 0; i < flags.size(); ++i)
     {
-        EXPECT_EQ(flags[i], Text(parsed.Value(), parsed.Value().projections[i].token));
-        EXPECT_EQ(rc::ValueKind::FlagOption, parsed.Value().projections[i].kind);
-        EXPECT_EQ(rc::Status::Parsed, parsed.Value().projections[i].status);
+        ASSERT_TRUE(options[i].Is<rc::FlagOption>());
+        EXPECT_EQ(flags[i], Text(parsed.Value(), options[i].Get<rc::FlagOption>().token));
     }
 }
 
@@ -137,13 +173,11 @@ TEST(ResolvConfTest, UnknownAndUnverifiedInputRemainOwnedEvidence)
     ASSERT_TRUE(parsed.HasValue());
     const auto& doc = parsed.Value();
     EXPECT_EQ(lines, doc.entries);
-    EXPECT_EQ(rc::Directive::Unknown, doc.records[2].directive);
-    ASSERT_EQ(6U, doc.projections.size());
-    EXPECT_EQ(rc::ValueKind::UnknownOption, doc.projections[2].kind);
-    EXPECT_EQ(rc::Status::Unknown, doc.projections[2].status);
-    EXPECT_EQ(rc::Status::Unverified, doc.projections[3].status);
-    EXPECT_EQ("a\r", Text(doc, doc.projections.back().token));
-    EXPECT_EQ(rc::Status::Unverified, doc.projections.back().status);
+    EXPECT_TRUE(doc.records[2].directive.Is<rc::Unknown>());
+    ASSERT_EQ(6U, doc.operands.size());
+    EXPECT_TRUE(doc.records[1].directive.Get<rc::Options>().entries[0].Is<rc::UnknownOption>());
+    EXPECT_TRUE(doc.records[3].directive.Get<rc::Sortlist>().entries[0].Is<rc::UnverifiedIpv6Sort>());
+    EXPECT_EQ("a\r", Text(doc, doc.records[6].directive.Get<rc::Search>().names.back()));
 }
 
 TEST(ResolvConfTest, MalformedKnownInputFailsNextAndIsSticky)
@@ -170,40 +204,46 @@ TEST(ResolvConfTest, MalformedKnownInputFailsNextAndIsSticky)
     EXPECT_EQ(EIO, later.Finish(ComplianceEngine::Error("late Close failure", EIO)).Error().code);
 }
 
+template <typename T>
+bool Matches(const rc::DirectiveValue& value)
+{
+    return value.Is<T>();
+}
+
 TEST(ResolvConfTest, Glibc239LexerPreservesIgnoredTextAndExactOperands)
 {
     struct Case
     {
         std::string line;
-        rc::Directive directive;
+        bool (*matches)(const rc::DirectiveValue&);
         std::vector<std::string> operands;
     };
     const std::vector<Case> cases = {
-        {"# first-column", rc::Directive::Comment, {}},
-        {"; first-column", rc::Directive::Comment, {}},
-        {" # indented", rc::Directive::Unknown, {}},
-        {"\tnameserver 192.0.2.1", rc::Directive::Unknown, {}},
-        {" nameserver 192.0.2.1", rc::Directive::Unknown, {}},
-        {"nameserver", rc::Directive::Unknown, {}},
-        {"nameserver\r 192.0.2.1", rc::Directive::Unknown, {}},
-        {"nameserverx 192.0.2.1", rc::Directive::Unknown, {}},
-        {"domain", rc::Directive::Unknown, {}},
-        {"search", rc::Directive::Unknown, {}},
-        {"sortlist", rc::Directive::Unknown, {}},
-        {"options", rc::Directive::Unknown, {}},
-        {"nameserver 192.0.2.1 # trailing; unknown", rc::Directive::Nameserver, {"192.0.2.1"}},
-        {"domain example.org # trailing", rc::Directive::Domain, {"example.org"}},
-        {"domain example.org;attached trailing", rc::Directive::Domain, {"example.org;attached"}},
-        {"search one # two; three\r", rc::Directive::Search, {"one", "#", "two;", "three\r"}},
-        {"sortlist 192.0.2.0&255.255.255.0 198.51.100.0/255.255.255.0;end 203.0.113.0", rc::Directive::Sortlist,
+        {"# first-column", &Matches<rc::Comment>, {}},
+        {"; first-column", &Matches<rc::Comment>, {}},
+        {" # indented", &Matches<rc::Unknown>, {}},
+        {"\tnameserver 192.0.2.1", &Matches<rc::Unknown>, {}},
+        {" nameserver 192.0.2.1", &Matches<rc::Unknown>, {}},
+        {"nameserver", &Matches<rc::Unknown>, {}},
+        {"nameserver\r 192.0.2.1", &Matches<rc::Unknown>, {}},
+        {"nameserverx 192.0.2.1", &Matches<rc::Unknown>, {}},
+        {"domain", &Matches<rc::Unknown>, {}},
+        {"search", &Matches<rc::Unknown>, {}},
+        {"sortlist", &Matches<rc::Unknown>, {}},
+        {"options", &Matches<rc::Unknown>, {}},
+        {"nameserver 192.0.2.1 # trailing; unknown", &Matches<rc::Nameserver>, {"192.0.2.1"}},
+        {"domain example.org # trailing", &Matches<rc::Domain>, {"example.org"}},
+        {"domain example.org;attached trailing", &Matches<rc::Domain>, {"example.org;attached"}},
+        {"search one # two; three\r", &Matches<rc::Search>, {"one", "#", "two;", "three\r"}},
+        {"sortlist 192.0.2.0&255.255.255.0 198.51.100.0/255.255.255.0;end 203.0.113.0", &Matches<rc::Sortlist>,
             {"192.0.2.0&255.255.255.0", "198.51.100.0/255.255.255.0"}},
-        {"sortlist 192.0.2.0 ; comment 198.51.100.0", rc::Directive::Sortlist, {"192.0.2.0"}},
-        {"options rotate#x ndots:2 # timeout:3", rc::Directive::Options, {"rotate#x", "ndots:2", "#", "timeout:3"}},
-        {"options rotate;tail no_tld_query:extra", rc::Directive::Options, {"rotate;tail", "no_tld_query:extra"}},
-        {"options debug inet6 mystery", rc::Directive::Options, {"debug", "inet6", "mystery"}},
-        {"options \t", rc::Directive::Options, {}},
-        {"domain \t", rc::Directive::Domain, {}},
-        {"search \t", rc::Directive::Search, {}},
+        {"sortlist 192.0.2.0 ; comment 198.51.100.0", &Matches<rc::Sortlist>, {"192.0.2.0"}},
+        {"options rotate#x ndots:2 # timeout:3", &Matches<rc::Options>, {"rotate#x", "ndots:2", "#", "timeout:3"}},
+        {"options rotate;tail no_tld_query:extra", &Matches<rc::Options>, {"rotate;tail", "no_tld_query:extra"}},
+        {"options debug inet6 mystery", &Matches<rc::Options>, {"debug", "inet6", "mystery"}},
+        {"options \t", &Matches<rc::Options>, {}},
+        {"domain \t", &Matches<rc::Domain>, {}},
+        {"search \t", &Matches<rc::Search>, {}},
     };
     for (const auto& fixture : cases)
     {
@@ -213,15 +253,16 @@ TEST(ResolvConfTest, Glibc239LexerPreservesIgnoredTextAndExactOperands)
         ASSERT_TRUE(entry.HasValue());
         EXPECT_EQ("fixture", entry.Value().source);
         EXPECT_EQ(fixture.line, entry.Value().text);
-        EXPECT_EQ(fixture.directive, entry.Value().record.directive);
-        ASSERT_EQ(fixture.operands.size(), entry.Value().projections.size());
+        EXPECT_TRUE(fixture.matches(entry.Value().directive));
+        const auto operands = Operands(entry.Value());
+        ASSERT_EQ(fixture.operands.size(), operands.size());
         for (std::size_t i = 0; i < fixture.operands.size(); ++i)
         {
-            const auto span = entry.Value().projections[i].token;
+            const auto span = operands[i];
             EXPECT_EQ(1U, span.line);
             EXPECT_EQ(fixture.operands[i], entry.Value().text.substr(span.column - 1, span.length));
         }
-        if (fixture.directive == rc::Directive::Nameserver && !fixture.operands.empty())
+        if (entry.Value().directive.Is<rc::Nameserver>() && !fixture.operands.empty())
         {
             ASSERT_GT(entry.Value().record.tokens.size(), 2U);
             const auto trailing = entry.Value().record.tokens[2];
@@ -229,19 +270,20 @@ TEST(ResolvConfTest, Glibc239LexerPreservesIgnoredTextAndExactOperands)
         }
         if (fixture.line == "options rotate#x ndots:2 # timeout:3")
         {
-            EXPECT_EQ(rc::ValueKind::FlagOption, entry.Value().projections[0].kind);
-            EXPECT_EQ(rc::ValueKind::NumericOption, entry.Value().projections[1].kind);
-            EXPECT_EQ(2U, entry.Value().projections[1].number);
-            EXPECT_EQ(rc::ValueKind::UnknownOption, entry.Value().projections[2].kind);
-            EXPECT_EQ(rc::ValueKind::NumericOption, entry.Value().projections[3].kind);
+            const auto& options = entry.Value().directive.Get<rc::Options>().entries;
+            EXPECT_TRUE(options[0].Is<rc::FlagOption>());
+            EXPECT_EQ(2U, options[1].Get<rc::NumericOption>().value);
+            EXPECT_TRUE(options[2].Is<rc::UnknownOption>());
+            EXPECT_TRUE(options[3].Is<rc::NumericOption>());
         }
         if (fixture.line == "options debug inet6 mystery")
         {
-            for (const auto& projection : entry.Value().projections)
-                EXPECT_EQ(rc::ValueKind::UnknownOption, projection.kind);
+            for (const auto& option : entry.Value().directive.Get<rc::Options>().entries)
+                EXPECT_TRUE(option.Is<rc::UnknownOption>());
         }
-        if (fixture.directive == rc::Directive::Sortlist && !fixture.operands.empty())
-            EXPECT_EQ(fixture.operands.front().find_first_of("&/") != std::string::npos, entry.Value().projections.front().hasMask);
+        if (entry.Value().directive.Is<rc::Sortlist>() && !fixture.operands.empty())
+            EXPECT_EQ(fixture.operands.front().find_first_of("&/") != std::string::npos,
+                entry.Value().directive.Get<rc::Sortlist>().entries.front().Get<rc::Ipv4Sort>().mask.HasValue());
         EXPECT_TRUE(parser.Finish(rc::Acquisition::EofAndClosed).HasValue());
     }
 }
@@ -300,17 +342,18 @@ TEST(ResolvConfTest, IncrementalEvidenceOwnsBytesAndDoesNotAccumulateInParser)
     rc::Parser parser("src");
     auto first = parser.Next("nameserver 192.0.2.1  ");
     ASSERT_TRUE(first.HasValue());
-    ASSERT_EQ(1U, first.Value().projections.size());
+    ASSERT_TRUE(first.Value().directive.Is<rc::Nameserver>());
     EXPECT_EQ("src", first.Value().source);
-    EXPECT_EQ("192.0.2.1", first.Value().text.substr(first.Value().projections[0].token.column - 1, first.Value().projections[0].token.length));
+    EXPECT_EQ("192.0.2.1", first.Value().text.substr(first.Value().directive.Get<rc::Nameserver>().token.column - 1,
+                               first.Value().directive.Get<rc::Nameserver>().token.length));
     auto unknown = parser.Next("mystery \xFF");
     ASSERT_TRUE(unknown.HasValue());
-    EXPECT_EQ(rc::Directive::Unknown, unknown.Value().record.directive);
+    EXPECT_TRUE(unknown.Value().directive.Is<rc::Unknown>());
     EXPECT_EQ(2U, unknown.Value().record.line);
     EXPECT_EQ(1U, unknown.Value().record.tokens.front().column);
     EXPECT_EQ("nameserver 192.0.2.1  ", first.Value().text); // Not overwritten by Next.
     EXPECT_EQ("src", first.Value().source);
-    EXPECT_EQ(rc::Status::Parsed, first.Value().projections[0].status);
+    EXPECT_TRUE(first.Value().directive.Get<rc::Nameserver>().address.Is<rc::Ipv4>());
     EXPECT_TRUE(parser.Finish(rc::Acquisition::EofAndClosed).HasValue());
 
     rc::Entry retained;
@@ -322,7 +365,8 @@ TEST(ResolvConfTest, IncrementalEvidenceOwnsBytesAndDoesNotAccumulateInParser)
         ASSERT_TRUE(transient.Finish(rc::Acquisition::EofAndClosed).HasValue());
     }
     EXPECT_EQ("persist", retained.source);
-    EXPECT_EQ("rotate", retained.text.substr(retained.projections[0].token.column - 1, retained.projections[0].token.length));
+    EXPECT_EQ("rotate", retained.text.substr(retained.directive.Get<rc::Options>().entries[0].Get<rc::FlagOption>().token.column - 1,
+                            retained.directive.Get<rc::Options>().entries[0].Get<rc::FlagOption>().token.length));
 
     // Each result can be destroyed immediately. Thousands of entries do not
     // require a caller-owned vector or a document buffered by the parser.
@@ -607,11 +651,11 @@ TEST(ResolvConfTest, CumulativeLimitsAndFailureAreStickyAfterEarlierEvidence)
     ASSERT_TRUE(first.HasValue());
     auto second = parser.Next("y");
     ASSERT_TRUE(second.HasValue());
-    EXPECT_EQ(rc::Directive::Unknown, first.Value().record.directive);
-    EXPECT_EQ(rc::Directive::Unknown, second.Value().record.directive);
+    EXPECT_TRUE(first.Value().directive.Is<rc::Unknown>());
+    EXPECT_TRUE(second.Value().directive.Is<rc::Unknown>());
     const auto failure = parser.Next("z");
     ASSERT_TRUE(failure.HasValue());
-    EXPECT_EQ(rc::Directive::Unknown, failure.Value().record.directive);
+    EXPECT_TRUE(failure.Value().directive.Is<rc::Unknown>());
     const auto overflow = parser.Next("x");
     ASSERT_FALSE(overflow.HasValue());
     EXPECT_EQ(E2BIG, overflow.Error().code);

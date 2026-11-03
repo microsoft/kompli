@@ -701,3 +701,76 @@ TEST(VariantTest, MoveOnlyResourceOwnership)
     EXPECT_EQ(1, deletions);
 }
 } // namespace
+
+namespace
+{
+struct MutableVisit
+{
+    int operator()(int& value) const
+    {
+        ++value;
+        return value;
+    }
+    int operator()(char& value) const
+    {
+        value = 'z';
+        return value;
+    }
+};
+struct ConstVisit
+{
+    int operator()(const int& value) const
+    {
+        return value + 1;
+    }
+    int operator()(const char& value) const
+    {
+        return value;
+    }
+};
+struct ReferenceVisit
+{
+    int operator()(int& value) const
+    {
+        value += 2;
+        return value;
+    }
+    int operator()(const long& value) const
+    {
+        return static_cast<int>(value);
+    }
+};
+struct VoidVisit
+{
+    void operator()(int& value) const
+    {
+        value = 42;
+    }
+    void operator()(char& value) const
+    {
+        value = 'x';
+    }
+};
+} // namespace
+
+TEST(VariantTest, ExhaustiveVisitDispatchesMutableConstAndReferenceAlternatives)
+{
+    Scalar number(InPlaceType<int>{}, 3);
+    Scalar letter(InPlaceType<char>{}, 'a');
+    EXPECT_EQ(4, number.Visit<int>(MutableVisit{}));
+    EXPECT_EQ(static_cast<int>('z'), letter.Visit<int>(MutableVisit{}));
+    const Scalar& constNumber = number;
+    const Scalar& constLetter = letter;
+    EXPECT_EQ(5, constNumber.Visit<int>(ConstVisit{}));
+    EXPECT_EQ(static_cast<int>('z'), constLetter.Visit<int>(ConstVisit{}));
+    number.Visit<void>(VoidVisit{});
+    EXPECT_EQ(42, number.Get<int>());
+    int referent = 5;
+    const long immutable = 9;
+    Variant<int&, const long&> mutableReference(InPlaceType<int&>{}, referent);
+    Variant<int&, const long&> constReference(InPlaceType<const long&>{}, immutable);
+    const auto& constView = mutableReference;
+    EXPECT_EQ(7, constView.Visit<int>(ReferenceVisit{}));
+    EXPECT_EQ(7, referent); // A const Variant does not const-qualify a referent.
+    EXPECT_EQ(9, constReference.Visit<int>(ReferenceVisit{}));
+}

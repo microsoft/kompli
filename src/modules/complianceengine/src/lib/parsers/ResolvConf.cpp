@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "ResolvConf.h"
+#include "ResolvConf.hpp"
 
 #include <StringTools.h>
 #include <algorithm>
@@ -35,7 +35,8 @@ std::string Text(const Entry& entry, Span span)
     return entry.text.substr(span.column - 1, span.length);
 }
 
-bool Address(const std::string& text, int family, std::array<unsigned char, 16>& bytes)
+template <std::size_t N>
+bool ParseAddress(const std::string& text, int family, std::array<unsigned char, N>& bytes)
 {
     // inet_pton takes a C string. Never allow an embedded NUL to turn a
     // malformed token into an apparently valid address prefix.
@@ -66,91 +67,71 @@ unsigned int NumericCap(const std::string& name)
     return 0;
 }
 
-Result<bool> Project(Entry& entry, const std::string& source, Directive directive, Span span)
+Result<Address> ParseHost(const std::string& text, const std::string& source, const char* error)
+{
+    Ipv4 ipv4;
+    if (ParseAddress(text, AF_INET, ipv4.bytes))
+        return Address(InPlaceType<Ipv4>{}, std::move(ipv4));
+    Ipv6 ipv6;
+    if (ParseAddress(text, AF_INET6, ipv6.bytes))
+        return Address(InPlaceType<Ipv6>{}, std::move(ipv6));
+    return Malformed(source, error);
+}
+
+Result<SortEntry> ParseSort(const Entry& entry, const std::string& source, Span span)
 {
     const auto value = Text(entry, span);
-    Projection projection;
-    projection.token = span;
+    const auto separator = value.find_first_of("/&");
+    const auto host = value.substr(0, separator);
+    const bool hasMask = separator != std::string::npos;
+    const auto mask = hasMask ? value.substr(separator + 1) : std::string();
+    if (hasMask && (mask.empty() || mask.find_first_of("/&") != std::string::npos))
+        return Malformed(source, "invalid sortlist address or netmask");
+    Ipv4 ipv4;
+    if (ParseAddress(host, AF_INET, ipv4.bytes))
+    {
+        Ipv4Sort item{span, ipv4, {}};
+        if (hasMask)
+        {
+            Ipv4 decoded;
+            if (!ParseAddress(mask, AF_INET, decoded.bytes))
+                return Malformed(source, "invalid sortlist address or netmask");
+            item.mask = decoded;
+        }
+        return SortEntry(InPlaceType<Ipv4Sort>{}, std::move(item));
+    }
+    Ipv6 ipv6;
+    if (ParseAddress(host, AF_INET6, ipv6.bytes))
+    {
+        // glibc/manual do not establish IPv6 sortlist pair semantics; the
+        // previous parser accepted any nonempty mask without decoding it.
+        UnverifiedIpv6Sort item{span, ipv6, {}};
+        if (hasMask)
+            item.mask = Span(span.line, span.column + separator + 1, mask.size());
+        return SortEntry(InPlaceType<UnverifiedIpv6Sort>{}, std::move(item));
+    }
+    return Malformed(source, "invalid sortlist address or netmask");
+}
 
-    if (directive == Directive::Nameserver)
+Result<Option> ParseOption(const Entry& entry, const std::string& source, Span span)
+{
+    const auto value = Text(entry, span);
+    const auto colon = value.find(':');
+    const auto cap = NumericCap(value.substr(0, colon));
+    if (cap)
     {
-        projection.kind = ValueKind::Nameserver;
-        if (Address(value, AF_INET, projection.address))
-        {
-            projection.addressBytes = 4;
-            projection.status = Status::Parsed;
-        }
-        else if (Address(value, AF_INET6, projection.address))
-        {
-            projection.addressBytes = 16;
-            projection.status = Status::Parsed;
-        }
-        else
-            return Malformed(source, "invalid nameserver address");
+        const auto number = colon == std::string::npos ? std::string() : value.substr(colon + 1);
+        bool digits = !number.empty();
+        for (const char digit : number)
+            digits = digits && digit >= '0' && digit <= '9';
+        const auto parsed = digits ? TryStringToUint(number) : Result<unsigned int>(Error("invalid digits", EINVAL));
+        if (!parsed.HasValue())
+            return Malformed(source, "invalid numeric option");
+        return Option(InPlaceType<NumericOption>{}, NumericOption{span, parsed.Value(), cap});
     }
-    else if (directive == Directive::Search || directive == Directive::Domain)
-    {
-        projection.kind = directive == Directive::Search ? ValueKind::SearchName : ValueKind::DomainName;
-        projection.status = Status::Unverified; // Domain-name byte grammar is not specified by the manual.
-    }
-    else if (directive == Directive::Sortlist)
-    {
-        projection.kind = ValueKind::SortPair;
-        const auto separator = value.find_first_of("/&");
-        const auto host = value.substr(0, separator);
-        const auto mask = separator == std::string::npos ? std::string() : value.substr(separator + 1);
-        projection.hasMask = separator != std::string::npos;
-        if (projection.hasMask && (mask.empty() || mask.find_first_of("/&") != std::string::npos))
-            return Malformed(source, "invalid sortlist address or netmask");
-        if (Address(host, AF_INET, projection.address) && (!projection.hasMask || Address(mask, AF_INET, projection.mask)))
-        {
-            projection.addressBytes = 4;
-            projection.status = Status::Parsed;
-        }
-        else if (Address(host, AF_INET6, projection.address))
-        {
-            // The manual's sortlist example is IPv4; do not assert IPv6
-            // pair semantics or synthesize a natural netmask.
-            projection.status = Status::Unverified;
-        }
-        else
-            return Malformed(source, "invalid sortlist address or netmask");
-    }
-    else // options
-    {
-        const auto colon = value.find(':');
-        const auto name = value.substr(0, colon);
-        const auto cap = NumericCap(name);
-        if (cap)
-        {
-            projection.kind = ValueKind::NumericOption;
-            projection.documentedCap = cap;
-            const auto number = colon == std::string::npos ? std::string() : value.substr(colon + 1);
-            bool digits = !number.empty();
-            for (const char digit : number)
-                digits = digits && digit >= '0' && digit <= '9';
-            const auto parsed = digits ? TryStringToUint(number) : Result<unsigned int>(Error("invalid digits", EINVAL));
-            if (parsed.HasValue())
-            {
-                projection.number = parsed.Value();
-                projection.status = Status::Parsed;
-            }
-            else
-                return Malformed(source, "invalid numeric option");
-        }
-        else if (Flag(value))
-        {
-            projection.kind = ValueKind::FlagOption;
-            projection.status = Status::Parsed; // Availability/deprecation NOT resolved.
-        }
-        else
-        {
-            projection.kind = ValueKind::UnknownOption;
-            projection.status = Status::Unknown;
-        }
-    }
-    entry.projections.push_back(std::move(projection));
-    return true;
+    if (Flag(value))
+        return Option(InPlaceType<FlagOption>{}, FlagOption{span});
+    return Option(InPlaceType<UnknownOption>{}, UnknownOption{span});
 }
 
 Result<bool> Analyze(Entry& entry, const Limits& limits, const std::string& source, std::size_t& tokenCount)
@@ -159,14 +140,13 @@ Result<bool> Analyze(Entry& entry, const Limits& limits, const std::string& sour
     const auto& line = entry.text;
     // Every supplied byte is retained, including bytes not given a token.
     // Unknown byte grammar remains in the raw text without asserting support.
-    // NUL cannot be a valid token or comment byte.
     if (line.find('\0') != std::string::npos)
         return Malformed(source, "embedded NUL");
     if (line.empty())
         return true;
     if (line[0] == '#' || line[0] == ';')
     {
-        record.directive = Directive::Comment;
+        entry.directive = DirectiveValue(InPlaceType<Comment>{}, Comment{});
         return true;
     }
     for (std::size_t i = 0; i < line.size();)
@@ -184,53 +164,77 @@ Result<bool> Analyze(Entry& entry, const Limits& limits, const std::string& sour
         record.tokens.push_back({record.line, start + 1, i - start});
         ++tokenCount;
     }
-    // glibc 2.39's MATCH requires an exact first-column keyword immediately
-    // followed by a literal space or tab. Indented and bare keywords (and
-    // CR-separated spellings) are unmatched, not malformed directives.
+    // glibc 2.39 MATCH: exact first-column keyword followed by space/tab.
+    // Indented, bare, and CR-separated spellings remain unknown evidence.
     if (record.tokens.empty() || Separator(line[0]))
     {
-        record.directive = Directive::Unknown;
+        entry.directive = DirectiveValue(InPlaceType<Unknown>{}, Unknown{});
         return true;
     }
     const auto key = Text(entry, record.tokens.front());
-    if (key == "nameserver" && key.size() < line.size() && Separator(line[key.size()]))
-        record.directive = Directive::Nameserver;
-    else if (key == "search" && key.size() < line.size() && Separator(line[key.size()]))
-        record.directive = Directive::Search;
-    else if (key == "domain" && key.size() < line.size() && Separator(line[key.size()]))
-        record.directive = Directive::Domain;
-    else if (key == "sortlist" && key.size() < line.size() && Separator(line[key.size()]))
-        record.directive = Directive::Sortlist;
-    else if (key == "options" && key.size() < line.size() && Separator(line[key.size()]))
-        record.directive = Directive::Options;
-    else
+    if (!(key.size() < line.size() && Separator(line[key.size()])))
     {
-        record.directive = Directive::Unknown;
+        entry.directive = DirectiveValue(InPlaceType<Unknown>{}, Unknown{});
         return true;
     }
-    if (record.directive == Directive::Nameserver && record.tokens.size() == 1)
-        return Malformed(source, "missing directive operand");
-    // nameserver and domain read only the first operand; ignored trailing
-    // words remain in record.tokens and entry.text as source evidence.
-    const auto end = (record.directive == Directive::Nameserver || record.directive == Directive::Domain) ? std::min(record.tokens.size(), std::size_t(2)) :
-                                                                                                            record.tokens.size();
-    for (std::size_t i = 1; i < end; ++i)
+    if (key == "nameserver")
     {
-        if (record.directive == Directive::Sortlist)
+        if (record.tokens.size() == 1)
+            return Malformed(source, "missing directive operand");
+        const auto span = record.tokens[1];
+        auto address = ParseHost(Text(entry, span), source, "invalid nameserver address");
+        if (!address.HasValue())
+            return address.Error();
+        entry.directive = DirectiveValue(InPlaceType<Nameserver>{}, Nameserver{span, std::move(address.Value())});
+        return true;
+    }
+    if (key == "domain")
+    {
+        entry.directive = DirectiveValue(InPlaceType<Domain>{}, Domain{record.tokens.size() > 1 ? Optional<Span>(record.tokens[1]) : Optional<Span>()});
+        return true;
+    }
+    if (key == "search")
+    {
+        Search search;
+        search.names.assign(record.tokens.begin() + 1, record.tokens.end());
+        entry.directive = DirectiveValue(InPlaceType<Search>{}, std::move(search));
+        return true;
+    }
+    if (key == "sortlist")
+    {
+        Sortlist sortlist;
+        for (std::size_t i = 1; i < record.tokens.size(); ++i)
         {
             const auto semicolon = Text(entry, record.tokens[i]).find(';');
             if (semicolon == 0)
                 break;
             if (semicolon != std::string::npos)
                 record.tokens[i].length = semicolon;
+            auto item = ParseSort(entry, source, record.tokens[i]);
+            if (!item.HasValue())
+                return item.Error();
+            sortlist.entries.push_back(std::move(item.Value()));
+            const auto tokenEnd = record.tokens[i].column - 1 + record.tokens[i].length;
+            if (tokenEnd < line.size() && line[tokenEnd] == ';')
+                break;
         }
-        auto projected = Project(entry, source, record.directive, record.tokens[i]);
-        if (!projected.HasValue())
-            return projected.Error();
-        const auto tokenEnd = record.tokens[i].column - 1 + record.tokens[i].length;
-        if (record.directive == Directive::Sortlist && tokenEnd < line.size() && line[tokenEnd] == ';')
-            break;
+        entry.directive = DirectiveValue(InPlaceType<Sortlist>{}, std::move(sortlist));
+        return true;
     }
+    if (key == "options")
+    {
+        Options options;
+        for (std::size_t i = 1; i < record.tokens.size(); ++i)
+        {
+            auto option = ParseOption(entry, source, record.tokens[i]);
+            if (!option.HasValue())
+                return option.Error();
+            options.entries.push_back(std::move(option.Value()));
+        }
+        entry.directive = DirectiveValue(InPlaceType<Options>{}, std::move(options));
+        return true;
+    }
+    entry.directive = DirectiveValue(InPlaceType<Unknown>{}, Unknown{});
     return true;
 }
 } // namespace

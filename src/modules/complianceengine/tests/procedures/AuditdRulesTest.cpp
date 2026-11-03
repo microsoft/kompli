@@ -8,7 +8,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <map>
-#include <parsers/LoginDefs.h>
+#include <parsers/LoginDefs.hpp>
 #include <string>
 #include <unistd.h>
 #include <vector>

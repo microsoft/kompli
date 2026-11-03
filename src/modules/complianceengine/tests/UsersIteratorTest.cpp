@@ -5,7 +5,7 @@
 #include <Users.h>
 #include <UsersIterator.h>
 #include <gtest/gtest.h>
-#include <parsers/LoginDefs.h>
+#include <parsers/LoginDefs.hpp>
 
 using ComplianceEngine::Error;
 using ComplianceEngine::GetUidMin;

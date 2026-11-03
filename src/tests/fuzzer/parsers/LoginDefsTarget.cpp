@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include <parsers/LoginDefs.h>
+#include <parsers/LoginDefs.hpp>
 
 #include <Optional.h>
 #include <cstddef>

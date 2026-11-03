@@ -81,6 +81,8 @@ expect_variant_compile_failure(21 "cv-mismatched reference Is" "Variant query re
 expect_variant_compile_failure(22 "cv-mismatched reference As" "Variant query requires the exact listed cv-qualified type")
 expect_variant_compile_failure(23 "unlisted value Get" "Variant query requires a listed alternative")
 expect_variant_compile_failure(24 "cv-mismatched value Get" "Variant query requires the exact listed cv-qualified type")
+expect_variant_compile_failure(25 "non-exhaustive Visit" "no matching function")
+expect_variant_compile_failure(26 "inconsistent Visit result" "Variant visitor must handle every alternative with the declared return type")
 
 # Independently check each class's copy operations and unsupported payloads
 # against its own valid C++11 translation unit before accepting failures.
@@ -226,7 +228,6 @@ add_executable(complianceenginetests
     RangesTest.cpp
     VariableResolverTest.cpp
     parsers/LoginDefsTest.cpp
-    parsers/NameserverSelectionTest.cpp
     parsers/ResolvConfTest.cpp
     RegexFallbackTest.cpp
     RegexTest.cpp

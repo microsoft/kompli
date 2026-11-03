@@ -33,6 +33,21 @@ struct ThrowingDestructor
     ~ThrowingDestructor() noexcept(false);
 };
 
+struct Missing
+{
+};
+
+struct IntOnly
+{
+    int operator()(int) const;
+};
+
+struct Both
+{
+    int operator()(int) const;
+    long operator()(Missing) const;
+};
+
 struct Base
 {
 };
@@ -48,6 +63,7 @@ void ValidControl()
     (void)value.Is<int>();
     (void)value.Get<int>();
     (void)As<int>(value);
+    (void)value.Visit<int>(IntOnly{});
     const Variant<int, char>& constView = value;
     (void)As<int>(constView);
     (void)As<int>(std::move(value));
@@ -162,6 +178,18 @@ void CvMismatchedValueGet()
 {
     Variant<int, char> value(InPlaceType<int>{}, 1);
     (void)value.Get<const int>();
+}
+#elif VARIANT_COMPILE_CASE == 25
+void MissingVisitBranch()
+{
+    Variant<int, Missing> value(InPlaceType<int>{}, 1);
+    (void)value.Visit<int>(IntOnly{});
+}
+#elif VARIANT_COMPILE_CASE == 26
+void InconsistentVisitResult()
+{
+    Variant<int, Missing> value(InPlaceType<int>{}, 1);
+    (void)value.Visit<int>(Both{});
 }
 #else
 #error Unknown Variant compile case

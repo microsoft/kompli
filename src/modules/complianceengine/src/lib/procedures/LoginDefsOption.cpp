@@ -9,7 +9,7 @@
 #include <StringTools.h>
 #include <TypedComparison.h>
 #include <climits>
-#include <parsers/LoginDefs.h>
+#include <parsers/LoginDefs.hpp>
 #include <string>
 #include <utility>
 

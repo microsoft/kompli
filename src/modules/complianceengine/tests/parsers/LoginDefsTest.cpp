@@ -3,7 +3,7 @@
 
 #include <cerrno>
 #include <gtest/gtest.h>
-#include <parsers/LoginDefs.h>
+#include <parsers/LoginDefs.hpp>
 #include <string>
 #include <utility>
 

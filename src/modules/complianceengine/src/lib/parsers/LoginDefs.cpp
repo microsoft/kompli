@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "LoginDefs.h"
+#include "LoginDefs.hpp"
 
 #include <StringTools.h>
 #include <cerrno>

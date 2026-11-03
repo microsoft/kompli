@@ -149,6 +149,30 @@ struct Dispatch<Index, Last>
         As<Stored>(storage).~Stored();
     }
 };
+// The visitor is checked for *every* alternative at instantiation, even
+// when the currently active index would take a different branch.
+template <typename R, typename Visitor, typename Pointer, std::size_t Index, typename... Types>
+struct VisitDispatch;
+
+template <typename R, typename Visitor, typename Pointer, std::size_t Index, typename First, typename... Rest>
+struct VisitDispatch<R, Visitor, Pointer, Index, First, Rest...>
+{
+    static R Apply(std::size_t active, Pointer storage, Visitor& visitor)
+    {
+        if (active == Index)
+            return visitor(Storage<First>::Get(storage));
+        return VisitDispatch<R, Visitor, Pointer, Index + 1, Rest...>::Apply(active, storage, visitor);
+    }
+};
+
+template <typename R, typename Visitor, typename Pointer, std::size_t Index, typename Last>
+struct VisitDispatch<R, Visitor, Pointer, Index, Last>
+{
+    static R Apply(std::size_t, Pointer storage, Visitor& visitor)
+    {
+        return visitor(Storage<Last>::Get(storage));
+    }
+};
 } // namespace VariantDetail
 
 template <typename... Alternatives>
@@ -240,6 +264,25 @@ public:
     const T&& Get() const&&
     {
         return std::forward<const T>(this->template Get<T>());
+    }
+
+    // Explicit R fixes one return type for every branch (including void).
+    // Passing a single overloaded function object makes new alternatives a
+    // compile-time obligation. Dispatch does not inspect an inactive value.
+    template <typename R, typename Visitor>
+    R Visit(Visitor&& visitor) &
+    {
+        static_assert(TypeTraits::All<std::is_same<R, decltype(std::declval<Visitor&>()(VariantDetail::Storage<Alternatives>::Get(std::declval<void*>())))>::value...>::value,
+            "Variant visitor must handle every alternative with the declared return type");
+        return VariantDetail::VisitDispatch<R, Visitor, void*, 0, Alternatives...>::Apply(mIndex, mStorage, visitor);
+    }
+
+    template <typename R, typename Visitor>
+    R Visit(Visitor&& visitor) const&
+    {
+        static_assert(TypeTraits::All<std::is_same<R, decltype(std::declval<Visitor&>()(VariantDetail::Storage<Alternatives>::Get(std::declval<const void*>())))>::value...>::value,
+            "Variant visitor must handle every alternative with the declared return type");
+        return VariantDetail::VisitDispatch<R, Visitor, const void*, 0, Alternatives...>::Apply(mIndex, mStorage, visitor);
     }
 
     template <typename T>

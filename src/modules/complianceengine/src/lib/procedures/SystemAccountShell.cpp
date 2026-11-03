@@ -6,7 +6,7 @@
 #include <Result.h>
 #include <UsersIterator.h>
 #include <fstream>
-#include <parsers/LoginDefs.h>
+#include <parsers/LoginDefs.hpp>
 #include <set>
 #include <shadow.h>
 #include <sys/stat.h>
