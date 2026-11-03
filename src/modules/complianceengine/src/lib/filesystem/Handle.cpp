@@ -5,7 +5,6 @@
 
 #include "ContextInterface.h"
 #include "FilesystemHelpers.hpp"
-#include "HandleActivationAccess.hpp"
 #include "Optional.h"
 #include "ProcfsDescriptorAccess.hpp"
 #include "ReadableFile.hpp"
@@ -20,13 +19,17 @@ namespace ComplianceEngine
 {
 namespace Filesystem
 {
-namespace Detail
-{
+using Detail::Descriptor;
+using Detail::LogSecondaryClose;
+using Detail::ProcfsDescriptorAccess;
+using Detail::SameIdentity;
+using Detail::SavedError;
+
 // The live O_PATH pin holds its kernel path (including mount). A verified
 // current-task procfd alias of that pin opens the same path; inode/type checks
 // still reject a wrong-object alias. Direct-test pins without an acquisition
 // mount retain the independent fdinfo comparisons below.
-static Result<bool> OpenAndVerifyAlias(const ContextInterface& context, const ProcfsDescriptorAccess& procfs, const Descriptor& pin,
+Result<bool> Handle::OpenAndVerifyAlias(const ContextInterface& context, const ProcfsDescriptorAccess& procfs, const Descriptor& pin,
     Descriptor& aliasOwner, const struct stat& before, bool directory, std::size_t fdinfoByteCap, const std::uint64_t* heldMount)
 {
     Result<std::uint64_t> pinnedMount = heldMount ? Result<std::uint64_t>(*heldMount) : procfs.ReadMountId(pin, fdinfoByteCap);
@@ -70,7 +73,7 @@ static Result<bool> OpenAndVerifyAlias(const ContextInterface& context, const Pr
     return true;
 }
 
-static Result<Descriptor> ActivateReadOnlyImpl(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory,
+Result<Descriptor> Handle::ActivateReadOnlyImpl(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory,
     std::size_t fdinfoByteCap, const std::uint64_t* heldMount)
 {
     if (!pin.HasValue())
@@ -148,17 +151,10 @@ static Result<Descriptor> ActivateReadOnlyImpl(const ContextInterface& context, 
     return std::move(aliasOwner);
 }
 
-Result<Descriptor> ActivateReadOnly(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory, std::size_t fdinfoByteCap)
+Result<Descriptor> Handle::ActivateReadOnly(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory, std::size_t fdinfoByteCap)
 {
     return ActivateReadOnlyImpl(context, pin, snapshot, directory, fdinfoByteCap, nullptr);
 }
-
-} // namespace Detail
-
-using Detail::Descriptor;
-using Detail::ProcfsDescriptorAccess;
-using Detail::SameIdentity;
-using Detail::SavedError;
 
 Handle::Handle(Detail::Descriptor&& descriptor, Type type, const struct stat& snapshot, std::size_t fdinfoBytes, std::uint64_t originalMount, std::uint64_t targetMount)
     : mDescriptor(std::move(descriptor)),
@@ -469,7 +465,7 @@ Result<ReadableFile> Handle::OpenReadOnly(ReadableFile::Policy policy) const
     {
         return Error("Read-only activation requires a regular file", EINVAL);
     }
-    auto activated = Detail::ActivateReadOnlyImpl(mDescriptor.Context(), mDescriptor, mAcquiredMetadata, false, mFdinfoBytes, &mTargetMount);
+    auto activated = ActivateReadOnlyImpl(mDescriptor.Context(), mDescriptor, mAcquiredMetadata, false, mFdinfoBytes, &mTargetMount);
     if (!activated.HasValue())
     {
         return std::move(activated).Error();
@@ -488,7 +484,7 @@ Result<DirectoryCursor> Handle::OpenChildren() const
         return Error("Directory enumeration requires a directory pin", EINVAL);
     }
     const auto& context = mDescriptor.Context();
-    auto activated = Detail::ActivateReadOnlyImpl(context, mDescriptor, mAcquiredMetadata, true, mFdinfoBytes, &mTargetMount);
+    auto activated = ActivateReadOnlyImpl(context, mDescriptor, mAcquiredMetadata, true, mFdinfoBytes, &mTargetMount);
     if (!activated.HasValue())
     {
         return std::move(activated).Error();

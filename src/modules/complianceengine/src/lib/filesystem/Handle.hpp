@@ -122,6 +122,14 @@ private:
     // Path owns composition. The checked acquisition methods below are
     // private: no consumer can supply an fd.
     friend class Path;
+    friend class ::ComplianceEngine::Tests::DescriptorTestAccess;
+    // Checked activation is wrapper-owned; test access is the only direct seam.
+    static Result<Detail::Descriptor> ActivateReadOnly(const ContextInterface& context, const Detail::Descriptor& pin, const struct stat& snapshot,
+        bool directory, std::size_t fdinfoByteCap);
+    static Result<Detail::Descriptor> ActivateReadOnlyImpl(const ContextInterface& context, const Detail::Descriptor& pin, const struct stat& snapshot,
+        bool directory, std::size_t fdinfoByteCap, const std::uint64_t* heldMount);
+    static Result<bool> OpenAndVerifyAlias(const ContextInterface& context, const Detail::ProcfsDescriptorAccess& procfs, const Detail::Descriptor& pin,
+        Detail::Descriptor& aliasOwner, const struct stat& before, bool directory, std::size_t fdinfoByteCap, const std::uint64_t* heldMount);
     Handle(Detail::Descriptor&& descriptor, Type type, const struct stat& snapshot, std::size_t fdinfoBytes, std::uint64_t originalMount, std::uint64_t targetMount);
     static Result<Handle> PinProcessRoot(const ContextInterface& context, std::size_t fdinfoBytes);
     static Result<bool> RecognizeAcceptedRoot(const Handle& acceptedRoot, const Handle& candidate, std::size_t fdinfoByteCap);

@@ -6,6 +6,7 @@
 
 #include "FilesystemPolicy.hpp"
 #include "Handle.hpp"
+#include "PathLinkAccess.hpp"
 #include "Variant.hpp"
 
 #include <cerrno>
@@ -310,6 +311,11 @@ public:
     }
 
 private:
+    friend class ::ComplianceEngine::Tests::DescriptorTestAccess;
+    // A held link pin is inspected only through Path or the focused test seam.
+    static Result<Detail::LinkTarget> ReadPinnedLink(const Detail::Descriptor& linkPin, std::size_t targetByteCap, std::size_t fdinfoByteCap);
+    static Result<Detail::LinkTarget> ReadVerifiedLinkText(const Detail::Descriptor& linkPin, const struct stat& before,
+        const Detail::ProcfsDescriptorAccess& procfs, std::size_t targetByteCap, std::size_t fdinfoByteCap);
     class Resolver;
     enum class ExtensionMode
     {

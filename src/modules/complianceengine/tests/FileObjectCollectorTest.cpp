@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#include <DescriptorTestAccess.h>
 #include <FileObjectCollector.h>
 #include <MockContext.h>
 #include <algorithm>
@@ -23,6 +24,7 @@
 
 using ComplianceEngine::FileCollectionPolicy;
 using ComplianceEngine::Filesystem::SymlinkPolicy;
+using ComplianceEngine::Tests::DescriptorTestAccess;
 using testing::_;
 using testing::NiceMock;
 namespace VariableResolution = ComplianceEngine::VariableResolution;
@@ -75,7 +77,7 @@ bool IsLinkPin(int fd, const std::string& path)
 bool IsAliasDirectory(int fd, const ComplianceEngine::ContextInterface& context)
 {
     struct stat held = {}, procfs = {};
-    const auto task = context.CurrentThreadId();
+    const auto task = DescriptorTestAccess::CurrentThreadId(context);
     if (!task.HasValue())
         return false;
     // The verified alias belongs to the current task, not /proc/self/fd.
@@ -99,19 +101,19 @@ TEST(FileObjectCollectorTest, TypedContextOpenRejectsUnsupportedProfilesWithoutD
     const auto missing = context.GetTempdirPath() + "/missing";
     using Profile = ComplianceEngine::ContextInterface::OpenProfile;
     static_assert(!std::is_convertible<int, Profile>::value, "Native open flags must not be a typed profile");
-    auto directory = context.OpenAbsolutePin(context.GetTempdirPath().c_str());
+    auto directory = DescriptorTestAccess::OpenAbsolutePin(context, context.GetTempdirPath().c_str());
     ASSERT_TRUE(directory.HasValue());
     EXPECT_CALL(context, OpenNativeAt(testing::_, testing::_, testing::_)).Times(0);
     for (const int flags : {O_WRONLY, O_RDWR, O_TRUNC, O_CREAT, O_TMPFILE})
     {
-        const auto rejected = context.OpenAt(directory.Value(), "missing", static_cast<Profile>(flags | 0x10000));
+        const auto rejected = DescriptorTestAccess::OpenAt(context, directory.Value(), "missing", static_cast<Profile>(flags | 0x10000));
         ASSERT_FALSE(rejected.HasValue());
         EXPECT_EQ(EINVAL, rejected.Error().code);
     }
     EXPECT_NE(0, ::access(missing.c_str(), F_OK));
 
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    const auto restricted = context.OpenAt(directory.Value(), "missing", Profile::ReadFdinfo);
+    const auto restricted = DescriptorTestAccess::OpenAt(context, directory.Value(), "missing", Profile::ReadFdinfo);
     ASSERT_FALSE(restricted.HasValue());
     EXPECT_EQ(EINVAL, restricted.Error().code);
 

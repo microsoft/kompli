@@ -10,6 +10,7 @@
 #include "Telemetry.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <dirent.h>
 #include <grp.h>
 #include <string>
@@ -20,14 +21,23 @@
 
 namespace ComplianceEngine
 {
+class ContextInterface;
+namespace Tests
+{
+class DescriptorTestAccess; // defined only in the test target
+}
 namespace Filesystem
 {
 namespace Detail
 {
 class Descriptor;
 class ProcfsDescriptorAccess;
+struct LinkTarget;
 } // namespace Detail
 class DirectoryCursor;
+class Handle;
+class Path;
+class ReadableFile;
 } // namespace Filesystem
 // A single network interface as reported by the system: its name and the IFF_* flags
 // bitmask (see <net/if.h>). Produced by ContextInterface::GetNetworkInterfaces().
@@ -61,6 +71,8 @@ public:
         Descriptor,
         DirectoryActivation
     };
+
+private:
     // Fail closed when the caller's native process or task identity cannot be read.
     Result<pid_t> CurrentProcessId() const;
     Result<pid_t> CurrentThreadId() const;
@@ -101,6 +113,7 @@ public:
     // Relinquish before the single native close attempt (even if it throws).
     int CloseOwnedDescriptor(Filesystem::Detail::Descriptor& owner) const;
 
+public:
     // POSIX directory and path operations. A null ReadDirectory result is EOF
     // only when errno is zero; callers clear errno immediately before reading.
     // Overrides must preserve errno on failure, including stat failures.
@@ -162,7 +175,14 @@ protected:
     virtual pid_t NativeThreadId() const;
 
 private:
+    friend class Filesystem::Detail::Descriptor;
     friend class Filesystem::Detail::ProcfsDescriptorAccess;
+    friend class Filesystem::Handle;
+    friend class Filesystem::Path;
+    friend class Filesystem::ReadableFile;
+    friend class Filesystem::DirectoryCursor;
+    friend class Tests::DescriptorTestAccess;
+
     // The only followed bootstrap link is /proc/self, reached from the
     // helper's verified procfs pin; generic OpenAt cannot request it.
     Result<Filesystem::Detail::Descriptor> OpenProcfsSelf(const Filesystem::Detail::Descriptor& proc) const&;
@@ -176,7 +196,6 @@ private:
     Result<bool> ReserveManagedDescriptor() const;
     void ReleaseManagedDescriptor() const noexcept;
     mutable ManagedDescriptorBudget mManagedDescriptors;
-    friend class Filesystem::DirectoryCursor;
     // The fdopendir transfer keeps the charge held by its input Descriptor;
     // closedir releases it exactly once even when the native close fails.
     int CloseOwnedDirectoryCursor(DIR* stream) const;

@@ -24,8 +24,6 @@ namespace Detail
 class ProcfsDescriptorAccess
 {
 public:
-    explicit ProcfsDescriptorAccess(const ContextInterface& context);
-    ProcfsDescriptorAccess(const ContextInterface&&) = delete;
     Result<bool> Open();
     Result<bool> Close();
     Result<std::uint64_t> ReadMountId(const Descriptor& descriptor, std::size_t byteCap) const;
@@ -44,6 +42,12 @@ public:
 
 private:
     friend class ::ComplianceEngine::ContextInterface;
+    friend class ::ComplianceEngine::Filesystem::Handle;
+    friend class ::ComplianceEngine::Filesystem::Path;
+    friend class ::ComplianceEngine::Tests::DescriptorTestAccess;
+    explicit ProcfsDescriptorAccess(const ContextInterface& context);
+    ProcfsDescriptorAccess(const ContextInterface&&) = delete;
+    static bool IsProcfsDirectory(const ContextInterface& context, const Descriptor& descriptor);
     bool VerifyRole(const ContextInterface& context, bool information) const;
     // Bootstrap owners are checked-closed during Open to keep the peak
     // descriptor count bounded. Ordinary callers cannot replace role pins.

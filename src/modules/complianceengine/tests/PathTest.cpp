@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#include <DescriptorTestAccess.h>
 #include <MockContext.h>
 #include <algorithm>
 #include <cerrno>
@@ -11,9 +12,7 @@
 #include <fcntl.h>
 #include <filesystem/FilesystemHelpers.hpp>
 #include <filesystem/Handle.hpp>
-#include <filesystem/HandleActivationAccess.hpp>
 #include <filesystem/Path.hpp>
-#include <filesystem/PathLinkAccess.hpp>
 #include <filesystem/ProcfsDescriptorAccess.hpp>
 #include <filesystem/ReadableFile.hpp>
 #include <fstream>
@@ -50,7 +49,7 @@ using ComplianceEngine::Filesystem::Detail::Descriptor;
 using ComplianceEngine::Filesystem::Detail::IsSingleChildComponent;
 using ComplianceEngine::Filesystem::Detail::ParseMountId;
 using ComplianceEngine::Filesystem::Detail::ProcfsDescriptorAccess;
-using ComplianceEngine::Filesystem::Detail::ReadPinnedLink;
+using ComplianceEngine::Tests::DescriptorTestAccess;
 using testing::_;
 using testing::NiceMock;
 
@@ -632,7 +631,7 @@ TEST_F(PathAliasTest, NestedLinkScheduleHasExactlySixtyFourFrameCeiling)
 // Exercise ownership on a context-acquired pin without native adoption.
 ComplianceEngine::Result<Descriptor> VerifiedTestDescriptor(const ComplianceEngine::ContextInterface& context)
 {
-    return context.OpenAbsolutePin("/proc");
+    return DescriptorTestAccess::OpenAbsolutePin(context, "/proc");
 }
 template <typename T>
 struct HasPublicNativeAdoption
@@ -901,7 +900,7 @@ TEST_F(PathAliasTest, ProcfsHelpersCloseCheckedOnceAndFirstFailureWins)
 TEST_F(PathAliasTest, ProcfsDescriptorAccessCloseAttemptsEveryOwnerAndDoesNotRetry)
 {
     const auto before = CountOpenDescriptors();
-    ComplianceEngine::Filesystem::Detail::ProcfsDescriptorAccess procfs(context);
+    auto procfs = DescriptorTestAccess::ProcfsAccess(context);
     ASSERT_TRUE(procfs.Open().HasValue());
     std::size_t attempted = 0;
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(3).WillRepeatedly([&](int descriptor) {
@@ -942,7 +941,7 @@ TEST_F(PathAliasTest, TemporaryCloseFailureIsNotRetriedAfterDescriptorReuse)
 
 TEST_F(PathAliasTest, DescriptorEmptyAfterMoveOrClose)
 {
-    auto opened = context.OpenAbsolutePin("/proc");
+    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, "/proc");
     ASSERT_TRUE(opened.HasValue());
     Descriptor owner(std::move(opened).Value());
     EXPECT_FALSE(opened.Value().HasValue());
@@ -954,10 +953,10 @@ TEST_F(PathAliasTest, DescriptorEmptyAfterMoveOrClose)
 TEST_F(PathAliasTest, ContextBoundaryRejectsEmptyAndForeignOwnersWithoutNativeCalls)
 {
     NiceMock<MockContext> foreign;
-    auto foreignOpened = foreign.OpenAbsolutePin("/");
+    auto foreignOpened = DescriptorTestAccess::OpenAbsolutePin(foreign, "/");
     ASSERT_TRUE(foreignOpened.HasValue());
     Descriptor owned = std::move(foreignOpened).Value();
-    Descriptor empty = context.EmptyDescriptor();
+    Descriptor empty = DescriptorTestAccess::EmptyDescriptor(context);
     EXPECT_CALL(context, OpenNativeAt(_, _, _)).Times(0);
     EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(0);
     EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
@@ -966,24 +965,24 @@ TEST_F(PathAliasTest, ContextBoundaryRejectsEmptyAndForeignOwnersWithoutNativeCa
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(0);
     struct stat snapshot = {};
     errno = 0;
-    EXPECT_EQ(-1, context.StatFile(empty, &snapshot));
+    EXPECT_EQ(-1, DescriptorTestAccess::StatFile(context, empty, &snapshot));
     EXPECT_EQ(EBADF, errno);
     errno = 0;
-    EXPECT_EQ(-1, context.ReadFile(empty, nullptr, 0));
+    EXPECT_EQ(-1, DescriptorTestAccess::ReadFile(context, empty, nullptr, 0));
     EXPECT_EQ(EBADF, errno);
-    EXPECT_EQ(EBADF, context.Duplicate(empty).Error().code);
-    EXPECT_EQ(EBADF, context.OpenAt(empty, "file", ComplianceEngine::ContextInterface::OpenProfile::PinChild).Error().code);
-    EXPECT_EQ(EBADF, context.OpenDirectoryCursor(std::move(empty)).Error().code);
-    EXPECT_EQ(EINVAL, context.Duplicate(owned).Error().code);
-    EXPECT_EQ(EINVAL, context.OpenAt(owned, "file", ComplianceEngine::ContextInterface::OpenProfile::PinChild).Error().code);
+    EXPECT_EQ(EBADF, DescriptorTestAccess::Duplicate(context, empty).Error().code);
+    EXPECT_EQ(EBADF, DescriptorTestAccess::OpenAt(context, empty, "file", ComplianceEngine::ContextInterface::OpenProfile::PinChild).Error().code);
+    EXPECT_EQ(EBADF, DescriptorTestAccess::OpenDirectoryCursor(context, std::move(empty)).Error().code);
+    EXPECT_EQ(EINVAL, DescriptorTestAccess::Duplicate(context, owned).Error().code);
+    EXPECT_EQ(EINVAL, DescriptorTestAccess::OpenAt(context, owned, "file", ComplianceEngine::ContextInterface::OpenProfile::PinChild).Error().code);
     errno = 0;
-    EXPECT_EQ(-1, context.StatFile(owned, &snapshot));
+    EXPECT_EQ(-1, DescriptorTestAccess::StatFile(context, owned, &snapshot));
     EXPECT_EQ(EINVAL, errno);
     errno = 0;
-    EXPECT_EQ(-1, context.CloseOwnedDescriptor(owned));
+    EXPECT_EQ(-1, DescriptorTestAccess::CloseOwnedDescriptor(context, owned));
     EXPECT_EQ(EINVAL, errno);
     EXPECT_TRUE(owned.HasValue());
-    EXPECT_TRUE(foreign.CloseOwnedDescriptor(owned) == 0);
+    EXPECT_TRUE(DescriptorTestAccess::CloseOwnedDescriptor(foreign, owned) == 0);
 }
 
 TEST_F(PathAliasTest, DescriptorReplacementAndEmptyMoveCloseOnlyOnce)
@@ -1017,18 +1016,18 @@ TEST_F(PathAliasTest, DescriptorReplacementAndEmptyMoveCloseOnlyOnce)
 TEST_F(PathAliasTest, DirectoryTransferConsumesOwnerOnce)
 {
     const auto before = CountOpenDescriptors();
-    auto acquired = context.OpenAbsolutePin(context.GetTempdirPath().c_str());
+    auto acquired = DescriptorTestAccess::OpenAbsolutePin(context, context.GetTempdirPath().c_str());
     ASSERT_TRUE(acquired.HasValue());
     Descriptor owner = std::move(acquired).Value();
-    ProcfsDescriptorAccess procfs(context);
+    auto procfs = DescriptorTestAccess::ProcfsAccess(context);
     ASSERT_TRUE(procfs.Open().HasValue());
-    auto operational = context.OpenAlias(procfs, owner, true);
+    auto operational = DescriptorTestAccess::OpenAlias(context, procfs, owner, true);
     ASSERT_TRUE(operational.HasValue());
-    auto duplicate = context.Duplicate(operational.Value());
+    auto duplicate = DescriptorTestAccess::Duplicate(context, operational.Value());
     ASSERT_TRUE(duplicate.HasValue());
     EXPECT_CALL(context, FdOpenDirectory(_)).Times(1);
     {
-        auto cursor = context.OpenDirectoryCursor(std::move(duplicate).Value());
+        auto cursor = DescriptorTestAccess::OpenDirectoryCursor(context, std::move(duplicate).Value());
         ASSERT_TRUE(cursor.HasValue());
         EXPECT_FALSE(duplicate.Value().HasValue());
         EXPECT_TRUE(cursor.Value().Close().HasValue());
@@ -1042,14 +1041,14 @@ TEST_F(PathAliasTest, DirectoryTransferConsumesOwnerOnce)
 TEST_F(PathAliasTest, DirectoryTransferFailureLeavesOwnerForExactlyOneClose)
 {
     const auto before = CountOpenDescriptors();
-    auto opened = context.OpenAbsolutePin(context.GetTempdirPath().c_str());
+    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, context.GetTempdirPath().c_str());
     ASSERT_TRUE(opened.HasValue());
     Descriptor pin = std::move(opened).Value();
-    ProcfsDescriptorAccess procfs(context);
+    auto procfs = DescriptorTestAccess::ProcfsAccess(context);
     ASSERT_TRUE(procfs.Open().HasValue());
-    auto active = context.OpenAlias(procfs, pin, true);
+    auto active = DescriptorTestAccess::OpenAlias(context, procfs, pin, true);
     ASSERT_TRUE(active.HasValue());
-    auto duplicated = context.Duplicate(active.Value());
+    auto duplicated = DescriptorTestAccess::Duplicate(context, active.Value());
     ASSERT_TRUE(duplicated.HasValue());
     EXPECT_TRUE(active.Value().Close().HasValue());
     EXPECT_TRUE(procfs.Close().HasValue());
@@ -1065,7 +1064,7 @@ TEST_F(PathAliasTest, DirectoryTransferFailureLeavesOwnerForExactlyOneClose)
         return ::close(fd);
     });
     Descriptor streamDescriptor = std::move(duplicated).Value();
-    auto failed = context.OpenDirectoryCursor(std::move(streamDescriptor));
+    auto failed = DescriptorTestAccess::OpenDirectoryCursor(context, std::move(streamDescriptor));
     ASSERT_FALSE(failed.HasValue());
     EXPECT_EQ(ENOTDIR, failed.Error().code);
     EXPECT_TRUE(streamDescriptor.HasValue());
@@ -1080,10 +1079,10 @@ TEST_F(PathAliasTest, TypedOpenAndDuplicateSetCloseOnExecAtomically)
         EXPECT_EQ((O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC), flags);
         return context.RealOpenNativePath(path, flags);
     });
-    auto opened = context.OpenAbsolutePin("/");
+    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, "/");
     ASSERT_TRUE(opened.HasValue());
     Descriptor owner = std::move(opened).Value();
-    EXPECT_NE(0, context.DescriptorFlags(owner) & FD_CLOEXEC);
+    EXPECT_NE(0, DescriptorTestAccess::DescriptorFlags(context, owner) & FD_CLOEXEC);
     EXPECT_CALL(context, DuplicateDescriptor(_)).WillOnce([&](int fd) {
         const int duplicated = context.RealDuplicateDescriptor(fd);
         EXPECT_NE(-1, duplicated);
@@ -1091,9 +1090,9 @@ TEST_F(PathAliasTest, TypedOpenAndDuplicateSetCloseOnExecAtomically)
             EXPECT_NE(0, ::fcntl(duplicated, F_GETFD) & FD_CLOEXEC);
         return duplicated;
     });
-    auto duplicate = context.Duplicate(owner);
+    auto duplicate = DescriptorTestAccess::Duplicate(context, owner);
     ASSERT_TRUE(duplicate.HasValue());
-    EXPECT_NE(0, context.DescriptorFlags(duplicate.Value()) & FD_CLOEXEC);
+    EXPECT_NE(0, DescriptorTestAccess::DescriptorFlags(context, duplicate.Value()) & FD_CLOEXEC);
 }
 
 TEST_F(PathAliasTest, DescriptorMovesOwnershipWithoutDoubleClose)
@@ -4593,11 +4592,11 @@ TEST_F(PathAliasTest, InspectionFailureClosesAcquiredDescriptorWithoutHidingPrim
 TEST_F(PathAliasTest, AliasStaysOnPinnedFileAfterNameReplacementAndUnlink)
 {
     const std::string source = context.MakeTempfile("original bytes");
-    auto opened = context.OpenAbsolutePin(source.c_str(), false);
+    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, source.c_str(), false);
     ASSERT_TRUE(opened.HasValue());
     Descriptor pinned = std::move(opened).Value();
     struct stat original = {};
-    ASSERT_EQ(0, context.StatFile(pinned, &original));
+    ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, pinned, &original));
     const std::size_t before = CountOpenDescriptors();
     {
         ASSERT_EQ(0, ::rename(source.c_str(), (source + ".former").c_str()));
@@ -4605,22 +4604,22 @@ TEST_F(PathAliasTest, AliasStaysOnPinnedFileAfterNameReplacementAndUnlink)
 
         // Opening the original name would block on this substituted FIFO;
         // descriptor-alias activation must instead bind to the prior inode.
-        auto active = ComplianceEngine::Filesystem::Detail::ActivateReadOnly(context, pinned, original, false, 4096);
+        auto active = DescriptorTestAccess::ActivateReadOnly(context, pinned, original, false, 4096);
         ASSERT_TRUE(active.HasValue()) << active.Error().message;
         struct stat activated = {};
-        ASSERT_EQ(0, context.StatFile(active.Value(), &activated));
+        ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, active.Value(), &activated));
         EXPECT_EQ(original.st_ino, activated.st_ino);
         EXPECT_EQ(original.st_dev, activated.st_dev);
         char bytes[15] = {};
         Descriptor reader = std::move(active).Value();
-        ASSERT_EQ(14, context.ReadFile(reader, bytes, 14));
+        ASSERT_EQ(14, DescriptorTestAccess::ReadFile(context, reader, bytes, 14));
         EXPECT_EQ("original bytes", std::string(bytes, 14));
 
         ASSERT_EQ(0, ::unlink((source + ".former").c_str()));
-        auto again = ComplianceEngine::Filesystem::Detail::ActivateReadOnly(context, pinned, original, false, 4096);
+        auto again = DescriptorTestAccess::ActivateReadOnly(context, pinned, original, false, 4096);
         ASSERT_TRUE(again.HasValue()) << again.Error().message;
         struct stat reacquired = {};
-        ASSERT_EQ(0, context.StatFile(again.Value(), &reacquired));
+        ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, again.Value(), &reacquired));
         EXPECT_EQ(original.st_ino, reacquired.st_ino);
     }
     EXPECT_EQ(before, CountOpenDescriptors());
@@ -4630,20 +4629,20 @@ TEST_F(PathAliasTest, DirectoryAliasAndMovesRetainSingleOwnership)
 {
     const std::string directory = context.GetTempdirPath() + "/acquired";
     ASSERT_EQ(0, ::mkdir(directory.c_str(), 0700));
-    auto opened = context.OpenAbsolutePin(directory.c_str());
+    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, directory.c_str());
     ASSERT_TRUE(opened.HasValue());
     Descriptor pinned = std::move(opened).Value();
     struct stat original = {};
-    ASSERT_EQ(0, context.StatFile(pinned, &original));
+    ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, pinned, &original));
     const std::size_t before = CountOpenDescriptors();
     {
-        auto active = ComplianceEngine::Filesystem::Detail::ActivateReadOnly(context, pinned, original, true, 4096);
+        auto active = DescriptorTestAccess::ActivateReadOnly(context, pinned, original, true, 4096);
         ASSERT_TRUE(active.HasValue()) << active.Error().message;
         struct stat activated = {};
-        ASSERT_EQ(0, context.StatFile(active.Value(), &activated));
+        ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, active.Value(), &activated));
         EXPECT_EQ(original.st_ino, activated.st_ino);
         Descriptor transferred = std::move(active).Value();
-        ASSERT_EQ(0, context.StatFile(transferred, &activated));
+        ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, transferred, &activated));
         EXPECT_EQ(original.st_ino, activated.st_ino);
     }
     EXPECT_EQ(before, CountOpenDescriptors());
@@ -4652,14 +4651,14 @@ TEST_F(PathAliasTest, DirectoryAliasAndMovesRetainSingleOwnership)
 TEST_F(PathAliasTest, ActivationHandsOffOwnerWithoutRetryingFailedClose)
 {
     const std::string file = context.MakeTempfile("activation");
-    auto opened = context.OpenAbsolutePin(file.c_str(), false);
+    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, file.c_str(), false);
     ASSERT_TRUE(opened.HasValue());
     Descriptor pin = std::move(opened).Value();
     struct stat snapshot = {};
-    ASSERT_EQ(0, context.StatFile(pin, &snapshot));
+    ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, pin, &snapshot));
     const auto before = CountOpenDescriptors();
     {
-        auto activated = ComplianceEngine::Filesystem::Detail::ActivateReadOnly(context, pin, snapshot, false, 4096);
+        auto activated = DescriptorTestAccess::ActivateReadOnly(context, pin, snapshot, false, 4096);
         ASSERT_TRUE(activated.HasValue()) << activated.Error().message;
         EXPECT_TRUE(pin.Close().HasValue());
         EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) {
@@ -4824,17 +4823,17 @@ TEST_F(PathAliasTest, UnsupportedLinkTargetSkipChecksHiddenDirectoryClose)
 TEST_F(PathAliasTest, FdinfoCapFailsClosedAndCleansUp)
 {
     const std::string source = context.MakeTempfile("a");
-    auto opened = context.OpenAbsolutePin(source.c_str(), false);
+    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, source.c_str(), false);
     ASSERT_TRUE(opened.HasValue());
     Descriptor pinned = std::move(opened).Value();
     struct stat snapshot = {};
-    ASSERT_EQ(0, context.StatFile(pinned, &snapshot));
+    ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, pinned, &snapshot));
     const std::size_t before = CountOpenDescriptors();
     {
-        auto tooSmall = ComplianceEngine::Filesystem::Detail::ActivateReadOnly(context, pinned, snapshot, false, 1);
+        auto tooSmall = DescriptorTestAccess::ActivateReadOnly(context, pinned, snapshot, false, 1);
         ASSERT_FALSE(tooSmall.HasValue());
         EXPECT_EQ(E2BIG, tooSmall.Error().code);
-        auto invalid = ComplianceEngine::Filesystem::Detail::ActivateReadOnly(context, pinned, snapshot, false, 0);
+        auto invalid = DescriptorTestAccess::ActivateReadOnly(context, pinned, snapshot, false, 0);
         ASSERT_FALSE(invalid.HasValue());
         EXPECT_EQ(EINVAL, invalid.Error().code);
     }
@@ -4846,11 +4845,11 @@ TEST_F(PathAliasTest, FdinfoReadOverreportRejectsActualRequestAndClosesHelpers)
     const std::size_t before = CountOpenDescriptors();
     {
         const std::string source = context.MakeTempfile("a");
-        auto opened = context.OpenAbsolutePin(source.c_str(), false);
+        auto opened = DescriptorTestAccess::OpenAbsolutePin(context, source.c_str(), false);
         ASSERT_TRUE(opened.HasValue());
         Descriptor pinned = std::move(opened).Value();
         struct stat snapshot = {};
-        ASSERT_EQ(0, context.StatFile(pinned, &snapshot));
+        ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, pinned, &snapshot));
         const std::size_t withPin = CountOpenDescriptors();
         for (const std::size_t cap : {4096U, 1U})
         {
@@ -4893,7 +4892,7 @@ TEST_F(PathAliasTest, FdinfoReadOverreportRejectsActualRequestAndClosesHelpers)
                 ++closed;
                 return context.RealCloseFileDescriptor(descriptor);
             });
-            auto activated = ComplianceEngine::Filesystem::Detail::ActivateReadOnly(context, pinned, snapshot, false, cap);
+            auto activated = DescriptorTestAccess::ActivateReadOnly(context, pinned, snapshot, false, cap);
             ASSERT_FALSE(activated.HasValue());
             EXPECT_EQ(EIO, activated.Error().code);
             EXPECT_EQ(1U, overreports);
@@ -4904,7 +4903,7 @@ TEST_F(PathAliasTest, FdinfoReadOverreportRejectsActualRequestAndClosesHelpers)
             EXPECT_EQ(withPin, CountOpenDescriptors());
             ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
         }
-        EXPECT_GE(context.DescriptorFlags(pinned), 0);
+        EXPECT_GE(DescriptorTestAccess::DescriptorFlags(context, pinned), 0);
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }
@@ -4916,13 +4915,13 @@ TEST_F(PathAliasTest, ActivationPerformsReadPermissionCheck)
         GTEST_SKIP() << "Privileged processes may open mode-000 files";
     }
     const std::string source = context.MakeTempfile("restricted");
-    auto opened = context.OpenAbsolutePin(source.c_str(), false);
+    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, source.c_str(), false);
     ASSERT_TRUE(opened.HasValue());
     Descriptor pinned = std::move(opened).Value();
     struct stat snapshot = {};
-    ASSERT_EQ(0, context.StatFile(pinned, &snapshot));
+    ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, pinned, &snapshot));
     ASSERT_EQ(0, ::chmod(source.c_str(), 0000));
-    auto denied = ComplianceEngine::Filesystem::Detail::ActivateReadOnly(context, pinned, snapshot, false, 4096);
+    auto denied = DescriptorTestAccess::ActivateReadOnly(context, pinned, snapshot, false, 4096);
     ASSERT_FALSE(denied.HasValue());
     EXPECT_EQ(EACCES, denied.Error().code);
     EXPECT_EQ(0, ::chmod(source.c_str(), 0600));
@@ -4932,35 +4931,35 @@ TEST_F(PathAliasTest, PinnedRelativeAndAbsoluteLinksIgnoreReplacementNames)
 {
     const std::string link = context.GetTempdirPath() + "/relative.link";
     ASSERT_EQ(0, ::symlink("../target", link.c_str()));
-    auto relativeResult = context.OpenAbsolutePin(link.c_str(), false);
+    auto relativeResult = DescriptorTestAccess::OpenAbsolutePin(context, link.c_str(), false);
     ASSERT_TRUE(relativeResult.HasValue());
     Descriptor relative = std::move(relativeResult).Value();
     const std::size_t before = CountOpenDescriptors();
     ASSERT_EQ(0, ::unlink(link.c_str()));
     ASSERT_EQ(0, ::symlink("/etc/passwd", link.c_str()));
-    auto target = ReadPinnedLink(relative, 128, 4096);
+    auto target = DescriptorTestAccess::ReadPinnedLink(relative, 128, 4096);
     ASSERT_TRUE(target.HasValue()) << target.Error().message;
     EXPECT_EQ("../target", target.Value().text);
     EXPECT_GT(target.Value().mountId, 0U);
-    auto tooSmall = ReadPinnedLink(relative, 8, 4096);
+    auto tooSmall = DescriptorTestAccess::ReadPinnedLink(relative, 8, 4096);
     ASSERT_FALSE(tooSmall.HasValue());
     EXPECT_EQ(E2BIG, tooSmall.Error().code);
     EXPECT_EQ(before, CountOpenDescriptors());
 
-    auto absoluteResult = context.OpenAbsolutePin(link.c_str(), false);
+    auto absoluteResult = DescriptorTestAccess::OpenAbsolutePin(context, link.c_str(), false);
     ASSERT_TRUE(absoluteResult.HasValue());
     Descriptor absolute = std::move(absoluteResult).Value();
-    auto absoluteTarget = ReadPinnedLink(absolute, 128, 4096);
+    auto absoluteTarget = DescriptorTestAccess::ReadPinnedLink(absolute, 128, 4096);
     ASSERT_TRUE(absoluteTarget.HasValue()) << absoluteTarget.Error().message;
     EXPECT_EQ("/etc/passwd", absoluteTarget.Value().text);
 }
 
 TEST_F(PathAliasTest, ProcfsMagicLinkCannotEnterManualResolver)
 {
-    auto opened = context.OpenAbsolutePin("/proc/self/exe", false);
+    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, "/proc/self/exe", false);
     ASSERT_TRUE(opened.HasValue());
     Descriptor magic = std::move(opened).Value();
-    auto denied = ReadPinnedLink(magic, 4096, 4096);
+    auto denied = DescriptorTestAccess::ReadPinnedLink(magic, 4096, 4096);
     ASSERT_FALSE(denied.HasValue());
     EXPECT_EQ(ELOOP, denied.Error().code);
 }
@@ -4969,7 +4968,7 @@ TEST_F(PathAliasTest, PinnedLinkRejectsEmptyNulAndNonLinkWithoutConsumingPin)
 {
     const std::string link = context.GetTempdirPath() + "/bounded.link";
     ASSERT_EQ(0, ::symlink("target", link.c_str()));
-    auto opened = context.OpenAbsolutePin(link.c_str(), false);
+    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, link.c_str(), false);
     ASSERT_TRUE(opened.HasValue());
     Descriptor pin = std::move(opened).Value();
     const std::size_t before = CountOpenDescriptors();
@@ -4977,22 +4976,22 @@ TEST_F(PathAliasTest, PinnedLinkRejectsEmptyNulAndNonLinkWithoutConsumingPin)
         std::memcpy(buffer, "a\0b", 3);
         return 3;
     });
-    auto empty = ReadPinnedLink(pin, 16, 4096);
+    auto empty = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
     ASSERT_FALSE(empty.HasValue());
     EXPECT_EQ(E2BIG, empty.Error().code);
-    auto nul = ReadPinnedLink(pin, 16, 4096);
+    auto nul = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
     ASSERT_FALSE(nul.HasValue());
     EXPECT_EQ(EINVAL, nul.Error().code);
     EXPECT_EQ(before, CountOpenDescriptors());
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    auto valid = ReadPinnedLink(pin, 16, 4096);
+    auto valid = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
     ASSERT_TRUE(valid.HasValue()) << valid.Error().message;
     EXPECT_EQ("target", valid.Value().text);
 
     const std::string file = context.MakeTempfile("ordinary");
-    auto regular = context.OpenAbsolutePin(file.c_str(), false);
+    auto regular = DescriptorTestAccess::OpenAbsolutePin(context, file.c_str(), false);
     ASSERT_TRUE(regular.HasValue());
-    auto denied = ReadPinnedLink(regular.Value(), 16, 4096);
+    auto denied = DescriptorTestAccess::ReadPinnedLink(regular.Value(), 16, 4096);
     ASSERT_FALSE(denied.HasValue());
     EXPECT_EQ(ELOOP, denied.Error().code);
 }
@@ -5001,7 +5000,7 @@ TEST_F(PathAliasTest, PinnedLinkReadRechecksIdentityAndMount)
 {
     const std::string link = context.GetTempdirPath() + "/observed.link";
     ASSERT_EQ(0, ::symlink("target", link.c_str()));
-    auto opened = context.OpenAbsolutePin(link.c_str(), false);
+    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, link.c_str(), false);
     ASSERT_TRUE(opened.HasValue());
     Descriptor pin = std::move(opened).Value();
     const std::size_t before = CountOpenDescriptors();
@@ -5013,7 +5012,7 @@ TEST_F(PathAliasTest, PinnedLinkReadRechecksIdentityAndMount)
             ++snapshot->st_ino;
         return status;
     });
-    auto changed = ReadPinnedLink(pin, 16, 4096);
+    auto changed = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
     ASSERT_FALSE(changed.HasValue());
     EXPECT_EQ(EAGAIN, changed.Error().code);
     EXPECT_EQ(2, observations);
@@ -5027,7 +5026,7 @@ TEST_F(PathAliasTest, PinnedLinkReadRechecksIdentityAndMount)
             AlterFdinfoMountId(buffer, bytes);
         return bytes;
     });
-    auto mount = ReadPinnedLink(pin, 16, 4096);
+    auto mount = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
     ASSERT_FALSE(mount.HasValue());
     EXPECT_EQ(EAGAIN, mount.Error().code);
     EXPECT_EQ(2, records);
@@ -5038,7 +5037,7 @@ TEST_F(PathAliasTest, PinnedLinkReadFailsClosedOnMountAndStatObservationErrors)
 {
     const std::string link = context.GetTempdirPath() + "/fault.link";
     ASSERT_EQ(0, ::symlink("target", link.c_str()));
-    auto opened = context.OpenAbsolutePin(link.c_str(), false);
+    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, link.c_str(), false);
     ASSERT_TRUE(opened.HasValue());
     Descriptor pin = std::move(opened).Value();
     const std::size_t before = CountOpenDescriptors();
@@ -5054,7 +5053,7 @@ TEST_F(PathAliasTest, PinnedLinkReadFailsClosedOnMountAndStatObservationErrors)
         }
         return context.RealReadFileDescriptor(fd, buffer, size);
     });
-    auto mount = ReadPinnedLink(pin, 16, 4096);
+    auto mount = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
     ASSERT_FALSE(mount.HasValue());
     EXPECT_EQ(ENOSPC, mount.Error().code);
     EXPECT_TRUE(failedMount);
@@ -5070,7 +5069,7 @@ TEST_F(PathAliasTest, PinnedLinkReadFailsClosedOnMountAndStatObservationErrors)
         }
         return status;
     });
-    auto stat = ReadPinnedLink(pin, 16, 4096);
+    auto stat = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
     ASSERT_FALSE(stat.HasValue());
     EXPECT_EQ(EIO, stat.Error().code);
     EXPECT_EQ(2, observations);
@@ -5081,7 +5080,7 @@ TEST_F(PathAliasTest, PinnedLinkReadErrorOutranksHelperCloseFailure)
 {
     const std::string link = context.GetTempdirPath() + "/failing.link";
     ASSERT_EQ(0, ::symlink("target", link.c_str()));
-    auto opened = context.OpenAbsolutePin(link.c_str(), false);
+    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, link.c_str(), false);
     ASSERT_TRUE(opened.HasValue());
     Descriptor pin = std::move(opened).Value();
     const std::size_t before = CountOpenDescriptors();
@@ -5104,7 +5103,7 @@ TEST_F(PathAliasTest, PinnedLinkReadErrorOutranksHelperCloseFailure)
         }
         return status;
     });
-    auto failure = ReadPinnedLink(pin, 16, 4096);
+    auto failure = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
     ASSERT_FALSE(failure.HasValue());
     EXPECT_EQ(ENOSPC, failure.Error().code);
     EXPECT_TRUE(failedRead);
@@ -5116,7 +5115,7 @@ TEST_F(PathAliasTest, PinnedLinkSuccessfulReadReportsHelperCloseFailure)
 {
     const std::string link = context.GetTempdirPath() + "/close.link";
     ASSERT_EQ(0, ::symlink("target", link.c_str()));
-    auto opened = context.OpenAbsolutePin(link.c_str(), false);
+    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, link.c_str(), false);
     ASSERT_TRUE(opened.HasValue());
     Descriptor pin = std::move(opened).Value();
     const std::size_t before = CountOpenDescriptors();
@@ -5137,7 +5136,7 @@ TEST_F(PathAliasTest, PinnedLinkSuccessfulReadReportsHelperCloseFailure)
         }
         return status;
     });
-    auto failure = ReadPinnedLink(pin, 16, 4096);
+    auto failure = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
     ASSERT_FALSE(failure.HasValue());
     EXPECT_EQ(EIO, failure.Error().code);
     EXPECT_TRUE(read);

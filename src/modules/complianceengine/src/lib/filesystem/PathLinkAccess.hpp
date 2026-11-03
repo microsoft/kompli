@@ -16,15 +16,13 @@ namespace Filesystem
 {
 namespace Detail
 {
-// Path's pinned-link inspection; exposed only to the focused direct tests.
-// No kernel-follow of link text, including procfs magic links. The caller
-// keeps the O_PATH|O_NOFOLLOW pin live; stat and mount checks bracket the read.
+// Checked pinned-link observation returned by Path's private helper.
+// No kernel-follow of link text, including procfs magic links.
 struct LinkTarget
 {
     std::string text;
     std::uint64_t mountId = 0;
 };
-Result<LinkTarget> ReadPinnedLink(const Descriptor& linkPin, std::size_t targetByteCap, std::size_t fdinfoByteCap);
 } // namespace Detail
 } // namespace Filesystem
 } // namespace ComplianceEngine

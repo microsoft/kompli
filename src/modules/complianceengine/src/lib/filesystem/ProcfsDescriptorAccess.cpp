@@ -20,17 +20,13 @@ namespace Filesystem
 {
 namespace Detail
 {
-namespace
-{
-bool IsProcfsDirectory(const ContextInterface& context, const Descriptor& descriptor)
+bool ProcfsDescriptorAccess::IsProcfsDirectory(const ContextInterface& context, const Descriptor& descriptor)
 {
     struct statfs filesystem = {};
     struct stat metadata = {};
     return (context.StatFilesystem(descriptor, &filesystem) == 0) && (filesystem.f_type == PROC_SUPER_MAGIC) &&
            (context.StatFile(descriptor, &metadata) == 0) && S_ISDIR(metadata.st_mode);
 }
-} // namespace
-
 // All procfs names are relative to previously held, verified directories.
 // "self" is the one intentional link and must identify the current PID.
 ProcfsDescriptorAccess::ProcfsDescriptorAccess(const ContextInterface& context)

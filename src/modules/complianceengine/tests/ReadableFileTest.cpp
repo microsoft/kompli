@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#include <DescriptorTestAccess.h>
 #include <MockContext.h>
 #include <cerrno>
 #include <dirent.h>
@@ -33,6 +34,7 @@ using ComplianceEngine::Filesystem::ResolverLimits;
 using ComplianceEngine::Filesystem::SymlinkPolicy;
 using ComplianceEngine::Filesystem::Detail::Descriptor;
 using ComplianceEngine::Filesystem::Detail::ProcfsDescriptorAccess;
+using ComplianceEngine::Tests::DescriptorTestAccess;
 using testing::_;
 using testing::NiceMock;
 
@@ -63,7 +65,7 @@ std::size_t OpenDescriptors()
 
 ComplianceEngine::Result<Descriptor> VerifiedTestDescriptor(const ComplianceEngine::ContextInterface& context)
 {
-    return context.OpenAbsolutePin("/proc");
+    return DescriptorTestAccess::OpenAbsolutePin(context, "/proc");
 }
 
 struct ThrowingLogContext : NiceMock<MockContext>

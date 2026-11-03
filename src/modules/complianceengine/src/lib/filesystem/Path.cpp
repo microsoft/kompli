@@ -25,6 +25,7 @@ namespace ComplianceEngine
 namespace Filesystem
 {
 using Detail::Descriptor;
+using Detail::LogSecondaryClose;
 using Detail::ProcfsDescriptorAccess;
 using Detail::SameIdentity;
 using Detail::SavedError;
@@ -207,13 +208,11 @@ bool AtBoundary(const std::string& target, const std::string& prefix)
 }
 } // namespace
 
-namespace Detail
-{
-namespace
-{
+using Detail::LinkTarget;
+
 // The acquisition snapshot does not bracket the read: re-observe the pinned
 // object and its mount on both sides of readlinkat, without following its text.
-Result<LinkTarget> ReadVerifiedLinkText(const Descriptor& linkPin, const struct stat& before, const ProcfsDescriptorAccess& procfs,
+Result<LinkTarget> Path::ReadVerifiedLinkText(const Descriptor& linkPin, const struct stat& before, const ProcfsDescriptorAccess& procfs,
     std::size_t targetByteCap, std::size_t fdinfoByteCap)
 {
     const ContextInterface& context = linkPin.Context();
@@ -246,9 +245,7 @@ Result<LinkTarget> ReadVerifiedLinkText(const Descriptor& linkPin, const struct 
     target.mountId = mount.Value();
     return target;
 }
-} // namespace
-
-Result<LinkTarget> ReadPinnedLink(const Descriptor& linkPin, std::size_t targetByteCap, std::size_t fdinfoByteCap)
+Result<LinkTarget> Path::ReadPinnedLink(const Descriptor& linkPin, std::size_t targetByteCap, std::size_t fdinfoByteCap)
 {
     if (!linkPin.HasValue())
     {
@@ -304,7 +301,6 @@ Result<LinkTarget> ReadPinnedLink(const Descriptor& linkPin, std::size_t targetB
     }
     return inspected;
 }
-} // namespace Detail
 
 namespace Detail
 {
@@ -695,7 +691,7 @@ private:
         // This avoids relying on the caller's possibly small thread stack.
         if (mFrameDepth >= 64)
             return Error("Symlink resolution frame ceiling exhausted", ELOOP);
-        auto target = Detail::ReadPinnedLink(pin, mLimits.linkTargetBytes, mLimits.shared.fdinfoBytes);
+        auto target = Path::ReadPinnedLink(pin, mLimits.linkTargetBytes, mLimits.shared.fdinfoBytes);
         if (!target.HasValue())
             return std::move(target).Error();
         if (target.Value().mountId != observedMount || !CanRetain(target.Value().text.size()))
