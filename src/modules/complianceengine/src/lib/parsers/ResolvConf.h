@@ -17,8 +17,8 @@ namespace ResolvConf
 // Starter budgets, not resolver limits. All counts include unknown input.
 struct Limits
 {
-    std::size_t bytes = 1024 * 1024;
-    std::size_t lineBytes = 16 * 1024;
+    std::size_t bytes = std::size_t{1024} * 1024;
+    std::size_t lineBytes = std::size_t{16} * 1024;
     std::size_t entries = 8192;
     std::size_t tokens = 32768;
 };
