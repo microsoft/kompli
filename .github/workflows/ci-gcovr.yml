@@ -159,6 +159,11 @@ jobs:
               } else if (filename ~ /^src\/modules\//) {
                   match(filename, /^src\/modules\/[^\/]+/)
                   group = substr(filename, RSTART, RLENGTH)
+              } else if (filename ~ /^src\/(engine|benchmarkio|kompli|telemetry)\//) {
+                  match(filename, /^src\/[^\/]+/)
+                  group = substr(filename, RSTART, RLENGTH)
+              } else if (filename ~ /^src\/tools\/lua-evaluator\//) {
+                  group = "src/tools/lua-evaluator"
               } else {
                   group = "other directories"
               }

@@ -3,5 +3,5 @@
 
 add_subdirectory(src)
 if (BUILD_TESTS)
-    add_subdirectory(tests)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/engine/tests tests)
 endif()

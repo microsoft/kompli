@@ -65,9 +65,9 @@ find_package(nlohmann_json REQUIRED NO_DEFAULT_PATH PATHS ${VCPKG_PACKAGES_DIR})
 
 if(BUILD_EXTERNAL)
     include_directories(../../telemetry)
-    add_subdirectory(../../parson ${CMAKE_CURRENT_BINARY_DIR}/parson)
-    add_subdirectory(../../logging ${CMAKE_CURRENT_BINARY_DIR}/logging)
-    add_subdirectory(../../commonutils ${CMAKE_CURRENT_BINARY_DIR}/commonutils)
+    add_subdirectory(../../common/parson ${CMAKE_CURRENT_BINARY_DIR}/parson)
+    add_subdirectory(../../common/logging ${CMAKE_CURRENT_BINARY_DIR}/logging)
+    add_subdirectory(../../common/commonutils ${CMAKE_CURRENT_BINARY_DIR}/commonutils)
 endif()
 
 # Add telemetry ingestion key (if defined)

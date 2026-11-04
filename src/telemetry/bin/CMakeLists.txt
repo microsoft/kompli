@@ -12,7 +12,7 @@ target_link_libraries(telemetrybin PRIVATE telemetrylib)
 target_include_directories(telemetrybin
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/..
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../commonutils)
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../common/commonutils)
 
 if(BUILD_TESTS)
     add_subdirectory(tests)
