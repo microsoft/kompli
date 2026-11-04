@@ -29,7 +29,7 @@ public:
     Descriptor(const Descriptor&) = delete;
     Descriptor& operator=(const Descriptor&) = delete;
     Descriptor(Descriptor&& other) noexcept;
-    Descriptor& operator=(Descriptor&& other) noexcept;
+    Descriptor& operator=(Descriptor&& other) & noexcept;
     ~Descriptor() noexcept;
 
     // Zero is a valid owned descriptor. Absence means no ownership.
@@ -45,7 +45,7 @@ public:
 
     // Relinquish ownership before the syscall. A failed close is never
     // retried, even if the kernel has already recycled its fd number.
-    Result<bool> Close();
+    void Close() noexcept;
 
 private:
     friend class ::ComplianceEngine::ContextInterface;

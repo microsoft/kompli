@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
+#include <type_traits>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -23,6 +24,9 @@ using ComplianceEngine::Filesystem::LinesRange;
 using ComplianceEngine::Filesystem::SymlinkPolicy;
 using testing::_;
 using testing::NiceMock;
+
+static_assert(std::is_assignable<LinesRange&, LinesRange&&>::value, "LinesRange must support lvalue move assignment");
+static_assert(!std::is_assignable<LinesRange&&, LinesRange&&>::value, "LinesRange move assignment must require an lvalue owner");
 
 namespace
 {
@@ -99,9 +103,7 @@ protected:
             first = false;
             bytes += item.Value();
         }
-        auto closed = range.Close();
-        if (!closed.HasValue())
-            return std::move(closed).Error();
+        range.Close();
         return bytes;
     }
     NiceMock<MockContext> context;
@@ -139,7 +141,7 @@ TEST_F(PathFile, OmittedPolicyFollowsFinalSymlinkAndRejectsNul)
         collected += item.Value();
     }
     EXPECT_EQ("plain", collected);
-    EXPECT_TRUE(range.Close().HasValue());
+    range.Close();
 
     Write(std::string("a\0b", 3));
     int errors = 0;
@@ -153,7 +155,7 @@ TEST_F(PathFile, OmittedPolicyFollowsFinalSymlinkAndRejectsNul)
         EXPECT_EQ(EBADMSG, item.Error().code);
     }
     EXPECT_EQ(1, errors);
-    EXPECT_TRUE(textRange.Close().HasValue());
+    textRange.Close();
     EXPECT_EQ(EBADMSG, Collect(path, Limited(3)).Error().code);
     LinesRange::Policy reject;
     reject.symlinks = SymlinkPolicy::DoNotFollow;
@@ -274,7 +276,7 @@ TEST_F(PathFile, EmptyUnterminatedAndBareLines)
         ASSERT_TRUE(item.HasValue());
         lines.push_back(item.Value());
     }
-    EXPECT_TRUE(range.Close().HasValue());
+    range.Close();
     ASSERT_EQ(3U, lines.size());
     EXPECT_EQ("a\r", lines[0]);
     EXPECT_EQ("", lines[1]);
@@ -300,7 +302,7 @@ TEST_F(PathFile, FinalLfDoesNotProducePhantomItemAndCountsTowardByteCap)
             items.push_back(item.Value());
         }
         EXPECT_EQ(fixture.second, items) << content;
-        EXPECT_TRUE(range.Close().HasValue());
+        range.Close();
         if (content.size() > 1)
         {
             EXPECT_EQ(E2BIG, Collect(path, Limited(content.size() - 1)).Error().code);
@@ -339,8 +341,8 @@ TEST_F(PathFile, NulAtStartMiddleOrEndNeverYieldsAffectedLine)
             EXPECT_EQ(EBADMSG, item.Error().code);
         }
         EXPECT_EQ(1, items);
-        EXPECT_TRUE(range.Close().HasValue());
-        EXPECT_TRUE(range.Close().HasValue());
+        range.Close();
+        range.Close();
         EXPECT_EQ(1, closes);
     }
 }
@@ -371,7 +373,7 @@ TEST_F(PathFile, ValidLineThenNulAcrossReadChunksYieldsErrorNotTruncatedLine)
         EXPECT_EQ(EBADMSG, it->Error().code);
         ++it;
         EXPECT_FALSE(it != range.end());
-        EXPECT_TRUE(range.Close().HasValue());
+        range.Close();
         EXPECT_EQ(1, closes);
     }
 }
@@ -404,7 +406,7 @@ TEST_F(PathFile, SpanDelimiterAcrossRefillDefersLaterNulUntilAdvance)
         EXPECT_EQ(padding >= 8191 ? 2 : 1, reads);
         ++line;
         EXPECT_FALSE(line != range.end());
-        ASSERT_TRUE(range.Close().HasValue());
+        range.Close();
     }
 }
 
@@ -443,9 +445,9 @@ TEST_F(PathFile, BoundedChunksAndLazyEarlyBreakCloseExactlyOnce)
     }
     EXPECT_EQ(0, closes);
     EXPECT_FALSE(range.begin() != range.end());
-    EXPECT_TRUE(range.Close().HasValue());
+    range.Close();
     EXPECT_EQ(1, closes);
-    EXPECT_TRUE(range.Close().HasValue());
+    range.Close();
     EXPECT_EQ(1, closes);
 }
 
@@ -473,7 +475,7 @@ TEST_F(PathFile, ShortNativeReadsFillOneBoundedChunkBeforeEarlyBreak)
     ASSERT_TRUE(cursor->HasValue());
     EXPECT_EQ("first", cursor->Value());
     EXPECT_EQ((std::vector<std::size_t>{13, 11, 9, 7, 5, 3, 1}), requests);
-    EXPECT_TRUE(range.Close().HasValue());
+    range.Close();
     EXPECT_EQ(1, closes);
     EXPECT_EQ(7U, requests.size()); // No EOF probe or new chunk after early close.
 }
@@ -499,7 +501,7 @@ TEST_F(PathFile, IteratorOwnsOneErrorItemAndEndsAfterAdvance)
     ++moved;
     EXPECT_FALSE(moved != range.end());
     EXPECT_FALSE(range.end() != moved);
-    EXPECT_TRUE(range.Close().HasValue());
+    range.Close();
 }
 
 TEST_F(PathFile, CloseInvalidatesBufferedIteratorWithoutReadingTail)
@@ -518,7 +520,7 @@ TEST_F(PathFile, CloseInvalidatesBufferedIteratorWithoutReadingTail)
     ASSERT_TRUE(cursor != range.end());
     EXPECT_EQ("first", cursor->Value());
     const int before = reads;
-    EXPECT_TRUE(range.Close().HasValue());
+    range.Close();
     EXPECT_FALSE(cursor != range.end());
     EXPECT_FALSE(range.end() != cursor);
     EXPECT_FALSE(range.begin() != range.end());
@@ -605,18 +607,18 @@ TEST_F(PathFile, RangeMoveAndEarlyCloseNeverReadTail)
         EXPECT_EQ(0, reads);
         auto& original = opened.Value();
         LinesRange moved(std::move(original));
-        EXPECT_TRUE(original.Close().HasValue());
+        original.Close();
         EXPECT_EQ(0, closes);
         auto cursor = moved.begin();
         ASSERT_TRUE(cursor->HasValue());
         EXPECT_EQ("one", cursor->Value());
         const int before = reads;
-        EXPECT_TRUE(moved.Close().HasValue());
+        moved.Close();
         EXPECT_EQ(before, reads);
         EXPECT_EQ(1, closes);
         EXPECT_FALSE(cursor != moved.end());
         EXPECT_FALSE(moved.begin() != moved.end());
-        EXPECT_TRUE(moved.Close().HasValue());
+        moved.Close();
         EXPECT_EQ(1, closes);
     }
     EXPECT_EQ(1, closes);
@@ -652,12 +654,8 @@ TEST_F(PathFile, RepeatedFailedCloseSucceedsWithoutRetry)
         ++cursor;
         EXPECT_FALSE(cursor != range.end());
         EXPECT_EQ(0, closes); // Even verified EOF does not close data.
-        auto first = range.Close();
-        ASSERT_FALSE(first.HasValue());
-        EXPECT_EQ(EBADF, first.Error().code);
-        EXPECT_EQ("Cannot close readable file", first.Error().message);
-        auto again = range.Close();
-        EXPECT_TRUE(again.HasValue());
+        range.Close();
+        range.Close();
     }
     EXPECT_EQ(1, closes);
 }
@@ -686,15 +684,8 @@ TEST_F(PathFile, FailedExplicitCloseLogsDescriptorErrorOnlyOnce)
     if (opened.HasValue())
     {
         auto& range = opened.Value();
-        auto first = range.Close();
-        EXPECT_FALSE(first.HasValue());
-        auto again = range.Close();
-        EXPECT_TRUE(again.HasValue());
-        if (!first.HasValue())
-        {
-            EXPECT_EQ(EBADF, first.Error().code);
-            EXPECT_EQ("Cannot close readable file", first.Error().message);
-        }
+        range.Close();
+        range.Close();
     }
     EXPECT_EQ(1, closes);
     CloseLog(&logHandle);
@@ -702,11 +693,11 @@ TEST_F(PathFile, FailedExplicitCloseLogsDescriptorErrorOnlyOnce)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto expected = "Failed to close directory activation: " + std::to_string(EBADF);
+    const auto expected = "Cannot close readable-file activation (ownership bug, EBADF): " + std::to_string(EBADF);
     const auto firstOccurrence = text.find(expected);
     ASSERT_NE(std::string::npos, firstOccurrence);
     EXPECT_EQ(std::string::npos, text.find(expected, firstOccurrence + expected.size()));
-    EXPECT_EQ(std::string::npos, text.find("Failed to close pinned descriptor"));
+    EXPECT_EQ(std::string::npos, text.find("Cannot close internal filesystem descriptor"));
 }
 
 TEST_F(PathFile, DestructionAndMoveAssignmentLogDataFailureOncePerRange)
@@ -734,7 +725,7 @@ TEST_F(PathFile, DestructionAndMoveAssignmentLogDataFailureOncePerRange)
         ASSERT_TRUE(second.HasValue());
         first.Value() = std::move(second.Value()); // finalizes old state
         EXPECT_EQ(1, closes);
-        EXPECT_TRUE(second.Value().Close().HasValue());
+        second.Value().Close();
         // Finalize the transferred state by destruction, without explicit Close.
     }
     EXPECT_EQ(2, closes);
@@ -743,13 +734,13 @@ TEST_F(PathFile, DestructionAndMoveAssignmentLogDataFailureOncePerRange)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto expected = "Failed to close directory activation: " + std::to_string(EBADF);
+    const auto expected = "Cannot close readable-file activation (ownership bug, EBADF): " + std::to_string(EBADF);
     const auto firstOccurrence = text.find(expected);
     ASSERT_NE(std::string::npos, firstOccurrence);
     const auto secondOccurrence = text.find(expected, firstOccurrence + expected.size());
     ASSERT_NE(std::string::npos, secondOccurrence);
     EXPECT_EQ(std::string::npos, text.find(expected, secondOccurrence + expected.size()));
-    EXPECT_EQ(std::string::npos, text.find("Failed to close pinned descriptor"));
+    EXPECT_EQ(std::string::npos, text.find("Cannot close internal filesystem descriptor"));
 }
 
 TEST_F(PathFile, DestructorSuppressesThrowingDataCloseAndLogsOnce)
@@ -769,26 +760,20 @@ TEST_F(PathFile, DestructorSuppressesThrowingDataCloseAndLogsOnce)
             return 0;
         throw std::runtime_error("injected data close failure");
     });
-    testing::internal::CaptureStderr();
     {
         auto opened = LinesRange::Make(context, path);
         ASSERT_TRUE(opened.HasValue());
     }
-    const auto logged = testing::internal::GetCapturedStderr();
     EXPECT_EQ(1, closes);
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto expected = "Filesystem descriptor close or log failure: " + std::to_string(EIO);
-    EXPECT_EQ(std::string::npos, text.find(expected)); // Destructor fallback uses the literal C logger, not the context handle.
-    if (IsConsoleLoggingEnabled() && GetLoggingLevel() >= LoggingLevelError)
-    {
-        const auto occurrence = logged.find(expected);
-        ASSERT_NE(std::string::npos, occurrence);
-        EXPECT_EQ(std::string::npos, logged.find(expected, occurrence + expected.size()));
-    }
+    const auto expected = "Cannot close readable-file activation: " + std::to_string(EIO);
+    const auto occurrence = text.find(expected);
+    ASSERT_NE(std::string::npos, occurrence);
+    EXPECT_EQ(std::string::npos, text.find(expected, occurrence + expected.size()));
 }
 
 TEST_F(PathFile, MoveAssignmentClosesOldOwnershipAndTransfersNew)
@@ -806,9 +791,9 @@ TEST_F(PathFile, MoveAssignmentClosesOldOwnershipAndTransfersNew)
     ASSERT_TRUE(second.HasValue());
     first.Value() = std::move(second.Value());
     EXPECT_EQ(1, closes);
-    EXPECT_TRUE(second.Value().Close().HasValue());
+    second.Value().Close();
     EXPECT_EQ(1, closes);
-    EXPECT_TRUE(first.Value().Close().HasValue());
+    first.Value().Close();
     EXPECT_EQ(2, closes);
 }
 
@@ -843,7 +828,7 @@ TEST_F(PathFile, MoveConstructionLeavesSourceInertBeforeBeginDuringReadAndAfterE
         LinesRange moved(std::move(source));
         EXPECT_FALSE(source.begin() != source.end());
         EXPECT_FALSE(cursor != source.end());
-        EXPECT_TRUE(source.Close().HasValue());
+        source.Close();
         EXPECT_EQ(stage, closes);
         if (stage == 0)
         {
@@ -855,7 +840,7 @@ TEST_F(PathFile, MoveConstructionLeavesSourceInertBeforeBeginDuringReadAndAfterE
         {
             EXPECT_FALSE(moved.begin() != moved.end()); // Traversal already started.
         }
-        EXPECT_TRUE(moved.Close().HasValue());
+        moved.Close();
         EXPECT_EQ(stage + 1, closes);
     }
 }
@@ -887,7 +872,7 @@ TEST_F(PathFile, MoveAssignmentAcrossContextsPreservesSourceAndSelfMoveAndCloses
     EXPECT_EQ(0, newCloses);
     // Iterators into a moved owner are invalid; do not use oldCursor again.
     EXPECT_FALSE(source.begin() != source.end());
-    EXPECT_TRUE(source.Close().HasValue());
+    source.Close();
     auto cursor = target.begin();
     ASSERT_TRUE(cursor != target.end());
     EXPECT_EQ("new", cursor->Value());
@@ -898,22 +883,22 @@ TEST_F(PathFile, MoveAssignmentAcrossContextsPreservesSourceAndSelfMoveAndCloses
     ++cursor;
     ASSERT_TRUE(cursor != target.end());
     EXPECT_EQ("next", cursor->Value());
-    EXPECT_TRUE(target.Close().HasValue());
+    target.Close();
     EXPECT_FALSE(cursor != target.end());
     EXPECT_EQ(1, oldCloses);
     EXPECT_EQ(1, newCloses);
 
     auto closed = LinesRange::Make(otherContext, otherPath);
     ASSERT_TRUE(closed.HasValue());
-    ASSERT_TRUE(closed.Value().Close().HasValue());
+    closed.Value().Close();
     EXPECT_EQ(2, newCloses);
     auto replacement = LinesRange::Make(context, path);
     ASSERT_TRUE(replacement.HasValue());
     replacement.Value() = std::move(closed.Value());
     EXPECT_EQ(2, oldCloses);
     EXPECT_FALSE(replacement.Value().begin() != replacement.Value().end());
-    EXPECT_TRUE(closed.Value().Close().HasValue());
-    EXPECT_TRUE(replacement.Value().Close().HasValue());
+    closed.Value().Close();
+    replacement.Value().Close();
     EXPECT_EQ(2, newCloses);
 }
 
@@ -936,7 +921,7 @@ TEST_F(PathFile, CloseBeforeBeginDoesNotReadOrReopen)
     auto& range = opened.Value();
     EXPECT_EQ(0, closes);
     EXPECT_EQ(0, reads);
-    EXPECT_TRUE(range.Close().HasValue());
+    range.Close();
     EXPECT_EQ(1, closes);
     EXPECT_FALSE(range.begin() != range.end());
     EXPECT_EQ(0, reads);
@@ -981,7 +966,7 @@ TEST_F(PathFile, FactoryFailureClosesAcquiredPinAndReportsPrimary)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto expected = "Failed to close pinned descriptors for " + path + ": " + std::to_string(EBADF);
+    const auto expected = "Cannot close internal filesystem descriptor (ownership bug, EBADF): " + std::to_string(EBADF);
     const auto occurrence = text.find(expected);
     ASSERT_NE(std::string::npos, occurrence);
     EXPECT_EQ(std::string::npos, text.find(expected, occurrence + expected.size()));
@@ -1019,9 +1004,9 @@ TEST_F(PathFile, FactoryClosesPinAfterIdentityCheckBeforeReturnOrRead)
     EXPECT_NE(-1, ::fcntl(data, F_GETFD));
     EXPECT_EQ(0, reads);
     EXPECT_EQ(0, dataCloses);
-    EXPECT_TRUE(opened.Value().Close().HasValue());
+    opened.Value().Close();
     EXPECT_EQ(1, dataCloses);
-    EXPECT_TRUE(opened.Value().Close().HasValue());
+    opened.Value().Close();
     EXPECT_EQ(1, dataCloses);
 }
 
@@ -1057,7 +1042,7 @@ TEST_F(PathFile, EarlyStatFailuresCloseEveryAcquiredDescriptor)
     }
 }
 
-TEST_F(PathFile, FailedPinCloseIsPrimaryAndStillLogsDataCleanupFailure)
+TEST_F(PathFile, PinAndDataCloseFailuresAreDiagnosticOnly)
 {
     Write("a");
     int dataStats = 0, pinCloses = 0, dataCloses = 0, reads = 0;
@@ -1092,29 +1077,31 @@ TEST_F(PathFile, FailedPinCloseIsPrimaryAndStillLogsDataCleanupFailure)
         if (!IsFileDescriptor(fd, true))
             return context.RealReadFileDescriptor(fd, buffer, size);
         ++reads;
-        return 0;
+        return context.RealReadFileDescriptor(fd, buffer, size);
     });
     auto opened = LinesRange::Make(context, path);
-    ASSERT_FALSE(opened.HasValue());
-    EXPECT_EQ(EACCES, opened.Error().code);
-    EXPECT_EQ("Failed to close pinned descriptor", opened.Error().message);
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     EXPECT_GE(pinCloses, 1);
+    EXPECT_EQ(0, dataCloses);
+    for (const auto& item : opened.Value())
+        ASSERT_TRUE(item.HasValue());
+    EXPECT_GT(reads, 0);
+    opened.Value().Close();
     EXPECT_EQ(1, dataCloses);
-    EXPECT_EQ(0, reads);
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    EXPECT_NE(std::string::npos, text.find("Failed to close internal filesystem descriptor: " + std::to_string(EACCES)));
+    EXPECT_NE(std::string::npos, text.find("Cannot close internal filesystem descriptor: " + std::to_string(EACCES)));
     EXPECT_EQ(std::string::npos, text.find("Failed to close pinned descriptors for " + path + ": " + std::to_string(EACCES)));
-    const auto dataError = "Failed to close directory activation: " + std::to_string(EBADF);
+    const auto dataError = "Cannot close readable-file activation (ownership bug, EBADF): " + std::to_string(EBADF);
     const auto dataOccurrence = text.find(dataError);
     ASSERT_NE(std::string::npos, dataOccurrence);
     EXPECT_EQ(std::string::npos, text.find(dataError, dataOccurrence + dataError.size()));
 }
 
-TEST_F(PathFile, CheckedAcquisitionReleaseAttemptsAllPinsAndLogsSecondaryFailure)
+TEST_F(PathFile, AcquisitionReleaseReportsPinFailureWithoutRejectingReader)
 {
     Write("a");
     const std::string logPath = context.GetTempdirPath() + "/reader-secondary-close.log";
@@ -1141,10 +1128,9 @@ TEST_F(PathFile, CheckedAcquisitionReleaseAttemptsAllPinsAndLogsSecondaryFailure
         return 0;
     });
     auto opened = LinesRange::Make(context, path);
-    ASSERT_FALSE(opened.HasValue());
-    EXPECT_EQ(EACCES, opened.Error().code);
-    EXPECT_EQ("Failed to close pinned descriptor", opened.Error().message);
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     EXPECT_EQ(1, failedPins); // the selected file is the only retained root pin
+    opened.Value().Close();
     EXPECT_EQ(1, dataCloses);
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);
@@ -1152,7 +1138,7 @@ TEST_F(PathFile, CheckedAcquisitionReleaseAttemptsAllPinsAndLogsSecondaryFailure
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
     EXPECT_EQ(std::string::npos, text.find("Secondary filesystem pin close failure: " + std::to_string(EIO)));
-    EXPECT_NE(std::string::npos, text.find("Failed to close internal filesystem descriptor: " + std::to_string(EACCES)));
+    EXPECT_NE(std::string::npos, text.find("Cannot close internal filesystem descriptor: " + std::to_string(EACCES)));
 }
 
 TEST_F(PathFile, ThrowingAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
@@ -1192,16 +1178,11 @@ TEST_F(PathFile, ThrowingAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
         return context.RealStatFileDescriptor(fd, metadata);
     });
     dataStats = pinCloses = dataCloses = 0;
-    try
-    {
-        (void)LinesRange::Make(context, path);
-        FAIL() << "The pin-cleanup exception must propagate";
-    }
-    catch (const std::runtime_error& error)
-    {
-        EXPECT_STREQ("pin cleanup", error.what());
-    }
+    auto acquired = LinesRange::Make(context, path);
+    ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
     EXPECT_GE(pinCloses, 1);
+    EXPECT_EQ(0, dataCloses);
+    acquired.Value().Close();
     EXPECT_EQ(1, dataCloses);
 }
 
@@ -1220,7 +1201,7 @@ TEST_F(PathFile, ChunkBoundaryAndTrailingNewlineAreVerifiedWithoutExtraEmptyLine
     ASSERT_EQ(2U, lines.size());
     EXPECT_EQ(std::string(8191, 'a'), lines[0]);
     EXPECT_EQ("", lines[1]);
-    EXPECT_TRUE(range.Close().HasValue());
+    range.Close();
 }
 
 TEST_F(PathFile, PinnedInodeSymlinkAndNonregular)
@@ -1359,7 +1340,7 @@ TEST_F(PathFile, VerificationAndFinalAdvanceReportErrors)
     EXPECT_GT(reads, 0);
     ++cursor;
     EXPECT_FALSE(cursor != range.end());
-    EXPECT_TRUE(range.Close().HasValue());
+    range.Close();
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) { return context.RealStatFileDescriptor(fd, metadata); });
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
@@ -1393,7 +1374,7 @@ TEST_F(PathFile, ErrorsOnIntermediateReadsAndRetryLimit)
     EXPECT_EQ(EACCES, it->Error().code);
     ++it;
     EXPECT_FALSE(it != range.end());
-    EXPECT_TRUE(range.Close().HasValue());
+    range.Close();
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
             return context.RealReadFileDescriptor(fd, buffer, size);
@@ -1409,7 +1390,7 @@ TEST_F(PathFile, ErrorsOnIntermediateReadsAndRetryLimit)
     EXPECT_EQ(EIO, Collect(path, Limited(4)).Error().code);
 }
 
-TEST_F(PathFile, DataCloseErrorIsPrimaryAfterSuccessButNotAfterReadFailure)
+TEST_F(PathFile, DataCloseFailureDoesNotReplaceVerifiedInputOrReadFailure)
 {
     Write("abc\n");
     int dataCloses = 0;
@@ -1425,9 +1406,8 @@ TEST_F(PathFile, DataCloseErrorIsPrimaryAfterSuccessButNotAfterReadFailure)
         return 0;
     });
     auto result = Collect(path, Limited(4));
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EBADF, result.Error().code);
-    EXPECT_EQ("Cannot close readable file", result.Error().message);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ("abc", result.Value());
     EXPECT_EQ(1, dataCloses);
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
@@ -1442,7 +1422,7 @@ TEST_F(PathFile, DataCloseErrorIsPrimaryAfterSuccessButNotAfterReadFailure)
     EXPECT_EQ(2, dataCloses);
 }
 
-TEST_F(PathFile, LastUnterminatedLineIsNotPublishedWhenVerificationOrCloseFails)
+TEST_F(PathFile, LastUnterminatedLineRequiresVerificationButNotSuccessfulDisposal)
 {
     Write("tail");
     int reads = 0;
@@ -1468,7 +1448,7 @@ TEST_F(PathFile, LastUnterminatedLineIsNotPublishedWhenVerificationOrCloseFails)
     }
     EXPECT_EQ(1, lines);
     EXPECT_GT(reads, 0);
-    EXPECT_TRUE(range.Close().HasValue());
+    range.Close();
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) { return context.RealStatFileDescriptor(fd, metadata); });
     int closes = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
@@ -1488,16 +1468,8 @@ TEST_F(PathFile, LastUnterminatedLineIsNotPublishedWhenVerificationOrCloseFails)
     EXPECT_EQ("tail", cursor->Value());
     ++cursor;
     EXPECT_FALSE(cursor != tailRange.end());
-    try
-    {
-        (void)tailRange.Close();
-        FAIL() << "The native close exception must propagate";
-    }
-    catch (const std::runtime_error& error)
-    {
-        EXPECT_STREQ("close", error.what());
-    }
-    EXPECT_TRUE(tailRange.Close().HasValue());
+    tailRange.Close(); // Native close exception cannot escape diagnostic-only disposal.
+    tailRange.Close();
     EXPECT_EQ(1, closes); // Data close is not retried after throwing.
 }
 

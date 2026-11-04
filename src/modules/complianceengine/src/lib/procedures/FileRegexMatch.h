@@ -6,6 +6,9 @@
 #include <Behavior.h>
 #include <Evaluator.h>
 #include <Regex.h>
+#include <ResultEvidence.h>
+#include <functional>
+#include <istream>
 
 namespace ComplianceEngine
 {
@@ -80,6 +83,39 @@ struct FileRegexMatchParams
     /// pattern: ^(all_exist|any_exist|at_least_one_exists|none_exist|only_one_exists)$
     Optional<Behavior> behavior = Behavior::AllExist;
 };
+
+// A selected match is one item, even if its scalar state fails. position is
+// the line number in line mode and the byte offset in whole-file mode;
+// ordinal distinguishes multiple matches at the same position.
+struct FileRegexOccurrence
+{
+    size_t ordinal;
+    size_t position;
+    std::string capturedValue;
+    SourceCheckValue state;
+};
+
+// Synchronous, per-occurrence content seam. The sink consumes each item before
+// the next is produced; a failed sink result aborts with its original error.
+// A successful result means complete content assessment, including empty input.
+class FileRegexOccurrenceSink
+{
+public:
+    virtual ~FileRegexOccurrenceSink() = default;
+    virtual Result<bool> Consume(const FileRegexOccurrence& occurrence) = 0;
+};
+
+Result<bool> EvaluateFileRegexContent(std::istream& input, const std::string& filename, const std::string& matchPattern, const regex& matchRegex,
+    const Optional<regex>& stateRegex, ContextInterface& context, const Optional<long long>& minimumValue, const Optional<long long>& maximumValue,
+    bool wholeFile, FileRegexOccurrenceSink& sink);
+
+// Finalize even after a content failure. A first reached content error wins
+// over a subsequent close error; neither may become an ordinary file verdict.
+// Exceptions from reading and the supplied finalizer are contained as Result
+// errors; a supplied finalizer is invoked once even after a content error.
+Result<bool> EvaluateFileRegexContentAndFinalize(std::istream& input, const std::string& filename, const std::string& matchPattern,
+    const regex& matchRegex, const Optional<regex>& stateRegex, ContextInterface& context, const Optional<long long>& minimumValue,
+    const Optional<long long>& maximumValue, bool wholeFile, FileRegexOccurrenceSink& sink, const std::function<Result<bool>()>& finalize);
 
 Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace ComplianceEngine

@@ -266,8 +266,8 @@ void Run(const std::string& input, const rc::Limits& limits)
 
         if (failed)
         {
-            const auto a = first.Finish(rc::Acquisition::EofAndClosed);
-            const auto b = repeat.Finish(rc::Acquisition::EofAndClosed);
+            const auto a = first.Finish(rc::Acquisition::Eof);
+            const auto b = repeat.Finish(rc::Acquisition::Eof);
             SameResult(a, b);
             Require(!a.HasValue());
             const auto sticky = first.Next("");
@@ -281,7 +281,7 @@ void Run(const std::string& input, const rc::Limits& limits)
             // A completed stream, an incomplete stream, and an external
             // acquisition error are different caller-supplied outcomes.
             const auto mode = input.empty() ? 0 : static_cast<unsigned char>(input[0]) % 3;
-            ComplianceEngine::Result<rc::Acquisition> acquisition = rc::Acquisition::EofAndClosed;
+            ComplianceEngine::Result<rc::Acquisition> acquisition = rc::Acquisition::Eof;
             if (mode == 1)
                 acquisition = rc::Acquisition::Incomplete;
             else if (mode == 2)
@@ -294,7 +294,7 @@ void Run(const std::string& input, const rc::Limits& limits)
                 Require(a.Value());
             else
                 Require(a.Error().code == EIO);
-            const auto again = first.Finish(rc::Acquisition::EofAndClosed);
+            const auto again = first.Finish(rc::Acquisition::Eof);
             Require(!again.HasValue());
             if (a.HasValue())
                 Require(again.Error().code == EINVAL);
@@ -303,7 +303,7 @@ void Run(const std::string& input, const rc::Limits& limits)
             const auto illegal = first.Next("");
             Require(!illegal.HasValue());
             Require(illegal.Error().code == (a.HasValue() ? EINVAL : EIO));
-            const auto sticky = first.Finish(rc::Acquisition::EofAndClosed);
+            const auto sticky = first.Finish(rc::Acquisition::Eof);
             Require((!sticky.HasValue()) && (sticky.Error().code == illegal.Error().code) &&
                 (sticky.Error().message == illegal.Error().message));
         }

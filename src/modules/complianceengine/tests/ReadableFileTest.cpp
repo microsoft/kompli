@@ -16,6 +16,7 @@
 #include <iterator>
 #include <limits>
 #include <linux/magic.h>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -26,7 +27,6 @@
 #include <utility>
 
 using ComplianceEngine::Filesystem::ExtensionPolicy;
-using ComplianceEngine::Filesystem::Handle;
 using ComplianceEngine::Filesystem::MountPolicy;
 using ComplianceEngine::Filesystem::Path;
 using ComplianceEngine::Filesystem::ReadableFile;
@@ -141,6 +141,8 @@ TEST_F(ReadableFileTest, IsOpaqueAndMoveOnly)
     static_assert(std::is_nothrow_move_constructible<ReadableFile>::value, "Transferring source context and ownership cannot throw");
     static_assert(std::is_nothrow_move_assignable<ReadableFile>::value, "Replacing ownership across contexts cannot throw");
     static_assert(std::is_nothrow_destructible<ReadableFile>::value, "Cleanup cannot throw");
+    static_assert(noexcept(std::declval<ReadableFile&>().Close()) && std::is_same<decltype(std::declval<ReadableFile&>().Close()), void>::value,
+        "ReadableFile close reports only a guarded diagnostic");
 }
 
 TEST_F(ReadableFileTest, DescriptorExplicitCloseLogsNativeErrorOnceWithoutRetryInMoveOrDestruction)
@@ -158,20 +160,19 @@ TEST_F(ReadableFileTest, DescriptorExplicitCloseLogsNativeErrorOnceWithoutRetryI
             errno = EACCES;
             return -1;
         });
-        auto failed = owner.Close();
-        ASSERT_FALSE(failed.HasValue());
-        EXPECT_EQ(EACCES, failed.Error().code);
-        EXPECT_TRUE(owner.Close().HasValue());
+        owner.Close();
+        EXPECT_FALSE(owner.HasValue());
+        owner.Close();
         Descriptor moved(std::move(owner));
         moved = std::move(owner);
-        EXPECT_TRUE(moved.Close().HasValue());
+        moved.Close();
     }
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const std::string expected = "Failed to close internal filesystem descriptor: " + std::to_string(EACCES);
+    const std::string expected = "Cannot close internal filesystem descriptor: " + std::to_string(EACCES);
     const auto occurrence = text.find(expected);
     ASSERT_NE(std::string::npos, occurrence);
     EXPECT_EQ(std::string::npos, text.find(expected, occurrence + expected.size()));
@@ -195,20 +196,20 @@ TEST_F(ReadableFileTest, DescriptorMoveReplacementRoutesThrownCloseToOldContextO
         EXPECT_CALL(incomingContext, CloseFileDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
         testing::internal::CaptureStderr();
         old = std::move(incoming);
-        EXPECT_TRUE(incoming.Close().HasValue());
-        EXPECT_TRUE(old.Close().HasValue());
-        EXPECT_TRUE(old.Close().HasValue());
+        incoming.Close();
+        old.Close();
+        old.Close();
         const auto logged = testing::internal::GetCapturedStderr();
         if (IsConsoleLoggingEnabled() && GetLoggingLevel() >= LoggingLevelError)
         {
-            const auto expected = "Filesystem descriptor close or log failure: " + std::to_string(EIO);
+            const auto expected = "Cannot close internal filesystem descriptor: " + std::to_string(EIO);
             const auto occurrence = logged.find(expected);
             ASSERT_NE(std::string::npos, occurrence);
             EXPECT_EQ(std::string::npos, logged.find(expected, occurrence + expected.size()));
         }
-        EXPECT_EQ(0, oldContext.logHandleRequests); // Native exception never enters the diagnostic branch.
+        EXPECT_EQ(1, oldContext.logHandleRequests); // A native exception is a diagnostic-only failure.
     }
-    EXPECT_EQ(0, oldContext.logHandleRequests);
+    EXPECT_EQ(1, oldContext.logHandleRequests);
 }
 
 TEST_F(ReadableFileTest, AliasOpenFailureDoesNotReopenNameOrLeak)
@@ -262,7 +263,7 @@ TEST_F(ReadableFileTest, AliasOpenFailureDoesNotReopenNameOrLeak)
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
 }
 
-TEST_F(ReadableFileTest, AliasOutputClosesWhenProcfsHelperCloseFails)
+TEST_F(ReadableFileTest, AliasOutputRemainsReadableWhenProcfsHelperCloseFails)
 {
     const std::string source = context.MakeTempfile("held");
     auto pinned = Pin(Component(source));
@@ -291,8 +292,12 @@ TEST_F(ReadableFileTest, AliasOutputClosesWhenProcfsHelperCloseFails)
         return status;
     });
     auto readable = pinned.Value().OpenReadOnly();
-    ASSERT_FALSE(readable.HasValue());
-    EXPECT_EQ(EIO, readable.Error().code);
+    ASSERT_TRUE(readable.HasValue());
+    auto bytes = readable.Value().Read(4);
+    ASSERT_TRUE(bytes.HasValue());
+    ASSERT_TRUE(bytes.Value().HasValue());
+    EXPECT_EQ("held", bytes.Value().Value());
+    readable.Value().Close();
     EXPECT_TRUE(aliasOpened);
     EXPECT_TRUE(failed);
     EXPECT_EQ(before, OpenDescriptors());
@@ -304,7 +309,7 @@ TEST_F(ReadableFileTest, SurvivesPinAndNameReplacementAndInspectsReadableDescrip
     const std::string original = context.MakeTempfile("first");
     auto pinned = Pin(Component(original));
     ASSERT_TRUE(pinned.HasValue());
-    const ino_t inode = pinned.Value().AcquiredMetadata().st_ino;
+    const ino_t inode = pinned.Value().Acquired().metadata.st_ino;
     auto pinnedBefore = pinned.Value().Stat();
     ASSERT_TRUE(pinnedBefore.HasValue());
     EXPECT_EQ(inode, pinnedBefore.Value().st_ino);
@@ -330,8 +335,8 @@ TEST_F(ReadableFileTest, SurvivesPinAndNameReplacementAndInspectsReadableDescrip
     EXPECT_EQ(before.Value().st_ino, after.Value().st_ino);
     EXPECT_EQ(before.Value().st_size, after.Value().st_size);
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
-    EXPECT_TRUE(readable.Close().HasValue());
-    EXPECT_TRUE(readable.Close().HasValue());
+    readable.Close();
+    readable.Close();
     EXPECT_EQ(EBADF, readable.Read(1).Error().code);
     EXPECT_EQ(EBADF, readable.Stat().Error().code);
 }
@@ -402,7 +407,9 @@ TEST_F(ReadableFileTest, NativeDescriptorZeroRemainsOwnedThroughEofUntilClose)
                 }
                 return ::close(descriptor);
             });
-            if (!readable.Close().HasValue() || !readable.Close().HasValue() || !closed || (readable.Stat().Error().code != EBADF))
+            readable.Close();
+            readable.Close();
+            if (!closed || (readable.Stat().Error().code != EBADF))
             {
                 ::_exit(8);
             }
@@ -538,7 +545,7 @@ TEST_F(ReadableFileTest, ObservedEofTransfersWithOwnershipAndResetsOnClose)
     auto eof = replacement.Read(1);
     ASSERT_TRUE(eof.HasValue());
     EXPECT_FALSE(eof.Value().HasValue());
-    EXPECT_TRUE(replacement.Close().HasValue());
+    replacement.Close();
     EXPECT_FALSE(replacement.AtEnd());
     EXPECT_EQ(EBADF, replacement.Read(1).Error().code);
 }
@@ -891,7 +898,7 @@ TEST_F(ReadableFileTest, ThrowingReadPropagatesWithoutInvalidatingDescriptor)
     EXPECT_EQ("x", next.Value().Value());
 }
 
-TEST_F(ReadableFileTest, CheckedLeafAndPathReleasePreservesIndependentReadable)
+TEST_F(ReadableFileTest, ReleasedPinsPreserveIndependentReadableAndOwningFacts)
 {
     const std::string source = context.MakeTempfile(std::string("a\0b", 3));
     ResolverLimits limits;
@@ -909,39 +916,34 @@ TEST_F(ReadableFileTest, CheckedLeafAndPathReleasePreservesIndependentReadable)
     ASSERT_TRUE(path.Push(Component(source), CrossMountExtension()).HasValue());
     auto popped = path.Pop();
     ASSERT_TRUE(popped.HasValue());
-    Path::Component leaf = std::move(popped).Value();
+    auto leaf = std::unique_ptr<Path::Component>(new Path::Component(std::move(popped).Value()));
+    popped = ComplianceEngine::Error("Release returned share", EINVAL);
     EXPECT_GT(path.RetainedDescriptors(), 0U);
-    auto activated = leaf.OpenReadOnly();
+    auto activated = leaf->OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     const std::size_t pins = path.RetainedDescriptors();
     ASSERT_EQ(pins, 1U); // only accepted root, not its acquisition scratch
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([](int fd) { return ::close(fd); });
-    EXPECT_TRUE(path.Close().HasValue());
-    EXPECT_TRUE(path.Close().HasValue());
+    {
+        Path retired(std::move(path));
+    } // path no longer owns the root
     EXPECT_EQ(0U, path.Size());
     EXPECT_EQ(0U, path.RetainedDescriptors()); // the popped handle belongs to the caller
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    EXPECT_TRUE(leaf.Stat().HasValue());
-    const auto acquiredType = leaf.AcquiredType();
-    const auto originalMount = leaf.OriginalMount();
-    const auto acquiredMetadata = leaf.AcquiredMetadata();
+    EXPECT_TRUE(leaf->Stat().HasValue());
+    const auto facts = leaf->Acquired();
+    const auto lookup = leaf->LookupName();
+    const auto effective = leaf->EffectiveName();
+    EXPECT_EQ(source, lookup);
+    EXPECT_EQ(source, effective);
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int fd) { return ::close(fd); });
-    EXPECT_TRUE(leaf.Close().HasValue());
-    EXPECT_FALSE(leaf.HasValue());
-    EXPECT_EQ(acquiredType, leaf.AcquiredType());
-    EXPECT_EQ(originalMount, leaf.OriginalMount());
-    EXPECT_EQ(acquiredMetadata.st_ino, leaf.AcquiredMetadata().st_ino);
-    EXPECT_EQ(EBADF, leaf.Stat().Error().code);
-    EXPECT_EQ(EBADF, leaf.MountIdentity().Error().code);
-    EXPECT_EQ(EBADF, leaf.SetOwnership(0, 0).Error().code);
-    EXPECT_EQ(EBADF, leaf.SetMode(0600).Error().code);
-    EXPECT_EQ(EBADF, leaf.OpenReadOnly().Error().code);
-    EXPECT_EQ(EBADF, leaf.OpenReadOnly(ReadableFile::Policy{}).Error().code);
-    EXPECT_EQ(EBADF, leaf.OpenChildren().Error().code);
-    Path::Component empty;
-    EXPECT_EQ(EBADF, empty.Stat().Error().code);
-    EXPECT_EQ(0u, empty.OriginalMount());
+    leaf.reset();
+    EXPECT_EQ(ComplianceEngine::Filesystem::Type::RegularFile, facts.type);
+    EXPECT_GT(facts.targetMount.value, 0u);
+    EXPECT_GT(facts.lookupMount.value, 0u);
+    EXPECT_FALSE(lookup.empty());
+    EXPECT_FALSE(effective.empty());
     EXPECT_EQ(0U, path.RetainedDescriptors());
     EXPECT_EQ(0U, path.RetainedBytes());
     EXPECT_EQ(EINVAL, path.Push("other", CrossMountExtension()).Error().code);
@@ -957,7 +959,7 @@ TEST_F(ReadableFileTest, CheckedLeafAndPathReleasePreservesIndependentReadable)
     ASSERT_TRUE(chunk.HasValue());
     ASSERT_TRUE(chunk.Value().HasValue());
     EXPECT_EQ(std::string("a\0b", 3), chunk.Value().Value());
-    EXPECT_TRUE(readable.Close().HasValue());
+    readable.Close();
 }
 
 TEST_F(ReadableFileTest, RejectsDirectoryInvalidCapAndPinInspectionFailureWithoutLeaks)
@@ -1002,6 +1004,10 @@ TEST_F(ReadableFileTest, RejectsDirectoryInvalidCapAndPinInspectionFailureWithou
 
 TEST_F(ReadableFileTest, CloseFailureIsReportedOnceAndDoesNotCloseReusedDescriptor)
 {
+    const std::string logPath = context.GetTempdirPath() + "/readable-close.log";
+    OsConfigLogHandle log = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, log);
+    context.SetLogHandle(log);
     const std::string source = context.MakeTempfile("x");
     auto pinned = Pin(Component(source));
     ASSERT_TRUE(pinned.HasValue());
@@ -1027,16 +1033,22 @@ TEST_F(ReadableFileTest, CloseFailureIsReportedOnceAndDoesNotCloseReusedDescript
             errno = EIO;
             return -1;
         });
-        auto first = readable.Close();
-        ASSERT_FALSE(first.HasValue());
-        EXPECT_EQ(EIO, first.Error().code);
-        auto again = readable.Close();
-        EXPECT_TRUE(again.HasValue());
+        readable.Close();
+        readable.Close();
         EXPECT_EQ(EBADF, readable.Stat().Error().code);
     }
     ASSERT_GE(reused, 0);
     EXPECT_GE(::fcntl(reused, F_GETFD), 0);
     EXPECT_EQ(0, ::close(reused));
+    CloseLog(&log);
+    context.SetLogHandle(nullptr);
+    std::ifstream record(logPath);
+    ASSERT_TRUE(record.is_open());
+    const std::string text((std::istreambuf_iterator<char>(record)), std::istreambuf_iterator<char>());
+    const std::string entry = "Cannot close readable-file activation: " + std::to_string(EIO);
+    const auto at = text.find(entry);
+    ASSERT_NE(std::string::npos, at);
+    EXPECT_EQ(std::string::npos, text.find(entry, at + entry.size()));
 }
 
 TEST_F(ReadableFileTest, FailedCloseTransfersNoErrorThroughMoveConstructionOrAssignment)
@@ -1060,22 +1072,20 @@ TEST_F(ReadableFileTest, FailedCloseTransfersNoErrorThroughMoveConstructionOrAss
                 return -1;
             })
             .WillOnce([](int descriptor) { return ::close(descriptor); });
-        auto closed = failed.Close();
-        ASSERT_FALSE(closed.HasValue());
-        EXPECT_EQ(EIO, closed.Error().code);
+        failed.Close();
         ReadableFile moved(std::move(failed));
-        EXPECT_TRUE(failed.Close().HasValue());
-        EXPECT_TRUE(moved.Close().HasValue());
+        failed.Close();
+        moved.Close();
 
         ReadableFile live = std::move(second).Value();
         live = std::move(moved);
-        EXPECT_TRUE(moved.Close().HasValue());
-        EXPECT_TRUE(live.Close().HasValue());
+        moved.Close();
+        live.Close();
     }
     EXPECT_EQ(before - 2, OpenDescriptors());
 }
 
-TEST_F(ReadableFileTest, ThrowingNativeClosePropagatesOnceAndDoesNotRetry)
+TEST_F(ReadableFileTest, ThrowingNativeCloseIsSuppressedOnceAndDoesNotRetry)
 {
     const std::string source = context.MakeTempfile("x");
     auto pinned = Pin(Component(source));
@@ -1089,16 +1099,8 @@ TEST_F(ReadableFileTest, ThrowingNativeClosePropagatesOnceAndDoesNotRetry)
             EXPECT_EQ(0, ::close(descriptor));
             throw std::runtime_error("native close fault");
         });
-        try
-        {
-            (void)readable.Close();
-            FAIL() << "Native close exceptions must propagate";
-        }
-        catch (const std::runtime_error& error)
-        {
-            EXPECT_STREQ("native close fault", error.what());
-        }
-        EXPECT_TRUE(readable.Close().HasValue());
+        EXPECT_NO_THROW(readable.Close());
+        readable.Close();
         EXPECT_EQ(EBADF, readable.Stat().Error().code);
     }
 }
@@ -1126,7 +1128,10 @@ TEST_F(ReadableFileTest, DestructorContainsThrowingLogAfterFailedNativeClose)
         const auto logged = testing::internal::GetCapturedStderr();
         if (IsConsoleLoggingEnabled() && GetLoggingLevel() >= LoggingLevelError)
         {
-            EXPECT_NE(std::string::npos, logged.find("Filesystem descriptor close or log failure: " + std::to_string(EIO)));
+            const std::string closeEntry = "Cannot close readable-file activation: " + std::to_string(EACCES);
+            const auto first = logged.find(closeEntry);
+            ASSERT_NE(std::string::npos, first);
+            EXPECT_EQ(std::string::npos, logged.find(closeEntry, first + closeEntry.size()));
         }
         EXPECT_EQ(1, selectedContext.logHandleRequests);
         EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&selectedContext));
@@ -1171,18 +1176,18 @@ TEST_F(ReadableFileTest, MoveAssignmentContainsThrowingLogAndRetainsIncomingOwne
             const auto logged = testing::internal::GetCapturedStderr();
             if (IsConsoleLoggingEnabled() && GetLoggingLevel() >= LoggingLevelError)
             {
-                EXPECT_NE(std::string::npos, logged.find("Filesystem descriptor close or log failure: " + std::to_string(EIO)));
+                EXPECT_NE(std::string::npos, logged.find("Cannot close readable-file activation: " + std::to_string(EIO)));
             }
             EXPECT_EQ(1, selectedContext.logHandleRequests);
             EXPECT_EQ(EBADF, source.Stat().Error().code);
-            EXPECT_TRUE(source.Close().HasValue());
+            source.Close();
             EXPECT_TRUE(destination.Stat().HasValue());
             auto bytes = destination.Read(3);
             ASSERT_TRUE(bytes.HasValue());
             ASSERT_TRUE(bytes.Value().HasValue());
             EXPECT_EQ("new", bytes.Value().Value());
-            EXPECT_TRUE(destination.Close().HasValue());
-            EXPECT_TRUE(destination.Close().HasValue());
+            destination.Close();
+            destination.Close();
         }
         EXPECT_EQ(1, selectedContext.logHandleRequests);
         EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&selectedContext));
@@ -1235,7 +1240,7 @@ TEST_F(ReadableFileTest, SameContextMoveConstructorAssignmentAndSelfMoveKeepSing
     ReadableFile moved(std::move(original));
     EXPECT_EQ(EBADF, original.Read(1).Error().code);
     EXPECT_EQ(EBADF, original.Stat().Error().code);
-    EXPECT_TRUE(original.Close().HasValue());
+    original.Close();
     EXPECT_TRUE(moved.Stat().HasValue());
 
     ReadableFile incoming = std::move(second).Value();
@@ -1246,13 +1251,13 @@ TEST_F(ReadableFileTest, SameContextMoveConstructorAssignmentAndSelfMoveKeepSing
     moved = std::move(incoming);
     EXPECT_EQ(EBADF, incoming.Read(1).Error().code);
     EXPECT_EQ(EBADF, incoming.Stat().Error().code);
-    EXPECT_TRUE(incoming.Close().HasValue());
+    incoming.Close();
     auto read = moved.Read(1);
     ASSERT_TRUE(read.HasValue());
     ASSERT_TRUE(read.Value().HasValue());
     EXPECT_EQ("x", read.Value().Value());
-    EXPECT_TRUE(moved.Close().HasValue());
-    EXPECT_TRUE(moved.Close().HasValue());
+    moved.Close();
+    moved.Close();
     EXPECT_EQ(before - 2, OpenDescriptors());
 }
 
@@ -1302,7 +1307,7 @@ TEST_F(ReadableFileTest, CrossContextMoveAssignmentClosesOldOwnerAndRoutesIncomi
     EXPECT_EQ(EBADF, errno);
     EXPECT_EQ(EBADF, source.Read(1).Error().code);
     EXPECT_EQ(EBADF, source.Stat().Error().code);
-    EXPECT_TRUE(source.Close().HasValue());
+    source.Close();
     EXPECT_TRUE(destination.Stat().HasValue());
     ASSERT_GE(incomingDescriptor, 0);
     EXPECT_NE(oldDescriptor, incomingDescriptor);
@@ -1311,8 +1316,8 @@ TEST_F(ReadableFileTest, CrossContextMoveAssignmentClosesOldOwnerAndRoutesIncomi
     ASSERT_TRUE(bytes.HasValue());
     ASSERT_TRUE(bytes.Value().HasValue());
     EXPECT_EQ("new", bytes.Value().Value());
-    EXPECT_TRUE(destination.Close().HasValue());
-    EXPECT_TRUE(destination.Close().HasValue());
+    destination.Close();
+    destination.Close();
     EXPECT_EQ(-1, ::fcntl(incomingDescriptor, F_GETFD));
     EXPECT_EQ(EBADF, errno);
     EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
@@ -1354,7 +1359,7 @@ TEST_F(ReadableFileTest, CrossContextMoveReplacementContainsOldOwnerLoggingFault
     ASSERT_TRUE(bytes.HasValue());
     ASSERT_TRUE(bytes.Value().HasValue());
     EXPECT_EQ("new", bytes.Value().Value());
-    EXPECT_TRUE(destination.Close().HasValue());
+    destination.Close();
     EXPECT_EQ(before - 2, OpenDescriptors());
 }
 
@@ -1384,7 +1389,7 @@ TEST_F(ReadableFileTest, CrossContextClosedAndMovedFromAssignmentsTransferEofAnd
     EXPECT_TRUE(source.AtEnd());
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
     EXPECT_CALL(foreignContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
-    EXPECT_TRUE(destination.Close().HasValue());
+    destination.Close();
     EXPECT_FALSE(destination.AtEnd());
     ReadableFile closedOld(std::move(destination));
 
@@ -1405,7 +1410,7 @@ TEST_F(ReadableFileTest, CrossContextClosedAndMovedFromAssignmentsTransferEofAnd
     ReadableFile& self = destination;
     destination = std::move(self);
     EXPECT_TRUE(destination.AtEnd());
-    EXPECT_TRUE(destination.Close().HasValue());
+    destination.Close();
     EXPECT_FALSE(destination.AtEnd());
 
     source = std::move(closedOld);      // moved-from foreign destination, closed original-context source
@@ -1414,9 +1419,9 @@ TEST_F(ReadableFileTest, CrossContextClosedAndMovedFromAssignmentsTransferEofAnd
     EXPECT_EQ(EBADF, source.Stat().Error().code);
     EXPECT_EQ(EBADF, closedOld.Stat().Error().code);
     EXPECT_EQ(EBADF, destination.Stat().Error().code);
-    EXPECT_TRUE(source.Close().HasValue());
-    EXPECT_TRUE(closedOld.Close().HasValue());
-    EXPECT_TRUE(destination.Close().HasValue());
+    source.Close();
+    closedOld.Close();
+    destination.Close();
     EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
     EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&foreignContext));
     EXPECT_EQ(before - 2, OpenDescriptors());

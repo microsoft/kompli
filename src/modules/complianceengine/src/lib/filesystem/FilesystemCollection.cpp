@@ -175,12 +175,12 @@ FilesystemTraversalPolicy Continuation(const ResolvedFilesystemCollectionRequest
 
 Filesystem::ResolverLimits AcquisitionBudget(const ResolvedFilesystemCollectionRequest& request)
 {
-    const auto& limits = request.limits;
+    const auto limits = request.limits;
     const std::size_t components = std::count(request.rootPath.begin(), request.rootPath.end(), '/') + 1;
     const std::size_t work = limits.entryWork > (std::numeric_limits<std::size_t>::max() - 32768) / 512 ? std::numeric_limits<std::size_t>::max() :
                                                                                                           limits.entryWork * 512 + 32768;
     const std::size_t max = std::numeric_limits<std::size_t>::max();
-    const std::size_t perPrefix = 8 * sizeof(Handle);
+    const std::size_t perPrefix = 8 * sizeof(Detail::Handle);
     const std::size_t overhead = components > (max - 65536) / perPrefix ? max : 65536 + components * perPrefix;
     const std::size_t minimum = request.rootPath.size() > max - overhead ? max : overhead + request.rootPath.size();
     Filesystem::ResolverLimits budget;
@@ -365,29 +365,20 @@ struct FileRange::State
         ino_t inode = 0;
     };
 
-    State(FilesystemTraversalPolicy policy, const ContextInterface& owner)
-        : request(std::move(policy)),
-          context(owner)
+    explicit State(FilesystemTraversalPolicy policy)
+        : request(std::move(policy))
     {
     }
 
     State(FilesystemTraversalPolicy policy, Path accepted)
         : request(std::move(policy)),
-          context(accepted.Context()),
           path(new Path(std::move(accepted)))
     {
     }
 
-    ~State()
+    ~State() noexcept
     {
-        if (!closed)
-        {
-            const auto cleanup = Close();
-            if (!cleanup.HasValue())
-            {
-                OsConfigLogError(context.GetLogHandle(), "Abandoned filesystem range cleanup failed: %s", cleanup.Error().message.c_str());
-            }
-        }
+        Stop();
     }
 
     Result<bool> Budget(std::size_t extra, const std::string& name) const
@@ -454,17 +445,12 @@ struct FileRange::State
 
     Result<bool> Initialize(std::string rootName)
     {
-        const bool directory = path->Root().AcquiredType() == Handle::Type::Directory;
-        auto rootMount = path->Root().MountIdentity();
-        if (!rootMount.HasValue())
-        {
-            return std::move(rootMount).Error();
-        }
-        baseline = rootMount.Value();
+        const auto rootFacts = path->Root().Acquired();
+        const bool directory = rootFacts.type == Type::Directory;
+        baseline = rootFacts.targetMount.value;
         FilesystemCollectionEntry entry;
         entry.path = rootName;
-        const auto metadata = path->LeafMetadata();
-        entry.metadata = metadata.accepted;
+        entry.metadata = path->Leaf().Acquired().metadata;
         if (!directory)
         {
             auto detached = path->Pop();
@@ -480,9 +466,9 @@ struct FileRange::State
             Frame frame;
             frame.path = std::move(rootName);
             frame.bytes = frame.path.size() + 1;
-            frame.device = path->Leaf().AcquiredMetadata().st_dev;
-            frame.inode = path->Leaf().AcquiredMetadata().st_ino;
-            auto charged = Charge(frame.bytes, rootName);
+            frame.device = path->Leaf().Acquired().metadata.st_dev;
+            frame.inode = path->Leaf().Acquired().metadata.st_ino;
+            auto charged = Charge(frame.bytes, frame.path);
             if (!charged.HasValue())
             {
                 return charged;
@@ -520,14 +506,13 @@ struct FileRange::State
         extension.directoryLinks = request.childDirectoryLinkAction;
         extension.nonFollowedLinks = NonFollowedLinkAction::Skip;
         extension.reportMissingRegularFile = request.missingChildAction == FilesystemMissingChildAction::ReportRegularFile && child.type == DT_REG;
-        Path& parent = *frames.back().location;
-        const std::size_t live = parent.RetainedDescriptors() + frames.size();
+        const std::size_t live = frames.back().location->RetainedDescriptors() + frames.size();
         const std::size_t cap = ResolverBudget().shared.liveDescriptors;
         if ((live > cap) || (cap - live < 7))
         {
             return Error("Filesystem pin retention exceeds descriptor budget", EMFILE);
         }
-        auto pushed = parent.AcquireChild(child.name, extension);
+        auto pushed = frames.back().location->AcquireChild(child.name, extension);
         if (!pushed.HasValue())
             return std::move(pushed).Error();
         if (pushed.Value().Is<Path::RejectionReason>())
@@ -543,29 +528,15 @@ struct FileRange::State
             }
         }
         Path accepted = As<Path>(std::move(pushed).Value());
-        const auto handle = accepted.Leaf();
-        const auto metadata = accepted.LeafMetadata();
-        entry.metadata = metadata.accepted;
-        if ((FilesystemScope::All != request.scope) && (baseline != metadata.mountId))
+        auto handle = accepted.Leaf();
+        const auto facts = handle.Acquired();
+        entry.metadata = facts.metadata;
+        // Both lookup-entry and accepted-target mounts participate in scope.
+        if ((FilesystemScope::All != request.scope) && ((baseline != facts.lookupMount.value) || (baseline != facts.targetMount.value)))
         {
-            auto closed = accepted.Close();
-            if (!closed.HasValue())
-                return std::move(closed).Error();
             return Exclude(entry.path, "filesystem scope");
         }
-        auto mount = handle.MountIdentity();
-        if (!mount.HasValue())
-        {
-            return std::move(mount).Error();
-        }
-        if ((FilesystemScope::All != request.scope) && (baseline != mount.Value()))
-        {
-            auto closed = accepted.Close();
-            if (!closed.HasValue())
-                return std::move(closed).Error();
-            return Exclude(entry.path, "filesystem scope");
-        }
-        const bool directory = Filesystem::Handle::Type::Directory == handle.AcquiredType();
+        const bool directory = Type::Directory == facts.type;
         if (directory)
         {
             const std::size_t depth = frames.size();
@@ -584,9 +555,9 @@ struct FileRange::State
             }
             if (descend)
             {
-                for (const auto& ancestor : frames)
+                for (std::size_t i = 0; i < frames.size(); ++i)
                 {
-                    if ((ancestor.device == handle.AcquiredMetadata().st_dev) && (ancestor.inode == handle.AcquiredMetadata().st_ino))
+                    if ((frames[i].device == facts.metadata.st_dev) && (frames[i].inode == facts.metadata.st_ino))
                     {
                         return Error("Directory ancestor cycle at '" + entry.path + "'", ELOOP);
                     }
@@ -594,8 +565,8 @@ struct FileRange::State
                 Frame frame;
                 frame.path = entry.path;
                 frame.bytes = frame.path.size() + 1;
-                frame.device = handle.AcquiredMetadata().st_dev;
-                frame.inode = handle.AcquiredMetadata().st_ino;
+                frame.device = facts.metadata.st_dev;
+                frame.inode = facts.metadata.st_ino;
                 auto charged = Charge(frame.bytes, entry.path);
                 if (!charged.HasValue())
                 {
@@ -610,15 +581,7 @@ struct FileRange::State
         {
             entry.OwnComponent(handle);
         }
-        auto offered = Offer(std::move(entry));
-        auto released = accepted.Close();
-        if (!offered.HasValue())
-        {
-            if (!released.HasValue())
-                OsConfigLogError(context.GetLogHandle(), "Secondary filesystem child cleanup failure: %d", released.Error().code);
-            return offered;
-        }
-        return released;
+        return Offer(std::move(entry));
     }
 
     Result<bool> Child(const Filesystem::DirectoryChild& child)
@@ -645,56 +608,47 @@ struct FileRange::State
         }
         while (!frames.empty())
         {
-            Frame& frame = frames.back();
-            if (!frame.cursor.HasValue())
+            if (!frames.back().cursor.HasValue())
             {
                 if ((frames.size() > request.limits.openDirectories) ||
-                    (frame.location->RetainedDescriptors() + frames.size() + 10 > ResolverBudget().shared.liveDescriptors))
+                    (frames.back().location->RetainedDescriptors() + frames.size() + 10 > ResolverBudget().shared.liveDescriptors))
                 {
                     return Error("Filesystem directory continuation exceeds descriptor budget", EMFILE);
                 }
-                auto budget = Budget(0, frame.path);
+                auto budget = Budget(0, frames.back().path);
                 if (!budget.HasValue())
                 {
                     return budget.Error();
                 }
-                auto opened = frame.location->Leaf().OpenChildren();
+                auto opened = frames.back().location->Leaf().OpenChildren();
                 if (!opened.HasValue())
                 {
                     return std::move(opened).Error();
                 }
-                frame.cursor = std::move(opened).Value();
+                frames.back().cursor = std::move(opened).Value();
             }
-            auto name = frame.cursor->NextEntry();
+            auto name = frames.back().cursor->NextEntry();
             if (!name.HasValue())
             {
-                return OperationError("read directory", frame.path, name.Error().code);
+                return OperationError("read directory", frames.back().path, name.Error().code);
             }
             if (!name.Value().HasValue())
             {
-                auto closedCursor = frame.cursor->Close();
-                if (!closedCursor.HasValue())
-                {
-                    return std::move(closedCursor).Error();
-                }
-                auto finished = std::move(frame.location);
-                retained -= frame.bytes;
+                frames.back().cursor->Close();
+                retained -= frames.back().bytes;
                 frames.pop_back();
-                auto released = finished->Close();
-                if (!released.HasValue())
-                    return std::move(released).Error();
                 continue;
             }
             if (work >= request.limits.entryWork)
             {
-                return Error("Filesystem entry work budget exhausted at '" + frame.path + "'", E2BIG);
+                return Error("Filesystem entry work budget exhausted at '" + frames.back().path + "'", E2BIG);
             }
             ++work;
-            if (frame.width >= request.limits.directoryWidth)
+            if (frames.back().width >= request.limits.directoryWidth)
             {
-                return Error("Filesystem directory width budget exceeded at '" + frame.path + "'", E2BIG);
+                return Error("Filesystem directory width budget exceeded at '" + frames.back().path + "'", E2BIG);
             }
-            ++frame.width;
+            ++frames.back().width;
             auto processed = Child(name.Value().Value());
             if (!processed.HasValue())
             {
@@ -709,11 +663,7 @@ struct FileRange::State
                 return Optional<FilesystemCollectionEntry>(std::move(entry));
             }
         }
-        auto closedResult = Close();
-        if (!closedResult.HasValue())
-        {
-            return std::move(closedResult).Error();
-        }
+        Stop();
         return Optional<FilesystemCollectionEntry>();
     }
 
@@ -753,18 +703,17 @@ struct FileRange::State
     void Abort(const Error& primary)
     {
         failure = primary;
-        (void)Close();
+        Stop();
     }
 
-    Result<bool> Close()
+    void Stop() noexcept
     {
         if (closed)
-        {
-            return failure.HasValue() ? Result<bool>(failure.Value()) : Result<bool>(true);
-        }
-        // Transfer every remaining owner before a native close or diagnostic
-        // can throw. The detached owners finish cleanup on exception, while
-        // consumed cursors and pins cannot be retried by a later Close.
+            return;
+        closed = true;
+        // Detach all remaining resources before releasing them. Terminal owners
+        // report their own close failures exactly once; traversal evidence is
+        // never replaced by a disposal diagnostic.
         static_assert(std::is_nothrow_move_constructible<Optional<FilesystemCollectionEntry>>::value,
             "Pending range ownership must detach without throwing");
         std::vector<Frame> remainingFrames;
@@ -773,77 +722,11 @@ struct FileRange::State
         auto remainingPath = std::move(path);
         pendingBytes = 0;
         retained = 0;
-        closed = true;
-        Optional<Error> cleanup;
-        auto record = [this, &cleanup](const Error& error) {
-            if (!cleanup.HasValue())
-            {
-                cleanup = error;
-            }
-            else
-            {
-                OsConfigLogError(context.GetLogHandle(), "Secondary filesystem range cleanup failure: %s", error.message.c_str());
-            }
-        };
-        for (auto& frame : remainingFrames)
-        {
-            if (frame.cursor.HasValue())
-            {
-                auto ended = frame.cursor->Close();
-                if (!ended.HasValue())
-                {
-                    record(ended.Error());
-                }
-                frame.cursor.Reset();
-            }
-            if (frame.location)
-            {
-                auto ended = frame.location->Close();
-                if (!ended.HasValue())
-                    record(ended.Error());
-                frame.location.reset();
-            }
-        }
-        remainingFrames.clear();
-        if (remainingPending.HasValue())
-        {
-            if (remainingPending.Value().OwnsComponent())
-            {
-                auto ended = remainingPending.Value().CloseComponent();
-                if (!ended.HasValue())
-                {
-                    record(ended.Error());
-                }
-            }
-            remainingPending.Reset();
-        }
-        if (remainingPath)
-        {
-            auto ended = remainingPath->Close();
-            if (!ended.HasValue())
-            {
-                record(ended.Error());
-            }
-        }
-        remainingPath.reset();
-        if (failure.HasValue())
-        {
-            if (cleanup.HasValue())
-            {
-                OsConfigLogError(context.GetLogHandle(), "Filesystem cleanup failed after primary error: %s", cleanup.Value().message.c_str());
-            }
-            return failure.Value();
-        }
-        if (cleanup.HasValue())
-        {
-            failure = cleanup;
-            return cleanup.Value();
-        }
-        return true;
+        (void)remainingPending;
+        (void)remainingPath;
     }
 
     FilesystemTraversalPolicy request;
-    const ContextInterface& context;
     std::unique_ptr<Filesystem::Path> path;
     std::vector<Frame> frames;
     FilesystemCollectionResult result;
@@ -860,6 +743,8 @@ struct FileRange::State
 
 Result<Optional<FilesystemCollectionEntry>> FileRange::Source::Next()
 {
+    if (!state)
+        return Optional<FilesystemCollectionEntry>();
     return state->Next();
 }
 
@@ -869,11 +754,14 @@ FileRange::FileRange(std::shared_ptr<State> state)
 {
 }
 
-FileRange::~FileRange() = default;
+FileRange::~FileRange() noexcept
+{
+    Stop();
+}
 
 Result<bool> ValidateContinuation(const Path& root, const std::string& reportingName, const FilesystemTraversalPolicy& policy)
 {
-    const auto& limits = policy.limits;
+    const auto limits = policy.limits;
     if (!root.IsFrozen() || root.Size() != 1 || reportingName.empty() || reportingName.front() != '/' || reportingName.find('\0') != std::string::npos)
         return Error("Continuation requires one accepted absolute root", EINVAL);
     if (policy.direction == FilesystemDirection::Up)
@@ -947,7 +835,7 @@ Result<FileRange> Files(const FilesystemCollectionRequest& policy, ContextInterf
     }
     try
     {
-        const auto& request = resolved.Value();
+        auto request = std::move(resolved).Value();
         auto acquired = Path::Make(context, request.rootPath, AcquisitionPolicy(request), AcquisitionBudget(request));
         if (!acquired.HasValue())
             return std::move(acquired).Error();
@@ -957,14 +845,14 @@ Result<FileRange> Files(const FilesystemCollectionRequest& policy, ContextInterf
             auto frozen = accepted.FreezeRoot();
             if (!frozen.HasValue())
                 return std::move(frozen).Error();
-            if (request.rootKind == FilesystemRootKind::Directory && accepted.Root().AcquiredType() != Handle::Type::Directory)
+            if (request.rootKind == FilesystemRootKind::Directory && accepted.Root().Acquired().type != Type::Directory)
                 return Error("Expected directory root at '" + request.rootPath + "'", ENOTDIR);
-            if (request.rootKind == FilesystemRootKind::File && accepted.Root().AcquiredType() != Handle::Type::RegularFile)
+            if (request.rootKind == FilesystemRootKind::File && accepted.Root().Acquired().type != Type::RegularFile)
                 return Error("Expected file root at '" + request.rootPath + "'", EISDIR);
             return Files(std::move(accepted), request.rootPath, Continuation(request));
         }
         const auto reason = As<Path::RejectionReason>(acquired.Value());
-        auto state = std::make_shared<FileRange::State>(Continuation(request), context);
+        auto state = std::make_shared<FileRange::State>(Continuation(request));
         if (reason == Path::RejectionReason::Missing)
             state->rootExists = false;
         else if (reason == Path::RejectionReason::Excluded)
@@ -989,34 +877,42 @@ Result<FileRange> Files(const FilesystemCollectionRequest& policy, ContextInterf
 
 Result<FilesystemCollectionResult> FileRange::StopVisitor()
 {
-    auto closed = Close();
-    return closed.HasValue() ? Result<FilesystemCollectionResult>(std::move(mState->result)) : Result<FilesystemCollectionResult>(closed.Error());
+    if (!mState)
+        return Error("Cannot finish a moved-from filesystem range", EINVAL);
+    if (mState->failure.HasValue())
+        return mState->failure.Value();
+    auto result = std::move(mState->result);
+    Stop();
+    return result;
 }
 void FileRange::Abort(const Error& error)
 {
-    mState->Abort(error);
+    if (mState)
+        mState->Abort(error);
 }
 bool FileRange::RootExists() const
 {
-    return mState->rootExists;
+    return mState && mState->rootExists;
 }
-Result<bool> FileRange::Close()
+void FileRange::Stop() noexcept
 {
-    return mState->Close();
+    if (mState)
+        mState->Stop();
 }
 Result<bool> FileRange::RetainEntries()
 {
+    if (!mState)
+        return Error("Cannot retain entries from a moved-from filesystem range", EINVAL);
     try
     {
         if (mState->pending.HasValue())
         {
-            const auto& entry = mState->pending.Value();
-            auto charged = mState->Charge(entry.path.size() + 1, entry.path);
+            auto charged = mState->Charge(mState->pending.Value().path.size() + 1, mState->pending.Value().path);
             if (!charged.HasValue())
             {
                 return charged;
             }
-            mState->result.entries.push_back(Snapshot(entry));
+            mState->result.entries.push_back(Snapshot(mState->pending.Value()));
         }
         mState->retainEntries = true;
         return true;
@@ -1040,7 +936,7 @@ Result<FilesystemCollectionResult> StreamFilesystemCollection(const FilesystemCo
     {
         return opened.Error();
     }
-    auto& files = opened.Value();
+    auto files = std::move(opened).Value();
     for (const auto& entry : files)
     {
         if (!entry.HasValue())
@@ -1074,7 +970,7 @@ Result<FilesystemCollectionResult> CollectFilesystem(const FilesystemCollectionR
     {
         return opened.Error();
     }
-    auto& files = opened.Value();
+    auto files = std::move(opened).Value();
     auto retaining = files.RetainEntries();
     if (!retaining.HasValue())
     {

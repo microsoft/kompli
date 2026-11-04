@@ -291,7 +291,7 @@ Result<bool> Parser::Finish(Result<Acquisition> acquisition)
     mFinished = true;
     if (!acquisition.HasValue())
         mCompletion = std::move(acquisition).Error();
-    else if (acquisition.Value() != Acquisition::EofAndClosed)
+    else if (acquisition.Value() != Acquisition::Eof)
         mCompletion = Error(mSource + ": resolv.conf input not fully acquired", EIO);
     return mCompletion;
 }

@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <map>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -51,7 +52,7 @@ TEST(SshKeyRangeTest, MissingRootRemainsCompliantAndDeniedRootIsAnError)
     EXPECT_EQ(1u, deniedPins);
 }
 
-TEST(SshKeyRangeTest, FirstNoncomplianceBreaksWithoutReadingRemainderButCloseErrorWins)
+TEST(SshKeyRangeTest, FirstNoncomplianceBreaksWithoutReadingRemainderAndCloseDoesNotOverride)
 {
     MockContext context;
     IndicatorsTree indicators;
@@ -83,7 +84,13 @@ TEST(SshKeyRangeTest, FirstNoncomplianceBreaksWithoutReadingRemainderButCloseErr
     EXPECT_EQ(Status::NonCompliant, verdict.Value());
     EXPECT_EQ(1u, entries);
 
-    ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([](DIR* stream) {
+    const auto logPath = context.GetTempdirPath() + "/ssh-key-close.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    context.SetLogHandle(logHandle);
+    int closeAttempts = 0;
+    ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([&](DIR* stream) {
+        ++closeAttempts;
         const int result = closedir(stream);
         if (0 == result)
         {
@@ -93,9 +100,20 @@ TEST(SshKeyRangeTest, FirstNoncomplianceBreaksWithoutReadingRemainderButCloseErr
         return result;
     });
     entries = 0;
-    const auto closeError = AuditSshKeyPermissions(params, indicators, context);
-    ASSERT_FALSE(closeError.HasValue());
-    EXPECT_EQ(EIO, closeError.Error().code);
+    const auto closeResult = AuditSshKeyPermissions(params, indicators, context);
+    ASSERT_TRUE(closeResult.HasValue()) << closeResult.Error().message;
+    EXPECT_EQ(Status::NonCompliant, closeResult.Value());
+    EXPECT_EQ(1u, entries);
+    EXPECT_EQ(1, closeAttempts);
+    CloseLog(&logHandle);
+    context.SetLogHandle(nullptr);
+    std::ifstream log(logPath);
+    ASSERT_TRUE(log.is_open());
+    const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+    const auto diagnostic = "Cannot close pinned directory cursor: " + std::to_string(EIO);
+    const auto first = text.find(diagnostic);
+    ASSERT_NE(std::string::npos, first);
+    EXPECT_EQ(std::string::npos, text.find(diagnostic, first + diagnostic.size()));
 }
 
 TEST(SshKeyRangeTest, ReplacementAfterPinCannotRedirectClassificationOrRemediation)

@@ -81,16 +81,16 @@ public:
     };
 
     LinesRange(LinesRange&&) noexcept;
-    LinesRange& operator=(LinesRange&&) noexcept;
+    LinesRange& operator=(LinesRange&&) & noexcept;
     LinesRange(const LinesRange&) = delete;
     LinesRange& operator=(const LinesRange&) = delete;
-    ~LinesRange();
+    ~LinesRange() noexcept;
 
     // Acquires an absolute path from the filesystem root with bounded, checked
     // descriptor-backed resolution. Policy controls every component's links;
     // Follow permits intermediate and final links. Mount crossing remains allowed.
     // Activates a readable file from the final pin, verifies identity, then
-    // checks release of all acquisition pins before returning. Reads no content
+    // releases all acquisition pins before returning. Reads no content
     // bytes. LinesRange owns only the independently activated readable file.
     static ComplianceEngine::Result<LinesRange> Make(const ComplianceEngine::ContextInterface& context, std::string path);
     static ComplianceEngine::Result<LinesRange> Make(const ComplianceEngine::ContextInterface& context, std::string path, Policy policy);
@@ -101,13 +101,9 @@ public:
         return {};
     }
 
-    // The data descriptor is attempted once. The first call returns its native
-    // close failure, if any; subsequent calls succeed without another attempt.
-    // Failed closes log the descriptor diagnostic and native error once.
-    // Destruction also closes and logs if needed;
+    // Idempotent diagnostic-only disposal. Early release does not verify EOF;
     // the context (and its log handle) must outlive LinesRange.
-    // Success means closure succeeded, not that an early-stopped read verified EOF.
-    ComplianceEngine::Result<bool> Close();
+    void Close() noexcept;
 
 private:
     enum class State

@@ -3,12 +3,15 @@
 
 #include <PasswordCreditUnionEvidence.h>
 #include <ResultEvidence.h>
+#include <algorithm>
+#include <array>
 #include <cerrno>
 #include <gtest/gtest.h>
 #include <initializer_list>
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 using ComplianceEngine::CompletedItemEvidence;
 using ComplianceEngine::CreditEvidenceKind;
@@ -689,4 +692,113 @@ TEST(ResultEvidenceTest, ProducerBudgetErrorSurvivesIncrementalReporting)
     EXPECT_EQ(E2BIG, result.Error().code);
     EXPECT_EQ("Retained path budget exhausted", result.Error().message);
     EXPECT_EQ(2U, reported);
+}
+
+// Literal OVAL 5.12.3 rows on the supported T/F/E Check domain.
+// Each multiset is permuted, so fold order cannot accidentally define policy.
+TEST(ResultEvidenceTest, SourceCheckRowsAndOrder)
+{
+    using namespace ComplianceEngine;
+    using V = SourceCheckValue;
+    const std::array<SourceCheckPolicy, 4> policies{
+        {SourceCheckPolicy::All, SourceCheckPolicy::AtLeastOne, SourceCheckPolicy::NoneSatisfy, SourceCheckPolicy::OnlyOne}};
+    struct Row
+    {
+        std::vector<V> inputs;
+        std::array<V, 4> expected;
+    };
+    const std::vector<Row> rows{
+        {{V::True}, {V::True, V::True, V::False, V::True}},
+        {{V::False}, {V::False, V::False, V::True, V::False}},
+        {{V::Error}, {V::Error, V::Error, V::Error, V::Error}},
+        {{V::True, V::False}, {V::False, V::True, V::False, V::True}},
+        {{V::False, V::Error}, {V::False, V::Error, V::Error, V::Error}},
+        {{V::True, V::Error}, {V::Error, V::True, V::False, V::Error}},
+        {{V::True, V::True}, {V::True, V::True, V::False, V::False}},
+        {{V::False, V::False}, {V::False, V::False, V::True, V::False}},
+        {{V::Error, V::Error}, {V::Error, V::Error, V::Error, V::Error}},
+        {{V::True, V::False, V::Error}, {V::False, V::True, V::False, V::Error}},
+        {{V::True, V::True, V::Error}, {V::Error, V::True, V::False, V::False}},
+        {{V::True, V::True, V::False, V::Error}, {V::False, V::True, V::False, V::False}},
+        {{V::True, V::True, V::True}, {V::True, V::True, V::False, V::False}},
+    };
+    for (const auto& row : rows)
+    {
+        auto inputs = row.inputs;
+        std::sort(inputs.begin(), inputs.end());
+        do
+        {
+            SourceCheckEvidence evidence;
+            for (const auto input : inputs)
+                evidence.Add(input);
+            EXPECT_EQ(inputs.end() != std::find(inputs.begin(), inputs.end(), V::Error), evidence.HasSourceError());
+            for (size_t i = 0; i < policies.size(); ++i)
+            {
+                const auto result = evidence.Evaluate(policies[i]);
+                ASSERT_TRUE(result.HasValue());
+                EXPECT_EQ(row.expected[i], result.Value());
+            }
+        } while (std::next_permutation(inputs.begin(), inputs.end()));
+    }
+    SourceCheckEvidence empty;
+    for (const auto policy : policies)
+    {
+        const auto result = empty.Evaluate(policy);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(EINVAL, result.Error().code);
+    }
+    empty.Add(static_cast<V>(-1));
+    EXPECT_EQ(EINVAL, empty.Evaluate(SourceCheckPolicy::All).Error().code);
+    SourceCheckEvidence valid;
+    valid.Add(V::True);
+    EXPECT_EQ(EINVAL, valid.Evaluate(static_cast<SourceCheckPolicy>(-1)).Error().code);
+}
+
+// Literal source Existence rows restricted to Exists/Error plus the explicit empty row.
+TEST(ResultEvidenceTest, SourceExistenceRowsAndOrder)
+{
+    using namespace ComplianceEngine;
+    using V = SourceExistenceValue;
+    using C = SourceCheckValue;
+    const std::array<SourceExistencePolicy, 5> policies{{SourceExistencePolicy::AllExist, SourceExistencePolicy::AnyExist,
+        SourceExistencePolicy::AtLeastOneExists, SourceExistencePolicy::NoneExist, SourceExistencePolicy::OnlyOneExists}};
+    struct Row
+    {
+        std::vector<V> inputs;
+        std::array<C, 5> expected;
+    };
+    const std::vector<Row> rows{
+        {{}, {C::False, C::True, C::False, C::True, C::False}},
+        {{V::Exists}, {C::True, C::True, C::True, C::False, C::True}},
+        {{V::Error}, {C::Error, C::Error, C::Error, C::Error, C::Error}},
+        {{V::Exists, V::Exists}, {C::True, C::True, C::True, C::False, C::False}},
+        {{V::Exists, V::Error}, {C::Error, C::True, C::True, C::False, C::Error}},
+        {{V::Exists, V::Exists, V::Error}, {C::Error, C::True, C::True, C::False, C::False}},
+        {{V::Exists, V::Exists, V::Exists}, {C::True, C::True, C::True, C::False, C::False}},
+        {{V::Error, V::Error}, {C::Error, C::Error, C::Error, C::Error, C::Error}},
+    };
+    for (const auto& row : rows)
+    {
+        auto inputs = row.inputs;
+        std::sort(inputs.begin(), inputs.end());
+        do
+        {
+            SourceExistenceEvidence evidence;
+            for (const auto input : inputs)
+                evidence.Add(input);
+            EXPECT_EQ(inputs.end() != std::find(inputs.begin(), inputs.end(), V::Error), evidence.HasSourceError());
+            for (size_t i = 0; i < policies.size(); ++i)
+            {
+                const auto result = evidence.Evaluate(policies[i]);
+                ASSERT_TRUE(result.HasValue());
+                EXPECT_EQ(row.expected[i], result.Value());
+            }
+        } while (std::next_permutation(inputs.begin(), inputs.end()));
+    }
+    SourceExistenceEvidence invalid;
+    invalid.Add(static_cast<V>(-1));
+    EXPECT_EQ(EINVAL, invalid.Evaluate(SourceExistencePolicy::AnyExist).Error().code);
+    SourceExistenceEvidence valid;
+    valid.Add(V::Exists);
+    EXPECT_EQ(EINVAL, valid.Evaluate(static_cast<SourceExistencePolicy>(-1)).Error().code);
 }

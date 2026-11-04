@@ -32,10 +32,10 @@ namespace Detail
 {
 class Descriptor;
 class ProcfsDescriptorAccess;
+class Handle;
 struct LinkTarget;
 } // namespace Detail
 class DirectoryCursor;
-class Handle;
 class Path;
 class ReadableFile;
 } // namespace Filesystem
@@ -69,6 +69,7 @@ public:
     enum class CloseDiagnostic
     {
         Descriptor,
+        ReadableActivation,
         DirectoryActivation
     };
 
@@ -177,7 +178,7 @@ protected:
 private:
     friend class Filesystem::Detail::Descriptor;
     friend class Filesystem::Detail::ProcfsDescriptorAccess;
-    friend class Filesystem::Handle;
+    friend class Filesystem::Detail::Handle;
     friend class Filesystem::Path;
     friend class Filesystem::ReadableFile;
     friend class Filesystem::DirectoryCursor;

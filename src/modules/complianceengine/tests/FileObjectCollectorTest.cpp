@@ -373,7 +373,7 @@ TEST(FileObjectCollectorTest, SelectionFailureDefersToLaterReadError)
     EXPECT_EQ(2, reads);
 }
 
-TEST(FileObjectCollectorTest, SelectionFailureDefersToExplicitCloseError)
+TEST(FileObjectCollectorTest, SelectionFailureRemainsPrimaryAfterFailedDisposal)
 {
     NiceMock<MockContext> context;
     const auto path = context.MakeTempfile("nameserver 192.0.2.1\n");
@@ -394,12 +394,11 @@ TEST(FileObjectCollectorTest, SelectionFailureDefersToExplicitCloseError)
 
     const auto result = ComplianceEngine::CollectNameserverObject(context, path, policy);
     ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EACCES, result.Error().code);
-    EXPECT_EQ("Cannot close readable file", result.Error().message);
+    EXPECT_EQ(E2BIG, result.Error().code);
     EXPECT_EQ(1, closes);
 }
 
-TEST(FileObjectCollectorTest, MalformedEvidenceDefersToReachedReadAndCloseFailures)
+TEST(FileObjectCollectorTest, MalformedEvidenceDefersToReachedReadButNotCloseFailures)
 {
     NiceMock<MockContext> context;
     const auto path = context.MakeTempfile("nameserver invalid\nnameserver 192.0.2.1\n");
@@ -440,8 +439,7 @@ TEST(FileObjectCollectorTest, MalformedEvidenceDefersToReachedReadAndCloseFailur
     });
     result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EACCES, result.Error().code);
-    EXPECT_EQ("Cannot close readable file", result.Error().message);
+    EXPECT_EQ(EBADMSG, result.Error().code);
     EXPECT_EQ(2, dataCloses);
 }
 
@@ -671,10 +669,10 @@ TEST(FileObjectCollectorTest, TailReadAndIdentityFailuresAreErrors)
     EXPECT_EQ(EIO, result.Error().code);
 }
 
-TEST(FileObjectCollectorTest, CloseFailureIsAnError)
+TEST(FileObjectCollectorTest, CloseFailureCannotReplaceCompletedEmptyCollection)
 {
     NiceMock<MockContext> context;
-    const auto path = context.MakeTempfile("nameserver one\n");
+    const auto path = context.MakeTempfile("# no nameservers\n");
     int dataCloses = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int descriptor) {
         const bool data = IsFixture(descriptor, path, true);
@@ -690,12 +688,12 @@ TEST(FileObjectCollectorTest, CloseFailureIsAnError)
 
     const auto result = ComplianceEngine::CollectNameserverObject(context, path);
 
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EIO, result.Error().code);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_TRUE(result->complete);
     EXPECT_EQ(1, dataCloses);
 }
 
-TEST(FileObjectCollectorTest, ValidCapturesAreNotPublishedWhenFinalCloseFails)
+TEST(FileObjectCollectorTest, ValidCapturesRemainCompleteWhenFinalCloseFails)
 {
     NiceMock<MockContext> context;
     const auto path = context.MakeTempfile("nameserver 192.0.2.1\n");
@@ -712,19 +710,20 @@ TEST(FileObjectCollectorTest, ValidCapturesAreNotPublishedWhenFinalCloseFails)
         return 0;
     });
     auto result = ComplianceEngine::CollectNameserverObject(context, path);
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EACCES, result.Error().code);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_TRUE(result->complete);
+    EXPECT_EQ((std::vector<std::string>{"192.0.2.1"}), Captures(result.Value()));
     EXPECT_EQ(1, closes);
 }
 
-TEST(FileObjectCollectorTest, PinCloseFailureStopsBeforeReadAndLaterReadFailureFinalizesBothDescriptorsOnce)
+TEST(FileObjectCollectorTest, PinCloseFailureDoesNotStopReadAndLaterReadFailureFinalizesBothOnce)
 {
     NiceMock<MockContext> context;
     const auto logPath = context.GetTempdirPath() + "/pin-and-read-cleanup.log";
     OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
     ASSERT_NE(nullptr, logHandle);
     context.SetLogHandle(logHandle);
-    const auto path = context.MakeTempfile("nameserver one\n");
+    const auto path = context.MakeTempfile("nameserver 192.0.2.1\n");
     int pinCloses = 0;
     int dataCloses = 0;
     bool failRead = false;
@@ -738,7 +737,7 @@ TEST(FileObjectCollectorTest, PinCloseFailureStopsBeforeReadAndLaterReadFailureF
             errno = EACCES;
             return -1;
         }
-        return 0;
+        return context.RealReadFileDescriptor(fd, buffer, size);
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int descriptor) {
         const bool pin = IsFixture(descriptor, path, false);
@@ -762,14 +761,15 @@ TEST(FileObjectCollectorTest, PinCloseFailureStopsBeforeReadAndLaterReadFailureF
         return 0;
     });
     auto result = ComplianceEngine::CollectNameserverObject(context, path);
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EIO, result.Error().code);
-    EXPECT_EQ("Failed to close pinned descriptor", result.Error().message);
-    EXPECT_EQ(0, reads);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_TRUE(result->complete);
+    EXPECT_EQ((std::vector<std::string>{"192.0.2.1"}), Captures(result.Value()));
+    EXPECT_GT(reads, 0);
     EXPECT_EQ(1, pinCloses);
     EXPECT_EQ(1, dataCloses);
 
     failRead = true;
+    reads = 0;
     result = ComplianceEngine::CollectNameserverObject(context, path);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
@@ -780,8 +780,8 @@ TEST(FileObjectCollectorTest, PinCloseFailureStopsBeforeReadAndLaterReadFailureF
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);
     const auto text = ReadLog(logPath);
-    ExpectLoggedOnce(text, "Failed to close internal filesystem descriptor: " + std::to_string(EIO));
-    const auto dataEntry = "Failed to close directory activation: " + std::to_string(EBADF);
+    ExpectLoggedOnce(text, "Cannot close internal filesystem descriptor: " + std::to_string(EIO));
+    const auto dataEntry = "Cannot close readable-file activation (ownership bug, EBADF): " + std::to_string(EBADF);
     const auto first = text.find(dataEntry);
     ASSERT_NE(std::string::npos, first);
     const auto second = text.find(dataEntry, first + dataEntry.size());
@@ -907,31 +907,24 @@ TEST(FileObjectCollectorTest, ReportsCleanupFailuresOnEveryAcquiredFailureExit)
                                                         "Cannot open pinned descriptor alias for reading",
             result.Error().message);
         const auto text = ReadLog(logPath);
-        const auto pinError = "Failed to close pinned descriptors for " + path + ": " + std::to_string(EIO);
+        const auto pinError = "Cannot close internal filesystem descriptor: " + std::to_string(EIO);
         if (failure == FailurePoint::Read)
             EXPECT_EQ(std::string::npos, text.find(pinError));
-        else if (failure == FailurePoint::PinStat)
-        {
-            EXPECT_EQ(std::string::npos, text.find(pinError));
-            ExpectLoggedOnce(text, "Secondary filesystem helper close failure: " + std::to_string(EIO));
-        }
         else
             ExpectLoggedOnce(text, pinError);
         if (dataCloses)
-            ExpectLoggedOnce(text, failure == FailurePoint::DataStat || failure == FailurePoint::Identity ?
-                                       "Secondary filesystem helper close failure: " + std::to_string(EBADF) :
-                                       "Failed to close directory activation: " + std::to_string(EBADF));
+            ExpectLoggedOnce(text, "Cannot close readable-file activation (ownership bug, EBADF): " + std::to_string(EBADF));
     }
 }
 
-TEST(FileObjectCollectorTest, DataCloseFailureAfterSuccessfulPinCloseIsAnError)
+TEST(FileObjectCollectorTest, DataCloseFailureAfterSuccessfulPinCloseIsDiagnosticOnly)
 {
     NiceMock<MockContext> context;
     const auto logPath = context.GetTempdirPath() + "/data-close-cleanup.log";
     OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
     ASSERT_NE(nullptr, logHandle);
     context.SetLogHandle(logHandle);
-    const auto path = context.MakeTempfile("nameserver one\n");
+    const auto path = context.MakeTempfile("nameserver 192.0.2.1\n");
     int pinCloses = 0;
     int dataCloses = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
@@ -950,14 +943,14 @@ TEST(FileObjectCollectorTest, DataCloseFailureAfterSuccessfulPinCloseIsAnError)
     const auto result = ComplianceEngine::CollectNameserverObject(context, path);
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EBADF, result.Error().code);
-    EXPECT_EQ("Cannot close readable file", result.Error().message);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_TRUE(result->complete);
+    EXPECT_EQ((std::vector<std::string>{"192.0.2.1"}), Captures(result.Value()));
     EXPECT_EQ(1, pinCloses);
     EXPECT_EQ(1, dataCloses);
     const auto text = ReadLog(logPath);
-    ExpectLoggedOnce(text, "Failed to close directory activation: " + std::to_string(EBADF));
-    EXPECT_EQ(std::string::npos, text.find("Failed to close pinned descriptor"));
+    ExpectLoggedOnce(text, "Cannot close readable-file activation (ownership bug, EBADF): " + std::to_string(EBADF));
+    EXPECT_EQ(std::string::npos, text.find("Cannot close internal filesystem descriptor"));
 }
 
 TEST(FileObjectCollectorTest, PinAndDataCloseFailuresAreIndependentOfReadErrors)
@@ -997,14 +990,14 @@ TEST(FileObjectCollectorTest, PinAndDataCloseFailuresAreIndependentOfReadErrors)
         CloseLog(&logHandle);
         context.SetLogHandle(nullptr);
         ASSERT_FALSE(result.HasValue());
-        EXPECT_EQ(failingPin ? EIO : EACCES, result.Error().code);
+        EXPECT_EQ(EACCES, result.Error().code);
         EXPECT_EQ(1, pinCloses);
         EXPECT_EQ(1, dataCloses);
-        EXPECT_EQ(failingPin ? 0 : 1, reads);
-        EXPECT_EQ(failingPin ? "Failed to close pinned descriptor" : "Failed to read file bytes", result.Error().message);
+        EXPECT_EQ(1, reads);
+        EXPECT_EQ("Failed to read file bytes", result.Error().message);
         const auto text = ReadLog(logPath);
-        ExpectLoggedOnce(text, failingPin ? "Failed to close internal filesystem descriptor: " + std::to_string(EIO) :
-                                            "Failed to close directory activation: " + std::to_string(EBADF));
+        ExpectLoggedOnce(text, failingPin ? "Cannot close internal filesystem descriptor: " + std::to_string(EIO) :
+                                            "Cannot close readable-file activation (ownership bug, EBADF): " + std::to_string(EBADF));
     }
 }
 
@@ -1033,14 +1026,16 @@ TEST(FileObjectCollectorTest, ReadFailureSurvivesThrowingDataClose)
             throw std::bad_alloc();
         return 0;
     });
-    EXPECT_THROW((void)ComplianceEngine::CollectNameserverObject(context, path), std::bad_alloc);
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EACCES, result.Error().code);
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);
     EXPECT_EQ(1, dataCloses);
     EXPECT_EQ(1, pinCloses);
     const auto text = ReadLog(logPath);
-    EXPECT_EQ(std::string::npos, text.find("Failed to close directory activation: " + std::to_string(EIO)));
-    EXPECT_EQ(std::string::npos, text.find("Failed to close pinned descriptor"));
+    ExpectLoggedOnce(text, "Cannot close readable-file activation: " + std::to_string(EIO));
+    EXPECT_EQ(std::string::npos, text.find("Cannot close internal filesystem descriptor"));
 }
 
 TEST(FileObjectCollectorTest, RejectsEmbeddedNulAndInvalidInputsBeforeOpening)

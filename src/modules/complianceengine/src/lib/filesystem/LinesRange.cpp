@@ -72,15 +72,13 @@ Result<bool> LinesRange::Refill()
         return Error("Failed to read file bytes", error);
     }
 
-    auto& optionalBytes = chunk.Value();
-    if (!optionalBytes.HasValue())
+    if (!chunk.Value().HasValue())
         return false;
 
-    auto& bytes = optionalBytes.Value();
-    if (bytes.size() > remaining)
+    if (chunk.Value().Value().size() > remaining)
         return Error("File byte limit exceeded", E2BIG);
 
-    mBuffer = std::move(bytes);
+    mBuffer = std::move(chunk).Value().Value();
     mPosition = 0;
     return true;
 }
@@ -197,7 +195,7 @@ void LinesRange::Iterator::Next()
         return;
     }
 
-    auto& line = next.Value();
+    auto line = std::move(next).Value();
     if (line.HasValue())
         mCurrent = Result<std::string>(std::move(line).Value());
 }
@@ -222,7 +220,7 @@ LinesRange::LinesRange(LinesRange&& other) noexcept
     other.mState = State::Closed;
 }
 
-LinesRange& LinesRange::operator=(LinesRange&& other) noexcept
+LinesRange& LinesRange::operator=(LinesRange&& other) & noexcept
 {
     if (this != &other)
     {
@@ -242,7 +240,7 @@ LinesRange& LinesRange::operator=(LinesRange&& other) noexcept
     return *this;
 }
 
-LinesRange::~LinesRange() = default;
+LinesRange::~LinesRange() noexcept = default;
 
 LinesRange::Iterator LinesRange::begin() // NOLINT(*-identifier-naming)
 {
@@ -253,10 +251,10 @@ LinesRange::Iterator LinesRange::begin() // NOLINT(*-identifier-naming)
     return Iterator(this);
 }
 
-Result<bool> LinesRange::Close()
+void LinesRange::Close() noexcept
 {
     mState = State::Closed;
-    return mData.Close();
+    mData.Close();
 }
 
 Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string path)
@@ -294,51 +292,27 @@ Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string
         return Error("File target is missing", ENOENT);
     if (acquired.Value().Is<Filesystem::Path::RejectionReason>() && As<Filesystem::Path::RejectionReason>(acquired.Value()) == Filesystem::Path::RejectionReason::Excluded)
         return Error("File target is excluded", ELOOP);
-    auto& pins = As<Filesystem::Path>(acquired.Value());
-
-    // A primary acquisition/activation error wins over cleanup failures.
-    // Close still attempts every hidden acquisition pin and reports its
-    // first failure; log it when another error already owns the result.
-    auto fail = [&](Error primary) -> Result<LinesRange> {
-        auto closed = pins.Close();
-        if (!closed.HasValue())
-        {
-            try
-            {
-                OsConfigLogError(context.GetLogHandle(), "Failed to close pinned descriptors for %s: %d", path.c_str(), closed.Error().code);
-            }
-            catch (...)
-            {
-                OsConfigLogError(nullptr, "File reader secondary pin close log failure: %d", closed.Error().code);
-            }
-        }
-
-        return primary;
-    };
+    Filesystem::Path pins = As<Filesystem::Path>(std::move(acquired).Value());
 
     auto frozen = pins.FreezeRoot();
     if (!frozen.HasValue())
-        return fail(std::move(frozen).Error());
-    if (pins.Leaf().AcquiredType() != Filesystem::Handle::Type::RegularFile)
-        return fail(Error("File target is not regular", EINVAL));
+        return std::move(frozen).Error();
+    if (pins.Leaf().Acquired().type != Filesystem::Type::RegularFile)
+        return Error("File target is not regular", EINVAL);
 
     auto opened = pins.Leaf().OpenReadOnly(ReadableFile::Policy(policy.limits.maxInterruptedReads));
     if (!opened.HasValue())
-        return fail(std::move(opened).Error());
+        return std::move(opened).Error();
 
     ReadableFile data(std::move(opened).Value());
     auto inspected = data.Stat();
     if (!inspected.HasValue())
-        return fail(std::move(inspected).Error());
+        return std::move(inspected).Error();
 
     const struct stat before = inspected.Value();
-    const auto held = pins.Leaf().AcquiredMetadata();
+    const auto held = pins.Leaf().Acquired().metadata;
     if (held.st_dev != before.st_dev || held.st_ino != before.st_ino || !S_ISREG(before.st_mode))
-        return fail(Error("Pinned file identity changed", EAGAIN));
-
-    auto closed = pins.Close();
-    if (!closed.HasValue())
-        return Error("Failed to close pinned descriptor", closed.Error().code);
+        return Error("Pinned file identity changed", EAGAIN);
 
     return LinesRange(std::move(data), std::move(policy), before);
 }

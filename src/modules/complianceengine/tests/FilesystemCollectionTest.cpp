@@ -10,11 +10,13 @@
 #include <filesystem/FilesystemCollection.hpp>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
+#include <type_traits>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -157,22 +159,22 @@ TEST(FilesystemCollectionTest, UnifiedRangeRetainsLiveLeafAndSupportsRootDeviceS
     ASSERT_TRUE(entry->HasValue()) << entry->Error().message;
     EXPECT_EQ(tree.Path("administrative") + "/.settings", entry->Value().path);
     ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
-    EXPECT_EQ(ComplianceEngine::Filesystem::Handle::Type::RegularFile, entry->Value().LiveComponent().AcquiredType());
-    ASSERT_TRUE(followed.Value().Close().HasValue());
+    EXPECT_EQ(ComplianceEngine::Filesystem::Type::RegularFile, entry->Value().LiveComponent().Value().Acquired().type);
+    followed.Value().Stop();
 
     request.rootDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
     request.rootFileLinkAction = SymlinkPolicy::DoNotFollow;
     auto rejected = Files(request, context);
     ASSERT_TRUE(rejected.HasValue());
     EXPECT_TRUE(rejected.Value().RootExists());
-    ASSERT_TRUE(rejected.Value().Close().HasValue());
+    rejected.Value().Stop();
 
     request.scope = FilesystemScope::RootDevice;
     request.rootDirectoryLinkAction = SymlinkPolicy::Follow;
     request.rootFileLinkAction = SymlinkPolicy::Follow;
     auto scoped = Files(request, context);
     ASSERT_TRUE(scoped.HasValue()) << scoped.Error().message;
-    ASSERT_TRUE(scoped.Value().Close().HasValue());
+    scoped.Value().Stop();
 }
 
 TEST(FilesystemCollectionTest, CoreNoRootReplayAfterAcceptedDirectoryRenameAndReplacement)
@@ -192,7 +194,7 @@ TEST(FilesystemCollectionTest, CoreNoRootReplayAfterAcceptedDirectoryRenameAndRe
     ASSERT_TRUE(root.Value().Is<Path>());
     Path accepted = As<Path>(std::move(root).Value());
     ASSERT_TRUE(accepted.FreezeRoot().HasValue());
-    const ino_t acceptedInode = accepted.Root().AcquiredMetadata().st_ino;
+    const ino_t acceptedInode = accepted.Root().Acquired().metadata.st_ino;
     ASSERT_EQ(0, ::rename(tree.Path("root").c_str(), tree.Path("moved").c_str()));
     tree.Directory("root");
     tree.File("root/replacement");
@@ -210,11 +212,11 @@ TEST(FilesystemCollectionTest, CoreNoRootReplayAfterAcceptedDirectoryRenameAndRe
         seen.push_back(entry.Value().path);
         struct stat original = {};
         ASSERT_EQ(0, ::stat(tree.Path("moved/original").c_str(), &original));
-        EXPECT_EQ(original.st_ino, entry.Value().LiveComponent().AcquiredMetadata().st_ino);
+        EXPECT_EQ(original.st_ino, entry.Value().LiveComponent().Value().Acquired().metadata.st_ino);
     }
     EXPECT_EQ((std::vector<std::string>{tree.Path("root/original")}), seen);
     EXPECT_NE(0, acceptedInode);
-    EXPECT_TRUE(files->Close().HasValue());
+    files->Stop();
 }
 
 TEST(FilesystemCollectionTest, MovedRootReportsOriginalSpellingWithoutUsingItAsAuthority)
@@ -245,7 +247,7 @@ TEST(FilesystemCollectionTest, MovedRootReportsOriginalSpellingWithoutUsingItAsA
     ASSERT_TRUE(entry->HasValue()) << entry->Error().message;
     EXPECT_EQ(request.rootPath + "/file", entry->Value().path);
     ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
-    EXPECT_TRUE(files->Close().HasValue());
+    files->Stop();
 }
 
 TEST(FilesystemCollectionTest, IndependentChildRetainsAncestorAndOwnerSurvives)
@@ -282,7 +284,7 @@ TEST(FilesystemCollectionTest, IndependentChildRetainsAncestorAndOwnerSurvives)
     EXPECT_EQ(tree.Path("root/a/sub"), path.ToString()); // parent stays put
     EXPECT_EQ(parentBytes, path.RetainedBytes());
     auto alias = aliasPath.Leaf();
-    ASSERT_TRUE(aliasPath.Close().HasValue());
+    // A copied Component keeps the pin independently of its Path.
     EXPECT_TRUE(alias.Stat().HasValue());
     ASSERT_TRUE(path.Pop().HasValue());
     ASSERT_TRUE(path.Pop().HasValue());
@@ -290,13 +292,11 @@ TEST(FilesystemCollectionTest, IndependentChildRetainsAncestorAndOwnerSurvives)
     ASSERT_TRUE(path.Push("a", strict).HasValue());
     auto direct = path.Pop();
     ASSERT_TRUE(direct.HasValue());
-    EXPECT_EQ(alias.AcquiredMetadata().st_ino, direct.Value().AcquiredMetadata().st_ino);
+    EXPECT_EQ(alias.Acquired().metadata.st_ino, direct.Value().Acquired().metadata.st_ino);
     EXPECT_EQ(rootBytes, path.RetainedBytes());
-    ASSERT_TRUE(path.Close().HasValue());
+
     EXPECT_TRUE(alias.Stat().HasValue());
     EXPECT_TRUE(direct.Value().Stat().HasValue());
-    EXPECT_TRUE(alias.Close().HasValue());
-    EXPECT_TRUE(direct.Value().Close().HasValue());
 }
 
 TEST(FilesystemCollectionTest, AcquiredRootAndChildContinuationPoliciesRemainSeparate)
@@ -330,7 +330,7 @@ TEST(FilesystemCollectionTest, AcquiredRootAndChildContinuationPoliciesRemainSep
         seen.push_back(entry.Value().path);
     }
     EXPECT_EQ((std::vector<std::string>{tree.Path("alias/ordinary")}), seen);
-    EXPECT_TRUE(excluded->Close().HasValue());
+    excluded->Stop();
 
     request.rootPath = tree.Path("real");
     request.rootDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
@@ -353,7 +353,7 @@ TEST(FilesystemCollectionTest, AcquiredRootAndChildContinuationPoliciesRemainSep
     }
     std::sort(seen.begin(), seen.end());
     EXPECT_EQ((std::vector<std::string>{tree.Path("real/link"), tree.Path("real/ordinary")}), seen);
-    EXPECT_TRUE(followed->Close().HasValue());
+    followed->Stop();
 }
 
 TEST(FilesystemCollectionTest, OwnedLiveEntryOutlivesRangeButCollectedSnapshotHasNoAuthority)
@@ -367,7 +367,7 @@ TEST(FilesystemCollectionTest, OwnedLiveEntryOutlivesRangeButCollectedSnapshotHa
     EXPECT_FALSE(snapshot->entries.front().LiveComponent().HasValue());
 
     MockContext context;
-    Path::Component owned;
+    ComplianceEngine::Optional<Path::Component> owned;
     ino_t inode = 0;
     {
         auto opened = Files(request, context);
@@ -376,18 +376,18 @@ TEST(FilesystemCollectionTest, OwnedLiveEntryOutlivesRangeButCollectedSnapshotHa
         ASSERT_NE(entry, opened->end());
         ASSERT_TRUE(entry->HasValue());
         ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
-        owned = entry->Value().LiveComponent();
-        inode = owned.AcquiredMetadata().st_ino;
-        ASSERT_TRUE(opened->Close().HasValue());
+        owned = entry->Value().LiveComponent().Value();
+        inode = owned.Value().Acquired().metadata.st_ino;
+        opened->Stop();
     }
     ASSERT_EQ(0, unlink(tree.Path("file").c_str()));
-    auto inspected = owned.Stat();
+    auto inspected = owned.Value().Stat();
     ASSERT_TRUE(inspected.HasValue()) << inspected.Error().message;
     EXPECT_EQ(inode, inspected.Value().st_ino);
-    EXPECT_TRUE(owned.Close().HasValue());
+    owned.Reset();
 }
 
-TEST(FilesystemCollectionTest, ClosingBeforeFirstPullChecksUnyieldedFilePinAndAllPathPinsOnce)
+TEST(FilesystemCollectionTest, StopBeforeFirstPullReleasesUnyieldedFilePinOnce)
 {
     TestTree tree;
     tree.File("file");
@@ -483,17 +483,13 @@ TEST(FilesystemCollectionTest, ClosingBeforeFirstPullChecksUnyieldedFilePinAndAl
         ASSERT_EQ(1u, filePins);
         ASSERT_EQ(directoryPins, 0u);
         injectFileCloseFailure = true;
-        const auto closed = opened->Close();
-        ASSERT_FALSE(closed.HasValue());
-        EXPECT_EQ(EIO, closed.Error().code);
+        opened->Stop();
         EXPECT_TRUE(livePins.empty());
         for (const auto index : ownedPins)
         {
             EXPECT_EQ(1u, openedPins[index].closeAttempts) << "Pin lifetime " << index;
         }
-        const auto repeated = opened->Close();
-        ASSERT_FALSE(repeated.HasValue());
-        EXPECT_EQ(EIO, repeated.Error().code);
+        opened->Stop();
         EXPECT_TRUE(livePins.empty());
         for (const auto index : ownedPins)
         {
@@ -507,11 +503,15 @@ TEST(FilesystemCollectionTest, ClosingBeforeFirstPullChecksUnyieldedFilePinAndAl
     }
 }
 
-TEST(FilesystemCollectionTest, CloseAttemptsCursorAndPinsAfterFirstCleanupFailure)
+TEST(FilesystemCollectionTest, StopAttemptsCursorAndPinsAndReportsEachFailureOnce)
 {
     TestTree tree;
     tree.Directory("root");
     MockContext context;
+    const auto logPath = context.GetTempdirPath() + "/range-stop.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    context.SetLogHandle(logHandle);
     std::size_t cursorCloses = 0;
     std::size_t pinCloses = 0;
     ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) {
@@ -528,18 +528,30 @@ TEST(FilesystemCollectionTest, CloseAttemptsCursorAndPinsAfterFirstCleanupFailur
         errno = EIO;
         return result == 0 ? -1 : result;
     });
-    const auto first = opened->Close();
-    ASSERT_FALSE(first.HasValue());
-    EXPECT_EQ(EACCES, first.Error().code);
+    opened->Stop();
     EXPECT_EQ(1u, cursorCloses);
     EXPECT_GT(pinCloses, 0u);
     const auto count = pinCloses;
-    EXPECT_EQ(EACCES, opened->Close().Error().code);
+    opened->Stop();
     EXPECT_EQ(1u, cursorCloses);
     EXPECT_EQ(count, pinCloses);
+    CloseLog(&logHandle);
+    context.SetLogHandle(nullptr);
+    std::ifstream log(logPath);
+    ASSERT_TRUE(log.is_open());
+    const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+    const auto cursorDiagnostic = "Cannot close pinned directory cursor: " + std::to_string(EACCES);
+    const auto cursorOccurrence = text.find(cursorDiagnostic);
+    ASSERT_NE(std::string::npos, cursorOccurrence);
+    EXPECT_EQ(std::string::npos, text.find(cursorDiagnostic, cursorOccurrence + cursorDiagnostic.size()));
+    const auto pinDiagnostic = "Cannot close internal filesystem descriptor: " + std::to_string(EIO);
+    std::size_t loggedPins = 0;
+    for (std::size_t pos = text.find(pinDiagnostic); pos != std::string::npos; pos = text.find(pinDiagnostic, pos + pinDiagnostic.size()))
+        ++loggedPins;
+    EXPECT_EQ(pinCloses, loggedPins);
 }
 
-TEST(FilesystemCollectionTest, ThrownCursorCloseReleasesDetachedRangeWhileStillAlive)
+TEST(FilesystemCollectionTest, ThrownCursorCloseIsContainedAndReleasesDetachedRange)
 {
     TestTree tree;
     tree.Directory("root");
@@ -624,25 +636,17 @@ TEST(FilesystemCollectionTest, ThrownCursorCloseReleasesDetachedRangeWhileStillA
         }
         return 0;
     });
-    try
-    {
-        (void)files.Close();
-        FAIL() << "Post-native-close exception must propagate";
-    }
-    catch (const std::runtime_error& error)
-    {
-        EXPECT_STREQ("cursor close fault", error.what());
-    }
+    files.Stop(); // Native close exception is consumed by the terminal owner.
     // Closing the range releases its frames and cursors, but the last
     // yielded entry owns its independent pin until the entry is released.
     EXPECT_EQ(2u, cursorCloses);
     EXPECT_TRUE(liveStreams.empty());
-    ASSERT_TRUE(entry->Value().OwnsComponent());
-    EXPECT_TRUE(entry->Value().LiveComponent().Stat().HasValue());
+    ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
+    EXPECT_TRUE(entry->Value().LiveComponent().Value().Stat().HasValue());
     EXPECT_EQ(1u, livePins.size());
     EXPECT_GT(pinCloses, 0u);
     const auto attemptedPins = pinCloses;
-    EXPECT_TRUE(files.Close().HasValue());
+    files.Stop();
     EXPECT_EQ(2u, cursorCloses);
     EXPECT_EQ(attemptedPins, pinCloses);
     entry = files.end();
@@ -709,7 +713,7 @@ TEST(FilesystemCollectionTest, MissingRegularNameReportsWithoutFabricatingAMetad
     EXPECT_EQ(tree.Path("root/vanishing"), missing->Value().path);
     EXPECT_FALSE(missing->Value().LiveComponent().HasValue());
     EXPECT_EQ(0, missing->Value().metadata.st_mode); // no accepted stat exists
-    ASSERT_TRUE(opened->Close().HasValue());
+    opened->Stop();
 
     tree.File("root/vanishing");
     ON_CALL(context, ReadDirectory(testing::_)).WillByDefault([&tree](DIR * stream) -> struct dirent* {
@@ -1066,7 +1070,7 @@ TEST(FilesystemCollectionTest, ShortPathBudgetDoesNotLimitProcfsInspection)
     request.scope = FilesystemScope::All;
     auto opened = Files(request, context);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
-    EXPECT_TRUE(opened.Value().Close().HasValue());
+    opened.Value().Stop();
 }
 
 TEST(FilesystemCollectionTest, ContinuationCannotUnderstateAcquiredRootInspectionBound)
@@ -1535,7 +1539,7 @@ TEST(FilesystemCollectionTest, RootDirectoryLinkSkipIsAnExclusionNotAnAbsentRoot
     ASSERT_TRUE(range.HasValue());
     EXPECT_TRUE(range->RootExists());
     EXPECT_EQ(range->begin(), range->end());
-    EXPECT_TRUE(range->Close().HasValue());
+    range->Stop();
     const auto streamed = ComplianceEngine::Filesystem::StreamFilesystemCollection(
         request, [](const FilesystemCollectionEntry&) { return Result<FilesystemVisitAction>(FilesystemVisitAction::Continue); }, context);
     ASSERT_TRUE(streamed.HasValue());
@@ -1909,7 +1913,7 @@ TEST(FilesystemCollectionTest, RequiredStatFailurePropagatesItsOriginalCode)
     EXPECT_EQ(EACCES, result.Error().code);
 }
 
-TEST(FilesystemCollectionTest, StandaloneCloseFailureErrorsAndSecondaryClosePreservesCallbackError)
+TEST(FilesystemCollectionTest, StandaloneCloseFailureDoesNotReplaceResultsOrCallbackError)
 {
     TestTree tree;
     tree.Directory("root");
@@ -1926,8 +1930,8 @@ TEST(FilesystemCollectionTest, StandaloneCloseFailureErrorsAndSecondaryClosePres
     });
     const FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     const auto standalone = ComplianceEngine::Filesystem::CollectFilesystem(request, context);
-    ASSERT_FALSE(standalone.HasValue());
-    EXPECT_EQ(EIO, standalone.Error().code);
+    ASSERT_TRUE(standalone.HasValue()) << standalone.Error().message;
+    EXPECT_EQ(2u, standalone->entries.size());
 
     const auto secondary = ComplianceEngine::Filesystem::StreamFilesystemCollection(
         request,
@@ -1944,7 +1948,7 @@ TEST(FilesystemCollectionTest, StandaloneCloseFailureErrorsAndSecondaryClosePres
     EXPECT_EQ("original callback", secondary.Error().message);
 }
 
-TEST(FilesystemCollectionTest, CheckedChildCloseFailureStopsTraversal)
+TEST(FilesystemCollectionTest, ChildCloseFailureDoesNotStopTraversal)
 {
     TestTree tree;
     tree.Directory("root");
@@ -1962,8 +1966,8 @@ TEST(FilesystemCollectionTest, CheckedChildCloseFailureStopsTraversal)
         return -1;
     });
     const auto result = ComplianceEngine::Filesystem::CollectFilesystem(request, context);
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EIO, result.Error().code);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(2u, result->entries.size());
 }
 
 TEST(FilesystemCollectionTest, RootDeviceAndDefinedSelectSameMount)
@@ -2021,7 +2025,7 @@ TEST(FilesystemCollectionTest, FactoryAcquiresRootButReadsDescendantsOnePullAtAT
     ASSERT_TRUE(entry->HasValue());
     EXPECT_EQ(tree.Path("root"), entry->Value().path);
     ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
-    auto rootIdentity = entry->Value().LiveComponent().Stat();
+    auto rootIdentity = entry->Value().LiveComponent().Value().Stat();
     ASSERT_TRUE(rootIdentity.HasValue()) << rootIdentity.Error().message;
     EXPECT_EQ(0u, stats);
     EXPECT_EQ(0u, reads);
@@ -2033,11 +2037,11 @@ TEST(FilesystemCollectionTest, FactoryAcquiresRootButReadsDescendantsOnePullAtAT
     EXPECT_EQ(0u, stats);
     EXPECT_EQ(1u, reads);
     ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
-    EXPECT_EQ(ComplianceEngine::Filesystem::Handle::Type::RegularFile, entry->Value().LiveComponent().AcquiredType());
+    EXPECT_EQ(ComplianceEngine::Filesystem::Type::RegularFile, entry->Value().LiveComponent().Value().Acquired().type);
 
     ++entry;
     EXPECT_EQ(entry, files.end());
-    EXPECT_TRUE(files.Close().HasValue());
+    files.Stop();
     EXPECT_EQ(0u, stats);
 }
 
@@ -2065,9 +2069,9 @@ TEST(FilesystemCollectionTest, RangeForRetainsEachRegularFilePinWithoutReacquiri
         ASSERT_TRUE(item.HasValue()) << item.Error().message;
         const auto& entry = item.Value();
         ASSERT_TRUE(entry.LiveComponent().HasValue());
-        const auto inode = entry.LiveComponent().AcquiredMetadata().st_ino;
+        const auto inode = entry.LiveComponent().Value().Acquired().metadata.st_ino;
         ASSERT_EQ(0, unlink(entry.path.c_str()));
-        auto inspected = entry.LiveComponent().Stat();
+        auto inspected = entry.LiveComponent().Value().Stat();
         ASSERT_TRUE(inspected.HasValue()) << inspected.Error().message;
         EXPECT_EQ(inode, inspected.Value().st_ino);
         seen.push_back(entry.path);
@@ -2075,7 +2079,7 @@ TEST(FilesystemCollectionTest, RangeForRetainsEachRegularFilePinWithoutReacquiri
     std::sort(seen.begin(), seen.end());
     EXPECT_EQ((std::vector<std::string>{tree.Path("root/first"), tree.Path("root/second")}), seen);
     EXPECT_EQ(0u, rootLookups);
-    EXPECT_TRUE(opened->Close().HasValue());
+    opened->Stop();
 }
 
 TEST(FilesystemCollectionTest, FactorySeparatesAbsentRootFromInitializationFailures)
@@ -2087,8 +2091,8 @@ TEST(FilesystemCollectionTest, FactorySeparatesAbsentRootFromInitializationFailu
     auto absent = Files(request, context);
     ASSERT_TRUE(absent.HasValue());
     EXPECT_FALSE(absent->RootExists());
-    EXPECT_TRUE(absent->Close().HasValue());
-    EXPECT_TRUE(absent->Close().HasValue());
+    absent->Stop();
+    absent->Stop();
     EXPECT_EQ(absent->begin(), absent->end());
 
     request.rootPath = tree.Path("root");
@@ -2097,7 +2101,7 @@ TEST(FilesystemCollectionTest, FactorySeparatesAbsentRootFromInitializationFailu
     ASSERT_TRUE(existing.HasValue());
     EXPECT_TRUE(existing->RootExists());
     EXPECT_EQ(existing->begin(), existing->end());
-    EXPECT_TRUE(existing->Close().HasValue());
+    existing->Stop();
     ON_CALL(context, ReadDirectory(testing::_)).WillByDefault([](DIR*) -> struct dirent* {
         errno = EACCES;
         return nullptr;
@@ -2175,7 +2179,7 @@ TEST(FilesystemCollectionTest, YieldSelectionDoesNotSuppressDescentOrWorkBudgets
     ASSERT_NE(error, opened->end());
     ASSERT_FALSE(error->HasValue());
     EXPECT_EQ(EACCES, error->Error().code);
-    EXPECT_EQ(EACCES, opened->Close().Error().code);
+    opened->Stop();
 }
 
 TEST(FilesystemCollectionTest, LinkSelectionPublishesAcceptedTargetMetadata)
@@ -2281,7 +2285,7 @@ TEST(FilesystemCollectionTest, DescendantOpenFailureIsDeferredUntilAfterItsEntry
     ASSERT_TRUE(entry->HasValue());
     EXPECT_EQ(tree.Path("root/child"), entry->Value().path);
     ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
-    const auto childInode = entry->Value().LiveComponent().AcquiredMetadata().st_ino;
+    const auto childInode = entry->Value().LiveComponent().Value().Acquired().metadata.st_ino;
     EXPECT_EQ(expectedChild.st_ino, childInode);
     ++entry;
     ASSERT_NE(entry, files.end());
@@ -2289,7 +2293,7 @@ TEST(FilesystemCollectionTest, DescendantOpenFailureIsDeferredUntilAfterItsEntry
     EXPECT_EQ(EACCES, entry->Error().code);
     ++entry;
     EXPECT_EQ(entry, files.end());
-    EXPECT_EQ(EACCES, files.Close().Error().code);
+    files.Stop();
     EXPECT_TRUE(files.RootExists());
 }
 
@@ -2321,10 +2325,10 @@ TEST(FilesystemCollectionTest, LateReadErrorIsYieldedOnceAndNeverCertifiesComple
     }
     EXPECT_EQ(1u, values);
     EXPECT_EQ(1u, errors);
-    EXPECT_EQ(EIO, files.Close().Error().code);
+    files.Stop();
 }
 
-TEST(FilesystemCollectionTest, ExhaustionCloseFailureIsDeliveredThroughRange)
+TEST(FilesystemCollectionTest, ExhaustionCloseFailureDoesNotReplaceCompleteTraversal)
 {
     TestTree tree;
     tree.Directory("root");
@@ -2345,15 +2349,11 @@ TEST(FilesystemCollectionTest, ExhaustionCloseFailureIsDeliveredThroughRange)
     ASSERT_NE(entry, files.end());
     ASSERT_TRUE(entry->HasValue());
     ++entry;
-    ASSERT_NE(entry, files.end());
-    ASSERT_FALSE(entry->HasValue());
-    EXPECT_EQ(EIO, entry->Error().code);
-    ++entry;
     EXPECT_EQ(entry, files.end());
-    EXPECT_EQ(EIO, files.Close().Error().code);
+    files.Stop();
 }
 
-TEST(FilesystemCollectionTest, EarlyCloseIsIdempotentAndDoesNotReadUnseenEntries)
+TEST(FilesystemCollectionTest, EarlyStopIsIdempotentAndDoesNotReadUnseenEntries)
 {
     TestTree tree;
     tree.Directory("root");
@@ -2386,15 +2386,92 @@ TEST(FilesystemCollectionTest, EarlyCloseIsIdempotentAndDoesNotReadUnseenEntries
         }
         EXPECT_EQ(2u, seen);
         const auto beforeClose = reads;
-        const auto closedResult = files.Close();
-        ASSERT_TRUE(closedResult.HasValue());
+        files.Stop();
         EXPECT_EQ(beforeClose, reads);
         EXPECT_EQ(1u, closed);
-        EXPECT_TRUE(files.Close().HasValue());
+        files.Stop();
         EXPECT_EQ(1u, closed);
         EXPECT_EQ(files.begin(), files.end());
     }
     EXPECT_EQ(1u, closed);
+}
+
+static_assert(std::is_assignable<ComplianceEngine::Filesystem::FTW::FileRange&, ComplianceEngine::Filesystem::FTW::FileRange&&>::value,
+    "FileRange must support lvalue move assignment");
+static_assert(!std::is_assignable<ComplianceEngine::Filesystem::FTW::FileRange&&, ComplianceEngine::Filesystem::FTW::FileRange&&>::value,
+    "FileRange move assignment must not return a reference to a temporary");
+
+TEST(FilesystemCollectionTest, MovedFromRangeHasNoRootOrEntriesAndNewOwnerTraverses)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.File("root/item");
+    MockContext context;
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    auto opened = Files(request, context);
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    auto moved = std::move(opened.Value());
+    EXPECT_FALSE(opened.Value().RootExists());
+    EXPECT_EQ(opened.Value().begin(), opened.Value().end());
+    opened.Value().Stop();
+    std::vector<std::string> paths;
+    for (const auto& entry : moved)
+    {
+        ASSERT_TRUE(entry.HasValue()) << entry.Error().message;
+        paths.push_back(entry.Value().path);
+    }
+    EXPECT_EQ((std::vector<std::string>{tree.Path("root"), tree.Path("root/item")}), paths);
+    moved.Stop();
+}
+
+TEST(FilesystemCollectionTest, MoveAssignmentLeavesSourceInertAndFinalizesReplacedCursorOnce)
+{
+    TestTree tree;
+    tree.Directory("root");
+    MockContext context;
+    int cursorCloses = 0;
+    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) {
+        ++cursorCloses;
+        return closedir(stream);
+    });
+    const FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    auto first = Files(request, context);
+    auto second = Files(request, context);
+    ASSERT_TRUE(first.HasValue());
+    ASSERT_TRUE(second.HasValue());
+    first.Value() = std::move(second.Value());
+    EXPECT_EQ(1, cursorCloses);
+    EXPECT_FALSE(second.Value().RootExists());
+    EXPECT_EQ(second.Value().begin(), second.Value().end());
+    second.Value().Stop();
+    EXPECT_TRUE(first.Value().RootExists());
+    auto root = first.Value().begin();
+    ASSERT_NE(root, first.Value().end());
+    ASSERT_TRUE(root->HasValue());
+    first.Value().Stop();
+    EXPECT_EQ(2, cursorCloses);
+}
+
+TEST(FilesystemCollectionTest, StopOnMovedFromRangeIsInert)
+{
+    TestTree tree;
+    tree.Directory("root");
+    MockContext context;
+    int cursorCloses = 0;
+    EXPECT_CALL(context, ReadDirectory(testing::_)).Times(0);
+    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) {
+        ++cursorCloses;
+        return closedir(stream);
+    });
+    auto opened = Files(FilesystemCollectionRequest(tree.Path("root"), FilesystemRootKind::Directory), context);
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    auto moved = std::move(opened.Value());
+    opened.Value().Stop();
+    EXPECT_EQ(0, cursorCloses);
+    moved.Stop();
+    moved.Stop();
+    EXPECT_EQ(1, cursorCloses);
 }
 
 TEST(FilesystemCollectionTest, AbandonedRangeClosesWithoutPullingDescendants)
@@ -2419,7 +2496,7 @@ TEST(FilesystemCollectionTest, AbandonedRangeClosesWithoutPullingDescendants)
     EXPECT_EQ(1u, closed);
 }
 
-TEST(FilesystemCollectionTest, EarlyClosePropagatesFailure)
+TEST(FilesystemCollectionTest, EarlyStopDisposalIsDiagnosticOnly)
 {
     TestTree tree;
     tree.Directory("root");
@@ -2445,10 +2522,8 @@ TEST(FilesystemCollectionTest, EarlyClosePropagatesFailure)
         }
         return result;
     });
-    const auto closed = files.Close();
-    ASSERT_FALSE(closed.HasValue());
-    EXPECT_EQ(EIO, closed.Error().code);
-    EXPECT_EQ(EIO, files.Close().Error().code);
+    files.Stop();
+    files.Stop();
 }
 
 TEST(FilesystemCollectionTest, VisitorStopDoesNotDrainUnvisitedEntries)

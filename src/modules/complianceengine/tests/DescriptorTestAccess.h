@@ -114,7 +114,7 @@ public:
     }
     static Result<Descriptor> ActivateReadOnly(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory, std::size_t cap)
     {
-        return Filesystem::Handle::ActivateReadOnly(context, pin, snapshot, directory, cap);
+        return Filesystem::Detail::Handle::ActivateReadOnly(context, pin, snapshot, directory, cap);
     }
     static Result<Descriptor> ActivateReadOnly(const ContextInterface&&, const Descriptor&, const struct stat&, bool, std::size_t) = delete;
     static Result<Filesystem::Detail::LinkTarget> ReadPinnedLink(const Descriptor& pin, std::size_t targetCap, std::size_t fdinfoCap)

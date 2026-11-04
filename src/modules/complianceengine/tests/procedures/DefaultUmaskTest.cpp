@@ -146,10 +146,14 @@ TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, CorrectValueStopsWithoutReadingTa
     EXPECT_EQ(1, closes);
 }
 
-TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, CorrectValueCloseFailurePrecedesEarlyVerdict)
+TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, CorrectValueCloseFailurePreservesEarlyVerdictAndLogsOnce)
 {
     const auto path = mContext.MakeTempfile("umask 027\n");
     mContext.SetSpecialFilePath("/etc/bashrc", path);
+    const auto logPath = mContext.GetTempdirPath() + "/umask-close.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    mContext.SetLogHandle(logHandle);
     int closes = 0;
     ON_CALL(mContext, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
         const bool data = IsData(descriptor, path);
@@ -164,11 +168,20 @@ TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, CorrectValueCloseFailurePrecedesE
     });
 
     const auto result = AuditDefaultUmask(mIndicators, mContext);
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EIO, result.Error().code);
-    EXPECT_EQ("Cannot close readable file", result.Error().message);
+    CloseLog(&logHandle);
+    mContext.SetLogHandle(nullptr);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+    ASSERT_EQ(1U, mIndicators.Back().indicators.size());
+    EXPECT_EQ("umask is correctly set in " + path, mIndicators.Back().indicators.back().message);
     EXPECT_EQ(1, closes);
-    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+    std::ifstream log(logPath);
+    ASSERT_TRUE(log.is_open());
+    const string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+    const string closeEntry = "Cannot close readable-file activation: " + std::to_string(EIO);
+    const auto first = text.find(closeEntry);
+    ASSERT_NE(string::npos, first);
+    EXPECT_EQ(string::npos, text.find(closeEntry, first + closeEntry.size()));
 }
 
 TEST_F(EnsureDefaultUserUmaskIsConfiguredTest, CorrectValue_2)

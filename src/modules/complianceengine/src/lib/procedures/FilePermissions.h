@@ -107,19 +107,11 @@ struct FilePermissionsCollectionParams
 Result<Status> AuditFilePermissionsCollection(const FilePermissionsCollectionParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateFilePermissionsCollection(const FilePermissionsCollectionParams& params, IndicatorsTree& indicators, ContextInterface& context);
 
-namespace Filesystem
-{
-class Handle;
-}
-
 // Synchronous borrow: the caller keeps the acquired regular-file pin live
 // throughout inspection/mutation. path is diagnostic only, never reopened.
 // requireUnique retains the dotfile rule's fresh hard-link safeguard.
-Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Path::Component& component, IndicatorsTree& indicators,
     ContextInterface& context);
-Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, bool requireUnique,
-    IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Path::Component& component, bool requireUnique,
     IndicatorsTree& indicators, ContextInterface& context);
 } // namespace ComplianceEngine

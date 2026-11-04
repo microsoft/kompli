@@ -25,32 +25,21 @@ class ProcfsDescriptorAccess
 {
 public:
     Result<bool> Open();
-    Result<bool> Close();
+    void Close() noexcept;
     Result<std::uint64_t> ReadMountId(const Descriptor& descriptor, std::size_t byteCap) const;
-    const Descriptor& ProcDirectory() const noexcept
-    {
-        return proc;
-    }
-    const Descriptor& FdDirectory() const noexcept
-    {
-        return fd;
-    }
-    const Descriptor& FdinfoDirectory() const noexcept
-    {
-        return fdinfo;
-    }
 
 private:
     friend class ::ComplianceEngine::ContextInterface;
-    friend class ::ComplianceEngine::Filesystem::Handle;
+    friend class ::ComplianceEngine::Filesystem::Detail::Handle;
     friend class ::ComplianceEngine::Filesystem::Path;
     friend class ::ComplianceEngine::Tests::DescriptorTestAccess;
     explicit ProcfsDescriptorAccess(const ContextInterface& context);
     ProcfsDescriptorAccess(const ContextInterface&&) = delete;
     static bool IsProcfsDirectory(const ContextInterface& context, const Descriptor& descriptor);
     bool VerifyRole(const ContextInterface& context, bool information) const;
-    // Bootstrap owners are checked-closed during Open to keep the peak
-    // descriptor count bounded. Ordinary callers cannot replace role pins.
+    // Bootstrap owners are disposed during Open to keep the peak descriptor
+    // count bounded; disposal failures are diagnostic-only. Ordinary callers
+    // cannot replace role pins.
     Descriptor proc, self, pid, task, tid, fd, fdinfo;
     pid_t mPid = 0, mTid = 0;
     bool mVerified = false;

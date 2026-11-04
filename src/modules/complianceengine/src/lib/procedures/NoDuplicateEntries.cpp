@@ -73,11 +73,7 @@ Result<Status> AuditNoDuplicateEntries(const NoDuplicateEntriesParams& params, I
         }
     }
 
-    auto closed = range.Close();
-    if (!closed.HasValue())
-    {
-        return std::move(closed).Error();
-    }
+    range.Close();
 
     if (!duplicateEntries.empty())
     {

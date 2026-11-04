@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cerrno>
 #include <fcntl.h>
+#include <fstream>
+#include <iterator>
 #include <set>
 #include <string>
 #include <sys/stat.h>
@@ -126,9 +128,13 @@ TEST_F(ValidShellsTest, ReachedReadErrorTakesPrecedenceOverCloseError)
     EXPECT_EQ(1, closes);
 }
 
-TEST_F(ValidShellsTest, CloseFailureAfterEofIsAnError)
+TEST_F(ValidShellsTest, CloseFailureAfterEofPreservesCompletedSetAndLogsOnce)
 {
     SetShells("/bin/bash\n");
+    const auto logPath = context.GetTempdirPath() + "/shells-close.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    context.SetLogHandle(logHandle);
     int closes = 0;
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsData(fd);
@@ -141,9 +147,17 @@ TEST_F(ValidShellsTest, CloseFailureAfterEofIsAnError)
         }
         return 0;
     });
-    auto failed = ListValidShells(context);
-    ASSERT_FALSE(failed.HasValue());
-    EXPECT_EQ(EIO, failed.Error().code);
-    EXPECT_EQ("Cannot close readable file", failed.Error().message);
+    auto shells = ListValidShells(context);
+    CloseLog(&logHandle);
+    context.SetLogHandle(nullptr);
+    ASSERT_TRUE(shells.HasValue());
+    EXPECT_EQ((std::set<std::string>{"/bin/bash"}), shells.Value());
     EXPECT_EQ(1, closes);
+    std::ifstream log(logPath);
+    ASSERT_TRUE(log.is_open());
+    const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+    const std::string closeEntry = "Cannot close readable-file activation: " + std::to_string(EIO);
+    const auto first = text.find(closeEntry);
+    ASSERT_NE(std::string::npos, first);
+    EXPECT_EQ(std::string::npos, text.find(closeEntry, first + closeEntry.size()));
 }

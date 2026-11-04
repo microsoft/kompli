@@ -18,7 +18,10 @@ class ContextInterface;
 
 namespace Filesystem
 {
+namespace Detail
+{
 class Handle;
+}
 // Owns a separate read-only descriptor verified against a live regular-file
 // Handle. Each bound context must outlive operations and cleanup that use it,
 // including cleanup of replaced ownership during a move. No descriptor escapes.
@@ -39,7 +42,7 @@ public:
     ReadableFile(ReadableFile&& other) noexcept = default;
     // Replaces the old descriptor through its original context, then adopts
     // the incoming descriptor and its context (which may be different).
-    ReadableFile& operator=(ReadableFile&& other) noexcept = default;
+    ReadableFile& operator=(ReadableFile&& other) & noexcept = default;
     ~ReadableFile() noexcept = default;
 
     // Callers supply a positive, representable maxBytes. Fill that many bytes
@@ -70,14 +73,14 @@ public:
     // read, nor exclude concurrent writes.
     Result<struct stat> Stat() const;
 
-    // Relinquish ownership before the native close attempt. Return its actual
-    // failure on the first call; subsequent calls succeed without touching a
-    // possibly reused descriptor number. Destruction closes and logs failures
-    // only if the descriptor remains live.
-    Result<bool> Close();
+    // Relinquish ownership before a single native close attempt. Failures are
+    // reported best-effort through the descriptor owner, not returned; later
+    // calls never touch a possibly reused descriptor number. Destruction also
+    // disposes a descriptor still owned by this reader.
+    void Close() noexcept;
 
 private:
-    friend class Handle;
+    friend class Detail::Handle;
     ReadableFile(Detail::Descriptor&& descriptor, Policy policy) noexcept;
     Optional<Detail::Descriptor> mDescriptor;
     std::size_t mInterruptRetriesRemaining;

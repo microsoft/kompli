@@ -82,7 +82,7 @@ Result<MatchResult> MultilineMatch(const std::string& filename, const regex& val
             if (result.found)
             {
                 result.multiple = true;
-                // A duplicate is sufficient; Close must still be checked without draining the tail.
+                // A duplicate is sufficient; dispose early without draining the tail or vetoing the verdict.
                 break;
             }
             result.found = true;
@@ -117,11 +117,7 @@ Result<MatchResult> MultilineMatch(const std::string& filename, const regex& val
         }
     }
 
-    auto closed = range.Close();
-    if (!closed.HasValue())
-    {
-        return std::move(closed).Error();
-    }
+    range.Close();
     return result;
 }
 

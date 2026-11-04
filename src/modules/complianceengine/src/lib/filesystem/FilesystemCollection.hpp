@@ -179,22 +179,13 @@ struct FilesystemCollectionEntry
     bool missing = false;
     // Owning acquired object, independent of range advancement and closure.
     // Snapshots and missing observations have no component authority.
-    Path::Component LiveComponent() const noexcept
+    Optional<Path::Component> LiveComponent() const
     {
-        return mComponent.HasValue() ? mComponent.Value() : Path::Component{};
+        return mComponent;
     }
     void OwnComponent(Path::Component component)
     {
         mComponent = std::move(component);
-    }
-    // Checked release is only for a pin not yet transferred to a caller.
-    bool OwnsComponent() const noexcept
-    {
-        return mComponent.HasValue();
-    }
-    Result<bool> CloseComponent()
-    {
-        return mComponent.Value().Close();
     }
 
 private:
@@ -242,20 +233,19 @@ public:
     FileRange(const FileRange&) = delete;
     FileRange& operator=(const FileRange&) = delete;
     FileRange(FileRange&&) = default;
-    FileRange& operator=(FileRange&&) = default;
-    ~FileRange();
+    FileRange& operator=(FileRange&&) & = default;
+    ~FileRange() noexcept;
 
-    // Checked, idempotent cleanup of all still-owned pins and cursors without
-    // draining unseen entries. Yielded regular-file entries own their pins;
-    // borrowed directory pins expire on Close. Failed closes are not retried.
-    Result<bool> Close();
-    // False only when the requested root was missing during initial lookup.
+    // Stop traversal without draining unseen entries. Already yielded entries
+    // retain their independent pins; native disposal is diagnostic-only.
+    void Stop() noexcept;
+    // False when the requested root was missing or the range was moved from.
     bool RootExists() const;
 
     using Iterator = Ranges::View<Source>::Iterator;
     Iterator begin() // NOLINT(*-identifier-naming)
     {
-        return mView.begin();
+        return mState ? mView.begin() : end();
     }
     Iterator end() // NOLINT(*-identifier-naming)
     {

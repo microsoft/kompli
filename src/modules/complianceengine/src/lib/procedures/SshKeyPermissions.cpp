@@ -41,7 +41,7 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
         {
             return Error("SSH key collection requires a live regular-file pin", EBADF);
         }
-        auto opened = pin.OpenReadOnly();
+        auto opened = pin.Value().OpenReadOnly();
         if (!opened.HasValue())
         {
             return std::move(opened).Error();
@@ -51,42 +51,24 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
         // reading the entire file. Retain that behavior with a bounded read.
         constexpr std::size_t maxKeyBytes = 1024 * 1024;
         std::string content;
-        auto closeAfterError = [&]() {
-            auto closed = readable.Close();
-            if (!closed.HasValue())
-            {
-                try
-                {
-                    OsConfigLogError(context.GetLogHandle(), "Secondary SSH key reader close failure: %d", closed.Error().code);
-                }
-                catch (...)
-                {
-                    OsConfigLogError(nullptr, "Secondary SSH key reader close or log failure: %d", closed.Error().code);
-                }
-            }
-        };
         for (;;)
         {
             auto chunk = readable.Read(4096);
             if (!chunk.HasValue())
             {
                 auto primary = std::move(chunk).Error();
-                closeAfterError();
                 return primary;
             }
             if (!chunk.Value().HasValue())
                 break;
-            const auto& bytes = chunk.Value().Value();
+            auto bytes = std::move(chunk).Value().Value();
             if (bytes.size() > maxKeyBytes - content.size())
             {
-                closeAfterError();
                 return Error("SSH key content exceeds classification byte limit", E2BIG);
             }
             content += bytes;
         }
-        auto closed = readable.Close();
-        if (!closed.HasValue())
-            return std::move(closed).Error();
+        readable.Close();
         std::istringstream iss(content);
         std::string firstLine;
         if (!std::getline(iss, firstLine))
@@ -150,8 +132,8 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
             params.mask = 0137; // private key stricter forbidden bits
         }
 
-        Result<Status> result = isRemediation ? EnforcePinnedFilePermissions(params, pin, false, indicators, context) :
-                                                CheckPinnedFilePermissions(params, pin, indicators, context);
+        Result<Status> result = isRemediation ? EnforcePinnedFilePermissions(params, pin.Value(), false, indicators, context) :
+                                                CheckPinnedFilePermissions(params, pin.Value(), indicators, context);
         if (!result.HasValue())
         {
             return result.Error();
@@ -181,7 +163,7 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
     auto frozen = As<Filesystem::Path>(root.Value()).FreezeRoot();
     if (!frozen.HasValue())
         return std::move(frozen).Error();
-    if (As<Filesystem::Path>(root.Value()).Root().AcquiredType() != Filesystem::Handle::Type::Directory)
+    if (As<Filesystem::Path>(root.Value()).Root().Acquired().type != Filesystem::Type::Directory)
         return Error("Expected directory root at '" + baseDir + "'", ENOTDIR);
     auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), resolved.Value().rootPath,
         Filesystem::CollectionContinuation(resolved.Value()));
@@ -189,7 +171,7 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
     {
         return opened.Error();
     }
-    auto& files = opened.Value();
+    auto files = std::move(opened).Value();
     Status verdict = Status::Compliant;
     for (const auto& entry : files)
     {
@@ -208,11 +190,7 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
             break;
         }
     }
-    const auto closed = files.Close();
-    if (!closed.HasValue())
-    {
-        return closed.Error();
-    }
+    files.Stop();
     return verdict;
 }
 } // anonymous namespace

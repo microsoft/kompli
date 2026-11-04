@@ -15,6 +15,64 @@ enum class StateSatisfaction
     NotSatisfied,
 };
 
+// OVAL 5.12.3 source rows, restricted to nonempty Check T/F/E operands.
+// These are not the sticky operational Result errors of existing native callers.
+enum class SourceCheckValue
+{
+    True,
+    False,
+    Error
+};
+enum class SourceCheckPolicy
+{
+    All,
+    AtLeastOne,
+    NoneSatisfy,
+    OnlyOne
+};
+class SourceCheckEvidence
+{
+public:
+    void Add(SourceCheckValue value);
+    bool HasSourceError() const;
+    // Empty Check has no source chart row; invalid inputs return EINVAL.
+    Result<SourceCheckValue> Evaluate(SourceCheckPolicy policy) const;
+
+private:
+    unsigned mTrue = 0;
+    unsigned mFalse = 0;
+    unsigned mError = 0;
+    bool mInvalid = false;
+};
+
+// Selected occurrences contribute Exists regardless of scalar state. The
+// bounded producer supplies no DoesNotExist or NotCollected status.
+enum class SourceExistenceValue
+{
+    Exists,
+    Error
+};
+enum class SourceExistencePolicy
+{
+    AllExist,
+    AnyExist,
+    AtLeastOneExists,
+    NoneExist,
+    OnlyOneExists
+};
+class SourceExistenceEvidence
+{
+public:
+    void Add(SourceExistenceValue value);
+    bool HasSourceError() const;
+    Result<SourceCheckValue> Evaluate(SourceExistencePolicy policy) const;
+
+private:
+    unsigned mExists = 0;
+    unsigned mError = 0;
+    bool mInvalid = false;
+};
+
 class CompletedItemEvidence
 {
 public:

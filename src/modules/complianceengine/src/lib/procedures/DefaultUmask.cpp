@@ -191,11 +191,7 @@ Result<MatchResult> MultilineMatch(const std::string& filename, const regex& val
         }
     }
 
-    auto closed = range.Close();
-    if (!closed.HasValue())
-    {
-        return std::move(closed).Error();
-    }
+    range.Close();
     return result;
 }
 

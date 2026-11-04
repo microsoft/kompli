@@ -21,7 +21,7 @@ Result<bool> AppendNameserver(const ResolvConf::Entry& entry, const FileCollecti
     // nameserver evidence; the parser retains their original bytes.
     if (!entry.directive.Is<ResolvConf::Nameserver>())
         return true;
-    const auto& span = entry.directive.Get<ResolvConf::Nameserver>().token;
+    const auto span = entry.directive.Get<ResolvConf::Nameserver>().token;
     if (collection.items.size() >= policy.occurrences || collection.items.size() >= policy.values)
         return Error("Nameserver value limit exceeded", E2BIG);
     if (collection.items.size() >= collection.items.max_size())
@@ -57,17 +57,16 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
     if (!opened.HasValue())
         return std::move(opened).Error();
     ResolvConf::Parser parser(path);
-    auto& range = opened.Value();
-    // Keep reading after a parser/selection failure. Reached read errors and
-    // checked Close are authoritative even if Parser::Finish is sticky.
-    // The provisional collection is not returned until EOF, Close and Finish.
+    auto range = std::move(opened).Value();
+    // Keep reading after parser/selection failure so reached read errors win.
+    // Evidence stays provisional until verified EOF and Finish; native
+    // disposal cannot replace a read or selection result.
     for (const auto& item : range)
     {
         if (!item.HasValue())
         {
             const auto readError = item.Error();
-            const auto closed = range.Close();
-            (void)closed; // The reached read error takes precedence.
+            range.Close();
             (void)parser.Finish(readError);
             return readError;
         }
@@ -80,15 +79,8 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
                 selected = AppendNameserver(entry.Value(), policy, capturedBytes, collection);
         }
     }
-    auto closed = range.Close();
-    if (!closed.HasValue())
-    {
-        const auto closeError = std::move(closed).Error();
-        (void)parser.Finish(closeError);
-        return closeError;
-    }
-
-    auto finished = parser.Finish(ResolvConf::Acquisition::EofAndClosed);
+    range.Close();
+    auto finished = parser.Finish(ResolvConf::Acquisition::Eof);
     if (!selected.HasValue())
         return selected.Error();
     if (!finished.HasValue())

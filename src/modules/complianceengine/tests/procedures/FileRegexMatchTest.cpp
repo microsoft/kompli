@@ -275,6 +275,36 @@ TEST_F(FileRegexMatchTest, WholeFileVisitsEmptyMatchAtEndOfInput)
     EXPECT_EQ(result.Value(), Status::NonCompliant);
 }
 
+TEST_F(FileRegexMatchTest, LineModeSelectsFirstMatchWhileWholeFileSelectsNonOverlappingMatches)
+{
+    MakeTempfile("key=ok;key=bad\n");
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex("1");
+    params.matchPattern = R"(key=(ok|bad))";
+    params.statePattern = "^ok$";
+    params.behavior = Behavior::AtLeastOneExists;
+
+    for (const auto& testCase : {std::pair<string, Status>{"key=ok;key=bad\n", Status::Compliant}, {"key=bad;key=ok\n", Status::NonCompliant}})
+    {
+        std::ofstream(mTempfiles[0]) << testCase.first;
+        for (const bool wholeFile : {false, true})
+        {
+            params.wholeFile = wholeFile;
+            for (const bool allMatches : {false, true})
+            {
+                params.allMatches = allMatches;
+                const Status expected = wholeFile ? (allMatches ? Status::NonCompliant : Status::Compliant) : testCase.second;
+                IndicatorsTree indicators;
+                indicators.Push("FileRegexMatch");
+                const auto result = AuditFileRegexMatch(params, indicators, mContext);
+                ASSERT_TRUE(result.HasValue()) << testCase.first << " wholeFile=" << wholeFile << " allMatches=" << allMatches;
+                EXPECT_EQ(expected, result.Value()) << testCase.first << " wholeFile=" << wholeFile << " allMatches=" << allMatches;
+            }
+        }
+    }
+}
+
 TEST_F(FileRegexMatchTest, Audit_InvalidArguments_1)
 {
     FileRegexMatchParams params;
@@ -996,6 +1026,39 @@ TEST_F(FileRegexMatchTest, AllMatchesIgnoresUnselectedFilesInEitherOrder)
             result = AuditFileRegexMatch(params, mIndicators, mContext);
             ASSERT_TRUE(result.HasValue());
             EXPECT_EQ(Status::NonCompliant, result.Value());
+        }
+    }
+}
+
+TEST_F(FileRegexMatchTest, SelectedValueFlagsApplyAcrossFilesInEitherOrderAndMode)
+{
+    MakeTempfile("key=ok\n");
+    MakeTempfile("key=bad\n");
+    FileRegexMatchParams params;
+    params.path = mTempdir;
+    params.filenamePattern = regex("[12]");
+    params.matchPattern = R"(^key=([^\n]*))";
+    params.statePattern = "^ok$";
+    params.behavior = Behavior::AtLeastOneExists;
+
+    for (const bool wholeFile : {false, true})
+    {
+        params.wholeFile = wholeFile;
+        for (const bool passingFirst : {false, true})
+        {
+            std::ofstream(mTempfiles[0]) << (passingFirst ? "key=ok\n" : "key=bad\n");
+            std::ofstream(mTempfiles[1]) << (passingFirst ? "key=bad\n" : "key=ok\n");
+            for (const auto& expectation : {std::pair<std::pair<bool, bool>, Status>{{false, false}, Status::Compliant},
+                     {{true, false}, Status::NonCompliant}, {{false, true}, Status::NonCompliant}})
+            {
+                params.allMatches = expectation.first.first;
+                params.noneMatches = expectation.first.second;
+                IndicatorsTree indicators;
+                indicators.Push("FileRegexMatch");
+                const auto result = AuditFileRegexMatch(params, indicators, mContext);
+                ASSERT_TRUE(result.HasValue()) << "wholeFile=" << wholeFile << " passingFirst=" << passingFirst;
+                EXPECT_EQ(expectation.second, result.Value()) << "wholeFile=" << wholeFile << " passingFirst=" << passingFirst;
+            }
         }
     }
 }

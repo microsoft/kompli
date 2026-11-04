@@ -10,6 +10,7 @@
 #include <fstream>
 #include <grp.h>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <linux/limits.h>
 #include <pwd.h>
 #include <string>
@@ -187,10 +188,16 @@ TEST_F(LogFileRangeTest, ReachedItemErrorAfterNoncomplianceOutranksCleanupFailur
     EXPECT_EQ(1u, indicators.GetRootNode()->children.size());
 }
 
-TEST_F(LogFileRangeTest, CheckedCloseErrorOverridesVerdictForBothPaths)
+TEST_F(LogFileRangeTest, CloseFailureDoesNotOverrideVerdictForEitherPath)
 {
     const std::string file = testDir + "/bad.log";
-    ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([](DIR* stream) {
+    const auto logPath = context.GetTempdirPath() + "/logfile-close.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    context.SetLogHandle(logHandle);
+    int closeAttempts = 0;
+    ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([&](DIR* stream) {
+        ++closeAttempts;
         const int result = closedir(stream);
         errno = EIO;
         return result == 0 ? -1 : result;
@@ -206,10 +213,22 @@ TEST_F(LogFileRangeTest, CheckedCloseErrorOverridesVerdictForBothPaths)
             ASSERT_EQ(0, unlink(file.c_str()));
         }
         const auto result = Run(remediate);
-        ASSERT_FALSE(result.HasValue());
-        EXPECT_EQ(EIO, result.Error().code);
+        ASSERT_TRUE(result.HasValue()) << result.Error().message;
+        EXPECT_EQ(remediate ? Status::Compliant : Status::NonCompliant, result.Value());
     }
     EXPECT_EQ(1u, indicators.GetRootNode()->children.size());
+    EXPECT_EQ(2, closeAttempts);
+    CloseLog(&logHandle);
+    context.SetLogHandle(nullptr);
+    std::ifstream log(logPath);
+    ASSERT_TRUE(log.is_open());
+    const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+    const auto diagnostic = "Cannot close pinned directory cursor: " + std::to_string(EIO);
+    const auto first = text.find(diagnostic);
+    ASSERT_NE(std::string::npos, first);
+    const auto second = text.find(diagnostic, first + diagnostic.size());
+    ASSERT_NE(std::string::npos, second);
+    EXPECT_EQ(std::string::npos, text.find(diagnostic, second + diagnostic.size()));
 }
 
 TEST_F(LogFileRangeTest, DescendantErrorIsReachedDespiteDirectoryFiltering)

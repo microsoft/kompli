@@ -6,10 +6,14 @@
 #include <ProcedureMap.h>
 #include <Regex.h>
 #include <Result.h>
+#include <ResultEvidence.h>
 #include <cerrno>
 #include <cstdlib>
 #include <dirent.h>
 #include <fstream>
+#include <limits>
+#include <memory>
+#include <sys/stat.h>
 
 namespace ComplianceEngine
 {
@@ -47,185 +51,222 @@ Result<long long> ParseInteger(const std::string& text)
 // syntax Options for matchPattern and statePattern respectively
 using MatchStateSyntaxOptions = std::pair<syntax_option_type, syntax_option_type>;
 
-struct MultilineMatchResult
+// The producer is below, outside the anonymous namespace, so M-82 can feed
+// acquired content without changing selection or source evidence semantics.
+} // anonymous namespace
+
+Result<bool> EvaluateFileRegexContent(std::istream& input, const std::string& filename, const std::string& matchPattern, const regex& matchRegex,
+    const Optional<regex>& stateRegex, ContextInterface& context, const Optional<long long>& minimumValue, const Optional<long long>& maximumValue,
+    bool wholeFile, FileRegexOccurrenceSink& sink)
 {
-    // At least one selected value passes, or every selected value passes when allMatches is set.
-    bool success;
-    // At least one line matches matchPattern, regardless of its state or numeric constraints.
-    bool selected;
-};
-
-// Select lines with matchPattern, then evaluate their state and numeric constraints.
-Result<MultilineMatchResult> MultilineMatch(const std::string& filename, const string& matchPattern, const regex& matchRegex, const Optional<regex>& stateRegex,
-    ContextInterface& context, const Optional<long long>& minimumValue, const Optional<long long>& maximumValue, bool allMatches, bool wholeFile, bool noneMatches)
-{
-    ifstream input(filename);
-    if (!input.is_open())
+    try
     {
-        return Error("Failed to open file: " + filename, errno);
-    }
-
-    bool matchingValueFound = false;
-    bool selected = false;
-
-    const auto evaluateMatch = [&](const smatch& match) -> Optional<bool> {
-        selected = true;
-        const auto capturedValue = match.size() > 1 ? match[1].str() : match[0].str();
-        bool valueMatches = true;
-        if (minimumValue.HasValue() || maximumValue.HasValue())
-        {
-            const auto numericValue = ParseInteger(capturedValue);
-            valueMatches = numericValue.HasValue() && (!minimumValue.HasValue() || numericValue.Value() >= minimumValue.Value()) &&
-                           (!maximumValue.HasValue() || numericValue.Value() <= maximumValue.Value());
-        }
-        if (valueMatches && stateRegex.HasValue())
-        {
-            valueMatches = regex_search(capturedValue, stateRegex.Value());
-        }
-        return valueMatches;
-    };
-
-    if (wholeFile)
-    {
-        string contents;
-        char buffer[8192];
-        do
-        {
-            input.read(buffer, sizeof(buffer));
-            contents.append(buffer, static_cast<size_t>(input.gcount()));
-        } while (input);
-        if (input.bad() || !input.eof())
-        {
+        size_t ordinal = 0;
+        const auto evaluateMatch = [&](const smatch& match, size_t position) -> Result<SourceCheckValue> {
+            const auto capturedValue = (match.size() > 1) ? match[1].str() : match[0].str();
+            bool valueMatches = true;
+            if (minimumValue.HasValue() || maximumValue.HasValue())
+            {
+                const auto numericValue = ParseInteger(capturedValue);
+                valueMatches = numericValue.HasValue() && (!minimumValue.HasValue() || (numericValue.Value() >= minimumValue.Value())) &&
+                               (!maximumValue.HasValue() || (numericValue.Value() <= maximumValue.Value()));
+            }
+            if (valueMatches && stateRegex.HasValue())
+            {
+                valueMatches = regex_search(capturedValue, stateRegex.Value());
+            }
+            const FileRegexOccurrence occurrence{ordinal++, position, capturedValue, valueMatches ? SourceCheckValue::True : SourceCheckValue::False};
+            const auto consumed = sink.Consume(occurrence);
+            if (!consumed.HasValue())
+                return consumed.Error();
+            return occurrence.state;
+        };
+        const auto readFailure = [&]() -> Result<bool> {
             OsConfigLogError(context.GetLogHandle(), "Failed to read file '%s'", filename.c_str());
             return Error("Failed to read file: " + filename, EIO);
-        }
-        const auto evaluateWholeFileMatch = [&](const smatch& match) -> Optional<MultilineMatchResult> {
-            const bool valueMatches = evaluateMatch(match).Value();
-            if (noneMatches && valueMatches)
-            {
-                return MultilineMatchResult{false, selected};
-            }
-            if (allMatches && !valueMatches)
-            {
-                return MultilineMatchResult{false, selected};
-            }
-            matchingValueFound = matchingValueFound || valueMatches;
-            if (!allMatches && !noneMatches && valueMatches)
-            {
-                return MultilineMatchResult{true, selected};
-            }
-            return {};
         };
-
-        if (!matchPattern.empty() && matchPattern[0] == '^')
+        // A pre-failed stream has not supplied a complete content source.
+        if (!input.good())
+            return readFailure();
+        if (wholeFile)
         {
-            for (size_t offset = 0; offset <= contents.size();)
+            string contents;
+            char buffer[8192];
+            do
             {
-                smatch match;
-                const auto begin = contents.cbegin() + offset;
-                if (regex_search(begin, contents.cend(), match, matchRegex, std::regex_constants::match_continuous))
+                // A short final read throws at normal EOF under failbit masks.
+                try
                 {
-                    const auto result = evaluateWholeFileMatch(match);
-                    if (result.HasValue())
-                    {
-                        return result.Value();
-                    }
-                    offset += std::max<size_t>(match.length(0), 1);
-                    continue;
+                    input.read(buffer, sizeof(buffer));
                 }
-                const auto newline = contents.find('\n', offset);
-                if (newline == string::npos)
+                catch (const std::ios_base::failure&)
                 {
-                    break;
+                    if (input.bad() || !input.eof())
+                        return readFailure();
                 }
-                offset = newline + 1;
+                catch (const std::bad_alloc&)
+                {
+                    throw; // The outer allocation boundary reports ENOMEM.
+                }
+                catch (...)
+                {
+                    return readFailure(); // A streambuf may rethrow its original exception.
+                }
+                contents.append(buffer, static_cast<size_t>(input.gcount()));
+                if (input.bad() || (!input && !input.eof()))
+                    return readFailure();
+            } while (input);
+            if (input.bad() || !input.eof())
+            {
+                return readFailure();
             }
-        }
-        else
-        {
-            auto begin = contents.cbegin();
-            auto flags = std::regex_constants::match_default;
-            smatch match;
-            while (regex_search(begin, contents.cend(), match, matchRegex, flags))
+            if ((!matchPattern.empty()) && ('^' == matchPattern[0]))
             {
-                const auto result = evaluateWholeFileMatch(match);
-                if (result.HasValue())
+                for (size_t offset = 0; offset <= contents.size();)
                 {
-                    return result.Value();
-                }
-                begin += match.position(0) + match.length(0);
-                if (match.length(0) == 0)
-                {
-                    if (begin == contents.cend())
+                    smatch match;
+                    const auto begin = contents.cbegin() + offset;
+                    if (regex_search(begin, contents.cend(), match, matchRegex, std::regex_constants::match_continuous))
+                    {
+                        const auto consumed = evaluateMatch(match, offset + static_cast<size_t>(match.position(0)));
+                        if (!consumed.HasValue())
+                            return consumed.Error();
+                        offset += std::max<size_t>(match.length(0), 1);
+                        continue;
+                    }
+                    const auto newline = contents.find('\n', offset);
+                    if (string::npos == newline)
                     {
                         break;
                     }
-                    flags = begin == contents.cbegin() ? std::regex_constants::match_default : std::regex_constants::match_prev_avail;
-                    if (regex_search(begin, contents.cend(), match, matchRegex, flags | std::regex_constants::match_not_null | std::regex_constants::match_continuous))
-                    {
-                        const auto nonemptyResult = evaluateWholeFileMatch(match);
-                        if (nonemptyResult.HasValue())
-                        {
-                            return nonemptyResult.Value();
-                        }
-                        begin += match.length(0);
-                    }
-                    else
-                    {
-                        ++begin;
-                    }
+                    offset = newline + 1;
                 }
-                flags = std::regex_constants::match_prev_avail;
             }
-        }
-        return MultilineMatchResult{noneMatches ? selected : matchingValueFound, selected};
-    }
-
-    int lineNumber = 0;
-    string line;
-
-    // Special case for empty files, read empty line then
-    while (getline(input, line) || (lineNumber == 0 && input.eof()))
-    {
-        if (input.bad())
-        {
-            OsConfigLogError(context.GetLogHandle(), "Failed to read file '%s'", filename.c_str());
-            return Error("Failed to read file: " + filename, EIO);
-        }
-        lineNumber++;
-        OsConfigLogDebug(context.GetLogHandle(), "Matching line %d: '%s', pattern: '%s'", lineNumber, line.c_str(), matchPattern.c_str());
-        smatch match;
-        if (regex_search(line, match, matchRegex))
-        {
-            const bool valueMatches = evaluateMatch(match).Value();
-            if (noneMatches && valueMatches)
+            else
             {
-                return MultilineMatchResult{false, selected};
-            }
-            if (!valueMatches)
-            {
-                if (allMatches)
+                auto begin = contents.cbegin();
+                auto flags = std::regex_constants::match_default;
+                smatch match;
+                while (regex_search(begin, contents.cend(), match, matchRegex, flags))
                 {
-                    return MultilineMatchResult{false, selected};
+                    const auto consumed = evaluateMatch(match, static_cast<size_t>(begin - contents.cbegin()) + static_cast<size_t>(match.position(0)));
+                    if (!consumed.HasValue())
+                        return consumed.Error();
+                    begin += match.position(0) + match.length(0);
+                    if (0 == match.length(0))
+                    {
+                        if (begin == contents.cend())
+                        {
+                            break;
+                        }
+                        flags = (begin == contents.cbegin()) ? std::regex_constants::match_default : std::regex_constants::match_prev_avail;
+                        if (regex_search(begin, contents.cend(), match, matchRegex, flags | std::regex_constants::match_not_null | std::regex_constants::match_continuous))
+                        {
+                            const auto consumed = evaluateMatch(match, static_cast<size_t>(begin - contents.cbegin()));
+                            if (!consumed.HasValue())
+                                return consumed.Error();
+                            begin += match.length(0);
+                        }
+                        else
+                        {
+                            ++begin;
+                        }
+                    }
+                    flags = std::regex_constants::match_prev_avail;
                 }
-                continue;
             }
-            OsConfigLogDebug(context.GetLogHandle(), "Matched line %d: %s", lineNumber, line.c_str());
-            matchingValueFound = true;
-            if (!allMatches && !noneMatches)
+            return true;
+        }
+
+        size_t lineNumber = 0;
+        string line;
+        // As before, an empty file is one empty line for line-mode matching.
+        while (true)
+        {
+            bool hasLine = false;
+            try
             {
-                return MultilineMatchResult{true, selected};
+                hasLine = static_cast<bool>(getline(input, line));
+            }
+            catch (const std::ios_base::failure&)
+            {
+                if (input.bad() || !input.eof())
+                    return readFailure();
+                // EOF can throw after extracting an unterminated final line.
+                hasLine = !input.fail();
+            }
+            catch (const std::bad_alloc&)
+            {
+                throw; // The outer allocation boundary reports ENOMEM.
+            }
+            catch (...)
+            {
+                return readFailure(); // A streambuf may rethrow its original exception.
+            }
+            if (input.bad() || (!hasLine && !input.eof()))
+                return readFailure();
+            if (!hasLine && !((0 == lineNumber) && input.eof()))
+                break;
+            ++lineNumber;
+            OsConfigLogDebug(context.GetLogHandle(), "Matching line %zu: '%s', pattern: '%s'", lineNumber, line.c_str(), matchPattern.c_str());
+            smatch match;
+            if (regex_search(line, match, matchRegex))
+            {
+                const auto consumed = evaluateMatch(match, lineNumber);
+                if (!consumed.HasValue())
+                    return consumed.Error();
+                if (SourceCheckValue::True == consumed.Value())
+                {
+                    OsConfigLogDebug(context.GetLogHandle(), "Matched line %zu: %s", lineNumber, line.c_str());
+                }
             }
         }
+        if (input.bad() || !input.eof())
+        {
+            return readFailure();
+        }
+        return true;
     }
-    if (input.bad() || !input.eof())
+    catch (const std::bad_alloc&)
     {
-        OsConfigLogError(context.GetLogHandle(), "Failed to read file '%s'", filename.c_str());
-        return Error("Failed to read file: " + filename, EIO);
+        return Error("Failed to allocate file regex evidence", ENOMEM);
     }
-    return MultilineMatchResult{noneMatches ? selected : matchingValueFound, selected};
+    catch (const regex_error& e)
+    {
+        return Error("Failed to evaluate file regex: " + string(e.what()), EINVAL);
+    }
 }
-} // anonymous namespace
+
+Result<bool> EvaluateFileRegexContentAndFinalize(std::istream& input, const std::string& filename, const std::string& matchPattern,
+    const regex& matchRegex, const Optional<regex>& stateRegex, ContextInterface& context, const Optional<long long>& minimumValue,
+    const Optional<long long>& maximumValue, bool wholeFile, FileRegexOccurrenceSink& sink, const std::function<Result<bool>()>& finalize)
+{
+    const auto content = EvaluateFileRegexContent(input, filename, matchPattern, matchRegex, stateRegex, context, minimumValue, maximumValue, wholeFile, sink);
+    Result<bool> closed = true;
+    try
+    {
+        closed = finalize();
+    }
+    catch (const std::ios_base::failure&)
+    {
+        closed = Error("Failed to close file: " + filename, EIO);
+    }
+    catch (const std::bad_alloc&)
+    {
+        closed = Error("Failed to allocate file regex finalization evidence", ENOMEM);
+    }
+    catch (const std::bad_function_call&)
+    {
+        closed = Error("Missing file finalizer: " + filename, EINVAL);
+    }
+    catch (...)
+    {
+        closed = Error("Failed to close file: " + filename, EIO);
+    }
+    if (!content.HasValue())
+        return content.Error();
+    return closed;
+}
 
 Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -335,11 +376,19 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
     }
     auto dirCloser = std::unique_ptr<DIR, int (*)(DIR*)>(dir, closedir);
 
-    int matchCount = 0;
-    int mismatchCount = 0;
-    int fileCount = 0;
-    int errorCount = 0;
-    int unselectedCount = 0;
+    size_t matchCount = 0;
+    size_t mismatchCount = 0;
+    size_t fileCount = 0;
+    size_t unselectedCount = 0;
+    SourceCheckEvidence fileStates;
+    SourceExistenceEvidence passingFiles;
+    Optional<Error> firstFailure;
+    const auto increment = [](size_t& count) {
+        if (count < std::numeric_limits<size_t>::max())
+        {
+            ++count;
+        }
+    };
     struct dirent* entry = nullptr;
     for (errno = 0, entry = readdir(dir); nullptr != entry; errno = 0, entry = readdir(dir))
     {
@@ -357,7 +406,6 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
                 OsConfigLogInfo(context.GetLogHandle(), "Failed to stat symlink target '%s/%s': %s", params.path.c_str(), entry->d_name, strerror(status));
                 continue;
             }
-
             if (!S_ISREG(st.st_mode))
             {
                 continue;
@@ -371,131 +419,174 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
             OsConfigLogDebug(context.GetLogHandle(), "Ignoring file '%s' in directory '%s'", entry->d_name, params.path.c_str());
             continue;
         }
-        fileCount++;
-        auto filename = params.path + "/" + entry->d_name;
-        auto matchResult = MultilineMatch(filename, params.matchPattern, matchRegex, stateRegex, context, minimumValue, maximumValue,
-            params.allMatches.Value(), params.wholeFile.Value(), params.noneMatches.Value());
-        if (!matchResult.HasValue())
+        increment(fileCount);
+        const auto filename = params.path + "/" + entry->d_name;
+        ifstream input(filename);
+        if (!input.is_open())
         {
-            OsConfigLogInfo(context.GetLogHandle(), "Failed to match file '%s': %s", filename.c_str(), matchResult.Error().message.c_str());
-            errorCount++;
+            const Error failure("Failed to open file: " + filename, errno);
+            OsConfigLogInfo(context.GetLogHandle(), "Failed to match file '%s': %s", filename.c_str(), failure.message.c_str());
+            if (!firstFailure.HasValue())
+                firstFailure = failure;
+            continue;
         }
-        else if ((params.allMatches.Value() || params.noneMatches.Value()) && !matchResult.Value().selected)
+        // Only bounded summaries survive each occurrence; content items remain
+        // individually observable at the producer/sink boundary.
+        struct SummarySink : FileRegexOccurrenceSink
         {
-            unselectedCount++;
+            SourceCheckEvidence states;
+            SourceExistenceEvidence selected;
+            Result<bool> Consume(const FileRegexOccurrence& occurrence) override
+            {
+                selected.Add(SourceExistenceValue::Exists);
+                states.Add(occurrence.state);
+                return true;
+            }
+        } summary;
+        const auto evidence = EvaluateFileRegexContentAndFinalize(input, filename, params.matchPattern, matchRegex, stateRegex, context, minimumValue,
+            maximumValue, params.wholeFile.Value(), summary, [&]() -> Result<bool> {
+                // The completed read leaves EOF/failbit set. Clear only these
+                // stale read flags before checking the new close result.
+                input.clear();
+                input.close();
+                if (input.fail())
+                {
+                    const int status = errno;
+                    return Error("Failed to close file: " + filename, status ? status : EIO);
+                }
+                return true;
+            });
+        if (!evidence.HasValue())
+        {
+            OsConfigLogInfo(context.GetLogHandle(), "Failed to match file %s: %s", filename.c_str(), evidence.Error().message.c_str());
+            if (!firstFailure.HasValue())
+                firstFailure = evidence.Error();
+            continue;
         }
-        else if (matchResult.Value().success)
+        const auto& states = summary.states;
+        const auto& selected = summary.selected;
+        const auto exists = selected.Evaluate(SourceExistencePolicy::AtLeastOneExists);
+        if (!exists.HasValue())
+            return exists.Error();
+        const bool hasSelection = (SourceCheckValue::True == exists.Value());
+        if ((!hasSelection) && (params.allMatches.Value() || params.noneMatches.Value()))
         {
-            matchCount++;
+            increment(unselectedCount);
+            continue;
+        }
+        SourceCheckValue group = SourceCheckValue::False;
+        if (hasSelection)
+        {
+            SourceCheckPolicy policy = SourceCheckPolicy::AtLeastOne;
+            if (params.allMatches.Value())
+                policy = SourceCheckPolicy::All;
+            if (params.noneMatches.Value())
+                policy = SourceCheckPolicy::NoneSatisfy;
+            const auto checked = states.Evaluate(policy);
+            if (!checked.HasValue())
+                return checked.Error();
+            group = checked.Value();
+        }
+        // A source Error would require an explicit projection contract; this
+        // scalar producer emits only T/F. Operational errors never enter states.
+        if (SourceCheckValue::Error == group)
+        {
+            return Error("Unsupported source Error in legacy file group", EINVAL);
+        }
+        fileStates.Add(group);
+        if (SourceCheckValue::True == group)
+        {
+            increment(matchCount);
+            passingFiles.Add(SourceExistenceValue::Exists);
         }
         else
         {
-            mismatchCount++;
+            increment(mismatchCount);
         }
     }
-
-    if (errno != 0)
+    const int enumerationError = errno;
+    const int closeResult = closedir(dirCloser.release());
+    const int closeError = (0 == closeResult) ? 0 : errno;
+    if (0 != enumerationError)
     {
-        int status = errno;
-        OsConfigLogError(context.GetLogHandle(), "Failed to read directory '%s': %s", params.path.c_str(), strerror(status));
-        return Error("Failed to read directory '" + params.path + "': " + strerror(status), status);
+        OsConfigLogError(context.GetLogHandle(), "Failed to read directory '%s': %s", params.path.c_str(), strerror(enumerationError));
+        if (!firstFailure.HasValue())
+            firstFailure = Error("Failed to read directory '" + params.path + "': " + strerror(enumerationError), enumerationError);
     }
-
-    // This is a direct mapping of OVAL ExistenceEnumerator
-    // see https://oval.mitre.org/language/version5.9/ovalsc/documentation/oval-common-schema.html#ExistenceEnumeration for details
-    OsConfigLogInfo(context.GetLogHandle(), "Validating pattern matching results, behavior: '%s', matched: %d, mismatched: %d, errors: %d",
-        std::to_string(behavior).c_str(), matchCount, mismatchCount, errorCount);
-    if (matchCount + mismatchCount + errorCount + unselectedCount != fileCount)
+    if ((0 != closeError) && (!firstFailure.HasValue()))
     {
-        return Error("Counters mismatch");
+        firstFailure = Error("Failed to close directory '" + params.path + "': " + strerror(closeError), closeError);
     }
+    if (firstFailure.HasValue())
+        return firstFailure.Value();
 
-    if ((params.allMatches.Value() || params.noneMatches.Value()) && behavior != Behavior::NoneExist)
+    OsConfigLogInfo(context.GetLogHandle(), "Validating pattern matching results, behavior: '%s', matched: %zu, mismatched: %zu, unselected: %zu",
+        std::to_string(behavior).c_str(), matchCount, mismatchCount, unselectedCount);
+    if ((params.allMatches.Value() || params.noneMatches.Value()) && (Behavior::NoneExist != behavior) && (0 != mismatchCount))
     {
-        if (errorCount > 0)
-        {
-            return Error("Error occurred during pattern matching", EINVAL);
-        }
-        if (mismatchCount > 0)
-        {
-            return indicators.NonCompliant("At least one selected setting failed its state constraint");
-        }
+        return indicators.NonCompliant("At least one selected setting failed its state constraint");
     }
-
+    // This is a legacy compatibility mapping of derived file groups, not an
+    // OVAL test. The empty group cases are handled here before Check (whose
+    // source chart has no empty row). AnyExist uses the source existence row.
+    if (Behavior::AnyExist == behavior)
+    {
+        const auto any = passingFiles.Evaluate(SourceExistencePolicy::AnyExist);
+        if (!any.HasValue())
+            return any.Error();
+        return indicators.Compliant("Found " + std::to_string(matchCount) + " matches");
+    }
     if (Behavior::AllExist == behavior)
     {
-        if (mismatchCount > 0)
+        if ((0 != matchCount) || (0 != mismatchCount))
         {
-            return indicators.NonCompliant("At least one file did not match the pattern");
+            const auto all = fileStates.Evaluate(SourceCheckPolicy::All);
+            if (!all.HasValue())
+                return all.Error();
+            if (SourceCheckValue::False == all.Value())
+                return indicators.NonCompliant("At least one file did not match the pattern");
         }
-
-        if (errorCount > 0)
-        {
-            return Error("Error occurred during pattern matching", EINVAL);
-        }
-
-        if (matchCount > 0)
-        {
-            return indicators.Compliant("All " + std::to_string(fileCount) + " files matched the pattern");
-        }
-        else
+        if (0 == matchCount)
         {
             return indicators.NonCompliant("Expected all files to match, but only " + std::to_string(matchCount) + " out of " +
                                            std::to_string(fileCount) + " matched");
         }
+        return indicators.Compliant("All " + std::to_string(fileCount) + " files matched the pattern");
     }
-    else if (Behavior::AnyExist == behavior)
+    if (Behavior::AtLeastOneExists == behavior)
     {
-        if ((matchCount == 0) && (errorCount > 0))
-        {
-            return Error("Error occurred during pattern matching", EINVAL);
-        }
-        return indicators.Compliant("Found " + std::to_string(matchCount) + " matches");
-    }
-    else if (Behavior::AtLeastOneExists == behavior)
-    {
-        if (matchCount > 0)
-        {
+        if ((0 == matchCount) && (0 == mismatchCount))
+            return indicators.NonCompliant("Expected at least one file to match, but none did");
+        const auto any = fileStates.Evaluate(SourceCheckPolicy::AtLeastOne);
+        if (!any.HasValue())
+            return any.Error();
+        if (SourceCheckValue::True == any.Value())
             return indicators.Compliant("At least one file matched, found " + std::to_string(matchCount) + " matches");
-        }
-        if (errorCount > 0)
-        {
-            return Error("Error occurred during pattern matching", EINVAL);
-        }
         return indicators.NonCompliant("Expected at least one file to match, but none did");
     }
-    else if (Behavior::NoneExist == behavior)
+    if (Behavior::NoneExist == behavior)
     {
-        if (matchCount > 0)
-        {
+        if ((0 == matchCount) && (0 == mismatchCount))
+            return indicators.Compliant("No files matched the pattern");
+        const auto none = fileStates.Evaluate(SourceCheckPolicy::NoneSatisfy);
+        if (!none.HasValue())
+            return none.Error();
+        if (SourceCheckValue::False == none.Value())
             return indicators.NonCompliant("Expected no files to match, but " + std::to_string(matchCount) + " matched");
-        }
-
-        if (errorCount > 0)
-        {
-            return Error("Error occurred during pattern matching", EINVAL);
-        }
         return indicators.Compliant("No files matched the pattern");
     }
-    else if (Behavior::OnlyOneExists == behavior)
+    if (Behavior::OnlyOneExists == behavior)
     {
-        if (matchCount == 1 && errorCount == 0)
-        {
+        if ((0 == matchCount) && (0 == mismatchCount))
+            return indicators.NonCompliant("Expected exactly one file to match, but none did");
+        const auto one = fileStates.Evaluate(SourceCheckPolicy::OnlyOne);
+        if (!one.HasValue())
+            return one.Error();
+        if (SourceCheckValue::True == one.Value())
             return indicators.Compliant("Exactly one file matched the pattern");
-        }
-        if (matchCount > 1)
-        {
-            return indicators.NonCompliant("Expected only one file to match, but " + std::to_string(matchCount) + " matched");
-        }
-        if (errorCount > 0)
-        {
-            return Error("Error occurred during pattern matching", EINVAL);
-        }
-        return indicators.NonCompliant("Expected exactly one file to match, but none did");
+        return indicators.NonCompliant((matchCount > 1) ? "Expected only one file to match, but " + std::to_string(matchCount) + " matched" :
+                                                          "Expected exactly one file to match, but none did");
     }
-    else
-    {
-        return Error("Unknown behavior: " + std::to_string(params.behavior), EINVAL);
-    }
+    return Error("Unknown behavior: " + std::to_string(params.behavior), EINVAL);
 }
 } // namespace ComplianceEngine

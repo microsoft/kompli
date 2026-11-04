@@ -101,22 +101,14 @@ Result<struct stat> ReadableFile::Stat() const
     return metadata;
 }
 
-Result<bool> ReadableFile::Close()
+void ReadableFile::Close() noexcept
 {
     if (!mDescriptor.HasValue())
-    {
-        return true;
-    }
-
+        return;
     Detail::Descriptor owned(std::move(mDescriptor.Value()));
     mDescriptor.Reset();
     mAtEnd = false;
-    auto closed = owned.Close();
-    if (!closed.HasValue())
-    {
-        return Error("Cannot close readable file", closed.Error().code);
-    }
-    return true;
+    owned.Close();
 }
 } // namespace Filesystem
 } // namespace ComplianceEngine

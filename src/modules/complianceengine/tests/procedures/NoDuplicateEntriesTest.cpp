@@ -310,25 +310,31 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, ReachedReadFailureRejectsPartialResult
     OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
     ASSERT_NE(nullptr, logHandle);
     mContext.SetLogHandle(logHandle);
-    int reads = 0, closes = 0;
+    int reads = 0, closes = 0, readerFd = -1;
     ON_CALL(mContext, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsData(fd, filename))
             return mContext.RealReadFileDescriptor(fd, buffer, size);
+        if (-1 == readerFd)
+            readerFd = fd;
+        else
+            EXPECT_EQ(readerFd, fd);
         if (++reads == 1)
             return mContext.RealReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 6));
         errno = EIO;
         return -1;
     });
     ON_CALL(mContext, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
-        const bool data = IsData(fd, filename);
-        mContext.RealCloseFileDescriptor(fd);
-        if (data)
+        const int nativeResult = mContext.RealCloseFileDescriptor(fd);
+        if (fd != readerFd)
+            return nativeResult;
+        ++closes;
+        EXPECT_EQ(0, nativeResult);
+        if ((1 == closes) && (0 == nativeResult))
         {
-            ++closes;
             errno = EBADF;
             return -1;
         }
-        return 0;
+        return nativeResult;
     });
     NoDuplicateEntriesParams params;
     params.filename = filename;
@@ -345,7 +351,7 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, ReachedReadFailureRejectsPartialResult
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const string closeEntry = "Failed to close directory activation: " + std::to_string(EBADF);
+    const string closeEntry = "Cannot close readable-file activation (ownership bug, EBADF): " + std::to_string(EBADF);
     const auto first = text.find(closeEntry);
     ASSERT_NE(string::npos, first);
     EXPECT_EQ(string::npos, text.find(closeEntry, first + closeEntry.size()));
@@ -387,10 +393,14 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, ExactDefaultByteLimitSucceedsButExcess
     EXPECT_TRUE(mIndicators.Back().indicators.empty());
 }
 
-TEST_F(EnsureNoDuplicateEntriesExistTest, CloseFailureRejectsDuplicateVerdict)
+TEST_F(EnsureNoDuplicateEntriesExistTest, CloseFailurePreservesDuplicateVerdictAndLogsOnce)
 {
     auto filename = CreateTestFile("alpha\nalpha\n");
     ScopeGuard removeFile([&] { RemoveTestFile(filename); });
+    const string logPath = mTempdir + "/duplicate-close.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    mContext.SetLogHandle(logHandle);
     int closes = 0;
     ON_CALL(mContext, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsData(fd, filename);
@@ -407,9 +417,18 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, CloseFailureRejectsDuplicateVerdict)
     params.filename = filename;
     params.delimiter = ",";
     auto result = AuditNoDuplicateEntries(params, mIndicators, mContext);
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EIO, result.Error().code);
-    EXPECT_EQ("Cannot close readable file", result.Error().message);
+    CloseLog(&logHandle);
+    mContext.SetLogHandle(nullptr);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    ASSERT_EQ(1U, mIndicators.Back().indicators.size());
+    EXPECT_EQ("Duplicate entry: 'alpha'", mIndicators.Back().indicators.back().message);
     EXPECT_EQ(1, closes);
-    EXPECT_TRUE(mIndicators.Back().indicators.empty());
+    std::ifstream log(logPath);
+    ASSERT_TRUE(log.is_open());
+    const string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+    const string closeEntry = "Cannot close readable-file activation: " + std::to_string(EIO);
+    const auto first = text.find(closeEntry);
+    ASSERT_NE(string::npos, first);
+    EXPECT_EQ(string::npos, text.find(closeEntry, first + closeEntry.size()));
 }

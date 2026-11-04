@@ -132,11 +132,11 @@ struct Entry
 };
 
 // This is the caller's REPORT, not a fact independently verified by Parser.
-// EofAndClosed requires a real EOF and a successful checked Close; an early
-// break is Incomplete. Forward read/Close failures as Error instead.
+// Eof requires error-free input and verified EOF, not successful native close;
+// an early break is Incomplete. Forward read failures as Error instead.
 enum class Acquisition
 {
-    EofAndClosed,
+    Eof,
     Incomplete
 };
 
@@ -158,14 +158,14 @@ class Parser
 public:
     explicit Parser(std::string source, Limits limits = {});
     Result<Entry> Next(std::string text);
-    // Call once after EOF and checked Close, or report incomplete iteration
-    // or an acquisition Error. The parser cannot observe unseen input or
-    // independently verify EOF/Close. Empty input requires the same report.
+    // Call once after verified EOF, or report incomplete iteration or an
+    // acquisition Error. The parser cannot independently verify unseen input.
+    // Empty input requires the same report.
     // Repeated Finish is misuse (EINVAL); a later reported Error supersedes
     // an earlier success, but cannot revoke evidence already published.
     // Earlier parser/acquisition errors remain sticky.
-    // Example: for each read value call Next(value); after EOF check Close;
-    // then Finish(Acquisition::EofAndClosed), or Finish(read/Close Error).
+    // Example: for each read value call Next(value); after verified EOF
+    // call Finish(Acquisition::Eof), or Finish(read Error).
     // EINVAL: zero budget/invalid call; E2BIG: exceeded budget; EBADMSG:
     // malformed supplied entry.
     Result<bool> Finish(Result<Acquisition> acquisition);

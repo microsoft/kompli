@@ -15,6 +15,7 @@
 #include <fstream>
 #include <grp.h>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <limits>
 #include <pwd.h>
 #include <sys/stat.h>
@@ -1225,20 +1226,36 @@ TEST_F(UserDotFileRangeTest, MissingRootsAreCompliantAndFactoryFailuresPropagate
     EXPECT_EQ(EACCES, readFailure.Error().code);
 }
 
-TEST_F(UserDotFileRangeTest, CheckedCloseFailureOverridesEarlyAuditVerdict)
+TEST_F(UserDotFileRangeTest, CloseFailureDoesNotOverrideEarlyAuditVerdict)
 {
     const auto home = context.GetTempdirPath() + "/home";
     ASSERT_EQ(0, mkdir(home.c_str(), 0700));
     std::ofstream(home + "/.rhosts") << "host\n";
-    ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([](DIR* stream) {
+    const auto logPath = context.GetTempdirPath() + "/dotfile-close.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    context.SetLogHandle(logHandle);
+    int closeAttempts = 0;
+    ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([&](DIR* stream) {
+        ++closeAttempts;
         const int result = closedir(stream);
         errno = EIO;
         return result == 0 ? -1 : result;
     });
     const auto result = Run(User("fixture", home));
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EIO, result.Error().code);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    EXPECT_EQ(1, closeAttempts);
     EXPECT_EQ(1u, indicators.Back().indicators.size());
+    CloseLog(&logHandle);
+    context.SetLogHandle(nullptr);
+    std::ifstream log(logPath);
+    ASSERT_TRUE(log.is_open());
+    const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
+    const auto diagnostic = "Cannot close pinned directory cursor: " + std::to_string(EIO);
+    const auto first = text.find(diagnostic);
+    ASSERT_NE(std::string::npos, first);
+    EXPECT_EQ(std::string::npos, text.find(diagnostic, first + diagnostic.size()));
 }
 
 TEST_F(UserDotFileRangeTest, AuditReachedErrorInNextUserOverridesEarlierNoncompliance)

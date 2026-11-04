@@ -74,7 +74,7 @@ ComplianceEngine::Result<Snapshot> ParseFixture(const std::vector<std::string>& 
             snapshot.operands.push_back(span);
         snapshot.records.push_back(std::move(entry.Value()));
     }
-    auto finished = parser.Finish(rc::Acquisition::EofAndClosed);
+    auto finished = parser.Finish(rc::Acquisition::Eof);
     if (!finished.HasValue())
         return finished.Error();
     return snapshot;
@@ -192,7 +192,7 @@ TEST(ResolvConfTest, MalformedKnownInputFailsNextAndIsSticky)
         EXPECT_EQ(EBADMSG, failed.Error().code);
         EXPECT_NE(std::string::npos, failed.Error().message.find("src: resolv.conf"));
         EXPECT_EQ(failed.Error().message, parser.Next("").Error().message);
-        EXPECT_EQ(failed.Error().message, parser.Finish(rc::Acquisition::EofAndClosed).Error().message);
+        EXPECT_EQ(failed.Error().message, parser.Finish(rc::Acquisition::Eof).Error().message);
     }
     rc::Parser nul("src");
     const auto embedded = nul.Next(std::string("nameserver 192.0.2.1") + std::string("\0tail", 5));
@@ -201,7 +201,7 @@ TEST(ResolvConfTest, MalformedKnownInputFailsNextAndIsSticky)
     EXPECT_NE(std::string::npos, embedded.Error().message.find("embedded NUL"));
     rc::Parser later("src");
     ASSERT_TRUE(later.Next("nameserver 192.0.2.1").HasValue());
-    EXPECT_EQ(EIO, later.Finish(ComplianceEngine::Error("late Close failure", EIO)).Error().code);
+    EXPECT_EQ(EIO, later.Finish(ComplianceEngine::Error("late read failure", EIO)).Error().code);
 }
 
 template <typename T>
@@ -284,7 +284,7 @@ TEST(ResolvConfTest, Glibc239LexerPreservesIgnoredTextAndExactOperands)
         if (entry.Value().directive.Is<rc::Sortlist>() && !fixture.operands.empty())
             EXPECT_EQ(fixture.operands.front().find_first_of("&/") != std::string::npos,
                 entry.Value().directive.Get<rc::Sortlist>().entries.front().Get<rc::Ipv4Sort>().mask.HasValue());
-        EXPECT_TRUE(parser.Finish(rc::Acquisition::EofAndClosed).HasValue());
+        EXPECT_TRUE(parser.Finish(rc::Acquisition::Eof).HasValue());
     }
 }
 
@@ -297,7 +297,7 @@ TEST(ResolvConfTest, AttachedBadValuesFailButSeparatedTrailingTextIsIgnored)
         SCOPED_TRACE(line);
         rc::Parser parser("fixture");
         EXPECT_EQ(EBADMSG, parser.Next(line).Error().code);
-        EXPECT_EQ(EBADMSG, parser.Finish(ComplianceEngine::Error("late Close failure", EIO)).Error().code);
+        EXPECT_EQ(EBADMSG, parser.Finish(ComplianceEngine::Error("late read failure", EIO)).Error().code);
     }
 }
 
@@ -354,7 +354,7 @@ TEST(ResolvConfTest, IncrementalEvidenceOwnsBytesAndDoesNotAccumulateInParser)
     EXPECT_EQ("nameserver 192.0.2.1  ", first.Value().text); // Not overwritten by Next.
     EXPECT_EQ("src", first.Value().source);
     EXPECT_TRUE(first.Value().directive.Get<rc::Nameserver>().address.Is<rc::Ipv4>());
-    EXPECT_TRUE(parser.Finish(rc::Acquisition::EofAndClosed).HasValue());
+    EXPECT_TRUE(parser.Finish(rc::Acquisition::Eof).HasValue());
 
     rc::Entry retained;
     {
@@ -362,7 +362,7 @@ TEST(ResolvConfTest, IncrementalEvidenceOwnsBytesAndDoesNotAccumulateInParser)
         auto value = transient.Next("options rotate");
         ASSERT_TRUE(value.HasValue());
         retained = std::move(value.Value());
-        ASSERT_TRUE(transient.Finish(rc::Acquisition::EofAndClosed).HasValue());
+        ASSERT_TRUE(transient.Finish(rc::Acquisition::Eof).HasValue());
     }
     EXPECT_EQ("persist", retained.source);
     EXPECT_EQ("rotate", retained.text.substr(retained.directive.Get<rc::Options>().entries[0].Get<rc::FlagOption>().token.column - 1,
@@ -381,22 +381,22 @@ TEST(ResolvConfTest, IncrementalEvidenceOwnsBytesAndDoesNotAccumulateInParser)
         EXPECT_EQ(i + 1, entry.Value().record.line);
         EXPECT_EQ("x", entry.Value().text);
     }
-    EXPECT_TRUE(discard.Finish(rc::Acquisition::EofAndClosed).HasValue());
+    EXPECT_TRUE(discard.Finish(rc::Acquisition::Eof).HasValue());
 }
 
 TEST(ResolvConfTest, CompletionRequiresExplicitVerifiedAcquisition)
 {
     rc::Parser empty("src");
-    EXPECT_TRUE(empty.Finish(rc::Acquisition::EofAndClosed).HasValue()); // Caller reports checked EOF and Close.
-    EXPECT_EQ(EINVAL, empty.Finish(rc::Acquisition::EofAndClosed).Error().code);
+    EXPECT_TRUE(empty.Finish(rc::Acquisition::Eof).HasValue()); // Caller reports verified EOF.
+    EXPECT_EQ(EINVAL, empty.Finish(rc::Acquisition::Eof).Error().code);
 
     rc::Parser early("src");
     ASSERT_TRUE(early.Next("search example.org").HasValue());
-    // An entry being available does not certify EOF or Close.
+    // An entry being available does not certify EOF.
     const auto incomplete = early.Finish(rc::Acquisition::Incomplete);
     ASSERT_FALSE(incomplete.HasValue());
     EXPECT_EQ(EIO, incomplete.Error().code);
-    EXPECT_EQ(incomplete.Error().message, early.Finish(rc::Acquisition::EofAndClosed).Error().message);
+    EXPECT_EQ(incomplete.Error().message, early.Finish(rc::Acquisition::Eof).Error().message);
     EXPECT_EQ(EIO, early.Next("domain example.org").Error().code);
 
     rc::Parser readError("src");
@@ -404,24 +404,20 @@ TEST(ResolvConfTest, CompletionRequiresExplicitVerifiedAcquisition)
     const auto lateRead = readError.Finish(ComplianceEngine::Error("late reader failure", EIO));
     ASSERT_FALSE(lateRead.HasValue());
     EXPECT_EQ("late reader failure", lateRead.Error().message);
-    EXPECT_EQ("late reader failure", readError.Finish(rc::Acquisition::EofAndClosed).Error().message);
-
-    rc::Parser closeError("src");
-    ASSERT_TRUE(closeError.Next("search a").HasValue());
-    EXPECT_EQ(EBADF, closeError.Finish(ComplianceEngine::Error("Close failed", EBADF)).Error().code);
+    EXPECT_EQ("late reader failure", readError.Finish(rc::Acquisition::Eof).Error().message);
 
     rc::Parser done("src");
     ASSERT_TRUE(done.Next("").HasValue());
-    ASSERT_TRUE(done.Finish(rc::Acquisition::EofAndClosed).HasValue());
+    ASSERT_TRUE(done.Finish(rc::Acquisition::Eof).HasValue());
     EXPECT_EQ(EINVAL, done.Next("").Error().code);
-    EXPECT_EQ(EINVAL, done.Finish(rc::Acquisition::EofAndClosed).Error().code);
+    EXPECT_EQ(EINVAL, done.Finish(rc::Acquisition::Eof).Error().code);
 
-    rc::Parser falselyCompleted("src");
-    ASSERT_TRUE(falselyCompleted.Finish(rc::Acquisition::EofAndClosed).HasValue());
-    const auto reportedLate = falselyCompleted.Finish(ComplianceEngine::Error("late Close failure", EBADF));
+    rc::Parser lateReadFailure("src");
+    ASSERT_TRUE(lateReadFailure.Finish(rc::Acquisition::Eof).HasValue());
+    const auto reportedLate = lateReadFailure.Finish(ComplianceEngine::Error("late read failure", EIO));
     ASSERT_FALSE(reportedLate.HasValue());
-    EXPECT_EQ(EBADF, reportedLate.Error().code);
-    EXPECT_EQ("late Close failure", falselyCompleted.Finish(rc::Acquisition::EofAndClosed).Error().message);
+    EXPECT_EQ(EIO, reportedLate.Error().code);
+    EXPECT_EQ("late read failure", lateReadFailure.Finish(rc::Acquisition::Eof).Error().message);
 }
 
 // In-memory stand-in for an external reader. The test deliberately owns
@@ -483,19 +479,15 @@ ComplianceEngine::Result<bool> AcquireFixture(rc::Parser& parser, FakeAcquisitio
         }
         if (earlyBreak)
         {
-            const auto closed = reader.Close();
-            if (!closed.HasValue())
-                return parser.Finish(closed.Error());
+            reader.Close();
             return parser.Finish(rc::Acquisition::Incomplete);
         }
     }
-    const auto closed = reader.Close();
-    if (!closed.HasValue())
-        return parser.Finish(closed.Error());
-    return parser.Finish(rc::Acquisition::EofAndClosed);
+    reader.Close();
+    return parser.Finish(rc::Acquisition::Eof);
 }
 
-TEST(ResolvConfTest, FakeReaderSequencesEOFReadCloseAndEarlyBreak)
+TEST(ResolvConfTest, FakeReaderSequencesEOFReadAndEarlyBreakDespiteCloseFailure)
 {
     FakeAcquisition normal{{"nameserver 192.0.2.1"}};
     rc::Parser parser("src");
@@ -528,17 +520,16 @@ TEST(ResolvConfTest, FakeReaderSequencesEOFReadCloseAndEarlyBreak)
     FakeAcquisition closeFailure{{"search a"}};
     closeFailure.failClose = true;
     rc::Parser closeParser("src");
-    EXPECT_EQ("close failed", AcquireFixture(closeParser, closeFailure, false).Error().message);
+    EXPECT_TRUE(AcquireFixture(closeParser, closeFailure, false).HasValue());
     EXPECT_TRUE(closeFailure.eof);
     EXPECT_TRUE(closeFailure.closed);
 
     // Error discovered after an earlier (incorrect) completion report must
     // not be swallowed by a repeated-success path.
     rc::Parser late("src");
-    ASSERT_TRUE(late.Finish(rc::Acquisition::EofAndClosed).HasValue());
-    closeFailure.failClose = true;
-    const auto reported = late.Finish(closeFailure.Close().Error());
-    EXPECT_EQ(EBADF, reported.Error().code);
+    ASSERT_TRUE(late.Finish(rc::Acquisition::Eof).HasValue());
+    const auto reported = late.Finish(ComplianceEngine::Error("late read failure", EIO));
+    EXPECT_EQ(EIO, reported.Error().code);
 }
 
 TEST(ResolvConfTest, EveryDefaultBudgetAtMinusOneExactAndPlusOne)
@@ -555,7 +546,7 @@ TEST(ResolvConfTest, EveryDefaultBudgetAtMinusOneExactAndPlusOne)
         if (delta == 1)
             EXPECT_NE(std::string::npos, entry.Error().message.find("line limit"));
         else
-            EXPECT_TRUE(line.Finish(rc::Acquisition::EofAndClosed).HasValue());
+            EXPECT_TRUE(line.Finish(rc::Acquisition::Eof).HasValue());
     }
     // Comments avoid tokens while consuming the entire byte budget.
     for (const auto delta : {-1, 0, 1})
@@ -574,10 +565,10 @@ TEST(ResolvConfTest, EveryDefaultBudgetAtMinusOneExactAndPlusOne)
             const auto overflow = bytes.Next("#");
             ASSERT_FALSE(overflow.HasValue());
             EXPECT_NE(std::string::npos, overflow.Error().message.find("byte limit"));
-            EXPECT_EQ(overflow.Error().message, bytes.Finish(rc::Acquisition::EofAndClosed).Error().message);
+            EXPECT_EQ(overflow.Error().message, bytes.Finish(rc::Acquisition::Eof).Error().message);
         }
         else
-            EXPECT_TRUE(bytes.Finish(rc::Acquisition::EofAndClosed).HasValue());
+            EXPECT_TRUE(bytes.Finish(rc::Acquisition::Eof).HasValue());
     }
     for (const auto delta : {-1, 0, 1})
     {
@@ -596,7 +587,7 @@ TEST(ResolvConfTest, EveryDefaultBudgetAtMinusOneExactAndPlusOne)
                 ASSERT_TRUE(next.HasValue()) << i;
         }
         if (delta != 1)
-            EXPECT_TRUE(entries.Finish(rc::Acquisition::EofAndClosed).HasValue());
+            EXPECT_TRUE(entries.Finish(rc::Acquisition::Eof).HasValue());
     }
     // Eight 4096-token entries, then the last token at N+1. No line is
     // longer than 8193 bytes, so this isolates the cumulative token budget.
@@ -620,7 +611,7 @@ TEST(ResolvConfTest, EveryDefaultBudgetAtMinusOneExactAndPlusOne)
             EXPECT_NE(std::string::npos, overflow.Error().message.find("token limit"));
         }
         else
-            EXPECT_TRUE(tokens.Finish(rc::Acquisition::EofAndClosed).HasValue());
+            EXPECT_TRUE(tokens.Finish(rc::Acquisition::Eof).HasValue());
     }
 }
 
@@ -631,12 +622,12 @@ TEST(ResolvConfTest, EmptyCompletionAndErrorPrecedence)
     rc::Parser failed("src");
     EXPECT_EQ("read failed", failed.Finish(ComplianceEngine::Error("read failed", EIO)).Error().message);
     rc::Parser complete("src");
-    EXPECT_TRUE(complete.Finish(rc::Acquisition::EofAndClosed).HasValue());
-    EXPECT_EQ(EBADF, complete.Finish(ComplianceEngine::Error("late Close failure", EBADF)).Error().code);
+    EXPECT_TRUE(complete.Finish(rc::Acquisition::Eof).HasValue());
+    EXPECT_EQ(EBADF, complete.Finish(ComplianceEngine::Error("late read failure", EBADF)).Error().code);
     EXPECT_EQ(EBADF, complete.Next("").Error().code);
     rc::Parser malformed("src");
     ASSERT_FALSE(malformed.Next("nameserver invalid").HasValue());
-    EXPECT_EQ(EBADMSG, malformed.Finish(rc::Acquisition::EofAndClosed).Error().code);
+    EXPECT_EQ(EBADMSG, malformed.Finish(rc::Acquisition::Eof).Error().code);
 }
 
 TEST(ResolvConfTest, CumulativeLimitsAndFailureAreStickyAfterEarlierEvidence)
@@ -661,14 +652,14 @@ TEST(ResolvConfTest, CumulativeLimitsAndFailureAreStickyAfterEarlierEvidence)
     EXPECT_EQ(E2BIG, overflow.Error().code);
     EXPECT_NE(std::string::npos, overflow.Error().message.find("byte limit"));
     EXPECT_EQ(overflow.Error().message, parser.Next("").Error().message);
-    EXPECT_EQ(overflow.Error().message, parser.Finish(rc::Acquisition::EofAndClosed).Error().message);
+    EXPECT_EQ(overflow.Error().message, parser.Finish(rc::Acquisition::Eof).Error().message);
     EXPECT_EQ(overflow.Error().message, parser.Finish(ComplianceEngine::Error("read failed", EIO)).Error().message);
 
     rc::Parser bytes("src", limits);
     ASSERT_TRUE(bytes.Next("xx").HasValue());
     ASSERT_TRUE(bytes.Next("x").HasValue());
     EXPECT_NE(std::string::npos, bytes.Next("x").Error().message.find("byte limit"));
-    EXPECT_FALSE(bytes.Finish(rc::Acquisition::EofAndClosed).HasValue());
+    EXPECT_FALSE(bytes.Finish(rc::Acquisition::Eof).HasValue());
 
     limits.entries = 3;
     rc::Parser entries("src", limits);
@@ -684,7 +675,7 @@ TEST(ResolvConfTest, CumulativeLimitsAndFailureAreStickyAfterEarlierEvidence)
 
     limits.bytes = 0;
     rc::Parser invalid("src", limits);
-    EXPECT_EQ(EINVAL, invalid.Finish(rc::Acquisition::EofAndClosed).Error().code);
+    EXPECT_EQ(EINVAL, invalid.Finish(rc::Acquisition::Eof).Error().code);
     EXPECT_EQ(EINVAL, invalid.Next("").Error().code);
 }
 } // namespace

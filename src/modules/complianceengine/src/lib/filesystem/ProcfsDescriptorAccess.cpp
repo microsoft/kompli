@@ -87,9 +87,7 @@ Result<bool> ProcfsDescriptorAccess::Open()
         {
             return Error("Procfs self directory cannot be verified", EPROTO);
         }
-        auto closedPid = pid.Close();
-        if (!closedPid.HasValue())
-            return std::move(closedPid).Error();
+        pid.Close();
         auto openedTask = proc.Context().OpenAt(self, "task", ContextInterface::OpenProfile::PinDirectory);
         if (!openedTask.HasValue())
             return Error("Procfs task directory cannot be verified", openedTask.Error().code);
@@ -102,12 +100,8 @@ Result<bool> ProcfsDescriptorAccess::Open()
         tid = std::move(openedTid).Value();
         if (!tid.HasValue() || !IsProcfsDirectory(proc.Context(), tid))
             return Error("Procfs current task cannot be verified", EPROTO);
-        auto closedTask = task.Close();
-        if (!closedTask.HasValue())
-            return std::move(closedTask).Error();
-        auto closedSelf = self.Close();
-        if (!closedSelf.HasValue())
-            return std::move(closedSelf).Error();
+        task.Close();
+        self.Close();
         auto openedFd = proc.Context().OpenAt(tid, "fd", ContextInterface::OpenProfile::PinDirectory);
         if (!openedFd.HasValue())
         {
@@ -132,9 +126,7 @@ Result<bool> ProcfsDescriptorAccess::Open()
         {
             return Error("Procfs descriptor directory identity cannot be verified", SavedError());
         }
-        auto closedTid = tid.Close();
-        if (!closedTid.HasValue())
-            return std::move(closedTid).Error();
+        tid.Close();
         currentPid = proc.Context().CurrentProcessId();
         if (!currentPid.HasValue())
             return std::move(currentPid).Error();
@@ -147,44 +139,20 @@ Result<bool> ProcfsDescriptorAccess::Open()
         return true;
     }();
     if (!opened.HasValue())
-    {
-        auto closed = Close();
-        if (!closed.HasValue())
-        {
-            LogSecondaryClose(proc.Context(), closed.Error().code);
-        }
-    }
+        Close();
     return opened;
 }
 
-Result<bool> ProcfsDescriptorAccess::Close()
+void ProcfsDescriptorAccess::Close() noexcept
 {
     mVerified = false;
-    const ContextInterface& context = proc.Context();
-    // Detach every role before any fallible close or logging. If one throws,
-    // the remaining local owners still close while this helper is retained.
-    std::array<Descriptor, 7> resources = {std::move(fdinfo), std::move(fd), std::move(tid), std::move(task), std::move(pid), std::move(self), std::move(proc)};
-    Optional<Error> firstError;
-    for (Descriptor& resource : resources)
-    {
-        auto closed = resource.Close();
-        if (!closed.HasValue())
-        {
-            if (!firstError.HasValue())
-            {
-                firstError = std::move(closed).Error();
-            }
-            else
-            {
-                LogSecondaryClose(context, closed.Error().code);
-            }
-        }
-    }
-    if (firstError.HasValue())
-    {
-        return std::move(firstError.Value());
-    }
-    return true;
+    fdinfo.Close();
+    fd.Close();
+    tid.Close();
+    task.Close();
+    pid.Close();
+    self.Close();
+    proc.Close();
 }
 
 bool ProcfsDescriptorAccess::VerifyRole(const ContextInterface& context, bool information) const
@@ -197,11 +165,12 @@ bool ProcfsDescriptorAccess::VerifyRole(const ContextInterface& context, bool in
     auto currentTid = context.CurrentThreadId();
     if (!currentTid.HasValue() || currentTid.Value() != mTid)
         return false;
-    const Descriptor& role = information ? fdinfo : fd;
-    if (!role.HasValue() || &role.Context() != &context)
+    const bool validRole = information ? (fdinfo.HasValue() && &fdinfo.Context() == &context) : (fd.HasValue() && &fd.Context() == &context);
+    if (!validRole)
         return false;
     struct stat identity = {};
-    return context.StatFile(role, &identity) == 0 && SameIdentity(identity, information ? mFdinfoIdentity : mFdIdentity) && S_ISDIR(identity.st_mode);
+    const int status = information ? context.StatFile(fdinfo, &identity) : context.StatFile(fd, &identity);
+    return status == 0 && SameIdentity(identity, information ? mFdinfoIdentity : mFdIdentity) && S_ISDIR(identity.st_mode);
 }
 
 Result<std::uint64_t> ParseMountId(const std::string& fdinfo)
@@ -311,15 +280,7 @@ Result<std::uint64_t> ProcfsDescriptorAccess::ReadMountId(const Descriptor& desc
         }
         return ParseMountId(bytes);
     }();
-    auto closed = info.Close();
-    if (!closed.HasValue())
-    {
-        if (read.HasValue())
-        {
-            return std::move(closed).Error();
-        }
-        LogSecondaryClose(context, closed.Error().code);
-    }
+    info.Close();
     return read;
 }
 

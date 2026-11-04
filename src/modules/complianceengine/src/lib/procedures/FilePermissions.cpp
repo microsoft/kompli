@@ -6,7 +6,6 @@
 #include <FilePermissions.h>
 #include <Regex.h>
 #include <fcntl.h>
-#include <filesystem/Handle.hpp>
 #include <fnmatch.h>
 #include <fts.h>
 #include <grp.h>
@@ -390,18 +389,12 @@ static Result<Status> AuditFilePermissionsImpl(const FilePermissionsParams& para
 
 Result<Status> AuditFilePermissions(const FilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
-    return AuditFilePermissionsImpl<Filesystem::Handle>(params, nullptr, indicators, context);
+    return AuditFilePermissionsImpl<Filesystem::Path::Component>(params, nullptr, indicators, context);
 }
 
-Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, IndicatorsTree& indicators, ContextInterface& context)
-{
-    return AuditFilePermissionsImpl(params, &handle, indicators, context);
-}
 Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Path::Component& component, IndicatorsTree& indicators,
     ContextInterface& context)
 {
-    if (!component.HasValue())
-        return Error("No acquired file component", EBADF);
     return AuditFilePermissionsImpl(params, &component, indicators, context);
 }
 
@@ -605,7 +598,7 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
         }
         if (nullptr != pin)
         {
-            auto changed = pin->SetOwnership(uid, gid);
+            auto changed = pin->SetOwnership(Filesystem::UserId(uid), Filesystem::GroupId(gid));
             if (!changed.HasValue())
             {
                 return std::move(changed).Error();
@@ -680,25 +673,18 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
 
 Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
-    return RemediateFilePermissionsImpl<Filesystem::Handle>(params, Optional<FileIdentity>(), nullptr, false, indicators, context);
+    return RemediateFilePermissionsImpl<Filesystem::Path::Component>(params, Optional<FileIdentity>(), nullptr, false, indicators, context);
 }
 
 Result<Status> EnforceFilePermissionsAtIdentity(const FilePermissionsParams& params, const FileIdentity& expectedIdentity, IndicatorsTree& indicators,
     ContextInterface& context)
 {
-    return RemediateFilePermissionsImpl<Filesystem::Handle>(params, Optional<FileIdentity>(expectedIdentity), nullptr, false, indicators, context);
+    return RemediateFilePermissionsImpl<Filesystem::Path::Component>(params, Optional<FileIdentity>(expectedIdentity), nullptr, false, indicators, context);
 }
 
-Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Handle& handle, bool requireUnique,
-    IndicatorsTree& indicators, ContextInterface& context)
-{
-    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(), &handle, requireUnique, indicators, context);
-}
 Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Path::Component& component, bool requireUnique,
     IndicatorsTree& indicators, ContextInterface& context)
 {
-    if (!component.HasValue())
-        return Error("No acquired file component", EBADF);
     return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(), &component, requireUnique, indicators, context);
 }
 

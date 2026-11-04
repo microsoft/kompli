@@ -61,15 +61,6 @@ Result<const struct group*> LookupUserGroup(gid_t id, const char* user, ContextI
     return group;
 }
 
-Result<Status> CloseAfterError(const Error& primary, Filesystem::FTW::FileRange& files, ContextInterface& context)
-{
-    const auto cleanup = files.Close();
-    if (!cleanup.HasValue() && (cleanup.Error().code != primary.code || cleanup.Error().message != primary.message))
-    {
-        OsConfigLogError(context.GetLogHandle(), "Dotfile range cleanup failed after primary error: %s", cleanup.Error().message.c_str());
-    }
-    return primary;
-}
 } // namespace
 
 Result<Status> AuditUserDotFilePermissions(IndicatorsTree& indicators, ContextInterface& context)
@@ -154,7 +145,7 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
                     return;
                 }
                 indicators.Push("AuditFilePermissions");
-                auto subResult = CheckPinnedFilePermissions(params, pin, indicators, context);
+                auto subResult = CheckPinnedFilePermissions(params, pin.Value(), indicators, context);
                 if (!subResult.HasValue())
                 {
                     OsConfigLogError(context.GetLogHandle(), "Failed to check permissions for file '%s': %s", path.c_str(), subResult.Error().message.c_str());
@@ -203,7 +194,7 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
         auto frozen = As<Filesystem::Path>(root.Value()).FreezeRoot();
         if (!frozen.HasValue())
             return std::move(frozen).Error();
-        if (As<Filesystem::Path>(root.Value()).Root().AcquiredType() != Filesystem::Handle::Type::Directory)
+        if (As<Filesystem::Path>(root.Value()).Root().Acquired().type != Filesystem::Type::Directory)
             return Error("Expected directory root at '" + policy.rootPath + "'", ENOTDIR);
         auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), resolved.Value().rootPath,
             Filesystem::CollectionContinuation(resolved.Value()));
@@ -218,12 +209,12 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
         {
             if (!entry.HasValue())
             {
-                return CloseAfterError(entry.Error(), files, context);
+                return entry.Error();
             }
             const auto result = processFile(entry.Value());
             if (!result.HasValue())
             {
-                return CloseAfterError(result.Error(), files, context);
+                return result.Error();
             }
             if (result.Value() == Status::NonCompliant)
             {
@@ -231,11 +222,7 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
                 break;
             }
         }
-        const auto closed = files.Close();
-        if (!closed.HasValue())
-        {
-            return closed.Error();
-        }
+        files.Stop();
         if (verdict == Status::NonCompliant)
         {
             OsConfigLogDebug(context.GetLogHandle(), "Directory validation for user %s id %d returned NonCompliant, but continuing", pwd.pw_name, pwd.pw_uid);

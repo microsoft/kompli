@@ -52,11 +52,7 @@ Result<set<string>> ListValidShells(ContextInterface& context)
 
         validShells.insert(std::move(line));
     }
-    auto closed = range.Close();
-    if (!closed.HasValue())
-    {
-        return std::move(closed).Error();
-    }
+    range.Close();
     return validShells;
 }
 } // namespace ComplianceEngine

@@ -176,8 +176,8 @@ Result<Status> ProcessLogfile(const FilesystemCollectionEntry& entry, const Daem
     auto pin = entry.LiveComponent();
     if (!pin.HasValue())
         return Error("Logfile collection requires an acquired file", EBADF);
-    Result<Status> result =
-        remediate ? EnforcePinnedFilePermissions(params, pin, false, indicators, context) : CheckPinnedFilePermissions(params, pin, indicators, context);
+    Result<Status> result = remediate ? EnforcePinnedFilePermissions(params, pin.Value(), false, indicators, context) :
+                                        CheckPinnedFilePermissions(params, pin.Value(), indicators, context);
     if (!result.HasValue())
     {
         OsConfigLogError(context.GetLogHandle(), "Failed to %s permissions for logfile '%s': %s", remediate ? "remediate" : "audit", fullPath.c_str(),
@@ -225,7 +225,7 @@ Result<Status> WalkLogfiles(const std::string& path, const DaemonUidSet& daemonU
     auto frozen = As<Filesystem::Path>(root.Value()).FreezeRoot();
     if (!frozen.HasValue())
         return std::move(frozen).Error();
-    if (As<Filesystem::Path>(root.Value()).Root().AcquiredType() != Filesystem::Handle::Type::Directory)
+    if (As<Filesystem::Path>(root.Value()).Root().Acquired().type != Filesystem::Type::Directory)
         return Error("Expected directory root at '" + path + "'", ENOTDIR);
     auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), resolved.Value().rootPath,
         Filesystem::CollectionContinuation(resolved.Value()));
@@ -251,11 +251,7 @@ Result<Status> WalkLogfiles(const std::string& path, const DaemonUidSet& daemonU
             verdict = Status::NonCompliant;
         }
     }
-    const auto closed = files.Close();
-    if (!closed.HasValue())
-    {
-        return closed.Error();
-    }
+    files.Stop();
     return verdict;
 }
 

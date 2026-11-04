@@ -24,10 +24,10 @@ public:
     ResolvedPath& operator=(ResolvedPath&&) noexcept = default;
     ResolvedPath(const ResolvedPath&) = delete;
     ResolvedPath& operator=(const ResolvedPath&) = delete;
-    const Handle& Leaf() const;
+    Type LeafType() const;
     std::size_t OwnedDescriptors() const noexcept;
     std::size_t AccountedBytes() const noexcept;
-    Result<bool> Close(const ContextInterface& context);
+    void Close() noexcept;
 
 private:
     friend class ::ComplianceEngine::Filesystem::Path;
