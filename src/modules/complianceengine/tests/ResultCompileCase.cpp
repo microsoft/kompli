@@ -39,7 +39,14 @@ static_assert(std::is_same<decltype(std::declval<Result<int>&&>().Value()), int>
 
 void ValidControl()
 {
-    Result<int> result = 1;
+    Result<int> result = 5;
+    Error codeOnly(5);
+    Result<void> fromCodeOnly = Error(5);
+    Error lvalue("error");
+    Result<void> fromLvalue = lvalue;
+    (void)codeOnly;
+    (void)fromCodeOnly;
+    (void)fromLvalue;
     Result<int> resultCopy(result);
     resultCopy = result;
 
@@ -54,6 +61,10 @@ void ValidControl()
     Result<const int> constResult(1);
     Result<ThrowingMove> throwingResult(ThrowingMove(1));
     Result<ThrowingMove> movedThrowingResult(std::move(throwingResult));
+    Result<void> voidSuccess = Result<void>::Success();
+    Result<void> voidFailure(Error("error"));
+    (void)voidSuccess.HasValue();
+    (void)voidFailure.Error();
     (void)constResult;
     (void)movedThrowingResult;
 }
@@ -76,11 +87,29 @@ void MutateConstResult()
     value.Value() = 2;
 }
 #elif RESULT_COMPILE_CASE == 4
-static_assert(sizeof(Result<void>) > 0, "instantiate Result void");
+void AccessVoidValue()
+{
+    Result<void>::Success().Value();
+}
 #elif RESULT_COMPILE_CASE == 5
 static_assert(sizeof(Result<int&>) > 0, "instantiate Result reference");
 #elif RESULT_COMPILE_CASE == 6
 static_assert(sizeof(Result<Error>) > 0, "instantiate ambiguous Result Error");
+#elif RESULT_COMPILE_CASE == 7
+void DefaultConstructVoidResult()
+{
+    Result<void> result;
+}
+#elif RESULT_COMPILE_CASE == 8
+Result<void> ReturnEmptyBrace()
+{
+    return {};
+}
+#elif RESULT_COMPILE_CASE == 9
+void ImplicitIntegerError()
+{
+    Error error = 5;
+}
 #else
 #error Unknown Result compile case
 #endif

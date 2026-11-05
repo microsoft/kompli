@@ -4,6 +4,7 @@
 #ifndef COMPLIANCEENGINE_RESULT_H
 #define COMPLIANCEENGINE_RESULT_H
 
+#include "Optional.h"
 #include "TypeTraits.h"
 
 #include <cstddef>
@@ -21,6 +22,11 @@ struct Error
     int code = -1;
     std::string message;
 
+    // Format code-only diagnostics with strerror at report time.
+    explicit Error(int code) noexcept
+        : code(code)
+    {
+    }
     Error(std::string message, int code)
         : code(code),
           message(std::move(message))
@@ -177,7 +183,6 @@ class Result : private ResultDetail::CopyStorage<T, std::is_copy_constructible<T
     using Storage = ResultDetail::CopyStorage<T, std::is_copy_constructible<T>::value>;
     using Tag = typename ResultDetail::Storage<T>::Tag;
 
-    static_assert(!std::is_void<T>::value, "Result cannot hold void");
     static_assert(!std::is_reference<T>::value, "Result cannot hold references");
     static_assert(!std::is_same<T, ComplianceEngine::Error>::value, "Result cannot hold Error as its value type");
 
@@ -335,6 +340,105 @@ private:
             throw std::logic_error("Result: unchecked access to Value");
         }
     }
+};
+
+template <>
+class Result<void>
+{
+public:
+    static Result Success() noexcept
+    {
+        return Result();
+    }
+
+    Result(const ComplianceEngine::Error& error)
+        : mError(error)
+    {
+    }
+
+    Result(ComplianceEngine::Error&& error) noexcept
+        : mError(std::move(error))
+    {
+    }
+
+    Result(const Result&) = default;
+    Result& operator=(const Result& other)
+    {
+        if (this != &other)
+        {
+            Result copy(other);      // Keep our state intact if copying Error throws.
+            *this = std::move(copy); // Error move is nonthrowing.
+        }
+        return *this;
+    }
+
+    Result(Result&& other) noexcept
+    {
+        // Leave a moved-from failure in the failure state, as Result<T> does.
+        if (other.mError.HasValue())
+        {
+            mError = std::move(other.mError.Value());
+        }
+    }
+
+    Result& operator=(Result&& other) noexcept
+    {
+        if (this == &other)
+        {
+            return *this;
+        }
+
+        if (other.mError.HasValue())
+        {
+            mError = std::move(other.mError.Value());
+        }
+        else
+        {
+            mError.Reset();
+        }
+        return *this;
+    }
+
+    bool HasValue() const noexcept
+    {
+        return !mError.HasValue();
+    }
+
+    explicit operator bool() const noexcept
+    {
+        return HasValue();
+    }
+
+    const ComplianceEngine::Error& Error() const&
+    {
+        CheckError();
+        return mError.Value();
+    }
+
+    ComplianceEngine::Error& Error() &
+    {
+        CheckError();
+        return mError.Value();
+    }
+
+    ComplianceEngine::Error Error() &&
+    {
+        CheckError();
+        return std::move(mError).Value();
+    }
+
+private:
+    Result() noexcept = default;
+
+    void CheckError() const
+    {
+        if (HasValue())
+        {
+            throw std::logic_error("Result: unchecked access to Error");
+        }
+    }
+
+    Optional<ComplianceEngine::Error> mError;
 };
 } // namespace ComplianceEngine
 

@@ -64,6 +64,63 @@ struct ThrowingFallbackMove
     }
 };
 
+template <typename...>
+struct MakeVoid
+{
+    using Type = void;
+};
+
+template <typename T, typename = void>
+struct HasValueAccessor : std::false_type
+{
+};
+
+template <typename T>
+struct HasValueAccessor<T, typename MakeVoid<decltype(std::declval<T&>().Value())>::Type> : std::true_type
+{
+};
+
+template <typename T, typename = void>
+struct HasValueOrAccessor : std::false_type
+{
+};
+
+template <typename T>
+struct HasValueOrAccessor<T, typename MakeVoid<decltype(std::declval<T&>().ValueOr(0))>::Type> : std::true_type
+{
+};
+
+static_assert(!std::is_default_constructible<Result<void>>::value, "void success requires Success()");
+static_assert(!HasValueAccessor<Result<void>>::value, "void Result has no Value()");
+static_assert(!HasValueOrAccessor<Result<void>>::value, "void Result has no ValueOr()");
+static_assert(std::is_convertible<Error, Result<void>>::value, "Error implicitly constructs void Result");
+static_assert(!std::is_convertible<int, Error>::value, "integer cannot implicitly construct Error");
+static_assert(!std::is_convertible<int, Result<void>>::value, "integer cannot implicitly construct void Result");
+static_assert(std::is_convertible<int, Result<int>>::value, "integer remains a Result<int> value");
+static_assert(std::is_nothrow_constructible<Error, int>::value, "code-only Error construction is nonthrowing");
+static_assert(std::is_nothrow_constructible<Result<void>, Error&&>::value, "rvalue Error construction is nonthrowing");
+static_assert(!std::is_nothrow_constructible<Result<void>, const Error&>::value, "lvalue Error copying may throw");
+static_assert(std::is_nothrow_move_constructible<Result<void>>::value, "void Result move construction is nonthrowing");
+static_assert(std::is_nothrow_move_assignable<Result<void>>::value, "void Result move assignment is nonthrowing");
+static_assert(noexcept(Result<void>::Success()), "void Result success factory is nonthrowing");
+static_assert(std::is_copy_constructible<Result<void>>::value && std::is_copy_assignable<Result<void>>::value, "void Result copies");
+static_assert(std::is_move_constructible<Result<void>>::value && std::is_move_assignable<Result<void>>::value, "void Result moves");
+static_assert(std::is_same<decltype(std::declval<const Result<void>&>().Error()), const Error&>::value,
+    "const void Result returns a const error reference");
+static_assert(std::is_same<decltype(std::declval<Result<void>&>().Error()), Error&>::value, "mutable void Result returns a mutable error reference");
+static_assert(std::is_same<decltype(std::declval<Result<void>&&>().Error()), Error>::value, "rvalue void Result returns an error by value");
+static_assert(!std::is_convertible<Result<void>, bool>::value, "void Result has explicit bool conversion");
+static_assert(std::is_constructible<bool, Result<void>>::value, "void Result supports contextual bool conversion");
+
+Result<void> ForwardVoidFailure(Result<void> result)
+{
+    if (!result)
+    {
+        return std::move(result).Error();
+    }
+    return Result<void>::Success();
+}
+
 static_assert(std::is_copy_constructible<Result<int>>::value, "copyable Result must be copy constructible");
 static_assert(std::is_copy_assignable<Result<int>>::value, "copyable Result must be copy assignable");
 static_assert(!std::is_copy_constructible<Result<std::unique_ptr<int>>>::value, "move-only Result must not be copy constructible");
@@ -267,4 +324,135 @@ TEST_F(ResultTest, MoveOnlyValueAndErrorTransitions)
     destination = std::move(error);
     ASSERT_FALSE(destination.HasValue());
     EXPECT_EQ(destination.Error().message, "new error");
+}
+
+TEST_F(ResultTest, CodeOnlyErrorRetainsEmptyMessageAndIntIsValue)
+{
+    Error error(2);
+    EXPECT_EQ(2, error.code);
+    EXPECT_TRUE(error.message.empty());
+    Result<void> failure = error;
+    EXPECT_FALSE(failure.HasValue());
+    EXPECT_EQ(2, failure.Error().code);
+    EXPECT_TRUE(failure.Error().message.empty());
+    Result<int> value = 5;
+    ASSERT_TRUE(value.HasValue());
+    EXPECT_EQ(5, value.Value());
+}
+
+TEST_F(ResultTest, VoidSuccessRequiresFactory)
+{
+    Result<void> result = Result<void>::Success();
+    EXPECT_TRUE(result.HasValue());
+    EXPECT_TRUE(static_cast<bool>(result));
+    EXPECT_THROW(result.Error(), std::logic_error);
+    EXPECT_THROW(static_cast<const Result<void>&>(result).Error(), std::logic_error);
+    EXPECT_THROW(std::move(result).Error(), std::logic_error);
+}
+
+TEST_F(ResultTest, VoidErrorPreservesPayloadAndAccessQualifiers)
+{
+    Result<void> result = Error("failure", 42);
+    EXPECT_FALSE(result.HasValue());
+    EXPECT_FALSE(static_cast<bool>(result));
+    const Result<void>& constResult = result;
+    EXPECT_EQ(&result.Error(), &constResult.Error());
+    EXPECT_EQ(42, constResult.Error().code);
+    result.Error().message = "updated";
+    Error extracted = std::move(result).Error();
+    EXPECT_EQ(42, extracted.code);
+    EXPECT_EQ("updated", extracted.message);
+}
+
+TEST_F(ResultTest, VoidCopyAndMoveConstruction)
+{
+    Result<void> success = Result<void>::Success();
+    Result<void> successCopy(success);
+    Result<void> successMove(std::move(success));
+    EXPECT_TRUE(successCopy.HasValue());
+    EXPECT_TRUE(successMove.HasValue());
+
+    Result<void> failure = Error("source", 17);
+    Result<void> failureCopy(failure);
+    Result<void> failureMove(std::move(failure));
+    EXPECT_FALSE(failure.HasValue());
+    EXPECT_FALSE(failureCopy.HasValue());
+    EXPECT_EQ("source", failureCopy.Error().message);
+    EXPECT_FALSE(failureMove.HasValue());
+    EXPECT_EQ(17, failureMove.Error().code);
+    EXPECT_EQ("source", failureMove.Error().message);
+}
+
+TEST_F(ResultTest, VoidCopyAndMoveAssignment)
+{
+    Result<void> success = Result<void>::Success();
+    Result<void> failure = Error("original", 13);
+    success = failure;
+    EXPECT_FALSE(success.HasValue());
+    EXPECT_EQ("original", success.Error().message);
+    success = Result<void>::Success();
+    EXPECT_TRUE(success.HasValue());
+    failure = success;
+    EXPECT_TRUE(failure.HasValue());
+
+    failure = Error("next", 29);
+    success = std::move(failure);
+    EXPECT_FALSE(failure.HasValue());
+    EXPECT_FALSE(success.HasValue());
+    EXPECT_EQ(29, success.Error().code);
+    EXPECT_EQ("next", success.Error().message);
+    Result<void> replacement = Error("old");
+    replacement = std::move(success);
+    EXPECT_FALSE(success.HasValue());
+    EXPECT_EQ(29, replacement.Error().code);
+    EXPECT_EQ("next", replacement.Error().message);
+    success = Result<void>::Success();
+    EXPECT_TRUE(success.HasValue());
+
+    Result<void>& alias = success;
+    success = alias;
+    success = std::move(alias);
+    EXPECT_TRUE(success.HasValue());
+    success = Error("self", 31);
+    success = alias;
+    success = std::move(alias);
+    EXPECT_FALSE(success.HasValue());
+    EXPECT_EQ("self", success.Error().message);
+}
+
+TEST_F(ResultTest, VoidCopyAssignmentReplacesStatesAndPreservesSelfAssignment)
+{
+    Result<void> source = Error("new failure", 29);
+    Result<void> destination = Error("old failure", 13);
+    destination = source;
+    ASSERT_FALSE(destination.HasValue());
+    EXPECT_EQ(29, destination.Error().code);
+    EXPECT_EQ("new failure", destination.Error().message);
+    EXPECT_EQ("new failure", source.Error().message);
+
+    Result<void>& failureAlias = destination;
+    destination = failureAlias;
+    EXPECT_EQ(29, destination.Error().code);
+    EXPECT_EQ("new failure", destination.Error().message);
+
+    Result<void> success = Result<void>::Success();
+    destination = success;
+    EXPECT_TRUE(destination.HasValue());
+    destination = source;
+    ASSERT_FALSE(destination.HasValue());
+    EXPECT_EQ(29, destination.Error().code);
+    EXPECT_EQ("new failure", destination.Error().message);
+    success = destination;
+    ASSERT_FALSE(success.HasValue());
+    EXPECT_EQ(29, success.Error().code);
+    EXPECT_EQ("new failure", success.Error().message);
+}
+
+TEST_F(ResultTest, VoidFailureForwarding)
+{
+    Result<void> failure = ForwardVoidFailure(Error("forwarded", 53));
+    ASSERT_FALSE(failure.HasValue());
+    EXPECT_EQ(53, failure.Error().code);
+    EXPECT_EQ("forwarded", failure.Error().message);
+    EXPECT_TRUE(ForwardVoidFailure(Result<void>::Success()).HasValue());
 }

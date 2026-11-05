@@ -146,10 +146,13 @@ check_wrapper_compile_case(Optional "${optional_compile_case_source}" 5 "referen
 check_wrapper_compile_case(Result "${result_compile_case_source}" 0 "control" "")
 check_wrapper_compile_case(Result "${result_compile_case_source}" 1 "move-only copy construction" "deleted")
 check_wrapper_compile_case(Result "${result_compile_case_source}" 2 "move-only copy assignment" "deleted")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 4 "void" "Result cannot hold void")
 check_wrapper_compile_case(Result "${result_compile_case_source}" 3 "const mutation" "cannot assign to return value|assignment of read-only location")
+check_wrapper_compile_case(Result "${result_compile_case_source}" 4 "void Value access" "no member named 'Value'|no member named ‘Value’")
 check_wrapper_compile_case(Result "${result_compile_case_source}" 5 "reference" "Result cannot hold references")
 check_wrapper_compile_case(Result "${result_compile_case_source}" 6 "Error value" "Result cannot hold Error as its value type")
+check_wrapper_compile_case(Result "${result_compile_case_source}" 7 "void default construction" "calling a private constructor|is private within this context")
+check_wrapper_compile_case(Result "${result_compile_case_source}" 8 "void empty-brace return" "calling a private constructor|is private within this context")
+check_wrapper_compile_case(Result "${result_compile_case_source}" 9 "implicit integer Error" "no viable conversion|to non-scalar type")
 
 set(PROCEDURES
     procedures/AideAttributesTest.cpp
@@ -284,6 +287,12 @@ target_link_libraries(filesystem-collection-allocation-test PRIVATE
     parsonlib
 )
 gtest_discover_tests(filesystem-collection-allocation-test XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR})
+
+# Keep intentional allocation faults out of the shared test executable.
+add_executable(result-allocation-test ResultAllocationTest.cpp)
+target_link_options(result-allocation-test PRIVATE "LINKER:--wrap=_Znwm")
+target_link_libraries(result-allocation-test PRIVATE GTest::gtest_main)
+gtest_discover_tests(result-allocation-test XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR})
 
 add_library(file_regex_match_fallback_compile OBJECT ../src/lib/procedures/FileRegexMatch.cpp)
 target_compile_definitions(file_regex_match_fallback_compile PRIVATE USE_REGEX_FALLBACK=1)
