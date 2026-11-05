@@ -8,7 +8,7 @@
 #include <memory>
 #include <parson.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 using JsonWrapperPointerType = std::unique_ptr<json_value_t, void (*)(json_value_t*)>;
 struct JsonWrapper : public JsonWrapperPointerType
@@ -45,6 +45,6 @@ private:
     // Construct the wrapper from an existing json_value_t pointer
     explicit JsonWrapper(JsonWrapperPointerType&& value);
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_JSON_WRAPPER_H

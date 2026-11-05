@@ -8,9 +8,9 @@
 #include <Result.h>
 #include <set>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<std::set<std::string>> ListValidShells(ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_LIST_VALID_SHELLS_H

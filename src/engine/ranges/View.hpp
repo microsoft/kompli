@@ -10,7 +10,7 @@
 #include <iterator>
 #include <utility>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace Ranges
 {
@@ -137,6 +137,6 @@ private:
 };
 
 } // namespace Ranges
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_RANGES_VIEW_HPP

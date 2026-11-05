@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-using ComplianceEngine::Optional;
+using Kompli::Optional;
 
 class OptionalTest : public ::testing::Test
 {

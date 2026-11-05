@@ -6,9 +6,9 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditUserHomeDirectoryPermissions(IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateUserHomeDirectoryPermissions(IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_USER_HOME_DIRECTORY_PERMISSIONS_H

@@ -5,7 +5,7 @@ set(found_override_test FALSE)
 set(found_file_permissions_test FALSE)
 set(found_log_file_permissions_test FALSE)
 
-foreach(test_name IN LISTS complianceenginetests_TESTS)
+foreach(test_name IN LISTS kompli_engine_tests)
     if(test_name STREQUAL "ComplianceEngineTest.ValidatePayload_OverrideFile")
         set_tests_properties("${test_name}" PROPERTIES RUN_SERIAL TRUE)
         set(found_override_test TRUE)

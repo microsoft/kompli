@@ -6,7 +6,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class ComparisonOperation
 {
@@ -87,5 +87,5 @@ struct ShadowFieldParams
 };
 
 Result<Status> AuditShadowField(const ShadowFieldParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_SHADOW_FIELD_H

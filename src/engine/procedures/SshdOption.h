@@ -7,7 +7,7 @@
 #include <Evaluator.h>
 #include <Separated.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class SshdOptionOperation
 {
@@ -65,5 +65,5 @@ struct SshdOptionParams
 
 Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_SSHD_OPTION_H

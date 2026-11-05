@@ -16,13 +16,13 @@
 #include <unistd.h>
 #include <vector>
 
-using ComplianceEngine::AuditLogFilePermissions;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::LogFilePermissionsParams;
-using ComplianceEngine::RemediateLogFilePermissions;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditLogFilePermissions;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::LogFilePermissionsParams;
+using Kompli::RemediateLogFilePermissions;
+using Kompli::Result;
+using Kompli::Status;
 
 class EnsureLogfileAccessTest : public ::testing::Test
 {
@@ -30,7 +30,7 @@ protected:
     std::string testDir;
     MockContext mContext;
     IndicatorsTree indicators;
-    ComplianceEngine::NestedListFormatter mFormatter;
+    Kompli::NestedListFormatter mFormatter;
 
     void SetUp() override
     {

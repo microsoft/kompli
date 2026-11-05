@@ -4,7 +4,7 @@
 #include <Evaluator.h>
 #include <regex>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct FileSymlinkTargetParams
 {
@@ -15,6 +15,6 @@ struct FileSymlinkTargetParams
 };
 
 Result<Status> AuditFileSymlinkTarget(const FileSymlinkTargetParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif

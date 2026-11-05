@@ -14,9 +14,9 @@
 #include <string>
 #include <utility>
 
-namespace ComplianceEngine
-{
 namespace Kompli
+{
+namespace Cli
 {
 using std::string;
 
@@ -387,11 +387,9 @@ Result<bool> BuildTags(const JSON_Object* rule, pugi::xml_node testcase, XmlBudg
             return Error("Canonical result JSON rule has a non-string tag", EINVAL);
         }
         const size_t length = json_array_get_string_len(tags, i);
-        if (ComplianceEngine::BenchmarkDefinition::kMaxTagBytes < length)
+        if (Kompli::BenchmarkDefinition::kMaxTagBytes < length)
         {
-            return Error("Canonical result JSON rule has a tag exceeding " + std::to_string(ComplianceEngine::BenchmarkDefinition::kMaxTagBytes) +
-                             " bytes",
-                E2BIG);
+            return Error("Canonical result JSON rule has a tag exceeding " + std::to_string(Kompli::BenchmarkDefinition::kMaxTagBytes) + " bytes", E2BIG);
         }
         const string value(tag, length);
         if (string::npos != value.find('\0'))
@@ -665,5 +663,5 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
     return writer.Value();
 }
 
+} // namespace Cli
 } // namespace Kompli
-} // namespace ComplianceEngine

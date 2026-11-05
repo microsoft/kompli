@@ -11,7 +11,7 @@
 #include <set>
 #include <shadow.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 using std::set;
 using std::string;
@@ -118,4 +118,4 @@ Result<Status> AuditNoShellAccountsLocked(const NoShellAccountsLockedParams& par
 
     return indicators.Compliant("All non-root users without a login shell are locked");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

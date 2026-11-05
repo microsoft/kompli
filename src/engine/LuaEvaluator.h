@@ -14,7 +14,7 @@
 
 struct lua_State;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 using std::map;
@@ -76,6 +76,6 @@ private:
     static int LuaProcedureWrapper(lua_State* L);
 };
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_LUAEVALUATOR_H

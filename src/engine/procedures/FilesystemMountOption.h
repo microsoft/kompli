@@ -7,7 +7,7 @@
 #include <Evaluator.h>
 #include <Separated.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct FilesystemMountOptionParams
 {
@@ -29,5 +29,5 @@ struct FilesystemMountOptionParams
 
 Result<Status> AuditFilesystemMountOption(const FilesystemMountOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateFilesystemMountOption(const FilesystemMountOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_FILESYSTEM_MOUNT_OPTION_H

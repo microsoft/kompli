@@ -7,7 +7,7 @@
 #include <MmiResults.h>
 #include <Result.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class StateSatisfaction
 {
@@ -61,6 +61,6 @@ private:
     CompletedItemEvidence mItems;
     bool mHasEmptyItem = false;
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_RESULT_EVIDENCE_H

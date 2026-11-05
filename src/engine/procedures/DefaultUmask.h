@@ -6,9 +6,9 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditDefaultUmask(IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateDefaultUmask(IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_DEFAULT_UMASK_H

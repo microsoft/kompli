@@ -22,15 +22,15 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-using ComplianceEngine::Kompli::ApplyParameterOverrides;
-using ComplianceEngine::Kompli::CheckUniqueBenchmarkFiles;
-using ComplianceEngine::Kompli::GeneratePlan;
-using ComplianceEngine::Kompli::ParamOverride;
-using ComplianceEngine::Kompli::ParsePlanFile;
-using ComplianceEngine::Kompli::Toggle;
-using ComplianceEngine::Kompli::ToggleMode;
-using ComplianceEngine::Kompli::ValidatePlanForRun;
-using ComplianceEngine::Kompli::WritePlanFile;
+using Kompli::Cli::ApplyParameterOverrides;
+using Kompli::Cli::CheckUniqueBenchmarkFiles;
+using Kompli::Cli::GeneratePlan;
+using Kompli::Cli::ParamOverride;
+using Kompli::Cli::ParsePlanFile;
+using Kompli::Cli::Toggle;
+using Kompli::Cli::ToggleMode;
+using Kompli::Cli::ValidatePlanForRun;
+using Kompli::Cli::WritePlanFile;
 
 namespace
 {
@@ -748,24 +748,24 @@ namespace
 {
 // No filesystem/root needed: CheckUniqueBenchmarkIdentities operates purely
 // on already-parsed BenchmarkInfo values.
-ComplianceEngine::BenchmarkInfo MakeInfo(const std::string& framework, const std::string& distribution, const std::string& version, const std::string& benchmarkVersion)
+Kompli::BenchmarkInfo MakeInfo(const std::string& framework, const std::string& distribution, const std::string& version, const std::string& benchmarkVersion)
 {
-    auto result = ComplianceEngine::BenchmarkInfo::FromMetadata(framework, distribution, version, benchmarkVersion);
+    auto result = Kompli::BenchmarkInfo::FromMetadata(framework, distribution, version, benchmarkVersion);
     EXPECT_TRUE(result.HasValue()) << result.Error().message;
     return result.Value();
 }
 
-ComplianceEngine::DistributionInfo MakeDistribution(const std::string& version = "22.04")
+Kompli::DistributionInfo MakeDistribution(const std::string& version = "22.04")
 {
-    ComplianceEngine::DistributionInfo result;
-    result.distribution = ComplianceEngine::LinuxDistribution::Ubuntu;
+    Kompli::DistributionInfo result;
+    result.distribution = Kompli::LinuxDistribution::Ubuntu;
     result.version = version;
     return result;
 }
 
-ComplianceEngine::BenchmarkDefinition::BenchmarkDocument ParseDocument(const std::string& json)
+Kompli::BenchmarkDefinition::BenchmarkDocument ParseDocument(const std::string& json)
 {
-    auto result = ComplianceEngine::BenchmarkDefinition::ParseString(json, nullptr);
+    auto result = Kompli::BenchmarkDefinition::ParseString(json, nullptr);
     EXPECT_TRUE(result.HasValue()) << result.Error().message;
     return std::move(result.Value());
 }
@@ -774,12 +774,12 @@ ComplianceEngine::BenchmarkDefinition::BenchmarkDocument ParseDocument(const std
 TEST(ValidatePlanForRunTest, AcceptsKnownRuleAndValidParameters)
 {
     auto document = ParseDocument(kParameterizedBenchmarkJson);
-    ComplianceEngine::Kompli::Plan plan;
-    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    Kompli::Cli::Plan plan;
+    Kompli::Cli::PlanBenchmark benchmark;
     benchmark.file = "bench.json";
     benchmark.version = {"1", "0", "0"};
     benchmark.versionConstraint = "^1.0.0";
-    ComplianceEngine::Kompli::PlanRuleMode rule(ToggleMode::Audit);
+    Kompli::Cli::PlanRuleMode rule(ToggleMode::Audit);
     rule.parameters["mountPoint"] = "/var/tmp";
     benchmark.rules["1.1.1.1"] = rule;
     plan.benchmarks.push_back(benchmark);
@@ -790,8 +790,8 @@ TEST(ValidatePlanForRunTest, AcceptsKnownRuleAndValidParameters)
 TEST(ValidatePlanForRunTest, RejectsInapplicableBlock)
 {
     auto document = ParseDocument(kBenchmarkJson);
-    ComplianceEngine::Kompli::Plan plan;
-    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    Kompli::Cli::Plan plan;
+    Kompli::Cli::PlanBenchmark benchmark;
     benchmark.file = "bench.json";
     benchmark.version = {"1", "0", "0"};
     benchmark.versionConstraint = "^1.0.0";
@@ -803,12 +803,12 @@ TEST(ValidatePlanForRunTest, RejectsInapplicableBlock)
 TEST(ValidatePlanForRunTest, RejectsUnknownRule)
 {
     auto document = ParseDocument(kBenchmarkJson);
-    ComplianceEngine::Kompli::Plan plan;
-    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    Kompli::Cli::Plan plan;
+    Kompli::Cli::PlanBenchmark benchmark;
     benchmark.file = "bench.json";
     benchmark.version = {"1", "0", "0"};
     benchmark.versionConstraint = "^1.0.0";
-    benchmark.rules["unknown"] = ComplianceEngine::Kompli::PlanRuleMode(ToggleMode::Audit);
+    benchmark.rules["unknown"] = Kompli::Cli::PlanRuleMode(ToggleMode::Audit);
     plan.benchmarks.push_back(benchmark);
 
     EXPECT_TRUE(ValidatePlanForRun(plan, {document}, MakeDistribution()).HasValue());
@@ -817,12 +817,12 @@ TEST(ValidatePlanForRunTest, RejectsUnknownRule)
 TEST(ValidatePlanForRunTest, RejectsUnknownOrInvalidParameter)
 {
     auto document = ParseDocument(kParameterizedBenchmarkJson);
-    ComplianceEngine::Kompli::Plan plan;
-    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    Kompli::Cli::Plan plan;
+    Kompli::Cli::PlanBenchmark benchmark;
     benchmark.file = "bench.json";
     benchmark.version = {"1", "0", "0"};
     benchmark.versionConstraint = "^1.0.0";
-    ComplianceEngine::Kompli::PlanRuleMode rule(ToggleMode::Audit);
+    Kompli::Cli::PlanRuleMode rule(ToggleMode::Audit);
     rule.parameters["unknown"] = "value";
     benchmark.rules["1.1.1.1"] = rule;
     plan.benchmarks.push_back(benchmark);
@@ -839,12 +839,12 @@ TEST(ValidatePlanForRunTest, EmptyParameterValueRespectsDefinitionRegex)
     auto optionalDocument = ParseDocument(kParameterizedBenchmarkJson);
     optionalDocument.resources[0].parameterMetadata["mountPoint"].validationRegex = std::string("^(/[a-zA-Z0-9/_.-]+)?$");
 
-    ComplianceEngine::Kompli::Plan plan;
-    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    Kompli::Cli::Plan plan;
+    Kompli::Cli::PlanBenchmark benchmark;
     benchmark.file = "bench.json";
     benchmark.version = {"1", "0", "0"};
     benchmark.versionConstraint = "^1.0.0";
-    ComplianceEngine::Kompli::PlanRuleMode rule(ToggleMode::Audit);
+    Kompli::Cli::PlanRuleMode rule(ToggleMode::Audit);
     rule.parameters["mountPoint"] = "";
     benchmark.rules["1.1.1.1"] = rule;
     plan.benchmarks.push_back(benchmark);
@@ -861,12 +861,12 @@ TEST(ValidatePlanForRunTest, RejectsMissingMandatoryParameter)
 {
     auto document = ParseDocument(kParameterizedBenchmarkJson);
     document.resources[0].parameterMetadata["mountPoint"].mandatory = true;
-    ComplianceEngine::Kompli::Plan plan;
-    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    Kompli::Cli::Plan plan;
+    Kompli::Cli::PlanBenchmark benchmark;
     benchmark.file = "bench.json";
     benchmark.version = {"1", "0", "0"};
     benchmark.versionConstraint = "^1.0.0";
-    benchmark.rules["1.1.1.1"] = ComplianceEngine::Kompli::PlanRuleMode(ToggleMode::Audit);
+    benchmark.rules["1.1.1.1"] = Kompli::Cli::PlanRuleMode(ToggleMode::Audit);
     plan.benchmarks.push_back(benchmark);
 
     auto error = ValidatePlanForRun(plan, {document}, MakeDistribution());
@@ -876,12 +876,12 @@ TEST(ValidatePlanForRunTest, RejectsMissingMandatoryParameter)
 
 TEST(ValidatePlanForRunTest, GatesContentVersionBeforeEvaluatingRules)
 {
-    ComplianceEngine::Kompli::Plan plan;
-    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    Kompli::Cli::Plan plan;
+    Kompli::Cli::PlanBenchmark benchmark;
     benchmark.file = "bench.json";
     benchmark.version = {"1", "0", "0"};
     benchmark.versionConstraint = "^1.0.0";
-    benchmark.rules["1.1.1.1"] = ComplianceEngine::Kompli::PlanRuleMode(ToggleMode::Audit);
+    benchmark.rules["1.1.1.1"] = Kompli::Cli::PlanRuleMode(ToggleMode::Audit);
     plan.benchmarks.push_back(benchmark);
 
     auto checkVersion = [&](const std::string& version) {
@@ -926,12 +926,12 @@ TEST(ValidatePlanForRunTest, GatesContentVersionBeforeEvaluatingRules)
 TEST(ValidatePlanForRunTest, RejectsMalformedOrMismatchedVersionConstraintsWithoutFilesystem)
 {
     auto document = ParseDocument(kBenchmarkJson);
-    ComplianceEngine::Kompli::Plan plan;
-    ComplianceEngine::Kompli::PlanBenchmark benchmark;
+    Kompli::Cli::Plan plan;
+    Kompli::Cli::PlanBenchmark benchmark;
     benchmark.file = "bench.json";
     benchmark.version = {"1", "0", "0"};
     benchmark.versionConstraint = "^1.0.0";
-    benchmark.rules["unknown"] = ComplianceEngine::Kompli::PlanRuleMode(ToggleMode::Audit);
+    benchmark.rules["unknown"] = Kompli::Cli::PlanRuleMode(ToggleMode::Audit);
     plan.benchmarks.push_back(benchmark);
 
     for (const std::string constraint : {"", "^", "^2.0.0", "~1.0.1", "1.0", "^1.0.0 || 2.0.0"})
@@ -951,35 +951,35 @@ TEST(ValidatePlanForRunTest, RejectsMalformedOrMismatchedVersionConstraintsWitho
 
 TEST(CheckUniqueBenchmarkIdentitiesTest, AcceptsDistinctIdentities)
 {
-    const std::vector<std::pair<std::string, ComplianceEngine::BenchmarkInfo>> benchmarks = {
+    const std::vector<std::pair<std::string, Kompli::BenchmarkInfo>> benchmarks = {
         {"cis_ubuntu24.04.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v1.0.0")},
         {"stig_ubuntu24.04.benchmark.json", MakeInfo("stig", "ubuntu", "24.04", "v1.0.0")},
     };
 
-    auto result = ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities(benchmarks);
+    auto result = Kompli::Cli::CheckUniqueBenchmarkIdentities(benchmarks);
     EXPECT_FALSE(result.HasValue());
 }
 
 TEST(CheckUniqueBenchmarkIdentitiesTest, AcceptsDistinctIdentitiesWithDelimiterCharacters)
 {
-    const std::vector<std::pair<std::string, ComplianceEngine::BenchmarkInfo>> benchmarks = {
+    const std::vector<std::pair<std::string, Kompli::BenchmarkInfo>> benchmarks = {
         {"first.benchmark.json", MakeInfo("custom/ubuntu", "ubuntu", "24.04", "1.0.0")},
         {"second.benchmark.json", MakeInfo("custom", "ubuntu", "ubuntu/24.04", "1.0.0")},
     };
     ASSERT_EQ(std::to_string(benchmarks[0].second), std::to_string(benchmarks[1].second));
 
-    auto result = ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities(benchmarks);
+    auto result = Kompli::Cli::CheckUniqueBenchmarkIdentities(benchmarks);
     EXPECT_FALSE(result.HasValue());
 }
 
 TEST(CheckUniqueBenchmarkIdentitiesTest, RejectsDuplicateIdentity)
 {
-    const std::vector<std::pair<std::string, ComplianceEngine::BenchmarkInfo>> benchmarks = {
+    const std::vector<std::pair<std::string, Kompli::BenchmarkInfo>> benchmarks = {
         {"cis_ubuntu24.04.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v1.0.0")},
         {"cis_ubuntu24.04_copy.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v1.0.0")},
     };
 
-    auto result = ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities(benchmarks);
+    auto result = Kompli::Cli::CheckUniqueBenchmarkIdentities(benchmarks);
     ASSERT_TRUE(result.HasValue());
     EXPECT_NE(result.Value().message.find("cis_ubuntu24.04.benchmark.json"), std::string::npos);
     EXPECT_NE(result.Value().message.find("cis_ubuntu24.04_copy.benchmark.json"), std::string::npos);
@@ -987,19 +987,19 @@ TEST(CheckUniqueBenchmarkIdentitiesTest, RejectsDuplicateIdentity)
 
 TEST(CheckUniqueBenchmarkIdentitiesTest, DifferingBenchmarkVersionIsNotADuplicate)
 {
-    const std::vector<std::pair<std::string, ComplianceEngine::BenchmarkInfo>> benchmarks = {
+    const std::vector<std::pair<std::string, Kompli::BenchmarkInfo>> benchmarks = {
         {"cis_ubuntu24.04_v1.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v1.0.0")},
         {"cis_ubuntu24.04_v2.benchmark.json", MakeInfo("cis", "ubuntu", "24.04", "v2.0.0")},
     };
 
-    auto result = ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities(benchmarks);
+    auto result = Kompli::Cli::CheckUniqueBenchmarkIdentities(benchmarks);
     EXPECT_FALSE(result.HasValue());
 }
 
 TEST(CheckUniqueBenchmarkIdentitiesTest, RejectsOptionalBenchmarkVersionPrefixDifference)
 {
-    const std::vector<std::pair<std::string, ComplianceEngine::BenchmarkInfo>> benchmarks = {
+    const std::vector<std::pair<std::string, Kompli::BenchmarkInfo>> benchmarks = {
         {"first.json", MakeInfo("cis", "ubuntu", "22.04", "v2.0.0")}, {"second.json", MakeInfo("cis", "ubuntu", "22.04", "2.0.0")}};
 
-    EXPECT_TRUE(ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities(benchmarks).HasValue());
+    EXPECT_TRUE(Kompli::Cli::CheckUniqueBenchmarkIdentities(benchmarks).HasValue());
 }

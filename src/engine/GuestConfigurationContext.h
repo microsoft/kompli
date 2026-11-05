@@ -7,7 +7,7 @@
 #include "CommonContext.h"
 #include "Logging.h"
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 class GuestConfigurationContext : public CommonContext
@@ -22,5 +22,5 @@ private:
     static constexpr char sStatePath[] = "/var/lib/GuestConfig";
 };
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_GUESTCONFIGURATIONCONTEXT_H

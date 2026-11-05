@@ -9,7 +9,7 @@
 #include <cstddef>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 class ContextInterface;
 
@@ -31,6 +31,6 @@ struct FileCollectionPolicy
 };
 
 Result<VariableResolution::ObjectCollection> CollectNameserverObject(const ContextInterface& context, const std::string& path, FileCollectionPolicy policy = {});
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_FILE_OBJECT_COLLECTOR_H

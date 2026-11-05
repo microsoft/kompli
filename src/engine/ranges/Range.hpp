@@ -11,7 +11,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace Ranges
 {
@@ -147,6 +147,6 @@ View<Detail::CollectionSource<std::vector<T>>> Range(std::initializer_list<T> va
     return View<Source>(Source(std::vector<T>(values)));
 }
 } // namespace Ranges
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_RANGES_RANGE_HPP

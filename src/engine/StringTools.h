@@ -6,7 +6,7 @@
 
 #include <Result.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 // ============================================================================
@@ -90,6 +90,6 @@ Result<int> TryStringToInt(const std::string& str, int base = 10);
  */
 Result<unsigned int> TryStringToUint(const std::string& str, int base = 10);
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_STRING_TOOLS_H

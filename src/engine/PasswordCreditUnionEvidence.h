@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct PasswordCreditItem
 {
@@ -74,6 +74,6 @@ using CreditDiagnosticReporter = std::function<void(CreditRootLocation, CreditEv
 // Reporter exceptions become evaluation errors; an already-reached assessment error takes precedence.
 Result<Status> EvaluatePasswordCreditUnion(const PasswordCreditAssessment& mainRoot, const PasswordCreditAssessment& dropInRoot,
     const CreditDiagnosticReporter& reportDiagnostic);
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_PASSWORD_CREDIT_UNION_EVIDENCE_H

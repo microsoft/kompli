@@ -4,10 +4,10 @@
 #include <string>
 #include <sys/stat.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 bool MkdirRecursive(const std::string& path, mode_t mode = 0700);
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_DIRTOOLS_H

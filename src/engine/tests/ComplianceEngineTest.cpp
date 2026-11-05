@@ -15,7 +15,7 @@
 #include <version.h>
 
 using namespace std;
-using ComplianceEngine::DistributionInfo;
+using Kompli::DistributionInfo;
 
 class ComplianceEngineTest : public ::testing::Test
 {
@@ -191,7 +191,7 @@ TEST_F(ComplianceEngineTest, ValidatePayload_2)
 
 TEST_F(ComplianceEngineTest, ValidatePayload_3)
 {
-    auto& engine = *reinterpret_cast<ComplianceEngine::Engine*>(mHandle);
+    auto& engine = *reinterpret_cast<Kompli::Engine*>(mHandle);
     auto osRelease = engine.GetDistributionInfo();
     ASSERT_TRUE(osRelease.HasValue());
     std::string payloadKey = std::string("/cis/") + to_string(osRelease->distribution) + "/" + osRelease->version + "/v1.1.1/x/y/z";
@@ -239,7 +239,7 @@ TEST_F(ComplianceEngineTest, ValidatePayload_OverrideFile)
         rmdir("/etc/kompli");
     }
     ASSERT_NE(nullptr, handle);
-    auto& engine = *reinterpret_cast<ComplianceEngine::Engine*>(handle);
+    auto& engine = *reinterpret_cast<Kompli::Engine*>(handle);
     auto osRelease = engine.GetDistributionInfo();
     ASSERT_TRUE(osRelease.HasValue());
     EXPECT_EQ(0, ComplianceEngineCheckApplicability(handle, "/cis/ol/foo/v2.0.1/x/y/z", nullptr));

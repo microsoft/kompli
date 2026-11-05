@@ -6,8 +6,8 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditSetBenchmarkSettings(const std::map<std::string, std::string>& settings, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_BENCHMARK_SETTINGS_H

@@ -40,7 +40,7 @@ target_link_libraries(${lib_name} PUBLIC
     logging
     commonutils
     parsonlib
-    complianceenginelib
+    kompli-engine
     benchmarkio
     )
 target_link_libraries(${lib_name} PRIVATE pugixml::pugixml)

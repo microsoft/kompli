@@ -6,10 +6,10 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditIptablesOpenPorts(IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> AuditIp6tablesOpenPorts(IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> AuditUfwOpenPorts(IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_FIREWALL_OPEN_PORTS_H

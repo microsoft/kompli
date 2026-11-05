@@ -8,7 +8,7 @@
 
 #include <set>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace Ranges
 {
@@ -58,6 +58,6 @@ View<Detail::UniqueSource<View<Source>>> Unique(View<Source> source)
 }
 
 } // namespace Ranges
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_RANGES_UNIQUE_HPP

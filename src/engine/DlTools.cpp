@@ -12,7 +12,7 @@
 #include <cerrno>
 #include <dlfcn.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 Result<std::string> GetComplianceEngineDirectory()
@@ -33,4 +33,4 @@ Result<std::string> GetComplianceEngineDirectory()
     return Result<std::string>(modulePath.substr(0, separator));
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

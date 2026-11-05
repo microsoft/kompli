@@ -5,7 +5,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // Parameters used by the EnsureFileExists procedure.
 struct FileExistsParams
@@ -15,6 +15,6 @@ struct FileExistsParams
 };
 
 Result<Status> AuditFileExists(const FileExistsParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_PROCEDURES_FILE_EXISTS_H

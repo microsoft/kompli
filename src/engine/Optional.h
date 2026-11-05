@@ -9,7 +9,7 @@
 #include <memory>
 #include <stdexcept>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 template <typename T>
 class Optional
@@ -168,6 +168,6 @@ private:
         }
     }
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_OPTIONAL_H

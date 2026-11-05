@@ -24,11 +24,11 @@
 #include "Telemetry.hpp"
 #endif
 
-using ComplianceEngine::Optional;
-using ComplianceEngine::Result;
-using ComplianceEngine::Error;
-using ComplianceEngine::Evaluator;
-using ComplianceEngine::action_func_t;
+using Kompli::Optional;
+using Kompli::Result;
+using Kompli::Error;
+using Kompli::Evaluator;
+using Kompli::action_func_t;
 
 // Tells libfuzzer to skip the input when it doesn't contain a valid target
 static const int c_skip_input = -1;
@@ -228,7 +228,7 @@ static int GetMaxLogSizeDebugMultiplierFromJsonConfig_target(const char* data, s
 
 static int Base64Decode_target(const char* data, std::size_t size) noexcept
 {
-    ComplianceEngine::Base64Decode(std::string(data, size));
+    Kompli::Base64Decode(std::string(data, size));
     return c_valid_input;
 }
 
@@ -242,8 +242,8 @@ static int ProcedureUpdateUserParameters_target(const char* data, std::size_t si
             return c_skip_input;
         }
     }
-    ComplianceEngine::Procedure proc;
-    ComplianceEngine::ProcedureParameters params;
+    Kompli::Procedure proc;
+    Kompli::ProcedureParameters params;
     params["X"] = "1";
     params["Y"] = "2";
     proc.SetParameters(std::move(params));

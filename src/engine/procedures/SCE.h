@@ -6,7 +6,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct SCEParams
 {
@@ -19,5 +19,5 @@ struct SCEParams
 
 Result<Status> AuditSCE(const SCEParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateSCE(const SCEParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_SCE_H

@@ -6,7 +6,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class DconfOperation
 {
@@ -32,5 +32,5 @@ struct DconfValueParams
 
 Result<Status> AuditDconfValue(const DconfValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateDconfValue(const DconfValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_DCONF_VALUE_H

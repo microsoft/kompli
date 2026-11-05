@@ -7,8 +7,8 @@
 #include <BindingParsers.h>
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditSystemAccountShell(IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_SYSTEM_ACCOUNT_SHELL_H

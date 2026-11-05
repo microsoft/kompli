@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 // This structure represents a ComplianceEngine indicator, which is a message that indicates whether a certain condition is met.
@@ -95,6 +95,6 @@ private:
     std::vector<Node*> mEvaluationStack;
 };
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_INDICATORS_H

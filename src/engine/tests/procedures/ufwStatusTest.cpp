@@ -14,14 +14,14 @@
 #include <unistd.h>
 #include <vector>
 
-using ComplianceEngine::AuditUfwStatus;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::NestedListFormatter;
-using ComplianceEngine::Pattern;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
-using ComplianceEngine::UfwStatusParams;
+using Kompli::AuditUfwStatus;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::NestedListFormatter;
+using Kompli::Pattern;
+using Kompli::Result;
+using Kompli::Status;
+using Kompli::UfwStatusParams;
 
 static const std::string ufwCommand = "ufw status verbose";
 static const std::string ufwActiveOutput =

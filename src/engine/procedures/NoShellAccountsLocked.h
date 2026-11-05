@@ -7,7 +7,7 @@
 #include <Evaluator.h>
 #include <Separated.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 struct NoShellAccountsLockedParams
@@ -21,5 +21,5 @@ struct NoShellAccountsLockedParams
 };
 
 Result<Status> AuditNoShellAccountsLocked(const NoShellAccountsLockedParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_NO_SHELL_ACCOUNTS_LOCKED_H

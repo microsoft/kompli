@@ -6,9 +6,9 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditXdmcpDisabled(IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateXdmcpDisabled(IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_XDMCP_DISABLED_H

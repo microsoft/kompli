@@ -5,9 +5,9 @@
 
 #include <gtest/gtest.h>
 
-using ComplianceEngine::Error;
-using ComplianceEngine::FactExistenceValidator;
-using ComplianceEngine::Result;
+using Kompli::Error;
+using Kompli::FactExistenceValidator;
+using Kompli::Result;
 
 class FactExistenceValidatorTest : public ::testing::Test
 {
@@ -15,47 +15,47 @@ class FactExistenceValidatorTest : public ::testing::Test
 
 TEST_F(FactExistenceValidatorTest, MapBehavior)
 {
-    auto result = ComplianceEngine::FactExistenceValidator::MapBehavior("all_exist");
+    auto result = Kompli::FactExistenceValidator::MapBehavior("all_exist");
     ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), ComplianceEngine::FactExistenceValidator::Behavior::AllExist);
+    ASSERT_EQ(result.Value(), Kompli::FactExistenceValidator::Behavior::AllExist);
 
-    result = ComplianceEngine::FactExistenceValidator::MapBehavior("any_exist");
+    result = Kompli::FactExistenceValidator::MapBehavior("any_exist");
     ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), ComplianceEngine::FactExistenceValidator::Behavior::AnyExist);
+    ASSERT_EQ(result.Value(), Kompli::FactExistenceValidator::Behavior::AnyExist);
 
-    result = ComplianceEngine::FactExistenceValidator::MapBehavior("at_least_one_exists");
+    result = Kompli::FactExistenceValidator::MapBehavior("at_least_one_exists");
     ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), ComplianceEngine::FactExistenceValidator::Behavior::AtLeastOneExists);
+    ASSERT_EQ(result.Value(), Kompli::FactExistenceValidator::Behavior::AtLeastOneExists);
 
-    result = ComplianceEngine::FactExistenceValidator::MapBehavior("none_exist");
+    result = Kompli::FactExistenceValidator::MapBehavior("none_exist");
     ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), ComplianceEngine::FactExistenceValidator::Behavior::NoneExist);
+    ASSERT_EQ(result.Value(), Kompli::FactExistenceValidator::Behavior::NoneExist);
 
-    result = ComplianceEngine::FactExistenceValidator::MapBehavior("only_one_exists");
+    result = Kompli::FactExistenceValidator::MapBehavior("only_one_exists");
     ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), ComplianceEngine::FactExistenceValidator::Behavior::OnlyOneExists);
+    ASSERT_EQ(result.Value(), Kompli::FactExistenceValidator::Behavior::OnlyOneExists);
 
-    result = ComplianceEngine::FactExistenceValidator::MapBehavior("invalid_value");
+    result = Kompli::FactExistenceValidator::MapBehavior("invalid_value");
     ASSERT_FALSE(result.HasValue());
 }
 
 TEST_F(FactExistenceValidatorTest, AllExist_1)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::AllExist);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::AllExist);
     ASSERT_FALSE(validator.Done());
     validator.Finish();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::Compliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::Compliant);
 
     // Already done, Finish should not affact the state
     validator.Finish();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::Compliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::Compliant);
 }
 
 TEST_F(FactExistenceValidatorTest, AllExist_2)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::AllExist);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::AllExist);
     ASSERT_FALSE(validator.Done());
     validator.CriteriaMet();
     ASSERT_FALSE(validator.Done());
@@ -63,33 +63,33 @@ TEST_F(FactExistenceValidatorTest, AllExist_2)
     ASSERT_FALSE(validator.Done());
     validator.Finish();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::Compliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::Compliant);
     // Already done, should not change state anymore
     validator.CriteriaUnmet();
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::Compliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::Compliant);
 }
 
 TEST_F(FactExistenceValidatorTest, AllExist_3)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::AllExist);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::AllExist);
     ASSERT_FALSE(validator.Done());
     validator.CriteriaUnmet();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::NonCompliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::NonCompliant);
 }
 
 TEST_F(FactExistenceValidatorTest, AnyExist_1)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::AnyExist);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::AnyExist);
     ASSERT_FALSE(validator.Done());
     validator.Finish();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::Compliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::Compliant);
 }
 
 TEST_F(FactExistenceValidatorTest, AnyExist_2)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::AnyExist);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::AnyExist);
     ASSERT_FALSE(validator.Done());
     validator.CriteriaUnmet();
     ASSERT_FALSE(validator.Done());
@@ -97,30 +97,30 @@ TEST_F(FactExistenceValidatorTest, AnyExist_2)
     ASSERT_FALSE(validator.Done());
     validator.Finish();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::Compliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::Compliant);
 }
 
 TEST_F(FactExistenceValidatorTest, AnyExist_3)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::AnyExist);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::AnyExist);
     ASSERT_FALSE(validator.Done());
     validator.CriteriaMet();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::Compliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::Compliant);
 }
 
 TEST_F(FactExistenceValidatorTest, AtLeastOneExists_1)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::AtLeastOneExists);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::AtLeastOneExists);
     ASSERT_FALSE(validator.Done());
     validator.Finish();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::NonCompliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::NonCompliant);
 }
 
 TEST_F(FactExistenceValidatorTest, AtLeastOneExists_2)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::AtLeastOneExists);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::AtLeastOneExists);
     ASSERT_FALSE(validator.Done());
     validator.CriteriaUnmet();
     ASSERT_FALSE(validator.Done());
@@ -128,45 +128,45 @@ TEST_F(FactExistenceValidatorTest, AtLeastOneExists_2)
     ASSERT_FALSE(validator.Done());
     validator.Finish();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::NonCompliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::NonCompliant);
     // Already done, should not change state anymore
     validator.CriteriaMet();
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::NonCompliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::NonCompliant);
 }
 
 TEST_F(FactExistenceValidatorTest, AtLeastOneExists_3)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::AtLeastOneExists);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::AtLeastOneExists);
     ASSERT_FALSE(validator.Done());
     validator.CriteriaMet();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::Compliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::Compliant);
     // Already done, should not change state anymore
     validator.CriteriaMet();
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::Compliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::Compliant);
 }
 
 TEST_F(FactExistenceValidatorTest, NoneExist_1)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::NoneExist);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::NoneExist);
     ASSERT_FALSE(validator.Done());
     validator.Finish();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::Compliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::Compliant);
 }
 
 TEST_F(FactExistenceValidatorTest, NoneExist_2)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::NoneExist);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::NoneExist);
     ASSERT_FALSE(validator.Done());
     validator.CriteriaMet();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::NonCompliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::NonCompliant);
 }
 
 TEST_F(FactExistenceValidatorTest, NoneExist_3)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::NoneExist);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::NoneExist);
     ASSERT_FALSE(validator.Done());
     validator.CriteriaUnmet();
     ASSERT_TRUE(validator.Done());
@@ -174,24 +174,24 @@ TEST_F(FactExistenceValidatorTest, NoneExist_3)
     ASSERT_TRUE(validator.Done());
     validator.Finish();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::Compliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::Compliant);
     // Already done, should not change state anymore
     validator.CriteriaMet();
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::Compliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::Compliant);
 }
 
 TEST_F(FactExistenceValidatorTest, OnlyOneExists_1)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::OnlyOneExists);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::OnlyOneExists);
     ASSERT_FALSE(validator.Done());
     validator.Finish();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::NonCompliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::NonCompliant);
 }
 
 TEST_F(FactExistenceValidatorTest, OnlyOneExists_2)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::OnlyOneExists);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::OnlyOneExists);
     ASSERT_FALSE(validator.Done());
     validator.CriteriaUnmet();
     ASSERT_FALSE(validator.Done());
@@ -201,15 +201,15 @@ TEST_F(FactExistenceValidatorTest, OnlyOneExists_2)
     ASSERT_FALSE(validator.Done());
     validator.Finish();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::Compliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::Compliant);
     // Already done, should not change state anymore
     validator.CriteriaMet();
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::Compliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::Compliant);
 }
 
 TEST_F(FactExistenceValidatorTest, OnlyOneExists_3)
 {
-    FactExistenceValidator validator(ComplianceEngine::FactExistenceValidator::Behavior::OnlyOneExists);
+    FactExistenceValidator validator(Kompli::FactExistenceValidator::Behavior::OnlyOneExists);
     ASSERT_FALSE(validator.Done());
     validator.CriteriaUnmet();
     ASSERT_FALSE(validator.Done());
@@ -217,5 +217,5 @@ TEST_F(FactExistenceValidatorTest, OnlyOneExists_3)
     ASSERT_FALSE(validator.Done());
     validator.CriteriaMet();
     ASSERT_TRUE(validator.Done());
-    ASSERT_EQ(validator.Result(), ComplianceEngine::Status::NonCompliant);
+    ASSERT_EQ(validator.Result(), Kompli::Status::NonCompliant);
 }

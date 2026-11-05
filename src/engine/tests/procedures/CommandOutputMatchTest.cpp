@@ -8,13 +8,13 @@
 #include <string>
 #include <vector>
 
-using ComplianceEngine::AuditCommandOutputMatch;
-using ComplianceEngine::CommandOutputMatchParams;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::RegexType;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditCommandOutputMatch;
+using Kompli::CommandOutputMatchParams;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::RegexType;
+using Kompli::Result;
+using Kompli::Status;
 using ::testing::Return;
 
 class ExecuteCommandGrepTest : public ::testing::Test

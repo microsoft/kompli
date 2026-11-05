@@ -10,7 +10,7 @@
 #include <string>
 #include <sys/types.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BindingParsers
 {
@@ -42,5 +42,5 @@ Result<bool> Parse<bool>(const std::string& input);
 template <>
 Result<mode_t> Parse<mode_t>(const std::string& input);
 } // namespace BindingParsers
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_BINDING_PARSERS_H

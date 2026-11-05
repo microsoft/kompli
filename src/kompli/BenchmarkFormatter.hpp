@@ -14,7 +14,7 @@
 #include <map>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BenchmarkFormatters
 {
@@ -52,5 +52,5 @@ private:
     JsonWrapper mJson;
 };
 } // namespace BenchmarkFormatters
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCE_ENGINE_BENCHMARK_FORMATTER_HPP

@@ -7,7 +7,7 @@
 #include <Evaluator.h>
 #include <Optional.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class MtaConfigurationVersion
 {
@@ -32,5 +32,5 @@ struct MtaLocalOnlyParams
 };
 
 Result<Status> AuditMtaLocalOnly(const MtaLocalOnlyParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_MTA_LOCAL_ONLY_H

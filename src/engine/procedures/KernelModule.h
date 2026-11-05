@@ -6,7 +6,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct KernelModuleUnavailableParams
 {
@@ -16,5 +16,5 @@ struct KernelModuleUnavailableParams
 
 Result<Status> AuditKernelModuleUnavailable(const KernelModuleUnavailableParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateKernelModuleUnavailable(const KernelModuleUnavailableParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_KERNEL_MODULE_H

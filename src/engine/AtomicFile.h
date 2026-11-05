@@ -10,10 +10,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<bool> CreateFileContentsAtomic(const std::string& path, const std::string& contents, mode_t mode, struct stat* created = nullptr);
 Result<bool> ReplaceFileContentsAtomic(const std::string& path, const std::string& contents);
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_ATOMIC_FILE_H

@@ -9,7 +9,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 bool MkdirRecursive(const std::string& path, mode_t mode)
 {
@@ -58,4 +58,4 @@ bool MkdirRecursive(const std::string& path, mode_t mode)
     return success;
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

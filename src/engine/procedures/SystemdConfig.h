@@ -7,7 +7,7 @@
 #include <Evaluator.h>
 #include <regex>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 enum class SystemdConfigValueOperator
@@ -56,5 +56,5 @@ struct SystemdConfigValueParams
 
 Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateSystemdConfigValue(const SystemdConfigValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_SYSTEMD_CONFIG_H

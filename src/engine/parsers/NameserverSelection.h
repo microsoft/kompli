@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace NameserverSelection
 {
@@ -38,6 +38,6 @@ struct Document
 // Offsets count bytes; the maximal six-byte ASCII whitespace run may cross LF.
 Result<Document> FindNameserverCaptures(std::string bytes, std::string source, const Limits& limits = {});
 } // namespace NameserverSelection
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_PARSERS_NAMESERVER_SELECTION_H

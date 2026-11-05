@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 class CommonContext : public ContextInterface
@@ -70,5 +70,5 @@ private:
     Telemetry mTelemetry;
     FilesystemScanner mFsScanner;
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_COMMONCONTEXT_H

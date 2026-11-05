@@ -6,9 +6,9 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditUserDotFilePermissions(IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateUserDotFilePermissions(IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_USER_DOT_FILE_PERMISSIONS_H

@@ -6,7 +6,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class GsettingsKeyType
 {
@@ -57,5 +57,5 @@ struct GsettingsValueParams
 
 Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateGsettingsValue(const GsettingsValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_GSETTINGS_VALUE_H

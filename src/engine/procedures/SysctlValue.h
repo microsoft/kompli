@@ -8,7 +8,7 @@
 #include <Optional.h>
 #include <Pattern.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct SysctlValueParams
 {
@@ -26,5 +26,5 @@ struct SysctlValueParams
 
 Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateSysctlValue(const SysctlValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_SYSCTL_VALUE_H

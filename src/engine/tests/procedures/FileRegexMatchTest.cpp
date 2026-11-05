@@ -13,16 +13,16 @@
 #include <string>
 #include <unistd.h>
 
-using ComplianceEngine::AuditFileRegexMatch;
-using ComplianceEngine::Behavior;
-using ComplianceEngine::CompactListFormatter;
-using ComplianceEngine::Error;
-using ComplianceEngine::FileRegexMatchParams;
-using ComplianceEngine::IgnoreCase;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Operation;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditFileRegexMatch;
+using Kompli::Behavior;
+using Kompli::CompactListFormatter;
+using Kompli::Error;
+using Kompli::FileRegexMatchParams;
+using Kompli::IgnoreCase;
+using Kompli::IndicatorsTree;
+using Kompli::Operation;
+using Kompli::Result;
+using Kompli::Status;
 using std::string;
 
 class FileRegexMatchTest : public ::testing::Test
@@ -363,7 +363,7 @@ TEST_F(FileRegexMatchTest, Audit_CaseInsensitive_1)
     params.filenamePattern = std::regex("1");
     params.matchPattern = R"(^[[:space:]]*Te[a-z]t.*$)";
     params.matchOperation = Operation::Match;
-    params.ignoreCase = ComplianceEngine::IgnoreCase::MatchPattern;
+    params.ignoreCase = Kompli::IgnoreCase::MatchPattern;
     auto result = AuditFileRegexMatch(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);

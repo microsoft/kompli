@@ -9,7 +9,7 @@ target_link_libraries(complianceengine
         commonutils
         logging
     PUBLIC
-        complianceenginelib
+        kompli-engine
 )
 target_include_directories(complianceengine
     PUBLIC

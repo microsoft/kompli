@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BenchmarkDefinition
 {
@@ -70,5 +70,5 @@ Result<BenchmarkDocument> ParseStream(std::istream& stream, OsConfigLogHandle lo
 Result<BenchmarkDocument> ParseFile(const std::string& path, OsConfigLogHandle logHandle);
 
 } // namespace BenchmarkDefinition
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCE_ENGINE_BENCHMARKIO_BENCHMARK_DEFINITION_HPP

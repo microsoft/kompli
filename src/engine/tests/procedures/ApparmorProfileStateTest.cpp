@@ -9,12 +9,12 @@
 #include <string>
 #include <vector>
 
-using ComplianceEngine::ApparmorProfileStateParams;
-using ComplianceEngine::AuditApparmorProfileState;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::ApparmorProfileStateParams;
+using Kompli::AuditApparmorProfileState;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::Result;
+using Kompli::Status;
 using ::testing::Return;
 
 class EnsureApparmorProfilesTest : public ::testing::Test

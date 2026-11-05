@@ -8,7 +8,7 @@
 #include <regex>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -135,4 +135,4 @@ Result<Status> RemediateXdmcpDisabled(IndicatorsTree& indicators, ContextInterfa
     return AuditXdmcpDisabled(indicators, context);
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

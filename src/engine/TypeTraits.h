@@ -6,7 +6,7 @@
 
 #include <type_traits>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 template <typename T>
 constexpr bool NoexceptCopyable() noexcept
@@ -25,6 +25,6 @@ constexpr bool NoexceptDestructible() noexcept
 {
     return std::is_nothrow_destructible<T>::value;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_TYPE_TRAITS_H

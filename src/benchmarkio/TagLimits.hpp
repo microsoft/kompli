@@ -6,12 +6,12 @@
 
 #include <cstddef>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BenchmarkDefinition
 {
 constexpr size_t kMaxTagBytes = 256;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCE_ENGINE_BENCHMARKIO_TAG_LIMITS_HPP

@@ -6,7 +6,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct LogFilePermissionsParams
 {
@@ -16,5 +16,5 @@ struct LogFilePermissionsParams
 
 Result<Status> AuditLogFilePermissions(const LogFilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateLogFilePermissions(const LogFilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_LOG_FILE_PERMISSIONS_H

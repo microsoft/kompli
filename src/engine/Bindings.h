@@ -15,7 +15,7 @@
 #include <set>
 #include <type_traits>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 // Each procedure provides specialization for this structure
@@ -308,6 +308,6 @@ inline BindingsImpl::RawParameterProcedureHandler MakeHandler(Result<Status> (*f
 {
     return BindingsImpl::RawParameterProcedureHandler{fn};
 }
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_BINDINGS_H

@@ -11,7 +11,7 @@
 #include <memory>
 #include <utility>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace Cli
 {
@@ -57,5 +57,5 @@ private:
 };
 
 } // namespace Cli
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_CLICONTEXT_H

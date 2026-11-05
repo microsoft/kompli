@@ -8,7 +8,7 @@
 #include <exception>
 #include <initializer_list>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -156,4 +156,4 @@ Result<Status> EvaluatePasswordCreditUnion(const PasswordCreditAssessment& mainR
     }
     return evaluation.Value();
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

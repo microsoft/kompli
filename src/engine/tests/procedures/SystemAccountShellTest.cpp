@@ -10,13 +10,13 @@
 #include <parsers/LoginDefs.h>
 #include <sys/stat.h>
 
-using ComplianceEngine::AuditSystemAccountShell;
-using ComplianceEngine::CompactListFormatter;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Optional;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditSystemAccountShell;
+using Kompli::CompactListFormatter;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::Optional;
+using Kompli::Result;
+using Kompli::Status;
 using std::map;
 using std::string;
 
@@ -26,11 +26,11 @@ string LoginDefsAtByteLimit()
 {
     string contents = "UID_MIN 2000\n";
     const string commentLine = string(4095, '#') + '\n';
-    while (contents.size() + commentLine.size() <= ComplianceEngine::LoginDefs::MaxBytes)
+    while (contents.size() + commentLine.size() <= Kompli::LoginDefs::MaxBytes)
     {
         contents += commentLine;
     }
-    contents.append(ComplianceEngine::LoginDefs::MaxBytes - contents.size(), '#');
+    contents.append(Kompli::LoginDefs::MaxBytes - contents.size(), '#');
     return contents;
 }
 } // namespace
@@ -219,11 +219,11 @@ TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, UnrelatedMissingValueRejects
 TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, LoginDefsFileAtByteLimitUsesSelectedUidMin)
 {
     const string contents = LoginDefsAtByteLimit();
-    ASSERT_EQ(ComplianceEngine::LoginDefs::MaxBytes, contents.size());
+    ASSERT_EQ(Kompli::LoginDefs::MaxBytes, contents.size());
     const string filename = mContext.MakeTempfile(contents);
     struct stat fileStat;
     ASSERT_EQ(0, ::stat(filename.c_str(), &fileStat));
-    ASSERT_EQ(static_cast<off_t>(ComplianceEngine::LoginDefs::MaxBytes), fileStat.st_size);
+    ASSERT_EQ(static_cast<off_t>(Kompli::LoginDefs::MaxBytes), fileStat.st_size);
     mContext.SetSpecialFilePath("/etc/login.defs", filename);
     mContext.SetSpecialFilePath("/etc/passwd", CreateTestPasswdFile(1500, "/bin/bash"));
 
@@ -240,11 +240,11 @@ TEST_F(EnsureSystemAccountsDoNotHaveValidShellTest, LoginDefsFileOverByteLimitRe
 {
     string contents = LoginDefsAtByteLimit();
     contents += '#';
-    ASSERT_EQ(ComplianceEngine::LoginDefs::MaxBytes + 1, contents.size());
+    ASSERT_EQ(Kompli::LoginDefs::MaxBytes + 1, contents.size());
     const string filename = mContext.MakeTempfile(contents);
     struct stat fileStat;
     ASSERT_EQ(0, ::stat(filename.c_str(), &fileStat));
-    ASSERT_EQ(static_cast<off_t>(ComplianceEngine::LoginDefs::MaxBytes + 1), fileStat.st_size);
+    ASSERT_EQ(static_cast<off_t>(Kompli::LoginDefs::MaxBytes + 1), fileStat.st_size);
     mContext.SetSpecialFilePath("/etc/login.defs", filename);
     mContext.SetSpecialFilePath("/etc/passwd", CreateTestPasswdFile(1500, "/bin/bash"));
 

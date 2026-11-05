@@ -7,7 +7,7 @@
 #include <set>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 static const std::set<std::string> allowedCommands = {"nft list ruleset", "nft list chain", "nft list tables", "ip6tables -L -n",
@@ -46,4 +46,4 @@ Result<Status> AuditCommandOutputMatch(const CommandOutputMatchParams& params, I
     }
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

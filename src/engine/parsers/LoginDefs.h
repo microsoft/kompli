@@ -11,7 +11,7 @@
 #include <string>
 #include <sys/types.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace LoginDefs
 {
@@ -48,6 +48,6 @@ const char* EncryptionMethodName(EncryptionMethod method);
 // LF ends a physical line; a preceding CR remains in the raw value.
 Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle logHandle);
 } // namespace LoginDefs
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_PARSERS_LOGIN_DEFS_H

@@ -5,7 +5,7 @@
 #include <regex>
 #include <unistd.h>
 
-using namespace ComplianceEngine;
+using namespace Kompli;
 
 class FileSymlinkTargetTest : public ::testing::Test
 {

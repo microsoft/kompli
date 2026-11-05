@@ -6,7 +6,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class PackageManagerType
 {
@@ -34,5 +34,5 @@ struct PackageInstalledParams
 };
 
 Result<Status> AuditPackageInstalled(const PackageInstalledParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_PACKAGE_INSTALLED_H

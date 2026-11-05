@@ -7,7 +7,7 @@
 #include <Result.h>
 #include <regex>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // Binds together a pattern and associated regular expression
 class Pattern
@@ -77,11 +77,11 @@ public:
         return mRegex;
     }
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 namespace std
 {
-inline string to_string(const ComplianceEngine::Pattern& pattern) // NOLINT(*-identifier-naming)
+inline string to_string(const Kompli::Pattern& pattern) // NOLINT(*-identifier-naming)
 {
     return pattern.GetPattern();
 }

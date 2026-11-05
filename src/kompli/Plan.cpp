@@ -21,9 +21,9 @@
 #include <tuple>
 #include <unistd.h>
 
-namespace ComplianceEngine
-{
 namespace Kompli
+{
+namespace Cli
 {
 using std::string;
 
@@ -1022,5 +1022,5 @@ Result<string> ApplyParameterOverrides(const string& procedureJson, const std::m
     return result;
 }
 
+} // namespace Cli
 } // namespace Kompli
-} // namespace ComplianceEngine

@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-namespace Selection = ComplianceEngine::NameserverSelection;
+namespace Selection = Kompli::NameserverSelection;
 
 namespace
 {

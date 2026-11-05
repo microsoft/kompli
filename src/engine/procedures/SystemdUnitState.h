@@ -7,7 +7,7 @@
 #include <Evaluator.h>
 #include <Pattern.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct SystemdUnitStateParams
 {
@@ -31,5 +31,5 @@ struct SystemdUnitStateParams
 };
 
 Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_SYSTEMD_UNIT_STATE_H

@@ -8,7 +8,7 @@
 #include <Optional.h>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // Linux network interface flags (the IFF_* bits in <linux/if.h>). The label is the
 // canonical flag name as it appears in the rule payload.
@@ -82,5 +82,5 @@ struct NetworkInterfaceFlagParams
 // relies on is unavailable in a restricted sandbox), which is indeterminate. Typically
 // composed under `not` to assert a flag (e.g. PROMISC) is NOT set on any interface.
 Result<Status> AuditNetworkInterfaceFlag(const NetworkInterfaceFlagParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_NETWORK_INTERFACE_FLAG_H

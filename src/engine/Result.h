@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct Error
 {
@@ -60,7 +60,7 @@ struct Error
     }
     ~Error() = default;
 };
-std::ostream& operator<<(std::ostream& os, const ComplianceEngine::Error& error);
+std::ostream& operator<<(std::ostream& os, const Kompli::Error& error);
 
 namespace
 {
@@ -76,7 +76,7 @@ class Result
     union Pointer
     {
         T* value;
-        ComplianceEngine::Error* error;
+        Kompli::Error* error;
     };
 
     enum class Tag
@@ -85,7 +85,7 @@ class Result
         Error
     };
 
-    alignas(Max(alignof(T), alignof(ComplianceEngine::Error))) char mBuffer[Max(sizeof(T), sizeof(ComplianceEngine::Error))];
+    alignas(Max(alignof(T), alignof(Kompli::Error))) char mBuffer[Max(sizeof(T), sizeof(Kompli::Error))];
     Tag mTag;
     Pointer mPointer;
 
@@ -96,10 +96,10 @@ public:
         mPointer.value = new (mBuffer) T(std::move(value));
     }
 
-    Result(ComplianceEngine::Error error)
+    Result(Kompli::Error error)
         : mTag(Tag::Error)
     {
-        mPointer.error = new (mBuffer) ComplianceEngine::Error(std::move(error));
+        mPointer.error = new (mBuffer) Kompli::Error(std::move(error));
     }
 
     Result(const Result& other)
@@ -111,7 +111,7 @@ public:
         }
         else
         {
-            mPointer.error = new (mBuffer) ComplianceEngine::Error(*other.mPointer.error);
+            mPointer.error = new (mBuffer) Kompli::Error(*other.mPointer.error);
         }
     }
 
@@ -124,7 +124,7 @@ public:
         }
         else
         {
-            mPointer.error = new (mBuffer) ComplianceEngine::Error(std::move(*other.mPointer.error));
+            mPointer.error = new (mBuffer) Kompli::Error(std::move(*other.mPointer.error));
         }
 
         other.Reset();
@@ -149,7 +149,7 @@ private:
         {
             if (nullptr != mPointer.error)
             {
-                using Type = ComplianceEngine::Error;
+                using Type = Kompli::Error;
                 mPointer.error->~Type();
             }
         }
@@ -173,7 +173,7 @@ public:
         }
         else
         {
-            mPointer.error = new (mBuffer) ComplianceEngine::Error(*other.mPointer.error);
+            mPointer.error = new (mBuffer) Kompli::Error(*other.mPointer.error);
         }
 
         return *this;
@@ -194,7 +194,7 @@ public:
         }
         else
         {
-            mPointer.error = new (mBuffer) ComplianceEngine::Error(std::move(*other.mPointer.error));
+            mPointer.error = new (mBuffer) Kompli::Error(std::move(*other.mPointer.error));
         }
 
         other.Reset();
@@ -261,19 +261,19 @@ public:
         return mPointer.value;
     }
 
-    const ComplianceEngine::Error& Error() const&
+    const Kompli::Error& Error() const&
     {
         CheckError();
         return *mPointer.error;
     }
 
-    ComplianceEngine::Error Error() &&
+    Kompli::Error Error() &&
     {
         CheckError();
         return std::move(*mPointer.error);
     }
 
-    ComplianceEngine::Error& Error() &
+    Kompli::Error& Error() &
     {
         CheckError();
         return *mPointer.error;
@@ -295,6 +295,6 @@ private:
         }
     }
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_RESULT_H

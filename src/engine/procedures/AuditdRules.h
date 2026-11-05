@@ -7,7 +7,7 @@
 #include <Evaluator.h>
 #include <Separated.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct AuditdRulesParams
 {
@@ -22,5 +22,5 @@ struct AuditdRulesParams
 };
 
 Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_AUDITD_RULES_H

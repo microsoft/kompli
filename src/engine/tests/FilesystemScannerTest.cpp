@@ -15,9 +15,9 @@
 #include <unistd.h>
 #include <vector>
 
-using ComplianceEngine::Error;
-using ComplianceEngine::FilesystemScanner;
-using ComplianceEngine::Result;
+using Kompli::Error;
+using Kompli::FilesystemScanner;
+using Kompli::Result;
 
 namespace
 {

@@ -6,9 +6,9 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditPasswdGroupsExist(IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediatePasswdGroupsExist(IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_PASSWD_GROUPS_EXIST_H

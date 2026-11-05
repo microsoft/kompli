@@ -5,10 +5,10 @@
 #define COMPLIANCEENGINE_PROCEDURES_NO_WORLD_WRITABLE_FILES_H
 
 #include <Evaluator.h>
-namespace ComplianceEngine
+namespace Kompli
 {
 
 Result<Status> AuditNoWorldWritableFiles(IndicatorsTree& indicators, ContextInterface& context);
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_NO_WORLD_WRITABLE_FILES_H

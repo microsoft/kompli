@@ -7,7 +7,7 @@
 #include <Result.h>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // A definition's content version, not its apiVersion or upstream
 // benchmarkVersion. Decimal components stay strings so comparison does not
@@ -22,6 +22,6 @@ struct ContentVersion
 Result<ContentVersion> ParseContentVersion(const std::string& text);
 int CompareContentVersion(const ContentVersion& left, const ContentVersion& right);
 std::string ContentVersionToString(const ContentVersion& version);
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCE_ENGINE_BENCHMARKIO_CONTENT_VERSION_HPP

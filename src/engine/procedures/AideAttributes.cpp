@@ -10,7 +10,7 @@
 #include <set>
 #include <sstream>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -199,4 +199,4 @@ Result<Status> RemediateAideAttributes(const AideAttributesParams& params, Indic
     }
     return postAudit;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

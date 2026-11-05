@@ -6,7 +6,7 @@
 #include <Base64.h>
 #include <parson.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -136,4 +136,4 @@ JsonWrapper::JsonWrapper(JsonWrapperPointerType&& value)
     : JsonWrapperPointerType(std::move(value))
 {
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

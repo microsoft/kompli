@@ -6,7 +6,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct UniqueGroupIdParams
 {
@@ -19,5 +19,5 @@ struct UniqueGroupIdParams
 };
 
 Result<Status> AuditUniqueGroupId(const UniqueGroupIdParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_UNIQUE_GROUP_ID_H

@@ -7,7 +7,7 @@
 #include <Evaluator.h>
 #include <ShadowField.h> // For ComparisonOperation enum
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct LoginDefsOptionParams
 {
@@ -25,5 +25,5 @@ struct LoginDefsOptionParams
 
 Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateLoginDefsOption(const LoginDefsOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_LOGIN_DEFS_OPTION_H

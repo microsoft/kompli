@@ -9,7 +9,7 @@
 #include <cstddef>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace Detail
 {
@@ -39,6 +39,6 @@ private:
     int mParent;
     int mRoot;
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_TEMPORARYDIRECTORY_H

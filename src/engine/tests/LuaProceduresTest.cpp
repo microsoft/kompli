@@ -14,12 +14,12 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-using ComplianceEngine::Action;
-using ComplianceEngine::CompactListFormatter;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::LuaEvaluator;
-using ComplianceEngine::NestedListFormatter;
-using ComplianceEngine::Status;
+using Kompli::Action;
+using Kompli::CompactListFormatter;
+using Kompli::IndicatorsTree;
+using Kompli::LuaEvaluator;
+using Kompli::NestedListFormatter;
+using Kompli::Status;
 
 class LuaProceduresTest : public ::testing::Test
 {

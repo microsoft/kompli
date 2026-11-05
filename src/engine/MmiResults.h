@@ -6,7 +6,7 @@
 
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class Status
 {
@@ -44,19 +44,19 @@ struct AuditResult
     {
     }
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 namespace std
 {
-inline std::string to_string(ComplianceEngine::Status status) // NOLINT(*-identifier-naming)
+inline std::string to_string(Kompli::Status status) // NOLINT(*-identifier-naming)
 {
     switch (status)
     {
-        case ComplianceEngine::Status::Compliant:
+        case Kompli::Status::Compliant:
             return "Compliant";
-        case ComplianceEngine::Status::NotApplicable:
+        case Kompli::Status::NotApplicable:
             return "NotApplicable";
-        case ComplianceEngine::Status::NonCompliant:
+        case Kompli::Status::NonCompliant:
         default:
             return "NonCompliant";
     }

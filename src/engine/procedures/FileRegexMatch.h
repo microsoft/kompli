@@ -7,7 +7,7 @@
 #include <Evaluator.h>
 #include <regex>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // Used by FileRegexMatch procedure and represents an operation using the provided patterns.
 // Currently only 'pattern match' operation is supported.
@@ -82,6 +82,6 @@ struct FileRegexMatchParams
 };
 
 Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_PROCEDURES_FILE_REGEX_MATCH_H

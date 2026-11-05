@@ -55,7 +55,7 @@
 #include <WirelessDisabled.h>
 #include <XdmcpDisabled.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // Forward declaration, defined in Bindings.h
 template <typename Params>
@@ -668,60 +668,60 @@ struct Bindings<UniqueUserIdParams>
     static constexpr auto members = std::make_tuple(&T::username, &T::uid, &T::gid);
 };
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 namespace std
 {
 // Returns a string representation of the AksCommandOperation enum value.
-string to_string(ComplianceEngine::AksCommandOperation value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::AksCommandOperation value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the Behavior enum value.
-string to_string(ComplianceEngine::Behavior value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::Behavior value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the RegexType enum value.
-string to_string(ComplianceEngine::RegexType value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::RegexType value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the DconfOperation enum value.
-string to_string(ComplianceEngine::DconfOperation value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::DconfOperation value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the Operation enum value.
-string to_string(ComplianceEngine::Operation value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::Operation value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the IgnoreCase enum value.
-string to_string(ComplianceEngine::IgnoreCase value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::IgnoreCase value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the GsettingsKeyType enum value.
-string to_string(ComplianceEngine::GsettingsKeyType value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::GsettingsKeyType value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the GsettingsOperationType enum value.
-string to_string(ComplianceEngine::GsettingsOperationType value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::GsettingsOperationType value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the MtaConfigurationVersion enum value.
-string to_string(ComplianceEngine::MtaConfigurationVersion value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::MtaConfigurationVersion value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the InterfaceFlag enum value.
-string to_string(ComplianceEngine::InterfaceFlag value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::InterfaceFlag value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the PackageManagerType enum value.
-string to_string(ComplianceEngine::PackageManagerType value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::PackageManagerType value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the ComparisonOperation enum value.
-string to_string(ComplianceEngine::ComparisonOperation value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::ComparisonOperation value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the Field enum value.
-string to_string(ComplianceEngine::Field value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::Field value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the SshKeyType enum value.
-string to_string(ComplianceEngine::SshKeyType value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::SshKeyType value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the SshdOptionOperation enum value.
-string to_string(ComplianceEngine::SshdOptionOperation value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::SshdOptionOperation value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the SshdOptionMode enum value.
-string to_string(ComplianceEngine::SshdOptionMode value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::SshdOptionMode value) noexcept(false); // NOLINT(*-identifier-naming)
 
 // Returns a string representation of the SystemdConfigValueOperator enum value.
-string to_string(ComplianceEngine::SystemdConfigValueOperator value) noexcept(false); // NOLINT(*-identifier-naming)
+string to_string(Kompli::SystemdConfigValueOperator value) noexcept(false); // NOLINT(*-identifier-naming)
 
 } // namespace std
 #endif // COMPLIANCEENGINE_PROCEDURE_MAP_H

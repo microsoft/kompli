@@ -8,7 +8,7 @@
 #include <pugixml.hpp>
 #include <string>
 
-using ComplianceEngine::Kompli::RenderJUnit;
+using Kompli::Cli::RenderJUnit;
 
 namespace
 {
@@ -36,7 +36,7 @@ TEST(JUnitRendererTest, EmptyRulesProduceEmptySuite)
 
 TEST(JUnitRendererTest, FormatterOutputPreservesIdentityTitleTagsAndCounts)
 {
-    using namespace ComplianceEngine;
+    using namespace Kompli;
     auto formatter = BenchmarkFormatters::BenchmarkFormatter::Begin(DistributionInfo{});
     ASSERT_TRUE(formatter.HasValue());
     BenchmarkIO::Resource entry;

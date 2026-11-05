@@ -9,7 +9,7 @@
 #include <cerrno>
 #include <limits>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace Ranges
 {
@@ -33,6 +33,6 @@ Result<std::size_t> Count(View<Source> source)
 }
 
 } // namespace Ranges
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_RANGES_COUNT_HPP

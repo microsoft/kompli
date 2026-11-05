@@ -7,10 +7,10 @@
 #include <regex>
 #include <string>
 
-using ComplianceEngine::Optional;
-using ComplianceEngine::Pattern;
-using ComplianceEngine::Separated;
-using ComplianceEngine::BindingsImpl::ParseArguments;
+using Kompli::Optional;
+using Kompli::Pattern;
+using Kompli::Separated;
+using Kompli::BindingsImpl::ParseArguments;
 using std::map;
 using std::string;
 
@@ -30,7 +30,7 @@ struct BuiltinTypesParams
     Optional<int> optionalIntValue;
 };
 
-namespace ComplianceEngine
+namespace Kompli
 {
 template <>
 struct Bindings<BuiltinTypesParams>
@@ -44,7 +44,7 @@ struct Bindings<BuiltinTypesParams>
 
 const char* Bindings<BuiltinTypesParams>::names[] = {
     "intValue", "boolValue", "stringValue", "regexValue", "patternValue", "octalValue", "separatedValue", "optionalIntValue"};
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 TEST_F(BindingsTest, ValidInput_1)
 {
@@ -204,7 +204,7 @@ TEST_F(BindingsTest, OctalModeRejectsUnconsumedSuffixes)
 {
     for (const string input : {"0755junk", "08", "0755 "})
     {
-        const auto result = ComplianceEngine::BindingParsers::Parse<mode_t>(input);
+        const auto result = Kompli::BindingParsers::Parse<mode_t>(input);
         ASSERT_FALSE(result.HasValue()) << input;
         EXPECT_EQ(result.Error().code, EINVAL) << input;
         EXPECT_EQ(result.Error().message, "Failed to parse octal value '" + input + "': Unconsumed suffix in octal value");
@@ -215,7 +215,7 @@ TEST_F(BindingsTest, OctalModeKeepsLeadingWhitespaceAndPositiveSign)
 {
     for (const string input : {"0755", "  +0755"})
     {
-        const auto result = ComplianceEngine::BindingParsers::Parse<mode_t>(input);
+        const auto result = Kompli::BindingParsers::Parse<mode_t>(input);
         ASSERT_TRUE(result.HasValue()) << input;
         EXPECT_EQ(result.Value(), static_cast<mode_t>(0755));
     }
@@ -226,7 +226,7 @@ TEST_F(BindingsTest, OctalModeRejectsNegativeValues)
 {
     for (const string input : {"-1", "\t-0755"})
     {
-        const auto result = ComplianceEngine::BindingParsers::Parse<mode_t>(input);
+        const auto result = Kompli::BindingParsers::Parse<mode_t>(input);
         ASSERT_FALSE(result.HasValue()) << input;
         EXPECT_EQ(result.Error().code, EINVAL) << input;
         EXPECT_EQ(result.Error().message, "Failed to parse octal value '" + input + "': Negative octal value");
@@ -237,7 +237,7 @@ TEST_F(BindingsTest, OctalModeAcceptsNegativeZero)
 {
     for (const string input : {"-0", " -00", "\t-0"})
     {
-        const auto result = ComplianceEngine::BindingParsers::Parse<mode_t>(input);
+        const auto result = Kompli::BindingParsers::Parse<mode_t>(input);
         ASSERT_TRUE(result.HasValue()) << input;
         EXPECT_EQ(result.Value(), static_cast<mode_t>(0));
     }
@@ -246,7 +246,7 @@ TEST_F(BindingsTest, OctalModeAcceptsNegativeZero)
 TEST_F(BindingsTest, OctalModeRejectsModeTypeOverflow)
 {
     const string input = "040000000000";
-    const auto result = ComplianceEngine::BindingParsers::Parse<mode_t>(input);
+    const auto result = Kompli::BindingParsers::Parse<mode_t>(input);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, EINVAL);
 }
@@ -255,7 +255,7 @@ TEST_F(BindingsTest, OctalModePreservesInvalidAndOverflowErrors)
 {
     for (const string input : {"invalid", "07777777777777777777777777777777777777"})
     {
-        const auto result = ComplianceEngine::BindingParsers::Parse<mode_t>(input);
+        const auto result = Kompli::BindingParsers::Parse<mode_t>(input);
         ASSERT_FALSE(result.HasValue()) << input;
         EXPECT_EQ(result.Error().code, EINVAL);
         EXPECT_EQ(result.Error().message, "Failed to parse octal value '" + input + "': stol");

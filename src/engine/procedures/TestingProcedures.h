@@ -6,7 +6,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct TestingProcedureParams
 {
@@ -38,5 +38,5 @@ struct TestingProcedureGetParamValuesParams
 };
 
 Result<Status> AuditAuditGetParamValues(const TestingProcedureGetParamValuesParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_TESTING_PROCEDURES_H

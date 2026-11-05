@@ -13,15 +13,15 @@
 #include <string>
 #include <unistd.h>
 
-using ComplianceEngine::AuditGsettingsValue;
-using ComplianceEngine::Error;
-using ComplianceEngine::GsettingsKeyType;
-using ComplianceEngine::GsettingsOperationType;
-using ComplianceEngine::GsettingsValueParams;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::RemediateGsettingsValue;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditGsettingsValue;
+using Kompli::Error;
+using Kompli::GsettingsKeyType;
+using Kompli::GsettingsOperationType;
+using Kompli::GsettingsValueParams;
+using Kompli::IndicatorsTree;
+using Kompli::RemediateGsettingsValue;
+using Kompli::Result;
+using Kompli::Status;
 
 class EnsureGsettings : public ::testing::Test
 {

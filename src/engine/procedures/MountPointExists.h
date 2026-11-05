@@ -6,7 +6,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct MountPointExistsParams
 {
@@ -15,5 +15,5 @@ struct MountPointExistsParams
 };
 
 Result<Status> AuditMountPointExists(const MountPointExistsParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_MOUNT_POINT_EXISTS_H

@@ -23,7 +23,7 @@ using std::map;
 using std::string;
 using std::vector;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -422,4 +422,4 @@ Result<Status> RemediateDefaultUmask(IndicatorsTree& indicators, ContextInterfac
     }
     return postAudit;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

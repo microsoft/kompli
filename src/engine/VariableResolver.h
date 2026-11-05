@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace VariableResolution
 {
@@ -188,6 +188,6 @@ inline Result<std::vector<std::string>> Split(const std::vector<std::string>& va
 }
 
 } // namespace VariableResolution
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_VARIABLE_RESOLVER_H

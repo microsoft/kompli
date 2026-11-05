@@ -6,7 +6,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class AksCommandOperation
 {
@@ -37,5 +37,5 @@ struct AksCommandParams
 };
 
 Result<Status> AuditAksCommand(const AksCommandParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_AKS_COMMAND_H

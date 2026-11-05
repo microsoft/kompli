@@ -9,7 +9,7 @@
 #include <Pattern.h>
 #include <Separated.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 struct FilePermissionsParams
@@ -89,5 +89,5 @@ struct FilePermissionsCollectionParams
 
 Result<Status> AuditFilePermissionsCollection(const FilePermissionsCollectionParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateFilePermissionsCollection(const FilePermissionsCollectionParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_FILE_PERMISSIONS_H

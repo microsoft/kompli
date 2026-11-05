@@ -16,7 +16,7 @@
 #include <sys/types.h>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // A single network interface as reported by the system: its name and the IFF_* flags
 // bitmask (see <net/if.h>). Produced by ContextInterface::GetNetworkInterfaces().
@@ -75,5 +75,5 @@ public:
 private:
     std::map<std::string, std::string> mBenchmarkSettings;
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_CONTEXT_H

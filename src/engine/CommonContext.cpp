@@ -12,7 +12,7 @@
 #include <set>
 #include <sys/utsname.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 constexpr char CommonContext::sFsCachePath[];
 constexpr char CommonContext::sLockPath[];
@@ -112,4 +112,4 @@ Result<std::string> CommonContext::GetRunningKernelRelease() const
     return std::string(buf.release);
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

@@ -6,7 +6,7 @@
 
 // Used by EnsureFilePermissions, FileRegexMatch procedure to determine how the function should
 // interpret results.
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class Behavior
 {
@@ -28,5 +28,5 @@ enum class Behavior
     /// label: only_one_exists
     OnlyOneExists,
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_BEHAVIOR_H

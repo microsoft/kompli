@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BenchmarkIO
 {
@@ -79,5 +79,5 @@ struct Resource
     bool hasInitAudit = false;
 };
 } // namespace BenchmarkIO
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCE_ENGINE_BENCHMARKIO_RESOURCE_HPP

@@ -12,8 +12,8 @@
 
 TEST(TypedComparisonTest, EvaluatesAllOperatorsOnTypedIntegersAndStrings)
 {
-    using ComplianceEngine::CompareTyped;
-    using ComplianceEngine::TypedComparisonOperation;
+    using Kompli::CompareTyped;
+    using Kompli::TypedComparisonOperation;
     struct Case
     {
         TypedComparisonOperation operation;
@@ -55,8 +55,8 @@ TEST(TypedComparisonTest, EvaluatesAllOperatorsOnTypedIntegersAndStrings)
 
 TEST(TypedComparisonTest, PreservesIntegerLimitsAndRejectsUnknownOperation)
 {
-    using ComplianceEngine::CompareTyped;
-    using ComplianceEngine::TypedComparisonOperation;
+    using Kompli::CompareTyped;
+    using Kompli::TypedComparisonOperation;
     const auto minimum = std::numeric_limits<long>::min();
     const auto maximum = std::numeric_limits<long>::max();
     auto less = CompareTyped(minimum, maximum, TypedComparisonOperation::LessThan);
@@ -71,14 +71,14 @@ TEST(TypedComparisonTest, PreservesIntegerLimitsAndRejectsUnknownOperation)
     EXPECT_EQ(invalid.Error().message, "Unsupported typed comparison operation 100");
 }
 
-using ComplianceEngine::AuditDconfValue;
-using ComplianceEngine::DconfOperation;
-using ComplianceEngine::DconfValueParams;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::RemediateDconfValue;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditDconfValue;
+using Kompli::DconfOperation;
+using Kompli::DconfValueParams;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::RemediateDconfValue;
+using Kompli::Result;
+using Kompli::Status;
 
 class EnsureDconf : public ::testing::Test
 {

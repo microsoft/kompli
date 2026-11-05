@@ -16,12 +16,12 @@
 #include <utility>
 #include <vector>
 
-using ComplianceEngine::AuditResult;
-using ComplianceEngine::Error;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
-using ComplianceEngine::TelemetryEvent;
-using ComplianceEngine::TelemetryEventType;
+using Kompli::AuditResult;
+using Kompli::Error;
+using Kompli::Result;
+using Kompli::Status;
+using Kompli::TelemetryEvent;
+using Kompli::TelemetryEventType;
 
 struct CapturedEvent
 {
@@ -29,7 +29,7 @@ struct CapturedEvent
     std::chrono::system_clock::time_point createdAt;
 };
 
-class MockTelemetry : public ComplianceEngine::TelemetryInterface
+class MockTelemetry : public Kompli::TelemetryInterface
 {
 public:
     explicit MockTelemetry() = default;
@@ -57,15 +57,14 @@ class TelemetryTest : public ::testing::Test
 #ifdef BUILD_TELEMETRY
 
 // Returns the TelemetryField with the given key, or an empty Optional if not found.
-static ComplianceEngine::Optional<ComplianceEngine::TelemetryField> FindContextField(const std::vector<ComplianceEngine::TelemetryField>& context,
-    const std::string& key)
+static Kompli::Optional<Kompli::TelemetryField> FindContextField(const std::vector<Kompli::TelemetryField>& context, const std::string& key)
 {
-    auto it = std::find_if(context.begin(), context.end(), [&key](const ComplianceEngine::TelemetryField& f) { return f.key == key; });
+    auto it = std::find_if(context.begin(), context.end(), [&key](const Kompli::TelemetryField& f) { return f.key == key; });
     if (it != context.end())
     {
-        return ComplianceEngine::Optional<ComplianceEngine::TelemetryField>(*it);
+        return Kompli::Optional<Kompli::TelemetryField>(*it);
     }
-    return ComplianceEngine::Optional<ComplianceEngine::TelemetryField>();
+    return Kompli::Optional<Kompli::TelemetryField>();
 }
 
 TEST_F(TelemetryTest, RunInTelemetry_WithIntSuccess_NoEventLogged)
@@ -80,12 +79,12 @@ TEST_F(TelemetryTest, TelemetrySerializesEventWithParson)
     ASSERT_EQ(0, pipe(pipeDescriptors));
 
     {
-        ComplianceEngine::Telemetry telemetry(pipeDescriptors[1]);
+        Kompli::Telemetry telemetry(pipeDescriptors[1]);
         auto event = TelemetryEvent(TelemetryEventType::Audit, std::string("rule\0\"\n", 7));
         event.Add(std::string("control\x01"), std::string("value\0\b\f\x1f", 9));
         event.Add("resultCode", 42);
         const auto createdAt = std::chrono::system_clock::time_point(std::chrono::microseconds(456));
-        ComplianceEngine::LogCreatedTelemetryEvent(event, telemetry, nullptr, 123, createdAt);
+        Kompli::LogCreatedTelemetryEvent(event, telemetry, nullptr, 123, createdAt);
     }
 
     char buffer[1024] = {};
@@ -93,7 +92,7 @@ TEST_F(TelemetryTest, TelemetrySerializesEventWithParson)
     close(pipeDescriptors[0]);
     ASSERT_GT(bytesRead, 0);
 
-    auto json = ComplianceEngine::JsonWrapper::FromString(buffer);
+    auto json = Kompli::JsonWrapper::FromString(buffer);
     ASSERT_TRUE(json.HasValue());
     auto* object = json_value_get_object(json.Value().get());
     ASSERT_NE(nullptr, object);
@@ -154,7 +153,7 @@ TEST_F(TelemetryTest, TelemetryEvent_RunWithTelemetryLogsSuccessfulEvent)
 
 TEST_F(TelemetryTest, TelemetryEvent_RunWithTelemetryPropagatesLoggingExceptions)
 {
-    class ThrowingTelemetry : public ComplianceEngine::TelemetryInterface
+    class ThrowingTelemetry : public Kompli::TelemetryInterface
     {
     private:
         void LogEvent(const TelemetryEvent&, int64_t, const std::chrono::system_clock::time_point&) override

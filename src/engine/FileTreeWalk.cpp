@@ -4,7 +4,7 @@
 #include <FileTreeWalk.h>
 #include <dirent.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -111,4 +111,4 @@ Result<Status> FileTreeWalk(const std::string& path, FtwCallback callable, Break
 {
     return FileTreeWalk(path, callable, breakOnNonCompliant, context, 0);
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

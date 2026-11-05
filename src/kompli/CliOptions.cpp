@@ -7,9 +7,9 @@
 #include <iostream>
 #include <string>
 
-namespace ComplianceEngine
-{
 namespace Kompli
+{
+namespace Cli
 {
 
 using std::string;
@@ -339,5 +339,5 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
     return result;
 }
 
+} // namespace Cli
 } // namespace Kompli
-} // namespace ComplianceEngine

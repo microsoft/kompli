@@ -7,11 +7,11 @@
 #include <Result.h>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 Result<std::string> GetComplianceEngineDirectory();
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_DLTOOLS_H

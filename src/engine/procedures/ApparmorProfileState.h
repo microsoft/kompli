@@ -6,7 +6,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct ApparmorProfileStateParams
 {
@@ -15,5 +15,5 @@ struct ApparmorProfileStateParams
 };
 
 Result<Status> AuditApparmorProfileState(const ApparmorProfileStateParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_APPARMOR_PROFILE_STATE_H

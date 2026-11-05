@@ -5,7 +5,7 @@
 #define COMPLIANCEENGINE_PROCEDURES_SSH_KEY_PERMISSIONS_H
 
 #include <Evaluator.h>
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class SshKeyType
 {
@@ -26,5 +26,5 @@ struct SshKeyPermissionsParams
 Result<Status> AuditSshKeyPermissions(const SshKeyPermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateSshKeyPermissions(const SshKeyPermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context);
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_SSH_KEY_PERMISSIONS_H

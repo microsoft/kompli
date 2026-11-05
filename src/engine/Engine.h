@@ -21,7 +21,7 @@
 
 struct json_object_t;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 class Engine
 {
@@ -65,6 +65,6 @@ public:
     Result<AuditResult> MmiGet(const char* objectName);
     Result<Status> MmiSet(const char* objectName, const std::string& payload);
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCEENGINE_ENGINE_H

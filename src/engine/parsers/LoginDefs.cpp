@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace LoginDefs
 {
@@ -213,4 +213,4 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
 }
 
 } // namespace LoginDefs
-} // namespace ComplianceEngine
+} // namespace Kompli

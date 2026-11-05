@@ -6,7 +6,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class RegexType
 {
@@ -43,5 +43,5 @@ struct CommandOutputMatchParams
 };
 
 Result<Status> AuditCommandOutputMatch(const CommandOutputMatchParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_COMMAND_OUTPUT_MATCH_H

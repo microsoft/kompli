@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -305,4 +305,4 @@ Result<VariableResolution::ObjectCollection> CollectNameserverObject(const Conte
         return Error("Exact file operation threw an unknown exception", EIO);
     }
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

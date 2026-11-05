@@ -9,14 +9,14 @@
 #include <UniqueGroupId.h>
 #include <fstream>
 
-using ComplianceEngine::AuditUniqueGroupId;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::NestedListFormatter;
-using ComplianceEngine::Optional;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
-using ComplianceEngine::UniqueGroupIdParams;
+using Kompli::AuditUniqueGroupId;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::NestedListFormatter;
+using Kompli::Optional;
+using Kompli::Result;
+using Kompli::Status;
+using Kompli::UniqueGroupIdParams;
 using std::map;
 using std::string;
 

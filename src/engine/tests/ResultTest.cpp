@@ -5,8 +5,8 @@
 
 #include <gtest/gtest.h>
 
-using ComplianceEngine::Error;
-using ComplianceEngine::Result;
+using Kompli::Error;
+using Kompli::Result;
 
 class ResultTest : public ::testing::Test
 {

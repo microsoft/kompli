@@ -15,9 +15,9 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-using ComplianceEngine::Optional;
+using Kompli::Optional;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 namespace
@@ -462,4 +462,4 @@ Result<Status> RemediateSystemdConfigValue(const SystemdConfigValueParams& param
     return postAudit;
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

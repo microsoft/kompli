@@ -6,7 +6,7 @@
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct NoDuplicateEntriesParams
 {
@@ -24,5 +24,5 @@ struct NoDuplicateEntriesParams
 };
 
 Result<Status> AuditNoDuplicateEntries(const NoDuplicateEntriesParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 #endif // COMPLIANCEENGINE_PROCEDURES_NO_DUPLICATE_ENTRIES_H

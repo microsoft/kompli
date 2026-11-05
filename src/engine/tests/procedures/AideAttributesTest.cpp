@@ -12,7 +12,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-using namespace ComplianceEngine;
+using namespace Kompli;
 using ::testing::Return;
 
 namespace
