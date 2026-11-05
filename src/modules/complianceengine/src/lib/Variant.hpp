@@ -149,6 +149,25 @@ struct Dispatch<Index, Last>
         As<Stored>(storage).~Stored();
     }
 };
+// Keep invalid visitor calls in the substitution context so Visit reports its
+// declared-return-type assertion for missing and mismatched alternatives.
+template <typename...>
+struct Void
+{
+    typedef void type;
+};
+
+template <typename R, typename Visitor, typename Arg, typename = void>
+struct VisitorReturns : std::false_type
+{
+};
+
+template <typename R, typename Visitor, typename Arg>
+struct VisitorReturns<R, Visitor, Arg, typename Void<decltype(std::declval<Visitor&>()(std::declval<Arg>()))>::type>
+    : std::is_same<R, decltype(std::declval<Visitor&>()(std::declval<Arg>()))>
+{
+};
+
 // The visitor is checked for *every* alternative at instantiation, even
 // when the currently active index would take a different branch.
 template <typename R, typename Visitor, typename Pointer, std::size_t Index, typename... Types>
@@ -272,7 +291,7 @@ public:
     template <typename R, typename Visitor>
     R Visit(Visitor&& visitor) &
     {
-        static_assert(TypeTraits::All<std::is_same<R, decltype(std::declval<Visitor&>()(VariantDetail::Storage<Alternatives>::Get(std::declval<void*>())))>::value...>::value,
+        static_assert(TypeTraits::All<VariantDetail::VisitorReturns<R, Visitor, decltype(VariantDetail::Storage<Alternatives>::Get(std::declval<void*>()))>::value...>::value,
             "Variant visitor must handle every alternative with the declared return type");
         return VariantDetail::VisitDispatch<R, Visitor, void*, 0, Alternatives...>::Apply(mIndex, mStorage, visitor);
     }
@@ -280,7 +299,7 @@ public:
     template <typename R, typename Visitor>
     R Visit(Visitor&& visitor) const&
     {
-        static_assert(TypeTraits::All<std::is_same<R, decltype(std::declval<Visitor&>()(VariantDetail::Storage<Alternatives>::Get(std::declval<const void*>())))>::value...>::value,
+        static_assert(TypeTraits::All<VariantDetail::VisitorReturns<R, Visitor, decltype(VariantDetail::Storage<Alternatives>::Get(std::declval<const void*>()))>::value...>::value,
             "Variant visitor must handle every alternative with the declared return type");
         return VariantDetail::VisitDispatch<R, Visitor, const void*, 0, Alternatives...>::Apply(mIndex, mStorage, visitor);
     }
