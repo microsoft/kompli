@@ -35,7 +35,7 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
     //  - pass mask for private keys too if semantics is to forbid bits (private keys should typically be 0600). However user explicitly said 'permissions 0137'. That suggests we want to CLEAR these bits. In helper logic supplying 'permissions' would require those bits to be present which is opposite. Thus we pass it as 'mask'.
     // So: treat provided numbers as masks of forbidden bits.
 
-    auto processFile = [&](const Filesystem::FilesystemCollectionEntry& entry) -> Result<Status> {
+    auto processFile = [isPublic, isRemediation, &indicators, &context](const Filesystem::FilesystemCollectionEntry& entry) -> Result<Status> {
         auto pin = entry.LiveComponent();
         if (!pin.HasValue() || entry.missing)
         {
@@ -160,10 +160,8 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
         return root.Error();
     if (root.Value().Is<Filesystem::Path::RejectionReason>())
         return Status::Compliant;
-    auto frozen = As<Filesystem::Path>(root.Value()).FreezeRoot();
-    if (!frozen.HasValue())
-        return std::move(frozen).Error();
-    if (As<Filesystem::Path>(root.Value()).Root().Acquired().type != Filesystem::Type::Directory)
+    // FTW freezes the selected starting leaf at its common entry point.
+    if (As<Filesystem::Path>(root.Value()).Leaf().Acquired().type != Filesystem::Type::Directory)
         return Error("Expected directory root at '" + baseDir + "'", ENOTDIR);
     auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), resolved.Value().rootPath,
         Filesystem::CollectionContinuation(resolved.Value()));

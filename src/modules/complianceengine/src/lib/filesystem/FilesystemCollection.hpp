@@ -69,9 +69,10 @@ struct FilesystemCollectionLimits
     // Collection-owned observation path strings retained in pending/result
     // entries, traversal frames and exclusions (including their NUL bytes).
     // Not a total-memory limit: the resolver separately reserves bounded
-    // internal acquisition pins; the request root, yielded
-    // caller-owned entries, objects, metadata and allocator capacity are not
-    // charged to the collection's observation-path counter.
+    // internal acquisition pins; live pin-owning entries are charged for
+    // their lifetime separately from observation strings. Detached Component
+    // copies, objects, metadata and allocator capacity are not charged to the
+    // observation-path counter.
     std::size_t retainedPathBytes = 32 * 1024 * 1024;
     // Must retain every active ancestor pin and cursor without pathname replay.
     std::size_t openDirectories = 16;
@@ -104,7 +105,7 @@ struct FilesystemCollectionRequest
     SymlinkPolicy childDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
     FilesystemScope scope = FilesystemScope::RootDevice;
     FilesystemYieldType yieldType = FilesystemYieldType::All;
-    UnsupportedTypeAction unsupported = UnsupportedTypeAction::Reject;
+    UnsupportedTypeDisposition unsupported = UnsupportedTypeDisposition::Error;
     FilesystemDepthAction depthAction = FilesystemDepthAction::Stop;
     // A vanished name hinted DT_REG by the pinned directory enumeration may
     // be reported without metadata or a handle. DT_UNKNOWN still fails.
@@ -130,7 +131,7 @@ struct ResolvedFilesystemCollectionRequest
     SymlinkPolicy childDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
     FilesystemScope scope = FilesystemScope::RootDevice;
     FilesystemYieldType yieldType = FilesystemYieldType::All;
-    UnsupportedTypeAction unsupported = UnsupportedTypeAction::Reject;
+    UnsupportedTypeDisposition unsupported = UnsupportedTypeDisposition::Error;
     FilesystemDepthAction depthAction = FilesystemDepthAction::Stop;
     FilesystemMissingChildAction missingChildAction = FilesystemMissingChildAction::Error;
     FilesystemCollectionLimits limits;
@@ -148,7 +149,7 @@ struct FilesystemTraversalPolicy
     SymlinkPolicy childDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
     FilesystemScope scope = FilesystemScope::RootDevice;
     FilesystemYieldType yieldType = FilesystemYieldType::All;
-    UnsupportedTypeAction unsupported = UnsupportedTypeAction::Reject;
+    UnsupportedTypeDisposition unsupported = UnsupportedTypeDisposition::Error;
     FilesystemDepthAction depthAction = FilesystemDepthAction::Stop;
     FilesystemMissingChildAction missingChildAction = FilesystemMissingChildAction::Error;
     FilesystemCollectionLimits limits;
@@ -164,6 +165,11 @@ enum class FilesystemVisitAction
     Continue,
     Stop,
 };
+
+namespace FTW
+{
+class FileRange;
+}
 
 struct FilesystemCollectionEntry
 {
@@ -189,7 +195,10 @@ struct FilesystemCollectionEntry
     }
 
 private:
+    friend class FTW::FileRange;
     Optional<Path::Component> mComponent;
+    // Private lifetime charge: no Path, Component or traversal State is owned here.
+    std::shared_ptr<void> mRetentionCharge;
 };
 
 struct FilesystemCollectionExclusion
@@ -214,8 +223,8 @@ Result<FilesystemCollectionResult> CollectFilesystem(const FilesystemCollectionR
 namespace FTW
 {
 // Single-pass live filesystem range. The pathname adapter acquires a root
-// once; the moved-Path entry accepts an already pinned root and validates
-// only continuation policy. Descendants are pulled lazily. Context must
+// once; the moved-Path entry accepts a pinned leaf, validates continuation
+// policy and freezes that leaf before traversing. Descendants are pulled lazily. Context must
 // outlive the range. Abandoned ranges clean up best-effort without certifying
 // the observations already yielded.
 class FileRange

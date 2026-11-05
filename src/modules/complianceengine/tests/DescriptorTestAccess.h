@@ -26,11 +26,6 @@ class DescriptorTestAccess
 
 public:
     // Keep every context-retaining result tied to a caller-owned lvalue.
-    static Descriptor EmptyDescriptor(const ContextInterface& context, Diagnostic diagnostic = Diagnostic::Descriptor) noexcept
-    {
-        return context.EmptyDescriptor(diagnostic);
-    }
-    static Descriptor EmptyDescriptor(const ContextInterface&&, Diagnostic = Diagnostic::Descriptor) = delete;
     static Result<Descriptor> OpenAbsolutePin(const ContextInterface& context, const char* path, bool directory = true)
     {
         return context.OpenAbsolutePin(path, directory);
@@ -100,7 +95,17 @@ public:
         return context.OpenDirectoryCursor(std::move(owner));
     }
     static Result<Cursor> OpenDirectoryCursor(const ContextInterface&&, Descriptor&&) = delete;
+    // This test-only native-access adapter is checked; internal disposal is not.
     static int CloseOwnedDescriptor(const ContextInterface& context, Descriptor& owner)
+    {
+        owner.RequireOwned();
+        return context.CloseOwnedDescriptor(owner);
+    }
+    static constexpr bool InternalCloseIsNoexcept() noexcept
+    {
+        return noexcept(std::declval<const ContextInterface&>().CloseOwnedDescriptor(std::declval<Descriptor&>()));
+    }
+    static int CloseInternally(const ContextInterface& context, Descriptor& owner) noexcept
     {
         return context.CloseOwnedDescriptor(owner);
     }
@@ -121,11 +126,19 @@ public:
     {
         return Filesystem::Path::ReadPinnedLink(pin, targetCap, fdinfoCap);
     }
-    static Procfs ProcfsAccess(const ContextInterface& context)
+    static Result<Procfs> ProcfsAccess(const ContextInterface& context)
     {
-        return Procfs(context);
+        return Procfs::Open(context);
     }
-    static Procfs ProcfsAccess(const ContextInterface&&) = delete;
+    static Result<Procfs> ProcfsAccess(const ContextInterface&&) = delete;
+    static int ConsumedDescriptor(const Descriptor& descriptor) noexcept
+    {
+        return descriptor.mDescriptor;
+    }
+    static int ConsumedProcfsRole(const Procfs& procfs, std::size_t index) noexcept
+    {
+        return procfs.mRoles[index].mDescriptor;
+    }
 };
 } // namespace Tests
 } // namespace ComplianceEngine

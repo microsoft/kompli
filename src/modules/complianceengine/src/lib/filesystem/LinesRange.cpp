@@ -280,10 +280,10 @@ Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string
     // Root "/" preserves absolute-path semantics for each component.
     const ResolverLimits limits;
     Filesystem::Path::Policy pathPolicy;
-    pathPolicy.symlinks = policy.symlinks;
-    pathPolicy.mounts = Filesystem::MountPolicy::AllowCrossing;
-    pathPolicy.fileLinks = policy.symlinks;
-    pathPolicy.directoryLinks = policy.symlinks;
+    pathPolicy.prefixLinks = policy.symlinks == SymlinkPolicy::Follow ? PrefixLinkPolicy::Follow : PrefixLinkPolicy::Reject;
+    pathPolicy.fileLinks = policy.symlinks == SymlinkPolicy::Follow ? FileLinkPolicy::Follow : FileLinkPolicy::Reject;
+    pathPolicy.directoryLinks = policy.symlinks == SymlinkPolicy::Follow ? DirectoryLinkPolicy::Follow : DirectoryLinkPolicy::Reject;
+    pathPolicy.mounts = MountPolicy::CrossMounts;
     auto acquired = Filesystem::Path::Make(context, path, pathPolicy, limits);
     if (!acquired.HasValue())
         return std::move(acquired).Error();
@@ -294,13 +294,13 @@ Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string
         return Error("File target is excluded", ELOOP);
     Filesystem::Path pins = As<Filesystem::Path>(std::move(acquired).Value());
 
-    auto frozen = pins.FreezeRoot();
-    if (!frozen.HasValue())
-        return std::move(frozen).Error();
-    if (pins.Leaf().Acquired().type != Filesystem::Type::RegularFile)
+    // The selected file is the leaf; freezing a file does not aid reading it.
+    auto leaf = pins.Leaf();
+    const auto acquiredFacts = leaf.Acquired();
+    if (acquiredFacts.type != Filesystem::Type::RegularFile)
         return Error("File target is not regular", EINVAL);
 
-    auto opened = pins.Leaf().OpenReadOnly(ReadableFile::Policy(policy.limits.maxInterruptedReads));
+    auto opened = leaf.OpenReadOnly(ReadableFile::Policy(policy.limits.maxInterruptedReads));
     if (!opened.HasValue())
         return std::move(opened).Error();
 
@@ -310,7 +310,7 @@ Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string
         return std::move(inspected).Error();
 
     const struct stat before = inspected.Value();
-    const auto held = pins.Leaf().Acquired().metadata;
+    const struct stat held = acquiredFacts.metadata;
     if (held.st_dev != before.st_dev || held.st_ino != before.st_ino || !S_ISREG(before.st_mode))
         return Error("Pinned file identity changed", EAGAIN);
 

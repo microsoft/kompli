@@ -137,8 +137,8 @@ private:
         std::size_t fdinfoByteCap);
     static Result<Descriptor> ActivateReadOnlyImpl(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory,
         std::size_t fdinfoByteCap, const std::uint64_t* heldMount);
-    static Result<bool> OpenAndVerifyAlias(const ContextInterface& context, const ProcfsDescriptorAccess& procfs, const Descriptor& pin,
-        Descriptor& aliasOwner, const struct stat& before, bool directory, std::size_t fdinfoByteCap, const std::uint64_t* heldMount);
+    static Result<Descriptor> OpenAndVerifyAlias(const ContextInterface& context, const ProcfsDescriptorAccess& procfs, const Descriptor& pin,
+        const struct stat& before, bool directory, std::size_t fdinfoByteCap, const std::uint64_t* heldMount);
     Handle(Descriptor descriptor, AcquisitionFacts facts, LookupSpelling lookup, EffectiveSpelling effective, std::size_t fdinfoByteCap);
     static Result<Handle> PinProcessRoot(const ContextInterface& context, std::size_t fdinfoBytes);
     static Result<bool> RecognizeAcceptedRoot(const Handle& acceptedRoot, const Handle& candidate, std::size_t fdinfoByteCap);

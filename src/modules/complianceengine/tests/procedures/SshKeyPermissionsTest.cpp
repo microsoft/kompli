@@ -269,7 +269,7 @@ TEST(SshKeyRangeTest, DeepTraversalRejectsDescriptorBudgetEvenThoughDirectoriesA
     const auto result = AuditSshKeyPermissions(params, indicators, context);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EMFILE, result.Error().code);
-    EXPECT_EQ("Filesystem directory continuation exceeds descriptor budget", result.Error().message);
+    EXPECT_EQ("Filesystem pin retention exceeds descriptor budget", result.Error().message);
 }
 
 TEST(SshKeyRangeTest, RootSymlinkIsFollowedButInteriorDirectorySymlinkIsNot)

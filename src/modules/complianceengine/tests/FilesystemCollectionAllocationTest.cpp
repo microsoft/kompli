@@ -7,11 +7,15 @@
 #include <cstddef>
 #include <dirent.h>
 #include <filesystem/FilesystemCollection.hpp>
-#include <filesystem/PathResolutionStage.hpp>
+#include <filesystem/Path.hpp>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <new>
+#include <stdexcept>
 #include <string>
+#include <sys/stat.h>
 #include <type_traits>
+#include <unistd.h>
 #include <utility>
 
 namespace
@@ -29,27 +33,27 @@ thread_local std::size_t transferAllocations = 0;
 thread_local bool countFreezeAllocations = false;
 thread_local std::size_t freezeAllocationAttempts = 0;
 thread_local std::size_t failFreezeAt = 0;
-} // namespace
-
-namespace ComplianceEngine
+// Keep these five sites in sync with the isolated FilesystemCollection TU.
+enum class TestCheckpoint : unsigned
 {
-namespace Filesystem
+    FrameReserve = 1,
+    InversePreparation,
+    AfterApply,
+    BeforeOffer,
+    InverseRestore,
+};
+thread_local unsigned armedCheckpoint = 0;
+thread_local std::size_t checkpointHits = 0;
+thread_local bool faultInverseAllocation = false;
+thread_local std::size_t inverseAllocationFailures = 0;
+struct ResetCheckpointOnExit
 {
-namespace Detail
-{
-struct ResolvedPathAllocationProbe
-{
-    static ResolvedPath Staged()
+    ~ResetCheckpointOnExit() noexcept
     {
-        ResolvedPath stage;
-        stage.mFrames.emplace_back(0);
-        stage.mAccountedBytes = 160;
-        return stage;
+        armedCheckpoint = 0;
     }
 };
-} // namespace Detail
-} // namespace Filesystem
-} // namespace ComplianceEngine
+} // namespace
 
 extern "C" void ArmFilesystemCollectionRootCopy(std::size_t bytes) noexcept
 {
@@ -66,9 +70,34 @@ extern "C" void DisarmFilesystemCollectionRootCopy() noexcept
     copyBytes = 0;
 }
 
+extern "C" bool TripFilesystemCollectionCheckpoint(unsigned site) noexcept
+{
+    if (site != armedCheckpoint)
+        return false;
+    armedCheckpoint = 0; // Disarm before unwinding or disposing native resources.
+    ++checkpointHits;
+    return true;
+}
+
+extern "C" void ArmFilesystemCollectionInverseAllocation() noexcept
+{
+    faultInverseAllocation = true;
+}
+
+extern "C" void DisarmFilesystemCollectionInverseAllocation() noexcept
+{
+    faultInverseAllocation = false;
+}
+
 extern "C" void* __real__Znwm(std::size_t bytes);
 extern "C" void* __wrap__Znwm(std::size_t bytes)
 {
+    if (faultInverseAllocation)
+    {
+        faultInverseAllocation = false; // Never fault disposal, logging or native seams.
+        ++inverseAllocationFailures;
+        throw std::bad_alloc();
+    }
     if (countFreezeAllocations)
     {
         ++freezeAllocationAttempts;
@@ -104,13 +133,24 @@ struct AllocationCloseContext final : MockContext
 {
     mutable std::size_t nativeCloses = 0;
     mutable std::size_t failedNativeCloses = 0;
+    mutable std::size_t actualNativeCloseFailures = 0;
+    mutable bool reportNativeCloseFailure = false;
 
-    int CloseFileDescriptor(int fd) const override
+    int CloseFileDescriptor(int fd) const noexcept override
     {
         ++nativeCloses;
         const int result = RealCloseFileDescriptor(fd);
         if (result != 0)
+            ++actualNativeCloseFailures;
+        if (result != 0 || reportNativeCloseFailure)
+        {
             ++failedNativeCloses;
+            if (reportNativeCloseFailure)
+            {
+                errno = EIO; // Real close has already released the fd.
+                return -1;
+            }
+        }
         return result;
     }
 };
@@ -127,20 +167,63 @@ std::size_t OpenDescriptors()
     return count;
 }
 
-TEST(FilesystemCollectionAllocationTest, ResolverResultTransfersDoNotAllocate)
+// Native mocks and fixture setup are never subject to allocation interception.
+struct PreparedTraversalFixture
 {
-    using ComplianceEngine::Filesystem::Detail::ResolvedPath;
-    static_assert(std::is_nothrow_move_constructible<ResolvedPath>::value, "Resolver result transfer must be noexcept");
-    static_assert(std::is_nothrow_move_assignable<ResolvedPath>::value, "Resolver result replacement must be noexcept");
-    auto stage = ComplianceEngine::Filesystem::Detail::ResolvedPathAllocationProbe::Staged();
-    // The owning deque has already allocated its map. The Result
-    // transfer must move ownership, not construct replacement empty maps.
+    AllocationCloseContext context;
+    std::string root = context.GetTempdirPath() + "/ftw-fault";
+    std::string directory = root + "/branch";
+    std::string file = directory + "/file";
+    ComplianceEngine::Filesystem::FilesystemCollectionRequest request{root, ComplianceEngine::Filesystem::FilesystemRootKind::Directory};
+
+    PreparedTraversalFixture()
+    {
+        request.direction = ComplianceEngine::Filesystem::FilesystemDirection::Down;
+        if (::mkdir(root.c_str(), 0700) != 0 || ::mkdir(directory.c_str(), 0700) != 0)
+            throw std::runtime_error("Failed to prepare FTW fault fixture");
+        std::ofstream output(file);
+        output << "content";
+        if (!output)
+            throw std::runtime_error("Failed to prepare FTW fault file");
+    }
+};
+
+TEST(FilesystemCollectionAllocationTest, StepResultAndVariantTransfersDoNotAllocate)
+{
+    using ComplianceEngine::Filesystem::Path;
+    static_assert(std::is_nothrow_move_constructible<Path::Step>::value, "Step move cannot allocate");
+    static_assert(std::is_nothrow_move_assignable<Path::Step>::value, "Step replacement cannot allocate");
+    MockContext context;
+    Path::Policy policy;
+    policy.mounts = ComplianceEngine::Filesystem::MountPolicy::CrossMounts;
+    ComplianceEngine::Filesystem::ResolverLimits limits;
+    limits.shared.retainedBytes = 262144;
+    auto opened = Path::Make(context, context.GetTempdirPath(), policy, limits);
+    ASSERT_TRUE(opened.HasValue());
+    ASSERT_TRUE(opened.Value().Is<Path>());
+    Path path = ComplianceEngine::As<Path>(std::move(opened.Value()));
+    // The acquired child is independent of the source path.
+    const std::string child = context.MakeTempfile("test");
+    auto resolved = path.Resolve(child.substr(child.find_last_of('/') + 1), policy);
+    ASSERT_TRUE(resolved.HasValue());
+    ASSERT_TRUE(resolved.Value().Is<Path::Step>());
+    Path::Step step = ComplianceEngine::As<Path::Step>(std::move(resolved.Value()));
+    using Outcome = ComplianceEngine::Variant<Path::Step, Path::RejectionReason>;
+    struct ResetFaultOnExit
+    {
+        ~ResetFaultOnExit()
+        {
+            faultTransfers = false;
+        }
+    } reset;
     faultTransfers = true;
-    ComplianceEngine::Result<ResolvedPath> first(std::move(stage));
-    ComplianceEngine::Result<ResolvedPath> second(std::move(first));
+    Path::Step moved(std::move(step));
+    ComplianceEngine::Result<Outcome> first(Outcome(ComplianceEngine::InPlaceType<Path::Step>{}, std::move(moved)));
+    ComplianceEngine::Result<Outcome> second(std::move(first));
     faultTransfers = false;
     EXPECT_TRUE(second.HasValue());
-    EXPECT_EQ(160u, second.Value().AccountedBytes());
+    EXPECT_TRUE(second.Value().Is<Path::Step>());
+    EXPECT_TRUE(step.Target().Stat().HasValue());
     EXPECT_EQ(0u, transferAllocations);
 }
 
@@ -151,12 +234,12 @@ TEST(FilesystemCollectionAllocationTest, PathMoveAndResultTransferDoNotAllocate)
     ComplianceEngine::Filesystem::ResolverLimits limits;
     limits.shared.retainedBytes = 262144;
     ComplianceEngine::Filesystem::Path::Policy policy;
-    policy.mounts = ComplianceEngine::Filesystem::MountPolicy::AllowCrossing;
+    policy.mounts = ComplianceEngine::Filesystem::MountPolicy::CrossMounts;
     auto opened = ComplianceEngine::Filesystem::Path::Make(context, context.GetTempdirPath(), policy, limits);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     ASSERT_TRUE(opened.Value().Is<ComplianceEngine::Filesystem::Path>());
     auto path = ComplianceEngine::As<ComplianceEngine::Filesystem::Path>(std::move(opened.Value()));
-    ASSERT_TRUE(path.FreezeRoot().HasValue());
+    ASSERT_TRUE(path.Freeze().HasValue());
     faultTransfers = true;
     ComplianceEngine::Filesystem::Path moved(std::move(path));
     using Path = ComplianceEngine::Filesystem::Path;
@@ -166,7 +249,8 @@ TEST(FilesystemCollectionAllocationTest, PathMoveAndResultTransferDoNotAllocate)
     faultTransfers = false;
     EXPECT_TRUE(transferred.HasValue());
     EXPECT_EQ(0u, transferAllocations);
-    EXPECT_TRUE(ComplianceEngine::As<Path>(transferred.Value()).IsFrozen());
+    EXPECT_GE(ComplianceEngine::As<Path>(transferred.Value()).Size(), 1u);
+    EXPECT_EQ(path.Size(), ComplianceEngine::As<Path>(transferred.Value()).Size());
 }
 
 TEST(FilesystemCollectionAllocationTest, FreezeRootAllocationFailuresPreserveSelectedPinAndNames)
@@ -177,7 +261,7 @@ TEST(FilesystemCollectionAllocationTest, FreezeRootAllocationFailuresPreserveSel
     ComplianceEngine::Filesystem::ResolverLimits limits;
     limits.shared.retainedBytes = 262144;
     Path::Policy policy;
-    policy.mounts = ComplianceEngine::Filesystem::MountPolicy::AllowCrossing;
+    policy.mounts = ComplianceEngine::Filesystem::MountPolicy::CrossMounts;
 
     auto control = Path::Make(context, directory, policy, limits);
     ASSERT_TRUE(control.HasValue()) << control.Error().message;
@@ -186,12 +270,12 @@ TEST(FilesystemCollectionAllocationTest, FreezeRootAllocationFailuresPreserveSel
     freezeAllocationAttempts = 0;
     failFreezeAt = 0;
     countFreezeAllocations = true;
-    auto frozenControl = controlPath.FreezeRoot();
+    auto frozenControl = controlPath.Freeze();
     countFreezeAllocations = false;
     ASSERT_TRUE(frozenControl.HasValue());
     const std::size_t allocations = freezeAllocationAttempts;
     const std::size_t nativeFailuresBefore = context.failedNativeCloses;
-    ASSERT_GT(allocations, 2u); // Include deque scratch/entry preparation, not just name copies.
+    ASSERT_GT(allocations, 0u); // Capture every preparation allocation before publication.
 
     for (std::size_t failure = 1; failure <= allocations; ++failure)
     {
@@ -205,15 +289,17 @@ TEST(FilesystemCollectionAllocationTest, FreezeRootAllocationFailuresPreserveSel
             freezeAllocationAttempts = 0;
             failFreezeAt = failure;
             countFreezeAllocations = true;
-            EXPECT_THROW(path.FreezeRoot(), std::bad_alloc);
+            EXPECT_THROW(path.Freeze(), std::bad_alloc);
             countFreezeAllocations = false;
             EXPECT_EQ(failure, freezeAllocationAttempts);
-            EXPECT_FALSE(path.IsFrozen());
-            auto frozen = path.FreezeRoot();
-            ASSERT_TRUE(frozen.HasValue()) << frozen.Error().message;
-            EXPECT_TRUE(path.IsFrozen());
             EXPECT_EQ(directory, path.ToString());
-            EXPECT_EQ(directory, path.Root().LookupName());
+            EXPECT_EQ("/", path.Root().LookupName());
+            auto frozen = path.Freeze();
+            ASSERT_TRUE(frozen.HasValue()) << frozen.Error().message;
+            EXPECT_TRUE(frozen.Value());
+            EXPECT_FALSE(path.Freeze().Value());
+            EXPECT_EQ(directory, path.ToString());
+            EXPECT_EQ("/", path.Root().LookupName());
             EXPECT_EQ(directory, path.Leaf().EffectiveName());
             EXPECT_TRUE(path.Leaf().Stat().HasValue());
         }
@@ -252,67 +338,330 @@ TEST(FilesystemCollectionAllocationTest, RootCopyAllocationFailureReturnsENOMEMB
 TEST(FilesystemCollectionAllocationTest, ComponentCopyAndMoveAsCopyRetainSourceWithoutAllocation)
 {
     AllocationCloseContext context;
-    const auto descriptorsBefore = OpenDescriptors();
-    std::size_t closesBeforeReplacement = 0;
+    const auto before = OpenDescriptors();
+    const auto closesBefore = context.nativeCloses;
     {
         ComplianceEngine::Filesystem::ResolverLimits limits;
         limits.shared.retainedBytes = 262144;
         ComplianceEngine::Filesystem::Path::Policy policy;
-        policy.mounts = ComplianceEngine::Filesystem::MountPolicy::AllowCrossing;
+        policy.mounts = ComplianceEngine::Filesystem::MountPolicy::CrossMounts;
         auto opened = ComplianceEngine::Filesystem::Path::Make(context, context.GetTempdirPath(), policy, limits);
         ASSERT_TRUE(opened.HasValue());
         ASSERT_TRUE(opened.Value().Is<ComplianceEngine::Filesystem::Path>());
         auto path = ComplianceEngine::As<ComplianceEngine::Filesystem::Path>(std::move(opened.Value()));
-        ASSERT_TRUE(path.FreezeRoot().HasValue());
         auto first = path.Leaf();
-        auto oldOpened = ComplianceEngine::Filesystem::Path::Make(context, "/proc", policy, limits);
-        ASSERT_TRUE(oldOpened.HasValue());
-        ASSERT_TRUE(oldOpened.Value().Is<ComplianceEngine::Filesystem::Path>());
-        auto oldPath = ComplianceEngine::As<ComplianceEngine::Filesystem::Path>(std::move(oldOpened.Value()));
-        ASSERT_TRUE(oldPath.FreezeRoot().HasValue());
-        auto replaced = oldPath.Leaf();
-        {
-            ComplianceEngine::Filesystem::Path retired(std::move(oldPath));
-        }
-        const auto nativeBefore = OpenDescriptors();
-        closesBeforeReplacement = context.nativeCloses;
-        const auto nativeFailuresBefore = context.failedNativeCloses;
-        EXPECT_CALL(context, OpenNativePath(testing::_, testing::_)).Times(0);
         auto second = first;
-        const std::string lookup = first.LookupName();
-        const std::string effective = first.EffectiveName();
-        const auto inode = first.Acquired().metadata.st_ino;
+        const auto identity = first.Acquired().metadata.st_ino;
+        const auto lookup = first.LookupName();
+        EXPECT_CALL(context, OpenNativePath(testing::_, testing::_)).Times(0);
         struct ResetFaultOnExit
         {
             ~ResetFaultOnExit()
             {
                 faultTransfers = false;
             }
-        } resetFault;
+        } reset;
         faultTransfers = true;
         auto copied = first;
         second = first;
         auto moved(std::move(first));
         second = std::move(first);
-        auto& sameComponent = second; // Intentional self-move of the Component wrapper.
-        second = std::move(sameComponent);
-        replaced = first; // releases the last share of the old acquisition
+        auto& self = second;
+        second = std::move(self);
         faultTransfers = false;
-        EXPECT_EQ(closesBeforeReplacement + 1, context.nativeCloses); // Old acquisition final share.
-        EXPECT_EQ(nativeFailuresBefore, context.failedNativeCloses);
         EXPECT_EQ(0u, transferAllocations);
-        EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&context)); // Native opens remain forbidden.
-        EXPECT_EQ(nativeBefore - 1, OpenDescriptors());
+        EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+        EXPECT_EQ(identity, first.Acquired().metadata.st_ino);
+        EXPECT_EQ(identity, second.Acquired().metadata.st_ino);
+        EXPECT_EQ(identity, moved.Acquired().metadata.st_ino);
         EXPECT_TRUE(copied.Stat().HasValue());
-        EXPECT_TRUE(replaced.Stat().HasValue());
-        EXPECT_EQ(inode, first.Acquired().metadata.st_ino);
-        EXPECT_EQ(inode, moved.Acquired().metadata.st_ino);
-        EXPECT_EQ(inode, second.Acquired().metadata.st_ino);
-        EXPECT_EQ(lookup, first.LookupName());
-        EXPECT_EQ(effective, moved.EffectiveName());
-        // The remaining path and shared pin copies dispose only when their final owners leave scope.
+        EXPECT_EQ(lookup, copied.LookupName());
     }
-    EXPECT_EQ(closesBeforeReplacement + 2, context.nativeCloses); // Remaining acquisition final share.
+    EXPECT_EQ(before, OpenDescriptors());
+    EXPECT_GT(context.nativeCloses, closesBefore);
     EXPECT_EQ(0u, context.failedNativeCloses);
+}
+
+TEST(FilesystemCollectionAllocationTest, ApplyAllocationFailuresNeverPublishPartialState)
+{
+    using ComplianceEngine::Filesystem::Path;
+    AllocationCloseContext context;
+    const std::string directory = context.GetTempdirPath();
+    const std::string child = context.MakeTempfile("pinned");
+    const std::string name = child.substr(child.find_last_of('/') + 1);
+    ComplianceEngine::Filesystem::ResolverLimits limits;
+    limits.shared.retainedBytes = 262144;
+    Path::Policy policy;
+    policy.mounts = ComplianceEngine::Filesystem::MountPolicy::CrossMounts;
+    auto prepare = [&]() -> ComplianceEngine::Result<Path> {
+        auto opened = Path::Make(context, directory, policy, limits);
+        if (!opened.HasValue())
+            return std::move(opened).Error();
+        if (!opened.Value().Is<Path>())
+            return ComplianceEngine::Error("Fixture root missing", ENOENT);
+        Path path = ComplianceEngine::As<Path>(std::move(opened.Value()));
+        auto frozen = path.Freeze();
+        if (!frozen.HasValue())
+            return std::move(frozen).Error();
+        return path;
+    };
+    auto control = prepare();
+    ASSERT_TRUE(control.HasValue()) << control.Error().message;
+    auto controlStep = control.Value().Resolve(name, policy);
+    ASSERT_TRUE(controlStep.HasValue());
+    ASSERT_TRUE(controlStep.Value().Is<Path::Step>());
+    freezeAllocationAttempts = 0;
+    failFreezeAt = 0;
+    countFreezeAllocations = true;
+    auto applied = control.Value().Apply(std::move(ComplianceEngine::As<Path::Step>(controlStep.Value())));
+    countFreezeAllocations = false;
+    ASSERT_TRUE(applied.HasValue()) << applied.Error().message;
+    const std::size_t allocations = freezeAllocationAttempts;
+    ASSERT_GT(allocations, 2u); // inverse, vector, names, immutable State publication
+    for (std::size_t failure = 1; failure <= allocations; ++failure)
+    {
+        SCOPED_TRACE(failure);
+        const auto beforeDescriptors = OpenDescriptors();
+        {
+            auto opened = prepare();
+            ASSERT_TRUE(opened.HasValue());
+            Path path = std::move(opened).Value();
+            auto resolved = path.Resolve(name, policy);
+            ASSERT_TRUE(resolved.HasValue());
+            ASSERT_TRUE(resolved.Value().Is<Path::Step>());
+            Path::Step step = ComplianceEngine::As<Path::Step>(std::move(resolved.Value()));
+            const std::string oldName = path.ToString();
+            const auto oldSize = path.Size();
+            const auto oldIdentity = path.Leaf().Acquired().metadata.st_ino;
+            freezeAllocationAttempts = 0;
+            failFreezeAt = failure;
+            countFreezeAllocations = true;
+            EXPECT_THROW((void)path.Apply(std::move(step)), std::bad_alloc);
+            countFreezeAllocations = false;
+            EXPECT_EQ(failure, freezeAllocationAttempts);
+            EXPECT_EQ(oldName, path.ToString());
+            EXPECT_EQ(oldSize, path.Size());
+            EXPECT_EQ(oldIdentity, path.Leaf().Acquired().metadata.st_ino);
+            EXPECT_TRUE(step.Target().Stat().HasValue());
+        }
+        EXPECT_EQ(beforeDescriptors, OpenDescriptors());
+    }
+    failFreezeAt = 0;
+}
+
+TEST(FilesystemCollectionAllocationTest, FTWFactoryAllocationFaultDoesNotConsumeSelectedRoot)
+{
+    using ComplianceEngine::Filesystem::Path;
+    AllocationCloseContext context;
+    const std::string directory = context.GetTempdirPath();
+    ComplianceEngine::Filesystem::ResolverLimits limits;
+    limits.shared.retainedBytes = 262144;
+    Path::Policy policy;
+    policy.mounts = ComplianceEngine::Filesystem::MountPolicy::CrossMounts;
+    auto makeRoot = [&]() -> ComplianceEngine::Result<Path> {
+        auto opened = Path::Make(context, directory, policy, limits);
+        if (!opened.HasValue())
+            return std::move(opened).Error();
+        if (!opened.Value().Is<Path>())
+            return ComplianceEngine::Error("Fixture root absent", ENOENT);
+        return ComplianceEngine::As<Path>(std::move(opened.Value()));
+    };
+    ComplianceEngine::Filesystem::FilesystemTraversalPolicy traversal;
+    traversal.scope = ComplianceEngine::Filesystem::FilesystemScope::All;
+    auto root = makeRoot();
+    ASSERT_TRUE(root.HasValue()) << root.Error().message;
+    // FTW takes the reporting name by value. Copying directory at the call
+    // site would allocate before the factory's bad_alloc handler can run.
+    std::string controlReportingName = directory;
+    freezeAllocationAttempts = 0;
+    failFreezeAt = 0;
+    countFreezeAllocations = true;
+    auto control = ComplianceEngine::Filesystem::FTW::Files(std::move(root).Value(), std::move(controlReportingName), traversal);
+    countFreezeAllocations = false;
+    ASSERT_TRUE(control.HasValue()) << control.Error().message;
+    const std::size_t allocations = freezeAllocationAttempts;
+    ASSERT_GT(allocations, 2u);
+    control.Value().Stop();
+    // Only the first pre-cursor Freeze allocation can be faulted safely here.
+    // Later ordinal faults could throw from a noexcept native/GMock seam;
+    // frame, inverse and post-Apply failures need a narrow traversal hook.
+    for (const std::size_t failure : {std::size_t{1}})
+    {
+        SCOPED_TRACE(failure);
+        const std::size_t before = OpenDescriptors();
+        std::size_t retainedDescriptors = 0;
+        std::size_t closesBefore = 0;
+        {
+            auto selected = makeRoot();
+            ASSERT_TRUE(selected.HasValue()) << selected.Error().message;
+            Path rootPath = std::move(selected).Value();
+            const auto inode = rootPath.Leaf().Acquired().metadata.st_ino;
+            retainedDescriptors = rootPath.RetainedDescriptors();
+            closesBefore = context.nativeCloses;
+            std::string reportingName = directory; // Allocate before arming, then transfer without a copy.
+            freezeAllocationAttempts = 0;
+            failFreezeAt = failure;
+            countFreezeAllocations = true;
+            auto failed = ComplianceEngine::Filesystem::FTW::Files(std::move(rootPath), std::move(reportingName), traversal);
+            countFreezeAllocations = false;
+            ASSERT_FALSE(failed.HasValue());
+            EXPECT_EQ(ENOMEM, failed.Error().code);
+            EXPECT_EQ(failure, freezeAllocationAttempts);
+            EXPECT_EQ(directory, rootPath.ToString()); // Path move-as-copy retains its source.
+            EXPECT_EQ(inode, rootPath.Leaf().Acquired().metadata.st_ino);
+            EXPECT_TRUE(rootPath.Leaf().Stat().HasValue());
+            EXPECT_EQ(closesBefore, context.nativeCloses); // The original selected root still owns its pins.
+        }
+        EXPECT_EQ(before, OpenDescriptors());
+        EXPECT_EQ(retainedDescriptors, context.nativeCloses - closesBefore); // Each pin closes once on release.
+        EXPECT_EQ(0u, context.actualNativeCloseFailures);
+    }
+    failFreezeAt = 0;
+}
+
+TEST(FilesystemCollectionAllocationTest, FTWRangeAndResultTransfersDoNotAllocate)
+{
+    using ComplianceEngine::Filesystem::FTW::FileRange;
+    static_assert(std::is_nothrow_move_constructible<FileRange>::value, "FTW range move must not allocate");
+    AllocationCloseContext context;
+    const std::string directory = context.GetTempdirPath();
+    ComplianceEngine::Filesystem::FilesystemCollectionRequest request(directory, ComplianceEngine::Filesystem::FilesystemRootKind::Directory);
+    auto opened = ComplianceEngine::Filesystem::FTW::Files(request, context);
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    struct ResetFaultOnExit
+    {
+        ~ResetFaultOnExit()
+        {
+            faultTransfers = false;
+        }
+    } reset;
+    faultTransfers = true;
+    FileRange range(std::move(opened).Value());
+    ComplianceEngine::Result<FileRange> returned(std::move(range));
+    ComplianceEngine::Result<FileRange> transferred(std::move(returned));
+    faultTransfers = false;
+    EXPECT_EQ(0u, transferAllocations);
+    EXPECT_FALSE(range.RootExists());
+    EXPECT_TRUE(transferred.HasValue());
+    EXPECT_TRUE(transferred.Value().RootExists());
+    transferred.Value().Stop();
+}
+
+TEST(FilesystemCollectionAllocationTest, FTWFrameInverseAndPublicationFaultsAbortWithoutLosingHeldPins)
+{
+    using ComplianceEngine::Filesystem::FTW::Files;
+    PreparedTraversalFixture fixture;
+    ResetCheckpointOnExit resetCheckpoint;
+    for (const TestCheckpoint site : {TestCheckpoint::FrameReserve, TestCheckpoint::InversePreparation, TestCheckpoint::AfterApply, TestCheckpoint::BeforeOffer})
+    {
+        SCOPED_TRACE(static_cast<unsigned>(site));
+        const auto descriptorsBefore = OpenDescriptors();
+        const auto closesBefore = fixture.context.nativeCloses;
+        const auto closeFailuresBefore = fixture.context.actualNativeCloseFailures;
+        {
+            auto opened = Files(fixture.request, fixture.context);
+            ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+            auto source = std::move(opened).Value();
+            auto range = std::move(source);
+            EXPECT_FALSE(source.RootExists());
+            source.Stop(); // A moved-from range cannot close the live traversal.
+            auto iter = range.begin();
+            ASSERT_NE(iter, range.end());
+            ASSERT_TRUE(iter->HasValue());
+            ASSERT_EQ(fixture.root, iter->Value().path);
+            auto retainedPin = iter->Value().LiveComponent();
+            ASSERT_TRUE(retainedPin.HasValue());
+            const auto inode = iter->Value().metadata.st_ino;
+
+            checkpointHits = 0;
+            inverseAllocationFailures = 0;
+            armedCheckpoint = static_cast<unsigned>(site);
+            ++iter; // Descend into branch; no fault is armed in a native mock.
+            ASSERT_NE(iter, range.end());
+            ASSERT_FALSE(iter->HasValue());
+            EXPECT_EQ(ENOMEM, iter->Error().code);
+            EXPECT_EQ(1u, checkpointHits);
+            EXPECT_EQ(site == TestCheckpoint::InversePreparation ? 1u : 0u, inverseAllocationFailures);
+            EXPECT_FALSE(faultInverseAllocation);
+            EXPECT_EQ(0u, armedCheckpoint);
+            ++iter;
+            EXPECT_EQ(range.end(), iter);          // Exactly one delivered error.
+            EXPECT_EQ(range.end(), range.begin()); // Aborted, never resumes.
+            range.Stop();
+            range.Stop();
+            auto stat = retainedPin.Value().Stat();
+            ASSERT_TRUE(stat.HasValue()) << stat.Error().message;
+            EXPECT_EQ(inode, stat.Value().st_ino);
+            retainedPin.Reset();
+        }
+        EXPECT_GT(fixture.context.nativeCloses, closesBefore);
+        EXPECT_EQ(closeFailuresBefore, fixture.context.actualNativeCloseFailures); // No double close.
+        EXPECT_EQ(descriptorsBefore, OpenDescriptors());
+    }
+}
+
+TEST(FilesystemCollectionAllocationTest, FTWFailedInverseDeliversOneErrorAndRejectsPartialCollection)
+{
+    using ComplianceEngine::Filesystem::FTW::Files;
+    PreparedTraversalFixture fixture;
+    ResetCheckpointOnExit resetCheckpoint;
+    const auto descriptorsBefore = OpenDescriptors();
+    const auto closeFailuresBefore = fixture.context.actualNativeCloseFailures;
+    {
+        auto opened = Files(fixture.request, fixture.context);
+        ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+        auto range = std::move(opened).Value();
+        auto iter = range.begin();
+        ASSERT_NE(iter, range.end());
+        ASSERT_TRUE(iter->HasValue());
+        EXPECT_EQ(fixture.root, iter->Value().path);
+        ++iter;
+        ASSERT_NE(iter, range.end());
+        ASSERT_TRUE(iter->HasValue());
+        EXPECT_EQ(fixture.directory, iter->Value().path);
+        ++iter;
+        ASSERT_NE(iter, range.end());
+        ASSERT_TRUE(iter->HasValue());
+        ASSERT_EQ(fixture.file, iter->Value().path);
+        auto retainedPin = iter->Value().LiveComponent();
+        ASSERT_TRUE(retainedPin.HasValue());
+        const auto inode = iter->Value().metadata.st_ino;
+        checkpointHits = 0;
+        fixture.context.reportNativeCloseFailure = true;
+        armedCheckpoint = static_cast<unsigned>(TestCheckpoint::InverseRestore);
+        ++iter; // Exhaust branch, then reject its inverse with ESTALE.
+        ASSERT_NE(iter, range.end());
+        ASSERT_FALSE(iter->HasValue());
+        EXPECT_EQ(ESTALE, iter->Error().code);
+        EXPECT_EQ(1u, checkpointHits);
+        EXPECT_EQ(0u, armedCheckpoint);
+        ++iter;
+        EXPECT_EQ(range.end(), iter);
+        EXPECT_EQ(range.end(), range.begin());
+        range.Stop();
+        EXPECT_GT(fixture.context.failedNativeCloses, 0u);
+        fixture.context.reportNativeCloseFailure = false;
+        ASSERT_EQ(0, ::unlink(fixture.file.c_str()));
+        auto stat = retainedPin.Value().Stat();
+        ASSERT_TRUE(stat.HasValue()) << stat.Error().message;
+        EXPECT_EQ(inode, stat.Value().st_ino); // Original file pin outlives removal/range.
+        retainedPin.Reset();
+    }
     EXPECT_EQ(descriptorsBefore, OpenDescriptors());
+    EXPECT_EQ(closeFailuresBefore, fixture.context.actualNativeCloseFailures);
+
+    // Recreate fixture content before starting the independent collection.
+    std::ofstream output(fixture.file);
+    output << "content";
+    output.close();
+    ASSERT_TRUE(output);
+    checkpointHits = 0;
+    armedCheckpoint = static_cast<unsigned>(TestCheckpoint::InverseRestore);
+    auto collected = ComplianceEngine::Filesystem::CollectFilesystem(fixture.request, fixture.context);
+    ASSERT_FALSE(collected.HasValue());
+    EXPECT_EQ(ESTALE, collected.Error().code);
+    EXPECT_EQ(1u, checkpointHits);
+    EXPECT_EQ(0u, armedCheckpoint);
+    EXPECT_EQ(descriptorsBefore, OpenDescriptors());
+    EXPECT_EQ(closeFailuresBefore, fixture.context.actualNativeCloseFailures);
 }

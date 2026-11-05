@@ -80,8 +80,6 @@ private:
     // Only the context syscall boundary extracts native descriptor numbers.
     // Open/duplicate atomically set CLOEXEC. Duplicate shares the open-file
     // description (including offset); it is not an independent reader.
-    Filesystem::Detail::Descriptor EmptyDescriptor(CloseDiagnostic diagnostic = CloseDiagnostic::Descriptor) const& noexcept;
-    Filesystem::Detail::Descriptor EmptyDescriptor(CloseDiagnostic = CloseDiagnostic::Descriptor) const&& = delete;
     Result<Filesystem::Detail::Descriptor> OpenAbsolutePin(const char* path, bool directory = true) const&;
     Result<Filesystem::Detail::Descriptor> OpenAbsolutePin(const char*, bool = true) const&& = delete;
     Result<Filesystem::Detail::Descriptor> OpenAt(const Filesystem::Detail::Descriptor& directory, const char* name, OpenProfile profile,
@@ -111,21 +109,23 @@ private:
     int ChmodAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Filesystem::Detail::Descriptor& pin, mode_t mode) const;
     Result<Filesystem::DirectoryCursor> OpenDirectoryCursor(Filesystem::Detail::Descriptor&& owner) const&;
     Result<Filesystem::DirectoryCursor> OpenDirectoryCursor(Filesystem::Detail::Descriptor&&) const&& = delete;
-    // Relinquish before the single native close attempt (even if it throws).
-    int CloseOwnedDescriptor(Filesystem::Detail::Descriptor& owner) const;
+    // Internal disposal only: a consumed owner is a silent no-op. Checked native
+    // access validates ownership separately, before entering this noexcept path.
+    // Relinquish ownership and budget before the single native close attempt.
+    int CloseOwnedDescriptor(Filesystem::Detail::Descriptor& owner) const noexcept;
 
 public:
     // POSIX directory and path operations. A null ReadDirectory result is EOF
     // only when errno is zero; callers clear errno immediately before reading.
     // Overrides must preserve errno on failure, including stat failures.
-    virtual DIR* OpenDirectory(const char* path) const;
-    virtual struct dirent* ReadDirectory(DIR* directory) const;
-    virtual int CloseDirectory(DIR* directory) const;
-    virtual int StatPath(const char* path, struct stat* metadata) const;
-    virtual int LstatPath(const char* path, struct stat* metadata) const;
+    virtual DIR* OpenDirectory(const char* path) const noexcept;
+    virtual struct dirent* ReadDirectory(DIR* directory) const noexcept;
+    virtual int CloseDirectory(DIR* directory) const noexcept;
+    virtual int StatPath(const char* path, struct stat* metadata) const noexcept;
+    virtual int LstatPath(const char* path, struct stat* metadata) const noexcept;
     // Native account lookup forward; callers distinguish absent groups from
     // lookup failures using errno immediately after a null result.
-    virtual struct group* GetGroupById(gid_t id) const;
+    virtual struct group* GetGroupById(gid_t id) const noexcept;
 
     virtual Telemetry& GetTelemetry() = 0;
 
@@ -141,7 +141,7 @@ public:
     // control the reported running kernel version.
     virtual Result<std::string> GetRunningKernelRelease() const = 0;
 
-    virtual OsConfigLogHandle GetLogHandle() const = 0;
+    virtual OsConfigLogHandle GetLogHandle() const noexcept = 0;
     virtual std::string GetSpecialFilePath(const std::string& path) const = 0;
 
     virtual FilesystemScanner& GetFilesystemScanner() = 0;
@@ -159,21 +159,21 @@ protected:
     ContextInterface();
     // Native-only override seams: subclasses receive integers solely for
     // system-call simulation, never through an owner-access API.
-    virtual int OpenNativePath(const char* path, int flags) const;
-    virtual int OpenNativeAt(int directory, const char* path, int flags) const;
-    virtual int StatFileDescriptor(int descriptor, struct stat* metadata) const;
-    virtual int StatFilesystemDescriptor(int descriptor, struct statfs* metadata) const;
-    virtual ssize_t ReadFileDescriptor(int descriptor, void* buffer, std::size_t size) const;
-    virtual ssize_t ReadLinkDescriptor(int descriptor, char* buffer, std::size_t size) const;
-    virtual int StatusFlagsDescriptor(int descriptor) const;
-    virtual int DescriptorFlagsDescriptor(int descriptor) const;
-    virtual int DuplicateDescriptor(int descriptor) const;
-    virtual DIR* FdOpenDirectory(int descriptor) const;
-    virtual int CloseFileDescriptor(int descriptor) const;
-    virtual int ChownPinnedFileDescriptor(int descriptor, uid_t owner, gid_t group) const;
-    virtual int ChmodPinnedAlias(int procfsDirectory, const char* decimalAlias, mode_t mode) const;
-    virtual pid_t NativeProcessId() const;
-    virtual pid_t NativeThreadId() const;
+    virtual int OpenNativePath(const char* path, int flags) const noexcept;
+    virtual int OpenNativeAt(int directory, const char* path, int flags) const noexcept;
+    virtual int StatFileDescriptor(int descriptor, struct stat* metadata) const noexcept;
+    virtual int StatFilesystemDescriptor(int descriptor, struct statfs* metadata) const noexcept;
+    virtual ssize_t ReadFileDescriptor(int descriptor, void* buffer, std::size_t size) const noexcept;
+    virtual ssize_t ReadLinkDescriptor(int descriptor, char* buffer, std::size_t size) const noexcept;
+    virtual int StatusFlagsDescriptor(int descriptor) const noexcept;
+    virtual int DescriptorFlagsDescriptor(int descriptor) const noexcept;
+    virtual int DuplicateDescriptor(int descriptor) const noexcept;
+    virtual DIR* FdOpenDirectory(int descriptor) const noexcept;
+    virtual int CloseFileDescriptor(int descriptor) const noexcept;
+    virtual int ChownPinnedFileDescriptor(int descriptor, uid_t owner, gid_t group) const noexcept;
+    virtual int ChmodPinnedAlias(int procfsDirectory, const char* decimalAlias, mode_t mode) const noexcept;
+    virtual pid_t NativeProcessId() const noexcept;
+    virtual pid_t NativeThreadId() const noexcept;
 
 private:
     friend class Filesystem::Detail::Descriptor;
@@ -199,7 +199,7 @@ private:
     mutable ManagedDescriptorBudget mManagedDescriptors;
     // The fdopendir transfer keeps the charge held by its input Descriptor;
     // closedir releases it exactly once even when the native close fails.
-    int CloseOwnedDirectoryCursor(DIR* stream) const;
+    int CloseOwnedDirectoryCursor(DIR* stream) const noexcept;
     Result<Filesystem::Detail::Descriptor> OpenVerifiedAt(const Filesystem::Detail::Descriptor& directory, const char* name, OpenProfile profile,
         CloseDiagnostic diagnostic) const&;
 };

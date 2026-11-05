@@ -163,7 +163,7 @@ FILE* PasswordEntryRange::GetStream() const
     return mStream;
 }
 
-OsConfigLogHandle PasswordEntryRange::GetLogHandle() const
+OsConfigLogHandle PasswordEntryRange::GetLogHandle() const noexcept
 {
     return mLog;
 }

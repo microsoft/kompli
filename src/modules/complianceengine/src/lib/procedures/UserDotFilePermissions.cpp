@@ -99,10 +99,13 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
         {
             return groupResult.Error();
         }
-        const auto* group = groupResult.Value();
+        const string userName = pwd.pw_name;
+        const string homeName = pwd.pw_dir;
+        const string groupName = groupResult.Value()->gr_name;
 
-        auto processFile = [pwd, group, &indicators, &context](const FilesystemCollectionEntry& entry) -> Result<Status> {
-            const auto& path = entry.path;
+        auto processFile = [userName, homeName, groupName, &indicators, &context](const FilesystemCollectionEntry& entry) -> Result<Status> {
+            const string path = entry.path;
+            auto pin = entry.LiveComponent();
             const std::size_t separator = path.find_last_of('/');
             const string filename = path.substr(separator + 1);
             if (filename.find(".") != 0)
@@ -113,20 +116,20 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
 
             if (filename == ".forward" || filename == ".rhosts")
             {
-                return indicators.NonCompliant("'" + filename + "' exists in home directory '" + pwd.pw_dir + "'");
+                return indicators.NonCompliant("'" + filename + "' exists in home directory '" + homeName + "'");
             }
 
             Result<Status> result = Status::Compliant;
             // Performs a file permissions check and updates the result in case of error or non-compliance
-            auto checkFile = [pwd, group, &path, &entry, &indicators, &context, &result](const mode_t mask) {
-                auto groupPattern = Pattern::Make(group->gr_name);
+            auto checkFile = [userName, groupName, path, pin, &indicators, &context, &result](const mode_t mask) {
+                auto groupPattern = Pattern::Make(groupName);
                 if (!groupPattern.HasValue())
                 {
                     result = groupPattern.Error();
                     return;
                 }
 
-                auto pwdPattern = Pattern::Make(pwd.pw_name);
+                auto pwdPattern = Pattern::Make(userName);
                 if (!pwdPattern.HasValue())
                 {
                     result = pwdPattern.Error();
@@ -138,7 +141,6 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
                 params.owner = {{std::move(pwdPattern.Value())}};
                 params.group = {{std::move(groupPattern.Value())}};
                 params.mask = mask;
-                auto pin = entry.LiveComponent();
                 if (!pin.HasValue())
                 {
                     result = Error("Dotfile collection requires an acquired file", EBADF);
@@ -191,10 +193,8 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
             return root.Error();
         if (root.Value().Is<Filesystem::Path::RejectionReason>())
             continue; // missing/excluded home: no dotfiles to inspect
-        auto frozen = As<Filesystem::Path>(root.Value()).FreezeRoot();
-        if (!frozen.HasValue())
-            return std::move(frozen).Error();
-        if (As<Filesystem::Path>(root.Value()).Root().Acquired().type != Filesystem::Type::Directory)
+        // FTW freezes the selected starting leaf at its common entry point.
+        if (As<Filesystem::Path>(root.Value()).Leaf().Acquired().type != Filesystem::Type::Directory)
             return Error("Expected directory root at '" + policy.rootPath + "'", ENOTDIR);
         auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), resolved.Value().rootPath,
             Filesystem::CollectionContinuation(resolved.Value()));
@@ -203,7 +203,7 @@ Result<Status> AuditUserDotFilePermissionsWithPasswdFile(IndicatorsTree& indicat
             OsConfigLogError(context.GetLogHandle(), "Directory validation for user '%s' failed: %s", pwd.pw_name, opened.Error().message.c_str());
             return opened.Error();
         }
-        auto& files = opened.Value();
+        auto files = std::move(opened).Value();
         Status verdict = Status::Compliant;
         for (const auto& entry : files)
         {

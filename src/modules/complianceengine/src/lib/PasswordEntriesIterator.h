@@ -59,7 +59,7 @@ public:
     static Result<PasswordEntryRange> Make(OsConfigLogHandle log = nullptr);
     static Result<PasswordEntryRange> Make(const std::string& path, OsConfigLogHandle log = nullptr);
     FILE* GetStream() const;
-    OsConfigLogHandle GetLogHandle() const;
+    OsConfigLogHandle GetLogHandle() const noexcept;
     PasswordEntryIterator begin(); // NOLINT(*-identifier-naming)
     PasswordEntryIterator end();   // NOLINT(*-identifier-naming)
 };

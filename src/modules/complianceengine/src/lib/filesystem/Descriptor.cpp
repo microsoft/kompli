@@ -4,6 +4,7 @@
 #include "Descriptor.hpp"
 
 #include <cerrno>
+#include <stdexcept>
 
 namespace ComplianceEngine
 {
@@ -11,89 +12,86 @@ namespace Filesystem
 {
 namespace Detail
 {
-Descriptor::Descriptor(const ContextInterface& context, int descriptor, ContextInterface::CloseDiagnostic closeDiagnostic) noexcept
+Descriptor::Descriptor(const ContextInterface& context, int descriptor, ContextInterface::CloseDiagnostic closeDiagnostic)
     : mContext(&context),
-      mDescriptor(0 > descriptor ? Optional<int>() : Optional<int>(descriptor)),
+      mDescriptor(descriptor),
       mCloseDiagnostic(closeDiagnostic)
 {
+    if (0 > descriptor)
+        throw std::logic_error("Descriptor: construction requires ownership");
 }
 
 Descriptor::Descriptor(Descriptor&& other) noexcept
     : mContext(other.mContext),
-      mDescriptor(std::move(other.mDescriptor)),
+      mDescriptor(other.mDescriptor),
       mCloseDiagnostic(other.mCloseDiagnostic)
 {
-    other.mDescriptor.Reset();
+    other.mDescriptor = -1;
 }
 
 Descriptor& Descriptor::operator=(Descriptor&& other) & noexcept
 {
     if (this != &other)
     {
-        Descriptor replaced(std::move(*this));
+        ReleaseOwned();
         mContext = other.mContext;
-        mDescriptor = std::move(other.mDescriptor);
+        mDescriptor = other.mDescriptor;
         mCloseDiagnostic = other.mCloseDiagnostic;
-        other.mDescriptor.Reset();
+        other.mDescriptor = -1;
     }
     return *this;
 }
 
 Descriptor::~Descriptor() noexcept
 {
-    Close();
+    ReleaseOwned();
 }
 
-void Descriptor::Close() noexcept
+int Descriptor::RequireOwned() const
 {
-    if (!mDescriptor.HasValue())
+    if (0 > mDescriptor)
+        throw std::logic_error("Descriptor: use after move (no ownership)");
+    return mDescriptor;
+}
+
+void Descriptor::ReportUseAfterMove() const noexcept
+{
+    OsConfigLogError(mContext->GetLogHandle(), "Descriptor: use after move (no ownership) on explicit Close");
+}
+
+void Descriptor::Close() & noexcept
+{
+    if (0 > mDescriptor)
+    {
+        ReportUseAfterMove();
         return;
+    }
+    ReleaseOwned();
+}
+
+void Descriptor::ReleaseOwned() noexcept
+{
+    if (0 > mDescriptor)
+        return; // Silent on destruction or internal release after consumption.
 
     const ContextInterface* context = mContext;
     int error = 0;
-    try
-    {
-        errno = 0;
-        if (context->CloseOwnedDescriptor(*this) != 0)
-            error = errno != 0 ? errno : EIO;
-    }
-    catch (...)
-    {
-        // The context consumes the owner and budget before the native call.
-        // If a trusted override throws before that boundary, detach here.
-        if (mDescriptor.HasValue())
-        {
-            mDescriptor.Reset();
-            context->ReleaseManagedDescriptor();
-        }
-        error = EIO;
-    }
-    if (error == 0)
+    errno = 0;
+    if (context->CloseOwnedDescriptor(*this) != 0)
+        error = errno != 0 ? errno : EIO;
+    if (0 == error)
         return;
     const char* diagnostic = mCloseDiagnostic == ContextInterface::CloseDiagnostic::DirectoryActivation ? "Cannot close directory activation" :
                              mCloseDiagnostic == ContextInterface::CloseDiagnostic::ReadableActivation  ? "Cannot close readable-file activation" :
                                                                                                           "Cannot close internal filesystem descriptor";
-    OsConfigLogHandle log = nullptr;
-    try
+    OsConfigLogHandle log = context->GetLogHandle();
+    if (EBADF == error)
     {
-        log = context->GetLogHandle();
+        OsConfigLogError(log, "%s (ownership bug, EBADF): %d", diagnostic, error);
     }
-    catch (...)
+    else
     {
-    }
-    try
-    {
-        if (error == EBADF)
-        {
-            OsConfigLogError(log, "%s (ownership bug, EBADF): %d", diagnostic, error);
-        }
-        else
-        {
-            OsConfigLogError(log, "%s: %d", diagnostic, error);
-        }
-    }
-    catch (...)
-    {
+        OsConfigLogError(log, "%s: %d", diagnostic, error);
     }
 }
 

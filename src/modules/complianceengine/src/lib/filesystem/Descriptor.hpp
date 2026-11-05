@@ -5,7 +5,6 @@
 #define COMPLIANCEENGINE_FILESYSTEM_DESCRIPTOR_HPP
 
 #include "ContextInterface.h"
-#include "Optional.h"
 #include "Result.h"
 
 #include <cstddef>
@@ -22,21 +21,16 @@ namespace Detail
 {
 
 // Internal, move-only ownership of a native descriptor and the context that
-// must close it. Absence of the optional represents no ownership.
+// must close it. The -1 sentinel exists only after ownership transfer.
 class Descriptor
 {
 public:
+    Descriptor() = delete;
     Descriptor(const Descriptor&) = delete;
     Descriptor& operator=(const Descriptor&) = delete;
     Descriptor(Descriptor&& other) noexcept;
     Descriptor& operator=(Descriptor&& other) & noexcept;
     ~Descriptor() noexcept;
-
-    // Zero is a valid owned descriptor. Absence means no ownership.
-    bool HasValue() const noexcept
-    {
-        return mDescriptor.HasValue();
-    }
 
     const ContextInterface& Context() const noexcept
     {
@@ -45,14 +39,20 @@ public:
 
     // Relinquish ownership before the syscall. A failed close is never
     // retried, even if the kernel has already recycled its fd number.
-    void Close() noexcept;
+    void Close() & noexcept;
 
 private:
     friend class ::ComplianceEngine::ContextInterface;
-    Descriptor(const ContextInterface& context, int descriptor, ContextInterface::CloseDiagnostic closeDiagnostic) noexcept;
+    friend class ProcfsDescriptorAccess;
+    friend class ::ComplianceEngine::Filesystem::ReadableFile;
+    friend class ::ComplianceEngine::Tests::DescriptorTestAccess;
+    Descriptor(const ContextInterface& context, int descriptor, ContextInterface::CloseDiagnostic closeDiagnostic);
+    int RequireOwned() const;
+    void ReleaseOwned() noexcept;
+    void ReportUseAfterMove() const noexcept;
 
     const ContextInterface* mContext;
-    Optional<int> mDescriptor;
+    int mDescriptor;
     ContextInterface::CloseDiagnostic mCloseDiagnostic;
 };
 

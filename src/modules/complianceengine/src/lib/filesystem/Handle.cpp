@@ -30,8 +30,8 @@ using Detail::SavedError;
 // current-task procfd alias of that pin opens the same path; inode/type checks
 // still reject a wrong-object alias. Direct-test pins without an acquisition
 // mount retain the independent fdinfo comparisons below.
-Result<bool> Handle::OpenAndVerifyAlias(const ContextInterface& context, const ProcfsDescriptorAccess& procfs, const Descriptor& pin,
-    Descriptor& aliasOwner, const struct stat& before, bool directory, std::size_t fdinfoByteCap, const std::uint64_t* heldMount)
+Result<Descriptor> Handle::OpenAndVerifyAlias(const ContextInterface& context, const ProcfsDescriptorAccess& procfs, const Descriptor& pin,
+    const struct stat& before, bool directory, std::size_t fdinfoByteCap, const std::uint64_t* heldMount)
 {
     Result<std::uint64_t> pinnedMount = heldMount ? Result<std::uint64_t>(*heldMount) : procfs.ReadMountId(pin, fdinfoByteCap);
     if (!pinnedMount.HasValue())
@@ -45,12 +45,7 @@ Result<bool> Handle::OpenAndVerifyAlias(const ContextInterface& context, const P
     {
         return Error("Cannot open pinned descriptor alias for reading", aliasResult.Error().code);
     }
-    aliasOwner = std::move(aliasResult).Value();
-    // After acquisition, the caller owns this output even if later verification fails.
-    if (!aliasOwner.HasValue())
-    {
-        return Error("Cannot open pinned descriptor alias for reading", EPROTO);
-    }
+    Descriptor aliasOwner = std::move(aliasResult).Value();
     struct stat activated = {}, stillPinned = {};
     if ((context.StatFile(aliasOwner, &activated) != 0) || (context.StatFile(pin, &stillPinned) != 0))
     {
@@ -72,26 +67,20 @@ Result<bool> Handle::OpenAndVerifyAlias(const ContextInterface& context, const P
         if ((pinnedMount.Value() != activatedMount.Value()) || (pinnedMount.Value() != retainedMount.Value()))
             return Error("Activated object mount does not match live pin", EAGAIN);
     }
-    return true;
+    return std::move(aliasOwner);
 }
 
 Result<Descriptor> Handle::ActivateReadOnlyImpl(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory,
     std::size_t fdinfoByteCap, const std::uint64_t* heldMount)
 {
-    if (!pin.HasValue())
-    {
-        return Error("Read-only activation requires a live pin", EBADF);
-    }
-
-    if ((fdinfoByteCap == 0) || (fdinfoByteCap >= std::string().max_size()))
-    {
-        return Error("Invalid procfs descriptor information byte cap", EINVAL);
-    }
     struct stat before = {};
     if (context.StatFile(pin, &before) != 0)
     {
         return Error("Cannot inspect pinned object", SavedError());
     }
+
+    if ((fdinfoByteCap == 0) || (fdinfoByteCap >= std::string().max_size()))
+        return Error("Invalid procfs descriptor information byte cap", EINVAL);
 
     if (!SameIdentity(before, snapshot))
     {
@@ -118,25 +107,11 @@ Result<Descriptor> Handle::ActivateReadOnlyImpl(const ContextInterface& context,
         return Error("Pinned object is not a close-on-exec O_PATH descriptor", EINVAL);
     }
 
-    ProcfsDescriptorAccess procfs(context);
-    auto verified = procfs.Open();
-    if (!verified.HasValue())
-    {
-        return std::move(verified).Error();
-    }
-    Descriptor aliasOwner =
-        context.EmptyDescriptor(directory ? ContextInterface::CloseDiagnostic::DirectoryActivation : ContextInterface::CloseDiagnostic::ReadableActivation);
-    auto inspected = OpenAndVerifyAlias(context, procfs, pin, aliasOwner, before, directory, fdinfoByteCap, heldMount);
-    procfs.Close();
-    if (!inspected.HasValue())
-    {
-        auto primary = std::move(inspected).Error();
-        aliasOwner.Close();
-        return primary;
-    }
-    // The alias must remain owned until all procfs checks and
-    // helper closes have succeeded; output transfer occurs below.
-    return std::move(aliasOwner);
+    auto opened = ProcfsDescriptorAccess::Open(context);
+    if (!opened.HasValue())
+        return std::move(opened).Error();
+    ProcfsDescriptorAccess procfs = std::move(opened).Value();
+    return OpenAndVerifyAlias(context, procfs, pin, before, directory, fdinfoByteCap, heldMount);
 }
 
 Result<Descriptor> Handle::ActivateReadOnly(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory, std::size_t fdinfoByteCap)
@@ -194,8 +169,6 @@ Result<struct stat> Handle::Stat() const
 
 Result<struct stat> Handle::Inspect() const
 {
-    if (!mDescriptor.HasValue())
-        return Error("Fresh inspection requires a live pin", EBADF);
     // Inspection uses the sealed pin directly; no procfs roles are needed.
     const auto& context = mDescriptor.Context();
     const int flags = context.StatusFlags(mDescriptor);
@@ -221,10 +194,6 @@ Result<struct stat> Handle::Inspect() const
 
 Result<bool> Handle::SetOwnership(UserId owner, GroupId group) const
 {
-    if (!mDescriptor.HasValue())
-    {
-        return Error("Ownership change requires a live pin", EBADF);
-    }
     const auto& context = mDescriptor.Context();
     auto changed = [&]() -> Result<bool> {
         auto beforeMutation = Inspect();
@@ -267,10 +236,6 @@ Result<bool> Handle::SetModeWithProcfs(const ProcfsDescriptorAccess& procfs, mod
     }
     Descriptor modeAlias = std::move(aliasResult).Value();
     auto changed = [&]() -> Result<bool> {
-        if (!modeAlias.HasValue())
-        {
-            return Error("Cannot inspect pinned mode alias", EPROTO);
-        }
         struct stat target = {};
         if (context.StatFile(modeAlias, &target) != 0)
         {
@@ -303,26 +268,20 @@ Result<bool> Handle::SetModeWithProcfs(const ProcfsDescriptorAccess& procfs, mod
 
         return true;
     }();
-    modeAlias.Close();
     return changed;
 }
 
 Result<bool> Handle::SetMode(mode_t mode) const
 {
-    if (!mDescriptor.HasValue())
-    {
-        return Error("Mode change requires a live pin", EBADF);
-    }
     const auto& context = mDescriptor.Context();
-    ProcfsDescriptorAccess procfs(context);
-    auto opened = procfs.Open();
+    // Check ownership at the sealed boundary before acquiring procfs roles.
+    if (context.StatusFlags(mDescriptor) < 0)
+        return Error("Cannot inspect pinned descriptor flags", SavedError());
+    auto opened = ProcfsDescriptorAccess::Open(context);
     if (!opened.HasValue())
-    {
         return std::move(opened).Error();
-    }
-    auto changed = SetModeWithProcfs(procfs, mode);
-    procfs.Close();
-    return changed;
+    ProcfsDescriptorAccess procfs = std::move(opened).Value();
+    return SetModeWithProcfs(procfs, mode);
 }
 
 Result<ReadableFile> Handle::OpenReadOnly() const
@@ -332,11 +291,6 @@ Result<ReadableFile> Handle::OpenReadOnly() const
 
 Result<ReadableFile> Handle::OpenReadOnly(ReadableFile::Policy policy) const
 {
-    if (!mDescriptor.HasValue())
-    {
-        return Error("Read-only activation requires a live file pin", EBADF);
-    }
-
     if (mFacts.type != Type::RegularFile)
     {
         return Error("Read-only activation requires a regular file", EINVAL);
@@ -351,10 +305,6 @@ Result<ReadableFile> Handle::OpenReadOnly(ReadableFile::Policy policy) const
 
 Result<DirectoryCursor> Handle::OpenChildren() const
 {
-    if (!mDescriptor.HasValue())
-    {
-        return Error("Directory enumeration requires a live directory pin", EBADF);
-    }
     if (mFacts.type != Type::Directory)
     {
         return Error("Directory enumeration requires a directory pin", EINVAL);
@@ -371,9 +321,7 @@ Result<DirectoryCursor> Handle::OpenChildren() const
     auto cursor = context.OpenDirectoryCursor(std::move(operational));
     if (!cursor.HasValue())
     {
-        auto primary = std::move(cursor).Error();
-        operational.Close();
-        return primary;
+        return std::move(cursor).Error();
     }
     return cursor;
 }
@@ -397,10 +345,6 @@ Result<Handle> Handle::PinProcessRoot(const ContextInterface& context, std::size
     }
     Descriptor acquired = std::move(opened).Value();
     auto pinned = [&]() -> Result<Handle> {
-        if (!acquired.HasValue())
-        {
-            return Error("Cannot pin process root for absolute-prefix validation", EPROTO);
-        }
         struct stat snapshot = {};
         if (context.StatFile(acquired, &snapshot) != 0)
         {
@@ -411,26 +355,23 @@ Result<Handle> Handle::PinProcessRoot(const ContextInterface& context, std::size
         {
             return Error("Process root is not a directory", ENOTDIR);
         }
-        ProcfsDescriptorAccess procfs(context);
-        auto verified = procfs.Open();
+        auto verified = ProcfsDescriptorAccess::Open(context);
         if (!verified.HasValue())
             return std::move(verified).Error();
+        ProcfsDescriptorAccess procfs = std::move(verified).Value();
         auto mount = procfs.ReadMountId(acquired, fdinfoBytes);
-        procfs.Close();
         if (!mount.HasValue())
             return std::move(mount).Error();
         Handle root(std::move(acquired), AcquisitionFacts{Type::Directory, snapshot, LookupMountId(mount.Value()), TargetMountId(mount.Value())},
             LookupSpelling{"/"}, EffectiveSpelling{"/"}, fdinfoBytes);
         return std::move(root);
     }();
-    acquired.Close();
     return pinned;
 }
 
 Result<bool> Handle::RecognizeAcceptedRoot(const Handle& acceptedRoot, const Handle& candidate, std::size_t fdinfoByteCap)
 {
-    if ((acceptedRoot.mFacts.type != Type::Directory) || (candidate.mFacts.type != Type::Directory) || !acceptedRoot.mDescriptor.HasValue() ||
-        !candidate.mDescriptor.HasValue() || (fdinfoByteCap == 0))
+    if ((acceptedRoot.mFacts.type != Type::Directory) || (candidate.mFacts.type != Type::Directory) || (fdinfoByteCap == 0))
     {
         return Error("Two live directory pins and a positive fdinfo cap are required", EINVAL);
     }
@@ -513,39 +454,19 @@ void DirectoryCursor::Close() noexcept
     mStream = nullptr;
     const ContextInterface* context = mContext;
     int error = 0;
-    try
-    {
-        errno = 0;
-        if (context->CloseOwnedDirectoryCursor(stream) != 0)
-            error = errno != 0 ? errno : EIO;
-    }
-    catch (...)
-    {
-        error = EIO;
-    }
+    errno = 0;
+    if (context->CloseOwnedDirectoryCursor(stream) != 0)
+        error = errno != 0 ? errno : EIO;
     if (error == 0)
         return;
-    OsConfigLogHandle log = nullptr;
-    try
+    OsConfigLogHandle log = context->GetLogHandle();
+    if (error == EBADF)
     {
-        log = context->GetLogHandle();
+        OsConfigLogError(log, "Cannot close pinned directory cursor (ownership bug, EBADF): %d", error);
     }
-    catch (...)
+    else
     {
-    }
-    try
-    {
-        if (error == EBADF)
-        {
-            OsConfigLogError(log, "Cannot close pinned directory cursor (ownership bug, EBADF): %d", error);
-        }
-        else
-        {
-            OsConfigLogError(log, "Cannot close pinned directory cursor: %d", error);
-        }
-    }
-    catch (...)
-    {
+        OsConfigLogError(log, "Cannot close pinned directory cursor: %d", error);
     }
 }
 

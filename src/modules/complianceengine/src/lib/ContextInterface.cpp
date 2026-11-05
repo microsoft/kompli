@@ -107,11 +107,6 @@ Result<pid_t> ContextInterface::CurrentThreadId() const
     return id;
 }
 
-Descriptor ContextInterface::EmptyDescriptor(CloseDiagnostic diagnostic) const& noexcept
-{
-    return Descriptor(*this, -1, diagnostic);
-}
-
 Result<Descriptor> ContextInterface::OpenAbsolutePin(const char* path, bool directory) const&
 {
     if (!path || *path != '/')
@@ -132,6 +127,7 @@ Result<Descriptor> ContextInterface::OpenAbsolutePin(const char* path, bool dire
 
 Result<Descriptor> ContextInterface::OpenAt(const Descriptor& directory, const char* name, OpenProfile profile, CloseDiagnostic diagnostic) const&
 {
+    directory.RequireOwned();
     switch (profile)
     {
         case OpenProfile::PinSelfDirectory:
@@ -153,10 +149,7 @@ Result<Descriptor> ContextInterface::OpenProcfsSelf(const Descriptor& proc) cons
 
 Result<Descriptor> ContextInterface::OpenVerifiedAt(const Descriptor& directory, const char* name, OpenProfile profile, CloseDiagnostic diagnostic) const&
 {
-    if (!directory.mDescriptor.HasValue())
-    {
-        return Error("Directory descriptor is empty", EBADF);
-    }
+    directory.RequireOwned();
     if (directory.mContext != this || !name || !*name || *name == '/')
     {
         return Error("Invalid directory context or relative name", EINVAL);
@@ -201,7 +194,7 @@ Result<Descriptor> ContextInterface::OpenVerifiedAt(const Descriptor& directory,
     Reservation charge(*this);
     if (!charge.Acquired())
         return charge.Failure();
-    const int fd = OpenNativeAt(directory.mDescriptor.Value(), name, flags);
+    const int fd = OpenNativeAt(directory.RequireOwned(), name, flags);
     if (fd < 0)
     {
         return Error("Cannot open relative descriptor", errno ? errno : EIO);
@@ -212,59 +205,53 @@ Result<Descriptor> ContextInterface::OpenVerifiedAt(const Descriptor& directory,
 
 Result<Descriptor> ContextInterface::OpenFdinfo(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Descriptor& target) const&
 {
+    target.RequireOwned();
     if (!procfs.VerifyRole(*this, true))
         return Error("Unverified procfs fdinfo directory", EINVAL);
-    if (!target.mDescriptor.HasValue())
-    {
-        return Error("Descriptor information target is empty", EBADF);
-    }
+    target.RequireOwned();
     if (target.mContext != this)
     {
         return Error("Foreign descriptor information target", EINVAL);
     }
-    const std::string alias = std::to_string(target.mDescriptor.Value());
-    return OpenVerifiedAt(procfs.fdinfo, alias.c_str(), OpenProfile::ReadFdinfo, CloseDiagnostic::Descriptor);
+    const std::string alias = std::to_string(target.RequireOwned());
+    return OpenVerifiedAt(procfs.mRoles[static_cast<std::size_t>(Filesystem::Detail::ProcfsDescriptorAccess::Role::Fdinfo)], alias.c_str(),
+        OpenProfile::ReadFdinfo, CloseDiagnostic::Descriptor);
 }
 
 Result<Descriptor> ContextInterface::OpenAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Descriptor& target, bool directoryAlias,
     CloseDiagnostic diagnostic) const&
 {
+    target.RequireOwned();
     if (!procfs.VerifyRole(*this, false))
         return Error("Unverified procfs fd directory", EINVAL);
-    if (!target.mDescriptor.HasValue())
-    {
-        return Error("Alias target is empty", EBADF);
-    }
+    target.RequireOwned();
     if (target.mContext != this)
     {
         return Error("Foreign alias target", EINVAL);
     }
-    const std::string alias = std::to_string(target.mDescriptor.Value());
-    return OpenVerifiedAt(procfs.fd, alias.c_str(), directoryAlias ? OpenProfile::FollowAliasDirectory : OpenProfile::FollowAliasFile, diagnostic);
+    const std::string alias = std::to_string(target.RequireOwned());
+    return OpenVerifiedAt(procfs.mRoles[static_cast<std::size_t>(Filesystem::Detail::ProcfsDescriptorAccess::Role::Fd)], alias.c_str(),
+        directoryAlias ? OpenProfile::FollowAliasDirectory : OpenProfile::FollowAliasFile, diagnostic);
 }
 
 Result<Descriptor> ContextInterface::OpenPinAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Descriptor& target, bool directoryAlias) const&
 {
+    target.RequireOwned();
     if (!procfs.VerifyRole(*this, false))
         return Error("Unverified procfs fd directory", EINVAL);
-    if (!target.mDescriptor.HasValue())
-    {
-        return Error("Alias target is empty", EBADF);
-    }
+    target.RequireOwned();
     if (target.mContext != this)
     {
         return Error("Foreign alias target", EINVAL);
     }
-    const std::string alias = std::to_string(target.mDescriptor.Value());
-    return OpenVerifiedAt(procfs.fd, alias.c_str(), directoryAlias ? OpenProfile::FollowAliasPinDirectory : OpenProfile::FollowAliasPin, CloseDiagnostic::Descriptor);
+    const std::string alias = std::to_string(target.RequireOwned());
+    return OpenVerifiedAt(procfs.mRoles[static_cast<std::size_t>(Filesystem::Detail::ProcfsDescriptorAccess::Role::Fd)], alias.c_str(),
+        directoryAlias ? OpenProfile::FollowAliasPinDirectory : OpenProfile::FollowAliasPin, CloseDiagnostic::Descriptor);
 }
 
 Result<Descriptor> ContextInterface::Duplicate(const Descriptor& source) const&
 {
-    if (!source.mDescriptor.HasValue())
-    {
-        return Error("Cannot duplicate an empty descriptor", EBADF);
-    }
+    source.RequireOwned();
     if (source.mContext != this)
     {
         return Error("Cannot duplicate a foreign descriptor", EINVAL);
@@ -272,7 +259,7 @@ Result<Descriptor> ContextInterface::Duplicate(const Descriptor& source) const&
     Reservation charge(*this);
     if (!charge.Acquired())
         return charge.Failure();
-    const int fd = DuplicateDescriptor(source.mDescriptor.Value());
+    const int fd = DuplicateDescriptor(source.RequireOwned());
     if (fd < 0)
     {
         return Error("Cannot duplicate descriptor", errno ? errno : EIO);
@@ -282,11 +269,7 @@ Result<Descriptor> ContextInterface::Duplicate(const Descriptor& source) const&
 }
 
 #define CHECK_OWNER(owner, failure)                                                                                                                    \
-    if (!(owner).mDescriptor.HasValue())                                                                                                               \
-    {                                                                                                                                                  \
-        errno = EBADF;                                                                                                                                 \
-        return failure;                                                                                                                                \
-    }                                                                                                                                                  \
+    static_cast<void>((owner).RequireOwned());                                                                                                         \
     if ((owner).mContext != this)                                                                                                                      \
     {                                                                                                                                                  \
         errno = EINVAL;                                                                                                                                \
@@ -296,177 +279,180 @@ Result<Descriptor> ContextInterface::Duplicate(const Descriptor& source) const&
 int ContextInterface::StatFile(const Descriptor& owner, struct stat* metadata) const
 {
     CHECK_OWNER(owner, -1)
-    return StatFileDescriptor(owner.mDescriptor.Value(), metadata);
+    return StatFileDescriptor(owner.RequireOwned(), metadata);
 }
 int ContextInterface::StatFilesystem(const Descriptor& owner, struct statfs* metadata) const
 {
     CHECK_OWNER(owner, -1)
-    return StatFilesystemDescriptor(owner.mDescriptor.Value(), metadata);
+    return StatFilesystemDescriptor(owner.RequireOwned(), metadata);
 }
 ssize_t ContextInterface::ReadFile(const Descriptor& owner, void* buffer, std::size_t size) const
 {
     CHECK_OWNER(owner, -1)
-    return ReadFileDescriptor(owner.mDescriptor.Value(), buffer, size);
+    return ReadFileDescriptor(owner.RequireOwned(), buffer, size);
 }
 ssize_t ContextInterface::ReadLink(const Descriptor& owner, char* buffer, std::size_t size) const
 {
     CHECK_OWNER(owner, -1)
-    return ReadLinkDescriptor(owner.mDescriptor.Value(), buffer, size);
+    return ReadLinkDescriptor(owner.RequireOwned(), buffer, size);
 }
 int ContextInterface::StatusFlags(const Descriptor& owner) const
 {
     CHECK_OWNER(owner, -1)
-    return StatusFlagsDescriptor(owner.mDescriptor.Value());
+    return StatusFlagsDescriptor(owner.RequireOwned());
 }
 int ContextInterface::DescriptorFlags(const Descriptor& owner) const
 {
     CHECK_OWNER(owner, -1)
-    return DescriptorFlagsDescriptor(owner.mDescriptor.Value());
+    return DescriptorFlagsDescriptor(owner.RequireOwned());
 }
 int ContextInterface::ChownPinned(const Descriptor& owner, uid_t user, gid_t group) const
 {
     CHECK_OWNER(owner, -1)
-    return ChownPinnedFileDescriptor(owner.mDescriptor.Value(), user, group);
+    return ChownPinnedFileDescriptor(owner.RequireOwned(), user, group);
 }
 int ContextInterface::ChmodAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Descriptor& pin, mode_t mode) const
 {
+    CHECK_OWNER(pin, -1)
     if (!procfs.VerifyRole(*this, false))
     {
         errno = EINVAL;
         return -1;
     }
-    CHECK_OWNER(pin, -1)
-    const std::string alias = std::to_string(pin.mDescriptor.Value());
-    return ChmodPinnedAlias(procfs.fd.mDescriptor.Value(), alias.c_str(), mode);
+    const std::string alias = std::to_string(pin.RequireOwned());
+    return ChmodPinnedAlias(procfs.mRoles[static_cast<std::size_t>(Filesystem::Detail::ProcfsDescriptorAccess::Role::Fd)].RequireOwned(), alias.c_str(), mode);
 }
-int ContextInterface::CloseOwnedDescriptor(Descriptor& owner) const
+int ContextInterface::CloseOwnedDescriptor(Descriptor& owner) const noexcept
 {
-    CHECK_OWNER(owner, -1)
-    const int fd = owner.mDescriptor.Value();
-    owner.mDescriptor.Reset();
+    if (0 > owner.mDescriptor)
+        return 0; // Internal cleanup never treats a consumed owner as native access.
+    if (owner.mContext != this)
+    {
+        errno = EINVAL;
+        return -1; // A foreign live owner must retain its fd and budget.
+    }
+    const int fd = owner.mDescriptor;
+    owner.mDescriptor = -1;
     ReleaseManagedDescriptor();
     return CloseFileDescriptor(fd);
 }
-int ContextInterface::CloseOwnedDirectoryCursor(DIR* stream) const
+int ContextInterface::CloseOwnedDirectoryCursor(DIR* stream) const noexcept
 {
     ReleaseManagedDescriptor();
     return CloseDirectory(stream);
 }
 Result<Filesystem::DirectoryCursor> ContextInterface::OpenDirectoryCursor(Descriptor&& owner) const&
 {
-    if (!owner.mDescriptor.HasValue())
-    {
-        return Error("Directory stream descriptor is empty", EBADF);
-    }
+    owner.RequireOwned();
     if (owner.mContext != this)
     {
         return Error("Foreign directory stream descriptor", EINVAL);
     }
-    DIR* stream = FdOpenDirectory(owner.mDescriptor.Value());
+    DIR* stream = FdOpenDirectory(owner.RequireOwned());
     if (!stream)
     {
         return Error("Cannot open directory stream", errno ? errno : EIO);
     }
-    owner.mDescriptor.Reset();
+    owner.mDescriptor = -1;
     return Filesystem::DirectoryCursor(*this, stream);
 }
 #undef CHECK_OWNER
 
-int ContextInterface::OpenNativePath(const char* path, int flags) const
+int ContextInterface::OpenNativePath(const char* path, int flags) const noexcept
 {
     return ::open(path, flags);
 }
 
-int ContextInterface::OpenNativeAt(int directory, const char* path, int flags) const
+int ContextInterface::OpenNativeAt(int directory, const char* path, int flags) const noexcept
 {
     return ::openat(directory, path, flags);
 }
 
-int ContextInterface::StatFileDescriptor(int descriptor, struct stat* metadata) const
+int ContextInterface::StatFileDescriptor(int descriptor, struct stat* metadata) const noexcept
 {
     return ::fstat(descriptor, metadata);
 }
-int ContextInterface::StatFilesystemDescriptor(int descriptor, struct statfs* metadata) const
+int ContextInterface::StatFilesystemDescriptor(int descriptor, struct statfs* metadata) const noexcept
 {
     return ::fstatfs(descriptor, metadata);
 }
-ssize_t ContextInterface::ReadLinkDescriptor(int descriptor, char* buffer, std::size_t size) const
+ssize_t ContextInterface::ReadLinkDescriptor(int descriptor, char* buffer, std::size_t size) const noexcept
 {
     return ::readlinkat(descriptor, "", buffer, size);
 }
-int ContextInterface::StatusFlagsDescriptor(int descriptor) const
+int ContextInterface::StatusFlagsDescriptor(int descriptor) const noexcept
 {
     return ::fcntl(descriptor, F_GETFL);
 }
-int ContextInterface::DescriptorFlagsDescriptor(int descriptor) const
+int ContextInterface::DescriptorFlagsDescriptor(int descriptor) const noexcept
 {
     return ::fcntl(descriptor, F_GETFD);
 }
-int ContextInterface::DuplicateDescriptor(int descriptor) const
+int ContextInterface::DuplicateDescriptor(int descriptor) const noexcept
 {
     return ::fcntl(descriptor, F_DUPFD_CLOEXEC, 0);
 }
-DIR* ContextInterface::FdOpenDirectory(int descriptor) const
+DIR* ContextInterface::FdOpenDirectory(int descriptor) const noexcept
 {
     return ::fdopendir(descriptor);
 }
 
-ssize_t ContextInterface::ReadFileDescriptor(int descriptor, void* buffer, std::size_t size) const
+ssize_t ContextInterface::ReadFileDescriptor(int descriptor, void* buffer, std::size_t size) const noexcept
 {
     return ::read(descriptor, buffer, size);
 }
 
-int ContextInterface::CloseFileDescriptor(int descriptor) const
+int ContextInterface::CloseFileDescriptor(int descriptor) const noexcept
 {
     return ::close(descriptor);
 }
 
-int ContextInterface::ChownPinnedFileDescriptor(int descriptor, uid_t owner, gid_t group) const
+int ContextInterface::ChownPinnedFileDescriptor(int descriptor, uid_t owner, gid_t group) const noexcept
 {
     return ::fchownat(descriptor, "", owner, group, AT_EMPTY_PATH);
 }
 
-int ContextInterface::ChmodPinnedAlias(int procfsDirectory, const char* decimalAlias, mode_t mode) const
+int ContextInterface::ChmodPinnedAlias(int procfsDirectory, const char* decimalAlias, mode_t mode) const noexcept
 {
     return ::fchmodat(procfsDirectory, decimalAlias, mode, 0);
 }
 
-pid_t ContextInterface::NativeProcessId() const
+pid_t ContextInterface::NativeProcessId() const noexcept
 {
     return ::getpid();
 }
 
-pid_t ContextInterface::NativeThreadId() const
+pid_t ContextInterface::NativeThreadId() const noexcept
 {
     return static_cast<pid_t>(::syscall(SYS_gettid));
 }
 
-DIR* ContextInterface::OpenDirectory(const char* path) const
+DIR* ContextInterface::OpenDirectory(const char* path) const noexcept
 {
     return ::opendir(path);
 }
 
-struct dirent* ContextInterface::ReadDirectory(DIR* directory) const
+struct dirent* ContextInterface::ReadDirectory(DIR* directory) const noexcept
 {
     return ::readdir(directory);
 }
 
-int ContextInterface::CloseDirectory(DIR* directory) const
+int ContextInterface::CloseDirectory(DIR* directory) const noexcept
 {
     return ::closedir(directory);
 }
 
-int ContextInterface::StatPath(const char* path, struct stat* metadata) const
+int ContextInterface::StatPath(const char* path, struct stat* metadata) const noexcept
 {
     return ::stat(path, metadata);
 }
 
-int ContextInterface::LstatPath(const char* path, struct stat* metadata) const
+int ContextInterface::LstatPath(const char* path, struct stat* metadata) const noexcept
 {
     return ::lstat(path, metadata);
 }
 
-struct group* ContextInterface::GetGroupById(gid_t id) const
+struct group* ContextInterface::GetGroupById(gid_t id) const noexcept
 {
     return ::getgrgid(id);
 }

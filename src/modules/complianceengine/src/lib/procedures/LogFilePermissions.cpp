@@ -30,7 +30,7 @@ using Filesystem::FilesystemRootKind;
 using Filesystem::FilesystemScope;
 using Filesystem::FilesystemYieldType;
 using Filesystem::SymlinkPolicy;
-using Filesystem::UnsupportedTypeAction;
+using Filesystem::UnsupportedTypeDisposition;
 
 // Global map of fnmatch patterns to file permission arguments
 // Pattern -> {args}
@@ -140,8 +140,8 @@ FilePermissionsParams GetFilePermissionArgs(const std::string& filename, const s
 
 Result<Status> ProcessLogfile(const FilesystemCollectionEntry& entry, const DaemonUidSet& daemonUids, IndicatorsTree& indicators, ContextInterface& context, bool remediate)
 {
-    const struct stat& statInfo = entry.metadata;
-    const std::string& fullPath = entry.path;
+    const struct stat statInfo = entry.metadata;
+    const std::string fullPath = entry.path;
     const std::size_t separator = fullPath.find_last_of('/');
     const std::string filename = fullPath.substr(separator + 1);
     if (entry.missing)
@@ -210,7 +210,7 @@ Result<Status> WalkLogfiles(const std::string& path, const DaemonUidSet& daemonU
     policy.yieldType = FilesystemYieldType::RegularFiles;
     // The scan selects only regular files; special children are not logfiles
     // and must be omitted without attempting an operational open.
-    policy.unsupported = UnsupportedTypeAction::Skip;
+    policy.unsupported = UnsupportedTypeDisposition::Skip;
     policy.missingChildAction = FilesystemMissingChildAction::ReportRegularFile;
 
     auto resolved = Filesystem::ResolveFilesystemCollectionRequest(policy);
@@ -222,10 +222,8 @@ Result<Status> WalkLogfiles(const std::string& path, const DaemonUidSet& daemonU
         return root.Error();
     if (root.Value().Is<Filesystem::Path::RejectionReason>())
         return Status::Compliant; // missing/excluded root: no matching files
-    auto frozen = As<Filesystem::Path>(root.Value()).FreezeRoot();
-    if (!frozen.HasValue())
-        return std::move(frozen).Error();
-    if (As<Filesystem::Path>(root.Value()).Root().Acquired().type != Filesystem::Type::Directory)
+    // FTW freezes the selected starting leaf at its common entry point.
+    if (As<Filesystem::Path>(root.Value()).Leaf().Acquired().type != Filesystem::Type::Directory)
         return Error("Expected directory root at '" + path + "'", ENOTDIR);
     auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), resolved.Value().rootPath,
         Filesystem::CollectionContinuation(resolved.Value()));
@@ -233,7 +231,7 @@ Result<Status> WalkLogfiles(const std::string& path, const DaemonUidSet& daemonU
     {
         return opened.Error();
     }
-    auto& files = opened.Value();
+    auto files = std::move(opened).Value();
     Status verdict = Status::Compliant;
     for (const auto& entry : files)
     {

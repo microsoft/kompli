@@ -6,6 +6,7 @@
 
 #include "Descriptor.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -24,8 +25,12 @@ namespace Detail
 class ProcfsDescriptorAccess
 {
 public:
-    Result<bool> Open();
-    void Close() noexcept;
+    ProcfsDescriptorAccess() = delete;
+    ProcfsDescriptorAccess(const ProcfsDescriptorAccess&) = delete;
+    ProcfsDescriptorAccess& operator=(const ProcfsDescriptorAccess&) = delete;
+    ProcfsDescriptorAccess(ProcfsDescriptorAccess&&) noexcept = default;
+    ProcfsDescriptorAccess& operator=(ProcfsDescriptorAccess&&) & noexcept = default;
+    ~ProcfsDescriptorAccess() noexcept = default;
     Result<std::uint64_t> ReadMountId(const Descriptor& descriptor, std::size_t byteCap) const;
 
 private:
@@ -33,17 +38,28 @@ private:
     friend class ::ComplianceEngine::Filesystem::Detail::Handle;
     friend class ::ComplianceEngine::Filesystem::Path;
     friend class ::ComplianceEngine::Tests::DescriptorTestAccess;
-    explicit ProcfsDescriptorAccess(const ContextInterface& context);
-    ProcfsDescriptorAccess(const ContextInterface&&) = delete;
+    static Result<ProcfsDescriptorAccess> Open(const ContextInterface& context);
+    static Result<ProcfsDescriptorAccess> Open(const ContextInterface&&) = delete;
+    enum class Role
+    {
+        Fd,
+        Fdinfo
+    };
+    using Roles = std::array<Descriptor, 2>;
+    struct VerifiedBindings
+    {
+        pid_t pid;
+        pid_t tid;
+        struct stat fdIdentity;
+        struct stat fdinfoIdentity;
+    };
+    ProcfsDescriptorAccess(const ContextInterface& context, Roles roles, VerifiedBindings bindings) noexcept;
     static bool IsProcfsDirectory(const ContextInterface& context, const Descriptor& descriptor);
+    void RequireRolesOwned() const;
     bool VerifyRole(const ContextInterface& context, bool information) const;
-    // Bootstrap owners are disposed during Open to keep the peak descriptor
-    // count bounded; disposal failures are diagnostic-only. Ordinary callers
-    // cannot replace role pins.
-    Descriptor proc, self, pid, task, tid, fd, fdinfo;
-    pid_t mPid = 0, mTid = 0;
-    bool mVerified = false;
-    struct stat mFdIdentity = {}, mFdinfoIdentity = {};
+    const ContextInterface* mContext;
+    Roles mRoles;
+    VerifiedBindings mBindings;
 };
 
 Result<std::uint64_t> ParseMountId(const std::string& fdinfo);

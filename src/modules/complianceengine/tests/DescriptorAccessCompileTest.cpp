@@ -20,6 +20,15 @@ using ComplianceEngine::Filesystem::Detail::Descriptor;
 using Procfs = ComplianceEngine::Filesystem::Detail::ProcfsDescriptorAccess;
 using Profile = ContextInterface::OpenProfile;
 
+static_assert(noexcept(std::declval<const ContextInterface&>().GetLogHandle()), "Logging access is nonthrowing");
+static_assert(ComplianceEngine::Tests::DescriptorTestAccess::InternalCloseIsNoexcept(), "Private internal owner disposal is nonthrowing");
+static_assert(!noexcept(ComplianceEngine::Tests::DescriptorTestAccess::CloseOwnedDescriptor(std::declval<const ContextInterface&>(), std::declval<Descriptor&>())),
+    "Checked test native access can reject a consumed owner with logic_error");
+static_assert(noexcept(std::declval<const MockContext&>().OpenNativePath("/", 0)), "Native open seam is nonthrowing");
+static_assert(noexcept(std::declval<const MockContext&>().ReadFileDescriptor(0, nullptr, 0)), "Native read seam is nonthrowing");
+static_assert(noexcept(std::declval<const MockContext&>().CloseFileDescriptor(0)), "Native close seam is nonthrowing");
+static_assert(noexcept(std::declval<const MockContext&>().CloseDirectory(nullptr)), "Native cursor close seam is nonthrowing");
+
 // These unevaluated C++11 expressions are outside every wrapper and test friend.
 // Private typed authority and protected native overrides must not be callable.
 template <typename...>
@@ -40,6 +49,7 @@ struct Void
     static_assert(!Can##name<const ContextInterface>::value, #name " must not be accessible to ordinary callers");
 
 DENY_CONTEXT_CALL(EmptyDescriptor, .EmptyDescriptor())
+DENY_CONTEXT_CALL(HasValue, .HasValue())
 DENY_CONTEXT_CALL(OpenAbsolutePin, .OpenAbsolutePin("/"))
 DENY_CONTEXT_CALL(OpenAt, .OpenAt(std::declval<const Descriptor&>(), "child", Profile::PinChild))
 DENY_CONTEXT_CALL(OpenFdinfo, .OpenFdinfo(std::declval<const Procfs&>(), std::declval<const Descriptor&>()))
@@ -99,8 +109,8 @@ DENY_HELPER_CALL(ActivateReadOnlyImpl, Detail::Handle,
     (std::declval<const ContextInterface&>(), std::declval<const Descriptor&>(), std::declval<const struct stat&>(), false, std::size_t{},
         std::declval<const std::uint64_t*>()))
 DENY_HELPER_CALL(OpenAndVerifyAlias, Detail::Handle,
-    (std::declval<const ContextInterface&>(), std::declval<const Procfs&>(), std::declval<const Descriptor&>(), std::declval<Descriptor&>(),
-        std::declval<const struct stat&>(), false, std::size_t{}, std::declval<const std::uint64_t*>()))
+    (std::declval<const ContextInterface&>(), std::declval<const Procfs&>(), std::declval<const Descriptor&>(), std::declval<const struct stat&>(),
+        false, std::size_t{}, std::declval<const std::uint64_t*>()))
 DENY_HELPER_CALL(ReadPinnedLink, Path, (std::declval<const Descriptor&>(), std::size_t{}, std::size_t{}))
 DENY_HELPER_CALL(ReadVerifiedLinkText, Path,
     (std::declval<const Descriptor&>(), std::declval<const struct stat&>(), std::declval<const Procfs&>(), std::size_t{}, std::size_t{}))
@@ -124,7 +134,6 @@ using Access = ComplianceEngine::Tests::DescriptorTestAccess;
         #name " must reject base temporaries");                                                                                                        \
     static_assert(!CanBridge##name<MockContext&&>::value && !CanBridge##name<const MockContext&&>::value, #name " must reject concrete temporaries");
 
-CHECK_CONTEXT_FACTORY(EmptyDescriptor, (std::declval<T>()))
 CHECK_CONTEXT_FACTORY(OpenAbsolutePin, (std::declval<T>(), "/"))
 CHECK_CONTEXT_FACTORY(OpenAt, (std::declval<T>(), std::declval<const Descriptor&>(), "child", Profile::PinChild))
 CHECK_CONTEXT_FACTORY(OpenFdinfo, (std::declval<T>(), std::declval<const Procfs&>(), std::declval<const Descriptor&>()))
@@ -206,11 +215,79 @@ struct CanBorrowPin<T, typename Void<decltype(std::declval<T&>().Pin())>::type> 
 };
 static_assert(!CanCloseComponent<C>::value && !CanTestComponentValue<C>::value && !CanBorrowPin<C>::value,
     "Shared acquisition never exposes empty state, native pin or checked close");
-static_assert(std::is_same<decltype(std::declval<const ComplianceEngine::Filesystem::Path&>().Root()), C>::value &&
-                  std::is_same<decltype(std::declval<const ComplianceEngine::Filesystem::Path&>().Leaf()), C>::value &&
-                  std::is_same<decltype(std::declval<const ComplianceEngine::Filesystem::Path&>().Components()), std::vector<C>>::value,
+static_assert(std::is_same<decltype(std::declval<const P&>().Root()), C>::value && std::is_same<decltype(std::declval<const P&>().Leaf()), C>::value,
     "Path gives owning pin values");
-static_assert(std::is_same<decltype(std::declval<ComplianceEngine::Filesystem::Path&>().Push(std::string{}, ComplianceEngine::Filesystem::ExtensionPolicy{})),
-                  ComplianceEngine::Result<ComplianceEngine::Variant<bool, ComplianceEngine::Filesystem::Path::RejectionReason>>>::value,
-    "Transitional Push does not borrow its Path");
+using Step = P::Step;
+static_assert(!std::is_default_constructible<P>::value && !std::is_copy_constructible<P>::value && std::is_nothrow_move_constructible<P>::value &&
+                  std::is_nothrow_move_assignable<P>::value,
+    "Path always owns a nonempty snapshot even after moving");
+static_assert(!std::is_default_constructible<Step>::value && !std::is_copy_constructible<Step>::value &&
+                  std::is_nothrow_move_constructible<Step>::value && std::is_nothrow_move_assignable<Step>::value,
+    "A delta owns its pins, including after moving");
+static_assert(std::is_same<decltype(std::declval<const Step&>().Target()), C>::value &&
+                  std::is_same<decltype(std::declval<const Step&>().Acquired()), ComplianceEngine::Filesystem::AcquisitionFacts>::value,
+    "Step publishes owned components and detached facts");
+static_assert(std::is_same<decltype(std::declval<const P&>().Resolve(std::string{}, P::Policy{})), ComplianceEngine::Result<ComplianceEngine::Variant<Step, P::RejectionReason>>>::value,
+    "Resolve returns an owning delta or a rejection");
+static_assert(std::is_same<decltype(std::declval<P&>().Apply(std::declval<Step&&>())), ComplianceEngine::Result<Step>>::value &&
+                  std::is_same<decltype(std::declval<P&>().Freeze()), ComplianceEngine::Result<bool>>::value,
+    "Mutators operate on an lvalue Path");
+#define DENY_PATH_MEMBER(name, expression)                                                                                                             \
+    template <typename T, typename = void>                                                                                                             \
+    struct Can##name : std::false_type                                                                                                                 \
+    {                                                                                                                                                  \
+    };                                                                                                                                                 \
+    template <typename T>                                                                                                                              \
+    struct Can##name<T, typename Void<decltype(std::declval<T>() expression)>::type> : std::true_type                                                  \
+    {                                                                                                                                                  \
+    };                                                                                                                                                 \
+    static_assert(!Can##name<P&>::value, #name " is not public");
+DENY_PATH_MEMBER(Push, .Push(std::string{}, P::Policy{}))
+DENY_PATH_MEMBER(Pop, .Pop())
+DENY_PATH_MEMBER(AcquireChild, .AcquireChild(std::string{}, P::Policy{}))
+DENY_PATH_MEMBER(IsFrozen, .IsFrozen())
+DENY_PATH_MEMBER(Components, .Components())
+DENY_PATH_MEMBER(Pin, .Pin())
+#undef DENY_PATH_MEMBER
+template <typename T, typename = void>
+struct CanFreeze : std::false_type
+{
+};
+template <typename T>
+struct CanFreeze<T, typename Void<decltype(std::declval<T>().Freeze())>::type> : std::true_type
+{
+};
+template <typename T, typename = void>
+struct CanApply : std::false_type
+{
+};
+template <typename T>
+struct CanApply<T, typename Void<decltype(std::declval<T>().Apply(std::declval<Step&&>()))>::type> : std::true_type
+{
+};
+static_assert(CanFreeze<P&>::value && !CanFreeze<P&&>::value && CanApply<P&>::value && !CanApply<P&&>::value, "Path mutation requires an lvalue owner");
+template <typename T, typename = void>
+struct CanMake : std::false_type
+{
+};
+template <typename T>
+struct CanMake<T, typename Void<decltype(P::Make(std::declval<T>(), std::string{}, P::Policy{}, ComplianceEngine::Filesystem::ResolverLimits{}))>::type>
+    : std::true_type
+{
+};
+static_assert(CanMake<const ContextInterface&>::value && !CanMake<const ContextInterface&&>::value, "A Path cannot retain a temporary context");
+static_assert(std::is_same<decltype(std::declval<const P&>().LookupName()), std::string>::value &&
+                  std::is_same<decltype(std::declval<const P&>().ToString()), std::string>::value,
+    "Names are returned by owning value, not borrowed storage");
+static_assert(!std::is_default_constructible<D>::value && !std::is_copy_constructible<D>::value && std::is_nothrow_move_constructible<D>::value,
+    "Descriptor has one owner or is consumed");
+template <typename T, typename = void>
+struct CanDescriptorHasValue : std::false_type
+{
+};
+template <typename T>
+struct CanDescriptorHasValue<T, typename Void<decltype(std::declval<T&>().HasValue())>::type> : std::true_type
+{
+};
+static_assert(!CanDescriptorHasValue<D>::value, "No empty Descriptor API");
 } // namespace

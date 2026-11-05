@@ -590,7 +590,7 @@ TEST(FileObjectCollectorTest, InterruptedReadCanRecoverWithinTheRetryLimit)
     EXPECT_EQ(3, reads);
 }
 
-TEST(FileObjectCollectorTest, MetadataMutationIsAnErrorAndThrowingOpenPropagates)
+TEST(FileObjectCollectorTest, MetadataMutationAndFailedNativeOpenReturnErrors)
 {
     NiceMock<MockContext> context;
     const auto path = context.MakeTempfile("nameserver one\n");
@@ -605,39 +605,104 @@ TEST(FileObjectCollectorTest, MetadataMutationIsAnErrorAndThrowingOpenPropagates
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EAGAIN, result.Error().code);
 
-    NiceMock<MockContext> throwing;
-    const auto throwingPath = throwing.MakeTempfile("nameserver one\n");
-    ON_CALL(throwing, OpenNativeAt(_, _, _)).WillByDefault([&](int fd, const char* name, int flags) -> int {
-        if (IsFixtureParent(fd, throwingPath) && std::string(name) == throwingPath.substr(throwingPath.find_last_of('/') + 1) && (flags & O_PATH))
-            throw std::runtime_error("open failed");
-        return throwing.RealOpenNativeAt(fd, name, flags);
+    NiceMock<MockContext> failingOpen;
+    const auto failedPath = failingOpen.MakeTempfile("nameserver one\n");
+    const auto basename = failedPath.substr(failedPath.find_last_of("/") + 1);
+    int rootOpens = 0;
+    int rootFd = -1;
+    int targetOpens = 0;
+    int parentCloses = 0;
+    int parentFd = -1;
+    ON_CALL(failingOpen, OpenNativePath(_, _)).WillByDefault([&](const char* name, int flags) {
+        const int fd = failingOpen.RealOpenNativePath(name, flags);
+        if (std::strcmp(name, "/") == 0)
+        {
+            ++rootOpens;
+            rootFd = fd;
+        }
+        return fd;
     });
-    EXPECT_THROW(ComplianceEngine::CollectNameserverObject(throwing, throwingPath), std::runtime_error);
+    ON_CALL(failingOpen, OpenNativeAt(_, _, _)).WillByDefault([&](int fd, const char* name, int flags) -> int {
+        if (IsFixtureParent(fd, failedPath) && std::strcmp(name, basename.c_str()) == 0)
+        {
+            ++targetOpens;
+            errno = EACCES;
+            return -1;
+        }
+        return failingOpen.RealOpenNativeAt(fd, name, flags);
+    });
+    ON_CALL(failingOpen, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+        if (IsFixtureParent(fd, failedPath))
+        {
+            ++parentCloses;
+            parentFd = fd;
+        }
+        return failingOpen.RealCloseFileDescriptor(fd);
+    });
+    const auto failed = ComplianceEngine::CollectNameserverObject(failingOpen, failedPath);
+    ASSERT_FALSE(failed.HasValue());
+    EXPECT_EQ(EACCES, failed.Error().code);
+    EXPECT_EQ("Cannot pin confined component", failed.Error().message);
+    EXPECT_EQ(1, targetOpens);
+    EXPECT_EQ(1, rootOpens);
+    EXPECT_EQ(1, parentCloses);
+    ASSERT_GE(rootFd, 0);
+    ASSERT_GE(parentFd, 0);
+    EXPECT_EQ(-1, ::fcntl(rootFd, F_GETFD));
+    EXPECT_EQ(EBADF, errno);
+    EXPECT_EQ(-1, ::fcntl(parentFd, F_GETFD));
+    EXPECT_EQ(EBADF, errno);
 }
 
-TEST(FileObjectCollectorTest, ThrowingReadPropagatesEvenWhenCloseThrowsDuringUnwinding)
+TEST(FileObjectCollectorTest, ReadFailureRemainsPrimaryWhenDataCloseFailsWithoutRetry)
 {
     NiceMock<MockContext> context;
     const auto path = context.MakeTempfile("nameserver one\n");
-    int closes = 0;
+    const auto logPath = context.GetTempdirPath() + "/read-close-failure.log";
+    OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
+    ASSERT_NE(nullptr, logHandle);
+    context.SetLogHandle(logHandle);
+    int reads = 0;
+    int pinCloses = 0;
+    int dataCloses = 0;
+    int dataFd = -1;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFixture(fd, path, true))
             return context.RealReadFileDescriptor(fd, buffer, size);
-        throw std::runtime_error("read failed");
+        ++reads;
+        errno = EACCES;
+        return -1;
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
-        const bool data = IsFixture(fd, path, true);
+        const bool pin = IsFixture(fd, path, false), data = IsFixture(fd, path, true);
+        pinCloses += pin;
+        dataCloses += data;
+        if (data)
+            dataFd = fd;
         const int status = context.RealCloseFileDescriptor(fd);
         if (data)
         {
-            ++closes;
-            throw std::bad_alloc();
+            errno = EIO;
+            return -1;
         }
         return status;
     });
 
-    EXPECT_THROW(ComplianceEngine::CollectNameserverObject(context, path), std::runtime_error);
-    EXPECT_EQ(1, closes);
+    const auto result = ComplianceEngine::CollectNameserverObject(context, path);
+    CloseLog(&logHandle);
+    context.SetLogHandle(nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EACCES, result.Error().code);
+    EXPECT_EQ("Failed to read file bytes", result.Error().message);
+    EXPECT_EQ(1, reads);
+    EXPECT_EQ(1, pinCloses);
+    EXPECT_EQ(1, dataCloses);
+    ASSERT_GE(dataFd, 0);
+    EXPECT_EQ(-1, ::fcntl(dataFd, F_GETFD));
+    EXPECT_EQ(EBADF, errno);
+    const auto text = ReadLog(logPath);
+    ExpectLoggedOnce(text, "Cannot close readable-file activation: " + std::to_string(EIO));
+    EXPECT_EQ(std::string::npos, text.find("Cannot close internal filesystem descriptor"));
 }
 
 TEST(FileObjectCollectorTest, TailReadAndIdentityFailuresAreErrors)
@@ -1001,19 +1066,22 @@ TEST(FileObjectCollectorTest, PinAndDataCloseFailuresAreIndependentOfReadErrors)
     }
 }
 
-TEST(FileObjectCollectorTest, ReadFailureSurvivesThrowingDataClose)
+TEST(FileObjectCollectorTest, ReadFailureSurvivesFailedDataClose)
 {
     NiceMock<MockContext> context;
-    const auto logPath = context.GetTempdirPath() + "/throwing-data-close.log";
+    const auto logPath = context.GetTempdirPath() + "/failed-data-close.log";
     OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
     ASSERT_NE(nullptr, logHandle);
     context.SetLogHandle(logHandle);
     const auto path = context.MakeTempfile("nameserver one\n");
+    int reads = 0;
     int dataCloses = 0;
     int pinCloses = 0;
+    int dataFd = -1;
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFixture(fd, path, true))
             return context.RealReadFileDescriptor(fd, buffer, size);
+        ++reads;
         errno = EACCES;
         return -1;
     });
@@ -1021,18 +1089,28 @@ TEST(FileObjectCollectorTest, ReadFailureSurvivesThrowingDataClose)
         const bool pin = IsFixture(fd, path, false), data = IsFixture(fd, path, true);
         pinCloses += pin;
         dataCloses += data;
-        context.RealCloseFileDescriptor(fd);
         if (data)
-            throw std::bad_alloc();
-        return 0;
+            dataFd = fd;
+        const int status = context.RealCloseFileDescriptor(fd);
+        if (data)
+        {
+            errno = EIO;
+            return -1;
+        }
+        return status;
     });
     const auto result = ComplianceEngine::CollectNameserverObject(context, path);
-    ASSERT_FALSE(result.HasValue());
-    EXPECT_EQ(EACCES, result.Error().code);
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EACCES, result.Error().code);
+    EXPECT_EQ("Failed to read file bytes", result.Error().message);
+    EXPECT_EQ(1, reads);
     EXPECT_EQ(1, dataCloses);
     EXPECT_EQ(1, pinCloses);
+    ASSERT_GE(dataFd, 0);
+    EXPECT_EQ(-1, ::fcntl(dataFd, F_GETFD));
+    EXPECT_EQ(EBADF, errno);
     const auto text = ReadLog(logPath);
     ExpectLoggedOnce(text, "Cannot close readable-file activation: " + std::to_string(EIO));
     EXPECT_EQ(std::string::npos, text.find("Cannot close internal filesystem descriptor"));

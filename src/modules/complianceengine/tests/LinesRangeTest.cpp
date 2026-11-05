@@ -743,10 +743,10 @@ TEST_F(PathFile, DestructionAndMoveAssignmentLogDataFailureOncePerRange)
     EXPECT_EQ(std::string::npos, text.find("Cannot close internal filesystem descriptor"));
 }
 
-TEST_F(PathFile, DestructorSuppressesThrowingDataCloseAndLogsOnce)
+TEST_F(PathFile, DestructorReportsNativeDataCloseFailureOnce)
 {
     Write("x");
-    const std::string logPath = context.GetTempdirPath() + "/reader-throwing-close.log";
+    const std::string logPath = context.GetTempdirPath() + "/reader-native-close-error.log";
     OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
     ASSERT_NE(nullptr, logHandle);
     context.SetLogHandle(logHandle);
@@ -758,7 +758,8 @@ TEST_F(PathFile, DestructorSuppressesThrowingDataCloseAndLogsOnce)
         context.RealCloseFileDescriptor(fd);
         if (!data)
             return 0;
-        throw std::runtime_error("injected data close failure");
+        errno = EIO;
+        return -1;
     });
     {
         auto opened = LinesRange::Make(context, path);
@@ -1117,7 +1118,7 @@ TEST_F(PathFile, AcquisitionReleaseReportsPinFailureWithoutRejectingReader)
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsFileDescriptor(fd, true);
-        const bool fail = releasingPins && !data;
+        const bool fail = releasingPins && IsFileDescriptor(fd, false); // Only the selected file pin, not ancestor pins.
         dataCloses += data;
         context.RealCloseFileDescriptor(fd);
         if (fail)
@@ -1141,13 +1142,16 @@ TEST_F(PathFile, AcquisitionReleaseReportsPinFailureWithoutRejectingReader)
     EXPECT_NE(std::string::npos, text.find("Cannot close internal filesystem descriptor: " + std::to_string(EACCES)));
 }
 
-TEST_F(PathFile, ThrowingAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
+TEST_F(PathFile, FailedAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
 {
     Write("a");
     int dataStats = 0, pinCloses = 0, dataCloses = 0;
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) -> int {
         if (IsFileDescriptor(fd, true) && ++dataStats == 1)
-            throw std::runtime_error("inspect data");
+        {
+            errno = EACCES;
+            return -1;
+        }
         return context.RealStatFileDescriptor(fd, metadata);
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
@@ -1157,18 +1161,16 @@ TEST_F(PathFile, ThrowingAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
         dataCloses += data;
         context.RealCloseFileDescriptor(fd);
         if (pin)
-            throw std::runtime_error("pin cleanup");
+        {
+            errno = EIO;
+            return -1;
+        }
         return 0;
     });
-    try
-    {
-        (void)LinesRange::Make(context, path);
-        FAIL() << "Data stat should throw";
-    }
-    catch (const std::runtime_error& error)
-    {
-        EXPECT_STREQ("inspect data", error.what());
-    }
+    auto failed = LinesRange::Make(context, path);
+    ASSERT_FALSE(failed.HasValue());
+    EXPECT_EQ(EACCES, failed.Error().code);
+    EXPECT_EQ("Cannot inspect activated object and pin", failed.Error().message); // Pin-close EIO is secondary.
     EXPECT_EQ(1, dataStats);
     EXPECT_GE(pinCloses, 1);
     EXPECT_EQ(1, dataCloses);
@@ -1456,7 +1458,10 @@ TEST_F(PathFile, LastUnterminatedLineRequiresVerificationButNotSuccessfulDisposa
         closes += data;
         context.RealCloseFileDescriptor(fd);
         if (data)
-            throw std::runtime_error("close");
+        {
+            errno = EIO;
+            return -1;
+        }
         return 0;
     });
     // A failed close no longer suppresses the verified unterminated line.
@@ -1468,18 +1473,21 @@ TEST_F(PathFile, LastUnterminatedLineRequiresVerificationButNotSuccessfulDisposa
     EXPECT_EQ("tail", cursor->Value());
     ++cursor;
     EXPECT_FALSE(cursor != tailRange.end());
-    tailRange.Close(); // Native close exception cannot escape diagnostic-only disposal.
+    tailRange.Close(); // Native close error cannot replace verified input.
     tailRange.Close();
-    EXPECT_EQ(1, closes); // Data close is not retried after throwing.
+    EXPECT_EQ(1, closes); // Failed native close is not retried.
 }
 
-TEST_F(PathFile, ThrowingMakeAndEofStatPropagateAndCloseOwnedDescriptors)
+TEST_F(PathFile, FailedMakeAndEofStatReturnErrorsAndCloseOwnedDescriptors)
 {
     Write("a");
     int stats = 0, closes = 0;
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) -> int {
         if (IsFileDescriptor(fd, true) && ++stats == 2)
-            throw std::bad_alloc();
+        {
+            errno = EIO;
+            return -1;
+        }
         return context.RealStatFileDescriptor(fd, metadata);
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
@@ -1487,7 +1495,10 @@ TEST_F(PathFile, ThrowingMakeAndEofStatPropagateAndCloseOwnedDescriptors)
             ++closes;
         return context.RealCloseFileDescriptor(fd);
     });
-    EXPECT_THROW(Collect(path, Limited(1)), std::bad_alloc);
+    auto makeFailure = Collect(path, Limited(1));
+    ASSERT_FALSE(makeFailure.HasValue());
+    EXPECT_EQ(EIO, makeFailure.Error().code);
+    EXPECT_EQ("Cannot inspect readable file", makeFailure.Error().message);
     EXPECT_EQ(1, closes);
     closes = 0;
     stats = 0;
@@ -1498,17 +1509,23 @@ TEST_F(PathFile, ThrowingMakeAndEofStatPropagateAndCloseOwnedDescriptors)
     });
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) -> int {
         if (IsFileDescriptor(fd, true) && reads > 0)
-            throw std::runtime_error("stat");
+        {
+            errno = EACCES;
+            return -1;
+        }
         if (IsFileDescriptor(fd, true))
             ++stats;
         return context.RealStatFileDescriptor(fd, metadata);
     });
-    EXPECT_THROW(Collect(path, Limited(1)), std::runtime_error);
+    auto eofFailure = Collect(path, Limited(1));
+    ASSERT_FALSE(eofFailure.HasValue());
+    EXPECT_EQ(EACCES, eofFailure.Error().code);
+    EXPECT_EQ("Failed to verify data descriptor", eofFailure.Error().message);
     EXPECT_GT(reads, 0);
     EXPECT_EQ(1, closes);
 }
 
-TEST_F(PathFile, ThrowingReadDuringIterationPropagatesAndClosesData)
+TEST_F(PathFile, FailedReadDuringIterationYieldsErrorAndClosesData)
 {
     Write("first\n" + std::string(8192 - std::string("first\n").size(), 'x') + "second\n");
     int reads = 0, closes = 0;
@@ -1519,7 +1536,8 @@ TEST_F(PathFile, ThrowingReadDuringIterationPropagatesAndClosesData)
         {
             return context.RealReadFileDescriptor(fd, buffer, size);
         }
-        throw std::runtime_error("read failed");
+        errno = EIO;
+        return -1;
     });
     ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
         if (IsFileDescriptor(fd, true))
@@ -1532,7 +1550,13 @@ TEST_F(PathFile, ThrowingReadDuringIterationPropagatesAndClosesData)
         auto cursor = opened.Value().begin();
         ASSERT_TRUE(cursor->HasValue());
         EXPECT_EQ("first", cursor->Value());
-        EXPECT_THROW(++cursor, std::runtime_error);
+        ++cursor;
+        ASSERT_TRUE(cursor != opened.Value().end());
+        ASSERT_FALSE(cursor->HasValue());
+        EXPECT_EQ(EIO, cursor->Error().code);
+        EXPECT_EQ("Failed to read file bytes", cursor->Error().message);
+        ++cursor;
+        EXPECT_FALSE(cursor != opened.Value().end());
     }
     EXPECT_EQ(2, reads);
     EXPECT_EQ(1, closes);

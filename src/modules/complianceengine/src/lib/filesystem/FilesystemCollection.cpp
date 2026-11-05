@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
 #include <exception>
 #include <limits>
@@ -19,6 +20,19 @@
 // instrumentation. The ordinary library never arms an allocator interceptor.
 extern "C" void ArmFilesystemCollectionRootCopy(std::size_t bytes) noexcept;
 extern "C" void DisarmFilesystemCollectionRootCopy() noexcept;
+// Fixed, test-TU-only fault sites. The hook disarms before throwing or
+// diagnostic disposal; no allocator interception runs through native seams.
+extern "C" bool TripFilesystemCollectionCheckpoint(unsigned site) noexcept;
+extern "C" void ArmFilesystemCollectionInverseAllocation() noexcept;
+extern "C" void DisarmFilesystemCollectionInverseAllocation() noexcept;
+enum class TestCheckpoint : unsigned
+{
+    FrameReserve = 1,
+    InversePreparation,
+    AfterApply,
+    BeforeOffer,
+    InverseRestore,
+};
 
 namespace ComplianceEngine
 {
@@ -44,6 +58,37 @@ public:
         DisarmFilesystemCollectionRootCopy();
     }
 };
+
+// Only the first allocation made *inside* the non-noexcept Path::Apply is
+// failed. Path prepares its inverse before publishing; the wrapper disarms
+// before stack unwinding, and this guard covers an unexpected early return.
+class ScopedInversePreparationFault
+{
+public:
+    explicit ScopedInversePreparationFault(bool enabled) noexcept
+        : armed(enabled)
+    {
+        if (armed)
+            ArmFilesystemCollectionInverseAllocation();
+    }
+
+    ~ScopedInversePreparationFault() noexcept
+    {
+        Disarm();
+    }
+
+    void Disarm() noexcept
+    {
+        if (armed)
+        {
+            DisarmFilesystemCollectionInverseAllocation();
+            armed = false;
+        }
+    }
+
+private:
+    bool armed;
+};
 } // namespace
 } // namespace Filesystem
 } // namespace ComplianceEngine
@@ -55,6 +100,12 @@ namespace Filesystem
 {
 namespace
 {
+// Path reserves three temporary procfs descriptors: either the bootstrap
+// directories or the published fd/fdinfo pair plus one fdinfo reader.
+// Physical pins are charged by Path; the starting cursor needs a separate slot.
+constexpr std::size_t PathOperationSlots = 3;
+constexpr std::size_t StartingCursorSlots = 1;
+
 Result<std::size_t> Limit(long long number, const char* name)
 {
     if (0 >= number)
@@ -123,7 +174,7 @@ Result<bool> Validate(const ResolvedFilesystemCollectionRequest& request)
     {
         return Error("Invalid filesystem yield type", EINVAL);
     }
-    if (request.unsupported != UnsupportedTypeAction::Reject && request.unsupported != UnsupportedTypeAction::Skip)
+    if (request.unsupported != UnsupportedTypeDisposition::Error && request.unsupported != UnsupportedTypeDisposition::Skip)
     {
         return Error("Invalid unsupported filesystem type action", EINVAL);
     }
@@ -148,9 +199,9 @@ Result<bool> Validate(const ResolvedFilesystemCollectionRequest& request)
         return Error("Filesystem collection root path exceeds the retained path byte limit", E2BIG);
     }
     const std::size_t components = std::count(request.rootPath.begin(), request.rootPath.end(), '/') + 1;
-    if ((components >= std::numeric_limits<std::size_t>::max() - 8) ||
+    if ((components >= std::numeric_limits<std::size_t>::max() - PathOperationSlots - StartingCursorSlots) ||
         (request.limits.operationalDescent > std::numeric_limits<std::size_t>::max() - components - 1) ||
-        (request.limits.openDirectories > std::numeric_limits<std::size_t>::max() - components - 8))
+        (request.limits.openDirectories > std::numeric_limits<std::size_t>::max() - components - PathOperationSlots - StartingCursorSlots))
     {
         return Error("Filesystem resolver budget is not representable", EOVERFLOW);
     }
@@ -180,14 +231,15 @@ Filesystem::ResolverLimits AcquisitionBudget(const ResolvedFilesystemCollectionR
     const std::size_t work = limits.entryWork > (std::numeric_limits<std::size_t>::max() - 32768) / 512 ? std::numeric_limits<std::size_t>::max() :
                                                                                                           limits.entryWork * 512 + 32768;
     const std::size_t max = std::numeric_limits<std::size_t>::max();
-    const std::size_t perPrefix = 8 * sizeof(Detail::Handle);
+    // Path charges each physical pin plus its bounded spelling/accounting storage.
+    const std::size_t perPrefix = sizeof(Path::Component) + 128;
     const std::size_t overhead = components > (max - 65536) / perPrefix ? max : 65536 + components * perPrefix;
     const std::size_t minimum = request.rootPath.size() > max - overhead ? max : overhead + request.rootPath.size();
     Filesystem::ResolverLimits budget;
     budget.shared.targetBytes = limits.fullPathBytes;
     budget.shared.components = limits.operationalDescent + components + 1;
     budget.shared.work = work;
-    budget.shared.liveDescriptors = limits.openDirectories + components + 8;
+    budget.shared.liveDescriptors = limits.openDirectories + components + PathOperationSlots + StartingCursorSlots;
     budget.shared.retainedBytes = std::max(limits.retainedPathBytes, minimum);
     budget.shared.fdinfoBytes = limits.fdinfoBytes;
     budget.linkTargetBytes = limits.fullPathBytes;
@@ -199,13 +251,31 @@ Filesystem::ResolverLimits AcquisitionBudget(const ResolvedFilesystemCollectionR
 Path::Policy AcquisitionPolicy(const ResolvedFilesystemCollectionRequest& request)
 {
     Path::Policy policy;
-    policy.symlinks = request.rootFileLinkAction == SymlinkPolicy::Follow || request.rootDirectoryLinkAction == SymlinkPolicy::Follow ?
-                          SymlinkPolicy::Follow :
-                          SymlinkPolicy::DoNotFollow;
-    policy.mounts = MountPolicy::AllowCrossing;
-    policy.fileLinks = request.rootFileLinkAction;
-    policy.directoryLinks = request.rootDirectoryLinkAction;
-    policy.nonFollowedLinks = NonFollowedLinkAction::Skip;
+    policy.prefixLinks = request.rootFileLinkAction == SymlinkPolicy::Follow || request.rootDirectoryLinkAction == SymlinkPolicy::Follow ?
+                             PrefixLinkPolicy::Follow :
+                             PrefixLinkPolicy::Reject;
+    policy.fileLinks = request.rootFileLinkAction == SymlinkPolicy::Follow ? FileLinkPolicy::Follow : FileLinkPolicy::Reject;
+    policy.directoryLinks = request.rootDirectoryLinkAction == SymlinkPolicy::Follow ? DirectoryLinkPolicy::Follow : DirectoryLinkPolicy::Reject;
+    policy.rejectedLinks = RejectedLinkDisposition::Skip;
+    policy.unsupportedTypes = UnsupportedTypeDisposition::Error;
+    policy.missingFiles = MissingFileDisposition::Report;
+    policy.mounts = MountPolicy::CrossMounts;
+    return policy;
+}
+
+Path::Policy ChildPolicy(const FilesystemTraversalPolicy& request)
+{
+    Path::Policy policy;
+    policy.prefixLinks = PrefixLinkPolicy::Follow;
+    policy.fileLinks = request.childFileLinkAction == SymlinkPolicy::Follow ? FileLinkPolicy::Follow : FileLinkPolicy::Reject;
+    policy.directoryLinks = request.childDirectoryLinkAction == SymlinkPolicy::Follow ? DirectoryLinkPolicy::Follow : DirectoryLinkPolicy::Reject;
+    policy.rejectedLinks = RejectedLinkDisposition::Skip;
+    policy.unsupportedTypes = request.unsupported == UnsupportedTypeDisposition::Skip ? UnsupportedTypeDisposition::Skip : UnsupportedTypeDisposition::Error;
+    policy.missingFiles =
+        request.missingChildAction == FilesystemMissingChildAction::ReportRegularFile ? MissingFileDisposition::Report : MissingFileDisposition::Error;
+    // Collection mount scope is a filter on BOTH acquired mount facts. Confinement
+    // is enforced independently by the frozen Path barrier, even with CrossMounts.
+    policy.mounts = MountPolicy::CrossMounts;
     return policy;
 }
 
@@ -350,29 +420,85 @@ Result<ResolvedFilesystemCollectionRequest> ResolveFilesystemCollectionRequest(c
 
 namespace FTW
 {
+namespace
+{
+struct DescriptorSlots
+{
+    explicit DescriptorSlots(std::size_t n = 0)
+        : value(n)
+    {
+    }
+    std::size_t value;
+};
+struct PinBytes
+{
+    explicit PinBytes(std::size_t n = 0)
+        : value(n)
+    {
+    }
+    std::size_t value;
+};
+struct PinCharge
+{
+    PinCharge(DescriptorSlots slots = DescriptorSlots(), PinBytes size = PinBytes())
+        : descriptors(slots),
+          bytes(size)
+    {
+    }
+    DescriptorSlots descriptors;
+    PinBytes bytes;
+};
+// Only scalar retention, never State, Path, Component or a cursor. Entries may
+// outlive the range; their final owner refunds the counter without allocations.
+struct RetentionCounter
+{
+    std::size_t descriptors = 0;
+    std::size_t bytes = sizeof(RetentionCounter) + 64; // shared control block
+};
+struct EntryCharge
+{
+    explicit EntryCharge(std::shared_ptr<RetentionCounter> counter) noexcept
+        : owner(std::move(counter))
+    {
+    }
+    ~EntryCharge() noexcept
+    {
+        // A corrupted retention ledger must not wrap and admit more pins.
+        if ((owner->descriptors < pins.descriptors.value) || (owner->bytes < pins.bytes.value))
+        {
+            std::terminate();
+        }
+        owner->descriptors -= pins.descriptors.value;
+        owner->bytes -= pins.bytes.value;
+    }
+    std::shared_ptr<RetentionCounter> owner;
+    PinCharge pins;
+};
+} // namespace
+
 struct FileRange::State
 {
     struct Frame
     {
-        std::string path;
-        Optional<Filesystem::DirectoryCursor> cursor;
-        // The location owns the physical parents even when the reporting
-        // parent differs after a symlink. No restoration or pathname replay.
-        std::unique_ptr<Path> location;
+        std::string logicalName;
+        Optional<DirectoryCursor> cursor;
+        Optional<Path::Step> inverse; // only the selected start has no inverse
+        PinCharge inverseCharge;
         std::size_t width = 0;
-        std::size_t bytes = 0;
         dev_t device = 0;
         ino_t inode = 0;
     };
 
     explicit State(FilesystemTraversalPolicy policy)
-        : request(std::move(policy))
+        : request(std::move(policy)),
+          pins(std::make_shared<RetentionCounter>())
     {
     }
 
     State(FilesystemTraversalPolicy policy, Path accepted)
         : request(std::move(policy)),
-          path(new Path(std::move(accepted)))
+          current(std::move(accepted)),
+          pins(std::make_shared<RetentionCounter>())
     {
     }
 
@@ -385,9 +511,7 @@ struct FileRange::State
     {
         const std::size_t cap = request.limits.retainedPathBytes;
         if ((retained > cap) || (extra > cap - retained))
-        {
-            return Error("Filesystem retained path byte budget exceeded at '" + name + "'", E2BIG);
-        }
+            return Error("Filesystem retained path byte budget exceeded at " + name, E2BIG);
         return true;
     }
 
@@ -395,205 +519,262 @@ struct FileRange::State
     {
         auto budget = Budget(amount, name);
         if (!budget.HasValue())
-        {
             return budget;
-        }
         retained += amount;
         return true;
+    }
+
+    void ReleaseObservation(std::size_t amount) noexcept
+    {
+        if (retained < amount)
+        {
+            std::terminate();
+        }
+        retained -= amount;
+    }
+
+    Result<bool> CheckPins(PinCharge extra) const
+    {
+        if (!current.HasValue())
+            return Error("Filesystem traversal is not active", EINVAL);
+        const ResolverLimits limits = current.Value().Limits();
+        if (pins->descriptors > limits.shared.liveDescriptors || extra.descriptors.value > limits.shared.liveDescriptors - pins->descriptors)
+            return Error("Filesystem pin retention exceeds descriptor budget", EMFILE);
+        if (pins->bytes > limits.shared.retainedBytes || extra.bytes.value > limits.shared.retainedBytes - pins->bytes)
+            return Error("Filesystem pin retention exceeds byte budget", E2BIG);
+        return true;
+    }
+
+    Result<bool> ReservePins(PinCharge extra)
+    {
+        auto budget = CheckPins(extra);
+        if (!budget.HasValue())
+            return budget;
+        pins->descriptors += extra.descriptors.value;
+        pins->bytes += extra.bytes.value;
+        return true;
+    }
+
+    void RefundPins(PinCharge charge) noexcept
+    {
+        if ((pins->descriptors < charge.descriptors.value) || (pins->bytes < charge.bytes.value))
+        {
+            std::terminate();
+        }
+        pins->descriptors -= charge.descriptors.value;
+        pins->bytes -= charge.bytes.value;
+    }
+
+    Result<bool> PrepareFrame(const std::string& name)
+    {
+        if (frames.size() == std::numeric_limits<std::size_t>::max())
+            return Error("Filesystem frame count overflow", EOVERFLOW);
+        // Reserve storage before Apply; charge the actual growth, not an
+        // assumed one-frame increment (vector may grow by more than one).
+        const std::size_t before = frames.capacity();
+        static_assert(std::is_nothrow_move_constructible<Frame>::value, "Frame publication after Apply must not throw");
+#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
+        if (TripFilesystemCollectionCheckpoint(static_cast<unsigned>(TestCheckpoint::FrameReserve)))
+            throw std::bad_alloc();
+#endif
+        frames.reserve(frames.size() + 1);
+        const std::size_t added = frames.capacity() - before;
+        if (added > std::numeric_limits<std::size_t>::max() / sizeof(Frame))
+            return Error("Filesystem frame storage overflow", EOVERFLOW);
+        auto charged = ReservePins(PinCharge(DescriptorSlots(), PinBytes(added * sizeof(Frame))));
+        if (!charged.HasValue())
+            return charged;
+        frameStorage += added * sizeof(Frame);
+        return Charge(name.size() + 1, name);
     }
 
     Result<bool> Exclude(const std::string& name, const char* reason)
     {
         auto charged = Charge(name.size() + 1, name);
         if (!charged.HasValue())
-        {
             return charged;
-        }
         result.exclusions.push_back({name, reason});
         return true;
     }
 
-    Result<bool> Offer(FilesystemCollectionEntry entry)
+    Result<bool> Offer(FilesystemCollectionEntry entry, PinCharge ownerCharge = PinCharge())
     {
-        if (entry.missing || Yield(request.yieldType, entry.metadata))
+        if (!entry.missing && !Yield(request.yieldType, entry.metadata))
+            return true;
+        const std::size_t bytes = entry.path.size() + 1;
+        auto charged = Charge(bytes, entry.path);
+        if (!charged.HasValue())
+            return charged;
+        if (retainEntries)
         {
-            const std::size_t bytes = entry.path.size() + 1;
-            auto liveCharge = Charge(bytes, entry.path);
-            if (!liveCharge.HasValue())
-            {
-                return liveCharge;
-            }
-            if (retainEntries)
-            {
-                auto charged = Charge(bytes, entry.path);
-                if (!charged.HasValue())
-                {
-                    return charged;
-                }
-                result.entries.push_back(Snapshot(entry));
-            }
-            pendingBytes = bytes;
-            pending = std::move(entry);
+            charged = Charge(bytes, entry.path);
+            if (!charged.HasValue())
+                return charged;
+            result.entries.push_back(Snapshot(entry));
         }
+        if (entry.mComponent.HasValue())
+        {
+            const std::size_t overhead = sizeof(EntryCharge) + 64;
+            if (ownerCharge.bytes.value > std::numeric_limits<std::size_t>::max() - overhead)
+                return Error("Filesystem entry charge overflow", EOVERFLOW);
+            auto record = std::make_shared<EntryCharge>(pins);
+            PinCharge full(ownerCharge.descriptors, PinBytes(ownerCharge.bytes.value + overhead));
+            charged = ReservePins(full);
+            if (!charged.HasValue())
+                return charged;
+            record->pins = full;
+            entry.mRetentionCharge = std::move(record);
+        }
+        static_assert(std::is_nothrow_move_constructible<FilesystemCollectionEntry>::value, "Entry publication after Apply must not throw");
+        pendingBytes = bytes;
+        pending = std::move(entry);
         return true;
-    }
-
-    Filesystem::ResolverLimits ResolverBudget() const
-    {
-        return path ? path->Limits() : frames.front().location->Limits();
     }
 
     Result<bool> Initialize(std::string rootName)
     {
-        const auto rootFacts = path->Root().Acquired();
-        const bool directory = rootFacts.type == Type::Directory;
-        baseline = rootFacts.targetMount.value;
+        auto budget = CheckPins(PinCharge());
+        if (!budget.HasValue())
+            return budget;
+        const AcquisitionFacts facts = current.Value().Leaf().Acquired();
+        baseline = facts.targetMount.value;
         FilesystemCollectionEntry entry;
         entry.path = rootName;
-        entry.metadata = path->Leaf().Acquired().metadata;
-        if (!directory)
+        entry.metadata = facts.metadata;
+        entry.OwnComponent(current.Value().Leaf());
+        if (Type::Directory == facts.type)
         {
-            auto detached = path->Pop();
-            if (!detached.HasValue())
-            {
-                return std::move(detached).Error();
-            }
-            entry.OwnComponent(std::move(detached).Value());
-        }
-        else
-        {
-            entry.OwnComponent(path->Leaf());
             Frame frame;
-            frame.path = std::move(rootName);
-            frame.bytes = frame.path.size() + 1;
-            frame.device = path->Leaf().Acquired().metadata.st_dev;
-            frame.inode = path->Leaf().Acquired().metadata.st_ino;
-            auto charged = Charge(frame.bytes, frame.path);
+            frame.logicalName = std::move(rootName);
+            frame.device = facts.metadata.st_dev;
+            frame.inode = facts.metadata.st_ino;
+            auto prepared = PrepareFrame(frame.logicalName);
+            if (!prepared.HasValue())
+                return prepared;
+            auto charged = ReservePins(PinCharge(DescriptorSlots(1)));
             if (!charged.HasValue())
-            {
                 return charged;
-            }
-            auto opened = path->Leaf().OpenChildren();
+            auto opened = current.Value().Leaf().OpenChildren();
             if (!opened.HasValue())
             {
+                RefundPins(PinCharge(DescriptorSlots(1)));
                 return std::move(opened).Error();
             }
             frame.cursor = std::move(opened).Value();
-            frame.location = std::move(path);
             frames.push_back(std::move(frame));
         }
-        return Offer(std::move(entry));
+        return Offer(std::move(entry), PinCharge(DescriptorSlots(current.Value().RetainedDescriptors()), PinBytes(current.Value().RetainedBytes())));
     }
 
-    Result<bool> MissingChild(const Filesystem::DirectoryChild& child, const std::string& full)
+    Result<bool> MissingChild(const DirectoryChild& child, const std::string& full)
     {
         if ((FilesystemMissingChildAction::ReportRegularFile != request.missingChildAction) || (DT_REG != child.type))
-        {
             return OperationError("acquire child", full, ENOENT);
-        }
         FilesystemCollectionEntry missing;
         missing.path = full;
         missing.missing = true;
         return Offer(std::move(missing));
     }
 
-    Result<bool> PushChild(const Filesystem::DirectoryChild& child, FilesystemCollectionEntry& entry)
+    Result<bool> Child(DirectoryChild child)
     {
-        ExtensionPolicy extension;
-        extension.mounts = MountPolicy::AllowCrossing;
-        extension.unsupported = request.unsupported;
-        extension.fileLinks = request.childFileLinkAction;
-        extension.directoryLinks = request.childDirectoryLinkAction;
-        extension.nonFollowedLinks = NonFollowedLinkAction::Skip;
-        extension.reportMissingRegularFile = request.missingChildAction == FilesystemMissingChildAction::ReportRegularFile && child.type == DT_REG;
-        const std::size_t live = frames.back().location->RetainedDescriptors() + frames.size();
-        const std::size_t cap = ResolverBudget().shared.liveDescriptors;
-        if ((live > cap) || (cap - live < 7))
+        const std::size_t cap = request.limits.fullPathBytes;
+        if (frames.back().logicalName.size() >= cap || child.name.size() >= cap - frames.back().logicalName.size())
+            return Error("Filesystem path exceeds full path budget", ENAMETOOLONG);
+        const std::string full = frames.back().logicalName + "/" + child.name;
+        if (full.size() >= cap)
+            return Error("Filesystem path exceeds full path budget at " + full, ENAMETOOLONG);
+        FilesystemCollectionEntry entry;
+        entry.path = full;
+        auto budget = CheckPins(PinCharge());
+        if (!budget.HasValue())
+            return budget;
+        PinCharge targetCharge;
         {
-            return Error("Filesystem pin retention exceeds descriptor budget", EMFILE);
-        }
-        auto pushed = frames.back().location->AcquireChild(child.name, extension);
-        if (!pushed.HasValue())
-            return std::move(pushed).Error();
-        if (pushed.Value().Is<Path::RejectionReason>())
-        {
-            switch (As<Path::RejectionReason>(pushed.Value()))
+            // Resolve only the cursor name. The reporting label is not authority.
+            auto resolved = current.Value().Resolve(std::move(child.name), ChildPolicy(request));
+            if (!resolved.HasValue())
+                return std::move(resolved).Error();
+            if (resolved.Value().Is<Path::RejectionReason>())
             {
-                case Path::RejectionReason::Missing:
-                    return MissingChild(child, entry.path);
-                case Path::RejectionReason::UnsupportedType:
-                    return Exclude(entry.path, "unsupported type");
-                case Path::RejectionReason::Excluded:
-                    return Exclude(entry.path, "link policy");
+                switch (As<Path::RejectionReason>(resolved.Value()))
+                {
+                    case Path::RejectionReason::Missing:
+                        return MissingChild(child, full);
+                    case Path::RejectionReason::Excluded:
+                        return Exclude(full, "link policy");
+                    case Path::RejectionReason::UnsupportedType:
+                        return Exclude(full, "unsupported type");
+                }
             }
-        }
-        Path accepted = As<Path>(std::move(pushed).Value());
-        auto handle = accepted.Leaf();
-        const auto facts = handle.Acquired();
-        entry.metadata = facts.metadata;
-        // Both lookup-entry and accepted-target mounts participate in scope.
-        if ((FilesystemScope::All != request.scope) && ((baseline != facts.lookupMount.value) || (baseline != facts.targetMount.value)))
-        {
-            return Exclude(entry.path, "filesystem scope");
-        }
-        const bool directory = Type::Directory == facts.type;
-        if (directory)
-        {
-            const std::size_t depth = frames.size();
-            bool descend = FilesystemDirection::Down == request.direction;
-            if (descend && (-1 != request.maxDepth) && (depth > static_cast<std::size_t>(request.maxDepth)))
+            const AcquisitionFacts facts = As<Path::Step>(resolved.Value()).Acquired();
+            entry.metadata = facts.metadata;
+            if ((FilesystemScope::All != request.scope) && ((baseline != facts.lookupMount.value) || (baseline != facts.targetMount.value)))
+                return Exclude(full, "filesystem scope");
+            const bool directory = Type::Directory == facts.type;
+            bool descend = directory && FilesystemDirection::Down == request.direction;
+            if (descend && (-1 != request.maxDepth) && (frames.size() > static_cast<std::size_t>(request.maxDepth)))
             {
                 if (FilesystemDepthAction::Error == request.depthAction)
-                {
                     return Error("Maximum recursion depth reached");
-                }
                 descend = false;
             }
-            if (descend && (depth > request.limits.operationalDescent))
-            {
-                return Error("Operational descent budget exceeded at '" + entry.path + "'", E2BIG);
-            }
+            if (descend && frames.size() > request.limits.operationalDescent)
+                return Error("Operational descent budget exceeded at " + full, E2BIG);
             if (descend)
             {
                 for (std::size_t i = 0; i < frames.size(); ++i)
-                {
                     if ((frames[i].device == facts.metadata.st_dev) && (frames[i].inode == facts.metadata.st_ino))
-                    {
-                        return Error("Directory ancestor cycle at '" + entry.path + "'", ELOOP);
-                    }
-                }
+                        return Error("Directory ancestor cycle at " + full, ELOOP);
+            }
+            targetCharge = PinCharge(DescriptorSlots(As<Path::Step>(resolved.Value()).RetainedDescriptors()),
+                PinBytes(As<Path::Step>(resolved.Value()).RetainedBytes()));
+            // Target is an owning Component. A file/observed directory never Applys.
+            entry.OwnComponent(As<Path::Step>(resolved.Value()).Target());
+            if (descend)
+            {
                 Frame frame;
-                frame.path = entry.path;
-                frame.bytes = frame.path.size() + 1;
+                frame.logicalName = full;
                 frame.device = facts.metadata.st_dev;
                 frame.inode = facts.metadata.st_ino;
-                auto charged = Charge(frame.bytes, entry.path);
+                auto prepared = PrepareFrame(frame.logicalName);
+                if (!prepared.HasValue())
+                    return prepared;
+                    // Prepare allocation before mutation; any later failure aborts the
+                    // private traversal without losing a published undo history.
+#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
+                ScopedInversePreparationFault inverseFault(TripFilesystemCollectionCheckpoint(static_cast<unsigned>(TestCheckpoint::InversePreparation)));
+#endif
+                auto applied = current.Value().Apply(std::move(resolved.Value().Get<Path::Step>()));
+#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
+                inverseFault.Disarm();
+#endif
+                if (!applied.HasValue())
+                    return std::move(applied).Error();
+#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
+                if (TripFilesystemCollectionCheckpoint(static_cast<unsigned>(TestCheckpoint::AfterApply)))
+                    throw std::bad_alloc();
+#endif
+                if (current.Value().RetainedDescriptors() > current.Value().Limits().shared.liveDescriptors)
+                    return Error("Applied path exceeds physical descriptor budget", EMFILE);
+                if (current.Value().RetainedBytes() > current.Value().Limits().shared.retainedBytes)
+                    return Error("Applied path exceeds physical retention budget", E2BIG);
+                const PinCharge inverseCharge(DescriptorSlots(applied.Value().RetainedDescriptors()), PinBytes(applied.Value().RetainedBytes()));
+                auto charged = ReservePins(inverseCharge);
                 if (!charged.HasValue())
-                {
                     return charged;
-                }
-                frame.location.reset(new Path(std::move(accepted)));
+                frame.inverse = std::move(applied).Value();
+                frame.inverseCharge = inverseCharge;
                 frames.push_back(std::move(frame));
+#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
+                // The inverse is already owned by the frame before testing
+                // failed output publication. Abort drops it exactly once.
+                if (TripFilesystemCollectionCheckpoint(static_cast<unsigned>(TestCheckpoint::BeforeOffer)))
+                    throw std::bad_alloc();
+#endif
             }
-            entry.OwnComponent(handle);
-        }
-        else
-        {
-            entry.OwnComponent(handle);
-        }
-        return Offer(std::move(entry));
-    }
-
-    Result<bool> Child(const Filesystem::DirectoryChild& child)
-    {
-        const std::string full = frames.back().path + "/" + child.name;
-        if (full.size() >= request.limits.fullPathBytes)
-        {
-            return Error("Filesystem path exceeds full path budget at '" + full + "'", ENAMETOOLONG);
-        }
-        FilesystemCollectionEntry entry;
-        entry.path = full;
-        return PushChild(child, entry);
+        } // Release forward Step/Result before publishing the entry.
+        return Offer(std::move(entry), targetCharge);
     }
 
     Result<Optional<FilesystemCollectionEntry>> Pull()
@@ -602,7 +783,7 @@ struct FileRange::State
         {
             auto entry = std::move(pending).Value();
             pending.Reset();
-            retained -= pendingBytes;
+            ReleaseObservation(pendingBytes);
             pendingBytes = 0;
             return Optional<FilesystemCollectionEntry>(std::move(entry));
         }
@@ -610,80 +791,76 @@ struct FileRange::State
         {
             if (!frames.back().cursor.HasValue())
             {
-                if ((frames.size() > request.limits.openDirectories) ||
-                    (frames.back().location->RetainedDescriptors() + frames.size() + 10 > ResolverBudget().shared.liveDescriptors))
-                {
-                    return Error("Filesystem directory continuation exceeds descriptor budget", EMFILE);
-                }
-                auto budget = Budget(0, frames.back().path);
-                if (!budget.HasValue())
-                {
-                    return budget.Error();
-                }
-                auto opened = frames.back().location->Leaf().OpenChildren();
+                if (frames.size() > request.limits.openDirectories)
+                    return Error("Filesystem directory continuation exceeds open directory budget", EMFILE);
+                auto charged = ReservePins(PinCharge(DescriptorSlots(1)));
+                if (!charged.HasValue())
+                    return charged.Error();
+                auto opened = current.Value().Leaf().OpenChildren();
                 if (!opened.HasValue())
                 {
+                    RefundPins(PinCharge(DescriptorSlots(1)));
                     return std::move(opened).Error();
                 }
                 frames.back().cursor = std::move(opened).Value();
             }
             auto name = frames.back().cursor->NextEntry();
             if (!name.HasValue())
-            {
-                return OperationError("read directory", frames.back().path, name.Error().code);
-            }
+                return OperationError("read directory", frames.back().logicalName, name.Error().code);
             if (!name.Value().HasValue())
             {
                 frames.back().cursor->Close();
-                retained -= frames.back().bytes;
+                frames.back().cursor.Reset();
+                RefundPins(PinCharge(DescriptorSlots(1)));
+                if (frames.back().inverse.HasValue())
+                {
+#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
+                    if (TripFilesystemCollectionCheckpoint(static_cast<unsigned>(TestCheckpoint::InverseRestore)))
+                        return Error("Filesystem inverse restoration failed", ESTALE);
+#endif
+                    auto restored = current.Value().Apply(std::move(frames.back().inverse.Value()));
+                    if (!restored.HasValue())
+                        return std::move(restored).Error();
+                    frames.back().inverse.Reset();
+                    RefundPins(frames.back().inverseCharge);
+                }
+                ReleaseObservation(frames.back().logicalName.size() + 1);
                 frames.pop_back();
                 continue;
             }
             if (work >= request.limits.entryWork)
-            {
-                return Error("Filesystem entry work budget exhausted at '" + frames.back().path + "'", E2BIG);
-            }
+                return Error("Filesystem entry work budget exhausted at " + frames.back().logicalName, E2BIG);
             ++work;
             if (frames.back().width >= request.limits.directoryWidth)
-            {
-                return Error("Filesystem directory width budget exceeded at '" + frames.back().path + "'", E2BIG);
-            }
+                return Error("Filesystem directory width budget exceeded at " + frames.back().logicalName, E2BIG);
             ++frames.back().width;
-            auto processed = Child(name.Value().Value());
+            auto processed = Child(std::move(name.Value()).Value());
             if (!processed.HasValue())
-            {
                 return std::move(processed).Error();
-            }
             if (pending.HasValue())
             {
                 auto entry = std::move(pending).Value();
                 pending.Reset();
-                retained -= pendingBytes;
+                ReleaseObservation(pendingBytes);
                 pendingBytes = 0;
                 return Optional<FilesystemCollectionEntry>(std::move(entry));
             }
         }
-        Stop();
+        Finish();
         return Optional<FilesystemCollectionEntry>();
     }
 
     Result<Optional<FilesystemCollectionEntry>> Next()
     {
         if (failure.HasValue())
-        {
             return failure.Value();
-        }
         if (closed)
-        {
             return Optional<FilesystemCollectionEntry>();
-        }
         try
         {
             auto next = Pull();
             if (!next.HasValue())
-            {
                 Abort(next.Error());
-            }
             return next;
         }
         catch (const std::bad_alloc&)
@@ -706,34 +883,51 @@ struct FileRange::State
         Stop();
     }
 
-    void Stop() noexcept
+    // Successful exhaustion releases traversal resources but keeps completed
+    // observations available to StopVisitor. Abandonment additionally discards
+    // the observations, without replaying any remaining inverse history.
+    void Finish() noexcept
     {
         if (closed)
             return;
         closed = true;
-        // Detach all remaining resources before releasing them. Terminal owners
-        // report their own close failures exactly once; traversal evidence is
-        // never replaced by a disposal diagnostic.
-        static_assert(std::is_nothrow_move_constructible<Optional<FilesystemCollectionEntry>>::value,
-            "Pending range ownership must detach without throwing");
-        std::vector<Frame> remainingFrames;
-        remainingFrames.swap(frames);
-        auto remainingPending = std::move(pending);
-        auto remainingPath = std::move(path);
+        pending.Reset();
         pendingBytes = 0;
+        for (std::size_t i = 0; i < frames.size(); ++i)
+        {
+            if (frames[i].cursor.HasValue())
+            {
+                frames[i].cursor->Close();
+                RefundPins(PinCharge(DescriptorSlots(1)));
+            }
+            if (frames[i].inverse.HasValue())
+                RefundPins(frames[i].inverseCharge);
+        }
+        RefundPins(PinCharge(DescriptorSlots(), PinBytes(frameStorage)));
+        std::vector<Frame> remainingFrames;
+        remainingFrames.swap(frames); // Drop inverses, never replay on disposal.
+        current.Reset();
+    }
+
+    void Stop() noexcept
+    {
+        Finish();
+        FilesystemCollectionResult remainingResult;
+        result.entries.swap(remainingResult.entries);
+        result.exclusions.swap(remainingResult.exclusions);
         retained = 0;
-        (void)remainingPending;
-        (void)remainingPath;
     }
 
     FilesystemTraversalPolicy request;
-    std::unique_ptr<Filesystem::Path> path;
+    Optional<Path> current;
     std::vector<Frame> frames;
     FilesystemCollectionResult result;
     Optional<FilesystemCollectionEntry> pending;
     Optional<Error> failure;
+    std::shared_ptr<RetentionCounter> pins;
     std::uint64_t baseline = 0;
     std::size_t retained = 0;
+    std::size_t frameStorage = 0;
     std::size_t pendingBytes = 0;
     std::size_t work = 0;
     bool rootExists = true;
@@ -762,8 +956,8 @@ FileRange::~FileRange() noexcept
 Result<bool> ValidateContinuation(const Path& root, const std::string& reportingName, const FilesystemTraversalPolicy& policy)
 {
     const auto limits = policy.limits;
-    if (!root.IsFrozen() || root.Size() != 1 || reportingName.empty() || reportingName.front() != '/' || reportingName.find('\0') != std::string::npos)
-        return Error("Continuation requires one accepted absolute root", EINVAL);
+    if (reportingName.empty() || reportingName.front() != '/' || reportingName.find('\0') != std::string::npos)
+        return Error("Continuation requires an absolute reporting name", EINVAL);
     if (policy.direction == FilesystemDirection::Up)
         return Error("Upward filesystem collection is not supported", ENOTSUP);
     if (policy.direction != FilesystemDirection::None && policy.direction != FilesystemDirection::Down)
@@ -785,7 +979,7 @@ Result<bool> ValidateContinuation(const Path& root, const std::string& reporting
     if (policy.yieldType != FilesystemYieldType::All && policy.yieldType != FilesystemYieldType::RegularFiles &&
         policy.yieldType != FilesystemYieldType::Directories && policy.yieldType != FilesystemYieldType::SymbolicLinks)
         return Error("Invalid filesystem yield type", EINVAL);
-    if (policy.unsupported != UnsupportedTypeAction::Reject && policy.unsupported != UnsupportedTypeAction::Skip)
+    if (policy.unsupported != UnsupportedTypeDisposition::Error && policy.unsupported != UnsupportedTypeDisposition::Skip)
         return Error("Invalid unsupported filesystem type action", EINVAL);
     if (policy.depthAction != FilesystemDepthAction::Stop && policy.depthAction != FilesystemDepthAction::Error)
         return Error("Invalid depth action", EINVAL);
@@ -807,6 +1001,11 @@ Result<FileRange> Files(Path path, std::string reportingName, FilesystemTraversa
         return valid.Error();
     try
     {
+        // TM-9: the selected leaf is the barrier, even for an unfrozen
+        // multi-component Path. Do not resolve a child before this succeeds.
+        auto frozen = path.Freeze();
+        if (!frozen.HasValue())
+            return std::move(frozen).Error();
         auto state = std::make_shared<FileRange::State>(std::move(continuation), std::move(path));
         auto initialized = state->Initialize(std::move(reportingName));
         if (!initialized.HasValue())
@@ -842,12 +1041,9 @@ Result<FileRange> Files(const FilesystemCollectionRequest& policy, ContextInterf
         if (acquired.Value().Is<Path>())
         {
             Path accepted = As<Path>(std::move(acquired).Value());
-            auto frozen = accepted.FreezeRoot();
-            if (!frozen.HasValue())
-                return std::move(frozen).Error();
-            if (request.rootKind == FilesystemRootKind::Directory && accepted.Root().Acquired().type != Type::Directory)
+            if (request.rootKind == FilesystemRootKind::Directory && accepted.Leaf().Acquired().type != Type::Directory)
                 return Error("Expected directory root at '" + request.rootPath + "'", ENOTDIR);
-            if (request.rootKind == FilesystemRootKind::File && accepted.Root().Acquired().type != Type::RegularFile)
+            if (request.rootKind == FilesystemRootKind::File && accepted.Leaf().Acquired().type != Type::RegularFile)
                 return Error("Expected file root at '" + request.rootPath + "'", EISDIR);
             return Files(std::move(accepted), request.rootPath, Continuation(request));
         }

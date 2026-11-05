@@ -54,27 +54,27 @@ struct MockContext : public ComplianceEngine::ContextInterface
     }
     MOCK_METHOD(ComplianceEngine::Result<std::string>, ExecuteCommand, (const std::string& cmd), (const, override));
     MOCK_METHOD(ComplianceEngine::Result<std::string>, GetFileContents, (const std::string& filePath), (const, override));
-    MOCK_METHOD(int, OpenNativePath, (const char* path, int flags), (const, override));
-    MOCK_METHOD(int, OpenNativeAt, (int directory, const char* path, int flags), (const, override));
-    MOCK_METHOD(int, StatFileDescriptor, (int descriptor, struct stat* metadata), (const, override));
-    MOCK_METHOD(int, StatFilesystemDescriptor, (int descriptor, struct statfs* metadata), (const, override));
-    MOCK_METHOD(ssize_t, ReadFileDescriptor, (int descriptor, void* buffer, std::size_t size), (const, override));
-    MOCK_METHOD(ssize_t, ReadLinkDescriptor, (int descriptor, char* buffer, std::size_t size), (const, override));
-    MOCK_METHOD(int, StatusFlagsDescriptor, (int descriptor), (const, override));
-    MOCK_METHOD(int, DescriptorFlagsDescriptor, (int descriptor), (const, override));
-    MOCK_METHOD(int, DuplicateDescriptor, (int descriptor), (const, override));
-    MOCK_METHOD(DIR*, FdOpenDirectory, (int descriptor), (const, override));
-    MOCK_METHOD(int, CloseFileDescriptor, (int descriptor), (const, override));
-    MOCK_METHOD(int, ChownPinnedFileDescriptor, (int descriptor, uid_t owner, gid_t group), (const, override));
-    MOCK_METHOD(int, ChmodPinnedAlias, (int procfsDirectory, const char* decimalAlias, mode_t mode), (const, override));
-    MOCK_METHOD(pid_t, NativeProcessId, (), (const, override));
-    MOCK_METHOD(pid_t, NativeThreadId, (), (const, override));
-    MOCK_METHOD(DIR*, OpenDirectory, (const char* path), (const, override));
-    MOCK_METHOD(struct dirent*, ReadDirectory, (DIR * directory), (const, override));
-    MOCK_METHOD(int, CloseDirectory, (DIR * directory), (const, override));
-    MOCK_METHOD(int, StatPath, (const char* path, struct stat* metadata), (const, override));
-    MOCK_METHOD(int, LstatPath, (const char* path, struct stat* metadata), (const, override));
-    MOCK_METHOD(struct group*, GetGroupById, (gid_t id), (const, override));
+    MOCK_METHOD(int, OpenNativePath, (const char* path, int flags), (const, noexcept, override));
+    MOCK_METHOD(int, OpenNativeAt, (int directory, const char* path, int flags), (const, noexcept, override));
+    MOCK_METHOD(int, StatFileDescriptor, (int descriptor, struct stat* metadata), (const, noexcept, override));
+    MOCK_METHOD(int, StatFilesystemDescriptor, (int descriptor, struct statfs* metadata), (const, noexcept, override));
+    MOCK_METHOD(ssize_t, ReadFileDescriptor, (int descriptor, void* buffer, std::size_t size), (const, noexcept, override));
+    MOCK_METHOD(ssize_t, ReadLinkDescriptor, (int descriptor, char* buffer, std::size_t size), (const, noexcept, override));
+    MOCK_METHOD(int, StatusFlagsDescriptor, (int descriptor), (const, noexcept, override));
+    MOCK_METHOD(int, DescriptorFlagsDescriptor, (int descriptor), (const, noexcept, override));
+    MOCK_METHOD(int, DuplicateDescriptor, (int descriptor), (const, noexcept, override));
+    MOCK_METHOD(DIR*, FdOpenDirectory, (int descriptor), (const, noexcept, override));
+    MOCK_METHOD(int, CloseFileDescriptor, (int descriptor), (const, noexcept, override));
+    MOCK_METHOD(int, ChownPinnedFileDescriptor, (int descriptor, uid_t owner, gid_t group), (const, noexcept, override));
+    MOCK_METHOD(int, ChmodPinnedAlias, (int procfsDirectory, const char* decimalAlias, mode_t mode), (const, noexcept, override));
+    MOCK_METHOD(pid_t, NativeProcessId, (), (const, noexcept, override));
+    MOCK_METHOD(pid_t, NativeThreadId, (), (const, noexcept, override));
+    MOCK_METHOD(DIR*, OpenDirectory, (const char* path), (const, noexcept, override));
+    MOCK_METHOD(struct dirent*, ReadDirectory, (DIR * directory), (const, noexcept, override));
+    MOCK_METHOD(int, CloseDirectory, (DIR * directory), (const, noexcept, override));
+    MOCK_METHOD(int, StatPath, (const char* path, struct stat* metadata), (const, noexcept, override));
+    MOCK_METHOD(int, LstatPath, (const char* path, struct stat* metadata), (const, noexcept, override));
+    MOCK_METHOD(struct group*, GetGroupById, (gid_t id), (const, noexcept, override));
     MOCK_METHOD(ComplianceEngine::Result<std::vector<ComplianceEngine::InterfaceInfo>>, GetNetworkInterfaces, (), (const, override));
 
     ComplianceEngine::Result<std::string> GetRunningKernelRelease() const override
@@ -94,7 +94,7 @@ struct MockContext : public ComplianceEngine::ContextInterface
         return mTelemetry;
     }
 
-    OsConfigLogHandle GetLogHandle() const override
+    OsConfigLogHandle GetLogHandle() const noexcept override
     {
         return mLogHandle;
     }

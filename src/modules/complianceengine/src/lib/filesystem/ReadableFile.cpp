@@ -108,7 +108,7 @@ void ReadableFile::Close() noexcept
     Detail::Descriptor owned(std::move(mDescriptor.Value()));
     mDescriptor.Reset();
     mAtEnd = false;
-    owned.Close();
+    owned.ReleaseOwned();
 }
 } // namespace Filesystem
 } // namespace ComplianceEngine

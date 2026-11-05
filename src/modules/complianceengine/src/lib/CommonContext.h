@@ -42,7 +42,7 @@ public:
     {
         return mTelemetry;
     }
-    OsConfigLogHandle GetLogHandle() const override
+    OsConfigLogHandle GetLogHandle() const noexcept override
     {
         return mLog;
     }
