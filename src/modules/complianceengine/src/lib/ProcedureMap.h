@@ -595,9 +595,9 @@ template <>
 struct Bindings<SshdOptionParams>
 {
     using T = SshdOptionParams;
-    static constexpr size_t size = 5;
+    static constexpr size_t size = 6;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::option, &T::value, &T::op, &T::mode, &T::readExtraConfigs);
+    static constexpr auto members = std::make_tuple(&T::option, &T::value, &T::op, &T::mode, &T::readExtraConfigs, &T::remediationValue);
 };
 
 // Defines the bindings for the SysctlValueParams structure.

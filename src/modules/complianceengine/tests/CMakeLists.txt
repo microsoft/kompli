@@ -41,6 +41,7 @@ set(PROCEDURES
     procedures/RootPathSecurityTest.cpp
     procedures/SshKeyPermissionsTest.cpp
     procedures/SshdOptionTest.cpp
+    procedures/SshdOptionRemediationTest.cpp
     procedures/SysctlValueTest.cpp
     procedures/SystemAccountShellTest.cpp
     procedures/UniqueUserIdTest.cpp

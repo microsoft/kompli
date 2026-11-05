@@ -92,8 +92,8 @@ const char* Bindings<ShadowFieldParams>::names[] = {"username", "usernameOperati
 // SshKeyPermissions.h:24
 const char* Bindings<SshKeyPermissionsParams>::names[] = {"type"};
 
-// SshdOption.h:64
-const char* Bindings<SshdOptionParams>::names[] = {"option", "value", "op", "mode", "readExtraConfigs"};
+// SshdOption.h:67
+const char* Bindings<SshdOptionParams>::names[] = {"option", "value", "op", "mode", "readExtraConfigs", "remediationValue"};
 
 // SysctlValue.h:25
 const char* Bindings<SysctlValueParams>::names[] = {"sysctlName", "value", "runtimeOnly"};
@@ -171,7 +171,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"ShadowField", {MakeHandler(AuditShadowField), nullptr}},
     {"ShellTimeout", {MakeHandler(AuditShellTimeout), MakeHandler(RemediateShellTimeout)}},
     {"SshKeyPermissions", {MakeHandler(AuditSshKeyPermissions), MakeHandler(RemediateSshKeyPermissions)}},
-    {"SshdOption", {MakeHandler(AuditSshdOption), nullptr}},
+    {"SshdOption", {MakeHandler(AuditSshdOption), MakeHandler(RemediateSshdOption)}},
     {"SysctlValue", {MakeHandler(AuditSysctlValue), MakeHandler(RemediateSysctlValue)}},
     {"SystemAccountShell", {MakeHandler(AuditSystemAccountShell), nullptr}},
     {"SystemdConfigValue", {MakeHandler(AuditSystemdConfigValue), MakeHandler(RemediateSystemdConfigValue)}},

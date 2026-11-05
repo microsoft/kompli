@@ -401,6 +401,39 @@ optional file skips only its watch without creating PAM configuration or a
 group-password database; existing files still require their watches. The native writer itself retains
 its existing-target requirement.
 
+### Explicit SSH option remediation
+
+`SshdOption` remains audit-only unless `remediationValue` supplies an explicit
+literal target. The first slice supports `maxauthtries`, `logingracetime`,
+`maxstartups` (`10:30:60`), `disableforwarding`, `permitrootlogin`,
+`gssapiauthentication`, `clientaliveinterval`, and `clientalivecountmax`.
+Boolean targets only harden the setting; numeric targets have bounded positive
+ranges. The target must satisfy the original audit predicate, including customer
+overrides, before any write. Values are never inferred from regular expressions.
+
+Already-compliant rules and stricter compliant numeric values are not changed.
+For a required change, the main
+configuration must be a regular, non-hardlinked file. All includes are inspected
+with bounded traversal; conditional `Match` blocks, quoted include paths,
+continued lines, custom startup options, and nonstandard/inactive services are
+refused for administrator review. Existing `Match` semantics are not rewritten.
+The writer prepends an explicit global setting before includes when the
+effective value needs changing. It replaces only selected global declarations
+whose own value fails the audit predicate in the main file and included files,
+preserving declarations the audit accepts (for example a customer-allowed
+`prohibit-password`), unrelated content, comments, and metadata. This also
+handles a compliant effective boolean whose ignored contradictory declarations
+still fail the complete benchmark audit. Every changed source must be regular
+and non-hardlinked.
+
+The original configuration and then the candidate are checked with `sshd -t`;
+the candidate's effective value is checked through the existing audit before
+reloading the active standard `ssh.service` or `sshd.service`. Reload retains
+existing sessions. Validation failures restore all modified sources without reload.
+A failed reload restores all sources and reloads the original configuration. Rollback never
+overwrites a concurrent content change; rollback/recovery failures are errors.
+No user/group allowlists or cryptographic policy are generated.
+
 ### Audit entries (`audit{RuleName}`)
 
 Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns a string that begins with `PASS` on success or contains a descriptive log on failure.
