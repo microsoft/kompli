@@ -77,6 +77,9 @@ const char* Bindings<NoShellAccountsLockedParams>::names[] = {"excludeUsers", "s
 // PackageInstalled.h:34
 const char* Bindings<PackageInstalledParams>::names[] = {"packageName", "minPackageVersion", "packageManager"};
 
+// PasswordPolicyOption.h:26
+const char* Bindings<PasswordPolicyOptionParams>::names[] = {"policy", "option", "value", "integratePam"};
+
 // SCE.h:18
 const char* Bindings<SCEParams>::names[] = {"scriptName", "environment"};
 
@@ -153,6 +156,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"PackageInstalled", {MakeHandler(AuditPackageInstalled), nullptr}},
     {"PasswdGroupsExist", {MakeHandler(AuditPasswdGroupsExist), MakeHandler(RemediatePasswdGroupsExist)}},
     {"PasswordChangeDate", {MakeHandler(AuditPasswordChangeDate), nullptr}},
+    {"PasswordPolicyOption", {MakeHandler(AuditPasswordPolicyOption), MakeHandler(RemediatePasswordPolicyOption)}},
     {"RemediationFailure", {nullptr, MakeHandler(RemediateRemediationFailure)}},
     {"RemediationNotApplicable", {nullptr, MakeHandler(RemediateRemediationNotApplicable)}},
     {"RemediationParametrized", {nullptr, MakeHandler(RemediateRemediationParametrized)}},

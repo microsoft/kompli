@@ -36,6 +36,7 @@
 #include <PackageInstalled.h>
 #include <PasswdGroupsExist.h>
 #include <PasswordChangeDate.h>
+#include <PasswordPolicyOption.h>
 #include <RootPathSecurity.h>
 #include <SCE.h>
 #include <ShadowField.h>
@@ -536,6 +537,16 @@ struct Bindings<PackageInstalledParams>
     static constexpr size_t size = 3;
     static const char* names[];
     static constexpr auto members = std::make_tuple(&T::packageName, &T::minPackageVersion, &T::packageManager);
+};
+
+// Defines the bindings for the PasswordPolicyOptionParams structure.
+template <>
+struct Bindings<PasswordPolicyOptionParams>
+{
+    using T = PasswordPolicyOptionParams;
+    static constexpr size_t size = 4;
+    static const char* names[];
+    static constexpr auto members = std::make_tuple(&T::policy, &T::option, &T::value, &T::integratePam);
 };
 
 // Defines the bindings for the SCEParams structure.

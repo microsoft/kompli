@@ -321,6 +321,49 @@ basename masking, lexical filename ordering, and `/dev/null` masks. Legacy
 `sysctl.conf` is read only when a selected sysctl.d symlink includes it. Other
 command failures and unreadable configuration sources remain explicit errors.
 
+`PasswordPolicyOption` accepts explicit allowlisted targets for existing
+`/etc/security/{pwquality,faillock,pwhistory}.conf` files. Numeric settings are
+range-checked; boolean flags use the value `"true"` and are written as bare
+options. It atomically updates all occurrences of the selected option while
+preserving other settings, comments, and file metadata, verifies its own audit,
+and restores the original file if verification fails. No reload is needed.
+The main pwquality configuration takes precedence over its drop-ins; this
+writer does not change drop-ins. The original benchmark audit can still reject
+conflicting drop-ins, which must be resolved separately.
+
+Without `integratePam`, the handler requires an existing configuration file and
+PAM module reference, including read-only authselect targets. It parses Linux-PAM
+continuations and refuses conflicting inline values, custom configuration paths,
+and unsafe configuration targets without changing authentication stacks.
+
+The explicit string flag `"integratePam": "true"` enables vendor-managed
+integration for installed modules. Authselect systems retain their selected
+providers/features; unselected EL systems can adopt a custom profile copied from
+their actual PAM and NSS configuration. When the selection is already a
+`custom/kompli-preserved-*` profile, later options update its templates in place
+(restored on rollback) instead of creating another copy. Debian/Ubuntu use `pam-auth-update`
+profiles, including managed faillock preauth/failure/account-reset boundaries.
+SUSE password history uses inspected `pam-config` state. Provider or NSS drift,
+administrator overrides, unsupported control flow, and vendor command failures
+refuse integration and trigger transaction rollback. Existing stronger policy
+values are retained. Inline-only history modules receive effective PAM arguments
+instead of an ignored configuration file.
+
+Validated faillock integration establishes its configured tally directory using
+scoped systemd-tmpfiles metadata, preserving existing administrator metadata.
+Validated history integration initializes a missing default `opasswd` database
+with root-only permissions and SELinux labeling where applicable; existing
+history records remain untouched. Unverified custom databases, missing modules,
+unsupported SUSE hooks, and unmanaged activation paths remain explicit refusals.
+No existing passwords are changed. Successful configuration validation does not
+replace real service authentication, lockout, and password-change testing.
+Before enabling password-quality enforcement, provision and verify the vendor
+CrackLib dictionary as well as the PAM module. Minimal Debian/Ubuntu images can
+have `libpam-pwquality` installed without the recommended dictionary packages;
+enforcement then rejects password changes with an error loading the dictionary.
+Install `cracklib-runtime` and a vendor word list such as `wamerican`, and verify
+real password changes rather than disabling dictionary checks.
+
 ### Audit entries (`audit{RuleName}`)
 
 Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns a string that begins with `PASS` on success or contains a descriptive log on failure.

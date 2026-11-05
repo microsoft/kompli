@@ -246,6 +246,9 @@
           "$ref": "procedures/PasswordChangeDate.schema.json#/definitions/audit"
         },
         {
+          "$ref": "procedures/PasswordPolicyOption.schema.json#/definitions/audit"
+        },
+        {
           "$ref": "procedures/RootPathSecurity.schema.json#/definitions/audit"
         },
         {
@@ -395,6 +398,9 @@
         },
         {
           "$ref": "procedures/PasswordChangeDate.schema.json#/definitions/remediation"
+        },
+        {
+          "$ref": "procedures/PasswordPolicyOption.schema.json#/definitions/remediation"
         },
         {
           "$ref": "procedures/RootPathSecurity.schema.json#/definitions/remediation"

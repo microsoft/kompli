@@ -49,6 +49,7 @@ set(PROCEDURES
     procedures/NoUnownedFiles.cpp
     procedures/NoWorldWritableFiles.cpp
     procedures/PasswordChangeDate.cpp
+    procedures/PasswordPolicyOption.cpp
     procedures/RootPathSecurity.cpp
     procedures/SshdOption.cpp
     procedures/SysctlValue.cpp
@@ -100,6 +101,7 @@ set(SCHEMAS
     procedures/NoUnownedFiles.schema.json
     procedures/NoWorldWritableFiles.schema.json
     procedures/PasswordChangeDate.schema.json
+    procedures/PasswordPolicyOption.schema.json
     procedures/RootPathSecurity.schema.json
     procedures/SshdOption.schema.json
     procedures/SysctlValue.schema.json
