@@ -302,6 +302,25 @@ Desired objects (`MmiSet`). The value is a human-readable, space-separated key-v
 
 Desired objects (`MmiSet`). Same key-value format as init entries. Triggers execution of the remediation procedure for the rule with the supplied parameter values.
 
+`SysctlValue` remediation accepts a literal value, optionally surrounded by
+`^` and `$`. With `runtimeOnly: true` it updates only the selected `/proc/sys`
+entry. Otherwise it also atomically maintains
+`/etc/sysctl.d/99-zz-kompli-<sysctlName>.conf`; persistent names must use dotted
+notation. The name sorts after stock late files such as `99-sysctl.conf` (the
+`/etc/sysctl.conf` link) and `99-cloudimg-*.conf`, so the managed value wins
+over them. The configuration directory must already exist. Other administrator
+files and unrelated runtime keys are not changed. The handler verifies the
+existing runtime-and-persistence audit and rolls back both changes if writing
+or verification fails, including when a later-precedence file overrides the
+managed setting. Missing runtime keys remain not applicable. Regex alternatives
+are audit-only: the handler does not guess which acceptable value to select.
+
+On older systemd versions without `systemd-sysctl --cat-config`, the persistence
+audit reads the selected `.conf` files directly. It preserves directory priority,
+basename masking, lexical filename ordering, and `/dev/null` masks. Legacy
+`sysctl.conf` is read only when a selected sysctl.d symlink includes it. Other
+command failures and unreadable configuration sources remain explicit errors.
+
 ### Audit entries (`audit{RuleName}`)
 
 Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns a string that begins with `PASS` on success or contains a descriptive log on failure.

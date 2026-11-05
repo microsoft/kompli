@@ -20,7 +20,7 @@ struct SysctlValueParams
     Pattern value;
 
     /// When true, only the runtime value in /proc/sys is checked (default: false)
-    /// When false (default), also validates stored sysctl configuration files
+    /// When false (default), also audits and remediates persistent sysctl configuration
     Optional<bool> runtimeOnly = false;
 };
 
