@@ -3,6 +3,7 @@
 
 cmake_minimum_required(VERSION 3.21)
 project(telemetry)
+get_filename_component(KOMPLI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
 if(BUILD_EXTERNAL)
     enable_testing()
@@ -10,5 +11,4 @@ if(BUILD_EXTERNAL)
         add_subdirectory(lib)
         add_subdirectory(bin)
     endif()
-else()
 endif()
