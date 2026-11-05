@@ -12,6 +12,7 @@ set(PROCEDURES
     procedures/AideAttributesTest.cpp
     procedures/AksCommandTest.cpp
     procedures/AuditdRulesTest.cpp
+    procedures/AuditdWatchTest.cpp
     procedures/NoShellAccountsLockedTest.cpp
     procedures/ApparmorProfileStateTest.cpp
     procedures/DconfValueTest.cpp

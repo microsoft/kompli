@@ -50,6 +50,29 @@ protected:
     std::size_t mTempdirCount{0};
 };
 
+TEST_F(AuditdRulesCheckTest, InvalidSearchRegexReturnsErrorBeforeInspectingRules)
+{
+    AuditdRulesParams params;
+    params.searchItem = "(";
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::_)).Times(0);
+
+    auto result = AuditAuditdRules(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+    EXPECT_NE(std::string::npos, result.Error().message.find("Invalid searchItem regex"));
+}
+
+TEST_F(AuditdRulesCheckTest, ForwardReferenceReturnsErrorInsteadOfNoncompliance)
+{
+    AuditdRulesParams params;
+    params.searchItem = R"(^(?!(\2))(a)(b)$)";
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::_)).Times(0);
+
+    auto result = AuditAuditdRules(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(EINVAL, result.Error().code);
+}
+
 // Test invalid requiredOptions regex
 TEST_F(AuditdRulesCheckTest, InvalidRequiredOptionsRegexReturnsError)
 {

@@ -9,6 +9,7 @@
 #include <AksCommand.h>
 #include <ApparmorProfileState.h>
 #include <AuditdRules.h>
+#include <AuditdWatch.h>
 #include <BenchmarkSettings.h>
 #include <CommandOutputMatch.h>
 #include <DconfValue.h>
@@ -347,6 +348,16 @@ struct Bindings<AuditdRulesParams>
     static constexpr size_t size = 3;
     static const char* names[];
     static constexpr auto members = std::make_tuple(&T::searchItem, &T::excludeOption, &T::requiredOptions);
+};
+
+// Defines the bindings for the AuditdWatchParams structure.
+template <>
+struct Bindings<AuditdWatchParams>
+{
+    using T = AuditdWatchParams;
+    static constexpr size_t size = 2;
+    static const char* names[];
+    static constexpr auto members = std::make_tuple(&T::path, &T::permissions);
 };
 
 // Defines the bindings for the CommandOutputMatchParams structure.

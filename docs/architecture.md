@@ -364,6 +364,43 @@ enforcement then rejects password changes with an error loading the dictionary.
 Install `cracklib-runtime` and a vendor word list such as `wamerican`, and verify
 real password changes rather than disabling dictionary checks.
 
+`AuditdRules` reports malformed search, exclusion, and required-option regexes
+as evaluation errors, not as noncompliance. Legacy distinct-option source
+patterns must be lowered to supported regex syntax during payload generation.
+
+`AuditdWatch` remediates only an explicit literal path and permission set.
+The target and `/etc/audit/rules.d` must already exist, auditing must be enabled
+with a running daemon, and changes require mutable kernel audit state. The
+effective `auditd.service` must either have a single `ExecStartPost` command
+invoking `/sbin/augenrules --load` or `/usr/sbin/augenrules --load`, or explicitly
+require/want the vendor `augenrules.service` or `audit-rules.service`. A vendor
+loader must be a loaded oneshot, ordered after auditd, with that same single
+`augenrules --load` command. Ambiguous or other startup arrangements are refused,
+not inferred. These checks do not execute the loader. An already-compliant
+immutable system is left untouched.
+
+The handler creates a mode-0600
+`70-kompli-watch-<hex-path>-<permissions>.rules` source when no matching source
+exists and adds only the selected runtime watch, using the reserved
+`kompli_watch` key. It reuses matching administrator watches without changing
+them. Different permissions, syscall-form equivalents, audit suppression,
+scoped deletion, and disabled-audit directives require administrator review.
+Unreadable or unsafe source files are errors. Permissions must be a nonempty
+subset in `rwxa` order; paths are limited to 96 safe literal characters.
+
+It does not create missing watch targets, compile or overwrite `audit.rules`,
+restart auditd, invoke a global rule load/flush, or set immutable mode.
+Verification checks runtime and persistent sources. Failure removes only a
+newly added owned watch and a newly created unchanged managed file; rollback
+failures and concurrent changes are reported explicitly. Existing rules and
+other successfully remediated leaves are not part of a global transaction.
+
+Generated payloads guard optional `/etc/pam.conf` and `/etc/gshadow` watches with
+audit-only file-absence branches, in both audit and remediation. An absent
+optional file skips only its watch without creating PAM configuration or a
+group-password database; existing files still require their watches. The native writer itself retains
+its existing-target requirement.
+
 ### Audit entries (`audit{RuleName}`)
 
 Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns a string that begins with `PASS` on success or contains a descriptive log on failure.

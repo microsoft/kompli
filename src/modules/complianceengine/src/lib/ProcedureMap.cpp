@@ -20,6 +20,9 @@ const char* Bindings<ApparmorProfileStateParams>::names[] = {"enforce"};
 // AuditdRules.h:22
 const char* Bindings<AuditdRulesParams>::names[] = {"searchItem", "excludeOption", "requiredOptions"};
 
+// AuditdWatch.h:19
+const char* Bindings<AuditdWatchParams>::names[] = {"path", "permissions"};
+
 // CommandOutputMatch.h:43
 const char* Bindings<CommandOutputMatchParams>::names[] = {"command", "awk", "pattern", "type"};
 
@@ -128,6 +131,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"AuditNotApplicable", {MakeHandler(AuditAuditNotApplicable), nullptr}},
     {"AuditSuccess", {MakeHandler(AuditAuditSuccess), nullptr}},
     {"AuditdRules", {MakeHandler(AuditAuditdRules), nullptr}},
+    {"AuditdWatch", {MakeHandler(AuditAuditdWatch), MakeHandler(RemediateAuditdWatch)}},
     {"CommandOutputMatch", {MakeHandler(AuditCommandOutputMatch), nullptr}},
     {"DconfValue", {MakeHandler(AuditDconfValue), MakeHandler(RemediateDconfValue)}},
     {"DefaultUmask", {MakeHandler(AuditDefaultUmask), MakeHandler(RemediateDefaultUmask)}},

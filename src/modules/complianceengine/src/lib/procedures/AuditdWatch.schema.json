@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "audit": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "AuditdWatch"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "AuditdWatch": {
+              "type": "object",
+              "required": [
+                "path",
+                "permissions"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "Existing absolute file or directory to watch; shell syntax and traversal are not accepted."
+                },
+                "permissions": {
+                  "type": "string",
+                  "description": "Explicit nonempty subset of audit watch permissions in rwxa order.",
+                  "pattern": "(^\\$[a-zA-Z0-9_]+:((r|r?w|r?w?x|r?w?x?a))$|(^(r|r?w|r?w?x|r?w?x?a)$))"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "remediation": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "AuditdWatch"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "AuditdWatch": {
+              "type": "object",
+              "required": [
+                "path",
+                "permissions"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "Existing absolute file or directory to watch; shell syntax and traversal are not accepted."
+                },
+                "permissions": {
+                  "type": "string",
+                  "description": "Explicit nonempty subset of audit watch permissions in rwxa order.",
+                  "pattern": "(^\\$[a-zA-Z0-9_]+:((r|r?w|r?w?x|r?w?x?a))$|(^(r|r?w|r?w?x|r?w?x?a)$))"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

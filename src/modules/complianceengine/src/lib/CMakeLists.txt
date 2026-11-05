@@ -22,6 +22,7 @@ set(PROCEDURES
     procedures/AksCommand.cpp
     procedures/NoShellAccountsLocked.cpp
     procedures/AuditdRules.cpp
+    procedures/AuditdWatch.cpp
     procedures/PasswdGroupsExist.cpp
     procedures/ApparmorProfileState.cpp
     procedures/DconfValue.cpp
@@ -74,6 +75,7 @@ set(SCHEMAS
     procedures/AksCommand.schema.json
     procedures/NoShellAccountsLocked.schema.json
     procedures/AuditdRules.schema.json
+    procedures/AuditdWatch.schema.json
     procedures/PasswdGroupsExist.schema.json
     procedures/ApparmorProfileState.schema.json
     procedures/DconfValue.schema.json
