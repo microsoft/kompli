@@ -1,4 +1,4 @@
-kompli - Roadmap
+Kompli - Roadmap
 ==================================================
 
 # 1. To be done

@@ -1,8 +1,8 @@
 # Remediation candidate assessment
 
 This assessment combines ComplianceEngine handler availability with procedure
-usage across 8,112 sampled benchmark rules. Usage is shown as
-`rules / positive leaves`; negated leaves are excluded
+usage in 8,112 generated benchmark rules from the Compliance Augmentation
+Engine. Usage is shown as `rules / positive leaves`; negated leaves are excluded
 because remediation generation intentionally does not invert audit procedures.
 
 ## Recommendation
@@ -21,7 +21,7 @@ The initial implementation should:
 1. Validate the module name.
 2. Return without mutation when the audit is already compliant.
 3. Refuse to unload a loaded module.
-4. Maintain a kompli-owned file below `/etc/modprobe.d` containing both
+4. Maintain a Kompli-owned file below `/etc/modprobe.d` containing both
    `blacklist <module>` and `install <module> /bin/false`.
 5. Use atomic creation or replacement, validate with `modprobe --showconfig`,
    post-audit, and roll back on failure.

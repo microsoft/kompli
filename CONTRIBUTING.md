@@ -1,6 +1,6 @@
 # Introduction
 
-kompli is a modular security compliance stack for Linux devices. kompli supports multi-authority device management over Azure and Azure Portal/CLI (via Azure Policy), GitOps, as well as local management. For more information on kompli see [Architecture](docs/architecture.md).
+Kompli is a modular security compliance stack for Linux devices. Kompli supports multi-authority device management over Azure and Azure Portal/CLI (via Azure Policy), GitOps, as well as local management. For more information on kompli see [Architecture](docs/architecture.md).
 
 # Code of conduct
 
@@ -8,7 +8,7 @@ This project has adopted the [Microsoft Open Source Code of Conduct](https://ope
 
 # Contributing
 
-We welcome contributions to kompli. The main way of contributing to and extending kompli is via developing new procedure [Procedures](src/engine/procedures)
+We welcome contributions to kompli. The main way of contributing to and extending kompli is via developing new procedure [Procedures](src/modules/complianceengine/src/lib/procedures)
 
 Pull requests with few exceptions must contain appropriate unit-tests. We cannot allow test coverage to go down. Pull requests containing code changes without accompanying unit tests may be rejected.
 Pull requests need to be formatted according to `.pre-commit-config.yaml`. Each pull request is checked by [Formatting Tests](https://github.com/microsoft/kompli/blob/main/.github/workflows/formatting.yml).
@@ -21,7 +21,7 @@ To help set expectations for external contributors and keep review focused, the 
 
 **In scope** (external contributions welcome):
 
-- New ComplianceEngine [procedures](src/engine/procedures) and Lua rules, with accompanying unit tests and schema/procedure-map updates.
+- New ComplianceEngine [procedures](src/modules/complianceengine/src/lib/procedures) and Lua rules, with accompanying unit tests and schema/procedure-map updates.
 - Bug fixes in the ComplianceEngine, MC adapter, and the retained common libraries (`commonutils`, `logging`, `mpiclient`, `telemetry`, `parson`).
 - Additional benchmark coverage, test fixtures, and improvements to existing test reliability.
 - Documentation fixes and clarifications.
