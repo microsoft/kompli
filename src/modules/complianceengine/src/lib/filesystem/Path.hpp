@@ -7,6 +7,7 @@
 #include "FilesystemPolicy.hpp"
 #include "Handle.hpp"
 #include "PathLinkAccess.hpp"
+#include "PrefixLimits.hpp"
 #include "Variant.hpp"
 
 #include <cstddef>
@@ -22,15 +23,6 @@ namespace ComplianceEngine
 class ContextInterface;
 namespace Filesystem
 {
-struct PrefixLimits
-{
-    std::size_t targetBytes = 4096;
-    std::size_t components = 128;
-    std::size_t work = 100000;
-    std::size_t liveDescriptors = 256;
-    std::size_t retainedBytes = std::size_t{1024} * 1024;
-    std::size_t fdinfoBytes = 4096;
-};
 enum class MountPolicy
 {
     CrossMounts,
@@ -100,73 +92,31 @@ public:
     {
     public:
         Component() = delete;
-        Component(const Component&) noexcept = default;
-        Component& operator=(const Component&) & noexcept = default;
-        Component(Component&& other) noexcept
-            : mAcquisition(other.mAcquisition)
-        {
-        }
-        Component& operator=(Component&& other) & noexcept
-        {
-            mAcquisition = other.mAcquisition;
-            return *this;
-        }
-        ~Component() noexcept = default;
-        AcquisitionFacts Acquired() const noexcept
-        {
-            return mAcquisition->Acquired();
-        }
-        std::string LookupName() const
-        {
-            return mAcquisition->LookupName();
-        }
-        std::string EffectiveName() const
-        {
-            return mAcquisition->EffectiveName();
-        }
-        Result<struct stat> Stat() const
-        {
-            return mAcquisition->Stat();
-        }
-        Result<bool> SetOwnership(UserId owner, GroupId group) const
-        {
-            return mAcquisition->SetOwnership(owner, group);
-        }
-        Result<bool> SetMode(mode_t mode) const
-        {
-            return mAcquisition->SetMode(mode);
-        }
-        Result<ReadableFile> OpenReadOnly() const
-        {
-            return mAcquisition->OpenReadOnly();
-        }
-        Result<ReadableFile> OpenReadOnly(ReadableFile::Policy policy) const
-        {
-            return mAcquisition->OpenReadOnly(policy);
-        }
-        Result<DirectoryCursor> OpenChildren() const
-        {
-            return mAcquisition->OpenChildren();
-        }
+        Component(const Component&) noexcept;
+        Component& operator=(const Component&) & noexcept;
+        Component(Component&& other) noexcept;
+        Component& operator=(Component&& other) & noexcept;
+        ~Component() noexcept;
+        ::ComplianceEngine::Filesystem::Metadata Metadata() const;
+        Result<struct stat> Stat() const;
+        Result<bool> SetOwnership(UserId owner, GroupId group) const;
+        Result<bool> SetMode(mode_t mode) const;
+        Result<ReadableFile> OpenReadOnly() const;
+        Result<ReadableFile> OpenReadOnly(ReadableFile::Policy policy) const;
 
     private:
         friend class Path;
-        explicit Component(Detail::Handle owned)
-            : mAcquisition(std::make_shared<const Detail::Handle>(std::move(owned)))
-        {
-        }
-        bool SameAcquisition(Component other) const noexcept
-        {
-            return mAcquisition == other.mAcquisition;
-        }
-        std::size_t LookupNameBytes() const noexcept
-        {
-            return mAcquisition->mLookupName.value.size();
-        }
-        std::size_t EffectiveNameBytes() const noexcept
-        {
-            return mAcquisition->mEffectiveName.value.size();
-        }
+        friend class FTW::Detail::DirectoryCursor;
+        explicit Component(Detail::Handle owned);
+        // The shared owner is immutable; these read the shared Handle's
+        // acquisition directly (no copy), needing Component's private
+        // mAcquisition plus the same friend-chain access to Handle/Metadata
+        // Path already has -- Component, nested in Path, inherits it.
+        static bool SameAcquisition(const Component& first, const Component& second) noexcept;
+        static std::size_t LookupNameBytes(const Component& owner) noexcept;
+        static std::size_t EffectiveNameBytes(const Component& owner) noexcept;
+        static std::string LookupName(const Component& owner);
+        static std::string EffectiveName(const Component& owner);
         std::shared_ptr<const Detail::Handle> mAcquisition;
     };
 
@@ -186,7 +136,7 @@ public:
             return *this;
         }
         ~Step() noexcept = default;
-        AcquisitionFacts Acquired() const noexcept;
+        ::ComplianceEngine::Filesystem::Metadata Metadata() const;
         Component Target() const noexcept;
         std::size_t RetainedDescriptors() const noexcept;
         std::size_t RetainedBytes() const noexcept;
@@ -232,7 +182,6 @@ public:
     const ContextInterface& Context() const noexcept;
 
 private:
-    friend class ::ComplianceEngine::Tests::DescriptorTestAccess;
     struct State;
     struct WorkAllowance
     {
@@ -244,15 +193,26 @@ private:
         Leaf
     };
     class Resolver;
+    // Private Path member (not anonymous-namespace) because it constructs
+    // the private nested Resolver and reads limits only through the public
+    // Limits() accessor.
+    static Result<Variant<Step, RejectionReason>> ResolveInput(const Path& path, std::string name, Policy policy, InputRole role, std::size_t& followed);
     explicit Path(std::shared_ptr<const State> state) noexcept
         : mState(std::move(state))
     {
     }
-    Result<Variant<Step, RejectionReason>> ResolveInput(std::string name, Policy policy, InputRole role, std::size_t& followed) const;
-    static Result<Detail::LinkTarget> ReadPinnedLink(const Detail::Descriptor& linkPin, std::size_t targetByteCap, std::size_t fdinfoByteCap,
+    // Scopes the allocation-fault guard to exactly this construction so the
+    // next heap allocation it covers is the shared root Handle, before it is
+    // published into the initial State.
+    static Component MakeRootComponent(Detail::Handle root);
+    // Checked pinned-link readers: dispatch through ContextInterface's
+    // friend-gated native surface (ReadLink/StatFile/StatusFlags/...), so
+    // they stay private members of Path, the narrowest existing friend that
+    // needs no Handle/Component state -- not anonymous-namespace functions.
+    static Result<Detail::LinkTarget> ReadPinnedLink(const Detail::Descriptor& linkPin, std::size_t targetByteCap,
         std::size_t temporaryBudget = PrefixLimits{}.retainedBytes);
-    static Result<Detail::LinkTarget> ReadVerifiedLinkText(const Detail::Descriptor& linkPin, const struct stat& before,
-        const Detail::ProcfsDescriptorAccess& procfs, std::size_t targetByteCap, std::size_t fdinfoByteCap, std::size_t temporaryBudget);
+    static Result<Detail::LinkTarget> ReadVerifiedLinkText(const Detail::Descriptor& linkPin, const struct stat& before, std::size_t targetByteCap,
+        std::size_t temporaryBudget);
     std::shared_ptr<const State> mState;
 };
 } // namespace Filesystem

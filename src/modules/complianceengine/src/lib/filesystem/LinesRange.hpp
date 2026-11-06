@@ -93,7 +93,9 @@ public:
     // releases all acquisition pins before returning. Reads no content
     // bytes. LinesRange owns only the independently activated readable file.
     static ComplianceEngine::Result<LinesRange> Make(const ComplianceEngine::ContextInterface& context, std::string path);
+    static ComplianceEngine::Result<LinesRange> Make(const ComplianceEngine::ContextInterface&&, std::string) = delete;
     static ComplianceEngine::Result<LinesRange> Make(const ComplianceEngine::ContextInterface& context, std::string path, Policy policy);
+    static ComplianceEngine::Result<LinesRange> Make(const ComplianceEngine::ContextInterface&&, std::string, Policy) = delete;
 
     Iterator begin();    // NOLINT(*-identifier-naming)
     Iterator end() const // NOLINT(*-identifier-naming)

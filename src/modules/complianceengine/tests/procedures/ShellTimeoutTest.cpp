@@ -33,7 +33,7 @@ protected:
         return flags >= 0 && !(flags & O_PATH) && (flags & O_ACCMODE) == O_RDONLY && ::fstat(fd, &held) == 0 && ::stat(path.c_str(), &fixture) == 0 &&
                held.st_dev == fixture.st_dev && held.st_ino == fixture.st_ino;
     }
-    MockContext mContext;
+    ::testing::StrictMock<MockContext> mContext;
     IndicatorsTree mIndicators;
 
     string mTempDir;
@@ -46,6 +46,12 @@ protected:
         mContext.SetSpecialFilePath("/etc/bash.bashrc", missingPath);
         mContext.SetSpecialFilePath("/etc/profile", missingPath);
         mContext.SetSpecialFilePath("/etc/profile.d/", mContext.GetTempdirPath() + "/missing-config-directory");
+        // No test in this fixture constrains open/stat/identity seams; only
+        // OpenNativeAt/ReadFileDescriptor/CloseFileDescriptor get
+        // test-specific ON_CALL overrides in a few tests below, each paired
+        // with its own later EXPECT_CALL that takes priority over this
+        // catch-all.
+        mContext.AllowIncidentalNativeAccess();
     }
 
     void TearDown() override
@@ -162,6 +168,7 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, ReachedReadFailureIsNotMissing
         errno = EIO;
         return -1;
     });
+    EXPECT_CALL(mContext, ReadFileDescriptor(testing::_, testing::_, testing::_)).Times(testing::AnyNumber());
 
     const auto result = AuditShellTimeout(mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
@@ -186,6 +193,7 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, OpenFailurePreservesErrno)
         }
         return mContext.RealOpenNativeAt(directory, component, flags);
     });
+    EXPECT_CALL(mContext, OpenNativeAt(testing::_, testing::_, testing::_)).Times(testing::AnyNumber());
 
     const auto result = AuditShellTimeout(mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
@@ -243,6 +251,11 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateStopsWithoutReadingTa
         closes += IsData(descriptor, path);
         return mContext.RealCloseFileDescriptor(descriptor);
     });
+    // Newer than the fixture's catch-all; the exact read/close-count property
+    // is already enforced below via the hand-counted reads/closes, not gMock
+    // cardinality.
+    EXPECT_CALL(mContext, ReadFileDescriptor(testing::_, testing::_, testing::_)).Times(testing::AnyNumber());
+    EXPECT_CALL(mContext, CloseFileDescriptor(testing::_)).Times(testing::AnyNumber());
 
     const auto result = AuditShellTimeout(mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
@@ -268,10 +281,14 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateCloseFailurePreserves
         {
             ++closes;
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return 0;
+        return ComplianceEngine::Result<void>::Success();
     });
+    // Newer than the fixture's catch-all; the exact close-count property is
+    // already enforced below via the hand-counted `closes`, not gMock
+    // cardinality.
+    EXPECT_CALL(mContext, CloseFileDescriptor(testing::_)).Times(testing::AnyNumber());
 
     const auto result = AuditShellTimeout(mIndicators, mContext);
     CloseLog(&logHandle);
@@ -287,7 +304,7 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateCloseFailurePreserves
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const string closeEntry = "Cannot close readable-file activation: " + std::to_string(EIO);
+    const string closeEntry = "Failed to close filesystem resource: " + std::string(strerror(EIO));
     const auto first = text.find(closeEntry);
     ASSERT_NE(string::npos, first);
     EXPECT_EQ(string::npos, text.find(closeEntry, first + closeEntry.size()));

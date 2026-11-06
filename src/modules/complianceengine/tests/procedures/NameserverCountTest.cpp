@@ -16,7 +16,9 @@ namespace
 {
 ComplianceEngine::Result<Status> Evaluate(const std::string& contents, NameserverCountParams params = {})
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ComplianceEngine::IndicatorsTree indicators;
     indicators.Push("NameserverCount");
     const auto path = context.MakeTempfile(contents);
@@ -52,7 +54,9 @@ TEST(NameserverCountTest, ZeroCapturesAndReadFailuresAreErrors)
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(ENODATA, result.Error().code);
 
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ComplianceEngine::IndicatorsTree indicators;
     indicators.Push("NameserverCount");
     NameserverCountParams params;
@@ -97,7 +101,9 @@ TEST(NameserverCountTest, GlibcLexingIgnoresUnmatchedAndTrailingNameserverText)
 
 TEST(NameserverCountTest, RejectsInvalidPathsAndUnknownArguments)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ComplianceEngine::IndicatorsTree indicators;
     indicators.Push("NameserverCount");
     NameserverCountParams params;
@@ -133,7 +139,9 @@ TEST(NameserverCountTest, RejectsInvalidPathsAndUnknownArguments)
 
 TEST(NameserverCountTest, SerializedProcedureExecutesTheProductionPipeline)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const auto path = context.MakeTempfile("nameserver 192.0.2.1\nnameserver 2001:db8::1\n");
     context.SetSpecialFilePath("/etc/resolv.conf", path);
     auto json = ComplianceEngine::JsonWrapper::FromString(R"({"NameserverCount":{"path":"/etc/resolv.conf"}})");
@@ -150,7 +158,9 @@ TEST(NameserverCountTest, SerializedProcedureExecutesTheProductionPipeline)
 
 TEST(NameserverCountTest, SerializedProcedureUsesDefaultPathWhenOmitted)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     context.SetSpecialFilePath("/etc/resolv.conf", context.MakeTempfile("nameserver 192.0.2.1\nnameserver 2001:db8::1\n"));
     auto json = ComplianceEngine::JsonWrapper::FromString(R"({"NameserverCount":{}})");
     ASSERT_TRUE(json.HasValue());
@@ -166,7 +176,9 @@ TEST(NameserverCountTest, SerializedProcedureUsesDefaultPathWhenOmitted)
 
 TEST(NameserverCountTest, SerializedProcedureUsesExplicitCustomPath)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const auto path = context.MakeTempfile("nameserver 192.0.2.1\nnameserver 2001:db8::1\n");
     auto json = ComplianceEngine::JsonWrapper::FromString(R"({"NameserverCount":{"path":")" + path + R"("}})");
     ASSERT_TRUE(json.HasValue());
@@ -182,7 +194,9 @@ TEST(NameserverCountTest, SerializedProcedureUsesExplicitCustomPath)
 
 TEST(NameserverCountTest, SerializedProcedureResolvesCustomPathParameter)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const auto path = context.MakeTempfile("nameserver 192.0.2.1\nnameserver 2001:db8::1\n");
     auto json = ComplianceEngine::JsonWrapper::FromString(R"({"NameserverCount":{"path":"$source"}})");
     ASSERT_TRUE(json.HasValue());
@@ -198,7 +212,9 @@ TEST(NameserverCountTest, SerializedProcedureResolvesCustomPathParameter)
 
 TEST(NameserverCountTest, SerializedProcedureRejectsInvalidResolvedPath)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     auto json = ComplianceEngine::JsonWrapper::FromString(R"({"NameserverCount":{"path":"$source"}})");
     ASSERT_TRUE(json.HasValue());
     ComplianceEngine::ParameterMap parameters{{"source", "relative/resolv.conf"}};

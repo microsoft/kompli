@@ -174,7 +174,7 @@ TEST_F(PathFile, DoNotFollowRejectsIntermediateAndFinalSymlinksWithoutReading)
         reads += IsFileDescriptor(fd, true);
         return context.RealReadFileDescriptor(fd, buffer, size);
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
         intermediateCloses += IsLinkDescriptor(fd, path + ".link");
         finalCloses += IsLinkDescriptor(fd, path + ".old");
         return context.RealCloseFileDescriptor(fd);
@@ -641,9 +641,9 @@ TEST_F(PathFile, RepeatedFailedCloseSucceedsWithoutRetry)
             ++closes;
         context.RealCloseFileDescriptor(fd);
         if (!data)
-            return 0;
+            return ComplianceEngine::Result<void>::Success();
         errno = EBADF;
-        return -1;
+        return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     {
         auto opened = LinesRange::Make(context, path, Limited(2));
@@ -675,9 +675,9 @@ TEST_F(PathFile, FailedExplicitCloseLogsDescriptorErrorOnlyOnce)
             ++closes;
         context.RealCloseFileDescriptor(fd);
         if (!data)
-            return 0;
+            return ComplianceEngine::Result<void>::Success();
         errno = EBADF;
-        return -1;
+        return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     auto opened = LinesRange::Make(context, path);
     EXPECT_TRUE(opened.HasValue());
@@ -693,11 +693,10 @@ TEST_F(PathFile, FailedExplicitCloseLogsDescriptorErrorOnlyOnce)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto expected = "Cannot close readable-file activation (ownership bug, EBADF): " + std::to_string(EBADF);
+    const auto expected = "Failed to close filesystem resource: " + std::string(strerror(EBADF)) + " (ownership bug)";
     const auto firstOccurrence = text.find(expected);
     ASSERT_NE(std::string::npos, firstOccurrence);
     EXPECT_EQ(std::string::npos, text.find(expected, firstOccurrence + expected.size()));
-    EXPECT_EQ(std::string::npos, text.find("Cannot close internal filesystem descriptor"));
 }
 
 TEST_F(PathFile, DestructionAndMoveAssignmentLogDataFailureOncePerRange)
@@ -714,9 +713,9 @@ TEST_F(PathFile, DestructionAndMoveAssignmentLogDataFailureOncePerRange)
             ++closes;
         context.RealCloseFileDescriptor(fd);
         if (!data)
-            return 0;
+            return ComplianceEngine::Result<void>::Success();
         errno = EBADF;
-        return -1;
+        return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     {
         auto first = LinesRange::Make(context, path);
@@ -734,13 +733,12 @@ TEST_F(PathFile, DestructionAndMoveAssignmentLogDataFailureOncePerRange)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto expected = "Cannot close readable-file activation (ownership bug, EBADF): " + std::to_string(EBADF);
+    const auto expected = "Failed to close filesystem resource: " + std::string(strerror(EBADF)) + " (ownership bug)";
     const auto firstOccurrence = text.find(expected);
     ASSERT_NE(std::string::npos, firstOccurrence);
     const auto secondOccurrence = text.find(expected, firstOccurrence + expected.size());
     ASSERT_NE(std::string::npos, secondOccurrence);
     EXPECT_EQ(std::string::npos, text.find(expected, secondOccurrence + expected.size()));
-    EXPECT_EQ(std::string::npos, text.find("Cannot close internal filesystem descriptor"));
 }
 
 TEST_F(PathFile, DestructorReportsNativeDataCloseFailureOnce)
@@ -751,15 +749,15 @@ TEST_F(PathFile, DestructorReportsNativeDataCloseFailureOnce)
     ASSERT_NE(nullptr, logHandle);
     context.SetLogHandle(logHandle);
     int closes = 0;
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
         const bool data = IsFileDescriptor(fd, true);
         if (data)
             ++closes;
         context.RealCloseFileDescriptor(fd);
         if (!data)
-            return 0;
+            return ComplianceEngine::Result<void>::Success();
         errno = EIO;
-        return -1;
+        return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     {
         auto opened = LinesRange::Make(context, path);
@@ -771,7 +769,7 @@ TEST_F(PathFile, DestructorReportsNativeDataCloseFailureOnce)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto expected = "Cannot close readable-file activation: " + std::to_string(EIO);
+    const auto expected = "Failed to close filesystem resource: " + std::string(strerror(EIO));
     const auto occurrence = text.find(expected);
     ASSERT_NE(std::string::npos, occurrence);
     EXPECT_EQ(std::string::npos, text.find(expected, occurrence + expected.size()));
@@ -952,9 +950,9 @@ TEST_F(PathFile, FactoryFailureClosesAcquiredPinAndReportsPrimary)
         if (pin)
         {
             errno = EBADF;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return 0;
+        return ComplianceEngine::Result<void>::Success();
     });
     auto opened = LinesRange::Make(context, path);
     ASSERT_FALSE(opened.HasValue());
@@ -967,7 +965,7 @@ TEST_F(PathFile, FactoryFailureClosesAcquiredPinAndReportsPrimary)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto expected = "Cannot close internal filesystem descriptor (ownership bug, EBADF): " + std::to_string(EBADF);
+    const auto expected = "Failed to close filesystem resource: " + std::string(strerror(EBADF)) + " (ownership bug)";
     const auto occurrence = text.find(expected);
     ASSERT_NE(std::string::npos, occurrence);
     EXPECT_EQ(std::string::npos, text.find(expected, occurrence + expected.size()));
@@ -1065,14 +1063,14 @@ TEST_F(PathFile, PinAndDataCloseFailuresAreDiagnosticOnly)
         if (pin)
         {
             errno = EACCES;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
         if (data)
         {
             errno = EBADF;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return 0;
+        return ComplianceEngine::Result<void>::Success();
     });
     ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
@@ -1094,9 +1092,9 @@ TEST_F(PathFile, PinAndDataCloseFailuresAreDiagnosticOnly)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    EXPECT_NE(std::string::npos, text.find("Cannot close internal filesystem descriptor: " + std::to_string(EACCES)));
+    EXPECT_NE(std::string::npos, text.find("Failed to close filesystem resource: " + std::string(strerror(EACCES))));
     EXPECT_EQ(std::string::npos, text.find("Failed to close pinned descriptors for " + path + ": " + std::to_string(EACCES)));
-    const auto dataError = "Cannot close readable-file activation (ownership bug, EBADF): " + std::to_string(EBADF);
+    const auto dataError = "Failed to close filesystem resource: " + std::string(strerror(EBADF)) + " (ownership bug)";
     const auto dataOccurrence = text.find(dataError);
     ASSERT_NE(std::string::npos, dataOccurrence);
     EXPECT_EQ(std::string::npos, text.find(dataError, dataOccurrence + dataError.size()));
@@ -1124,9 +1122,9 @@ TEST_F(PathFile, AcquisitionReleaseReportsPinFailureWithoutRejectingReader)
         if (fail)
         {
             errno = ++failedPins == 1 ? EACCES : EIO;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return 0;
+        return ComplianceEngine::Result<void>::Success();
     });
     auto opened = LinesRange::Make(context, path);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
@@ -1139,7 +1137,7 @@ TEST_F(PathFile, AcquisitionReleaseReportsPinFailureWithoutRejectingReader)
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
     EXPECT_EQ(std::string::npos, text.find("Secondary filesystem pin close failure: " + std::to_string(EIO)));
-    EXPECT_NE(std::string::npos, text.find("Cannot close internal filesystem descriptor: " + std::to_string(EACCES)));
+    EXPECT_NE(std::string::npos, text.find("Failed to close filesystem resource: " + std::string(strerror(EACCES))));
 }
 
 TEST_F(PathFile, FailedAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
@@ -1154,7 +1152,7 @@ TEST_F(PathFile, FailedAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
         }
         return context.RealStatFileDescriptor(fd, metadata);
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
         const bool pin = IsFileDescriptor(fd, false);
         const bool data = IsFileDescriptor(fd, true);
         pinCloses += pin;
@@ -1163,9 +1161,9 @@ TEST_F(PathFile, FailedAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
         if (pin)
         {
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return 0;
+        return ComplianceEngine::Result<void>::Success();
     });
     auto failed = LinesRange::Make(context, path);
     ASSERT_FALSE(failed.HasValue());
@@ -1251,7 +1249,7 @@ TEST_F(PathFile, AncestorReplacementBeforeAcquisitionRespectsLinkPolicy)
         reads += IsFileDescriptor(fd, true, alternate + "/target");
         return context.RealReadFileDescriptor(fd, buffer, size);
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
         linkCloses += IsLinkDescriptor(fd, ancestor);
         return context.RealCloseFileDescriptor(fd);
     });
@@ -1403,9 +1401,9 @@ TEST_F(PathFile, DataCloseFailureDoesNotReplaceVerifiedInputOrReadFailure)
         {
             ++dataCloses;
             errno = EBADF;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return 0;
+        return ComplianceEngine::Result<void>::Success();
     });
     auto result = Collect(path, Limited(4));
     ASSERT_TRUE(result.HasValue());
@@ -1453,16 +1451,16 @@ TEST_F(PathFile, LastUnterminatedLineRequiresVerificationButNotSuccessfulDisposa
     range.Close();
     ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) { return context.RealStatFileDescriptor(fd, metadata); });
     int closes = 0;
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> int {
+    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
         const bool data = IsFileDescriptor(fd, true);
         closes += data;
         context.RealCloseFileDescriptor(fd);
         if (data)
         {
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return 0;
+        return ComplianceEngine::Result<void>::Success();
     });
     // A failed close no longer suppresses the verified unterminated line.
     auto tail = LinesRange::Make(context, path, Limited(4));

@@ -44,6 +44,9 @@ enum class TestCheckpoint : unsigned
 };
 thread_local unsigned armedCheckpoint = 0;
 thread_local std::size_t checkpointHits = 0;
+thread_local unsigned armedHandleAllocationSite = 0;
+thread_local bool faultHandleAllocation = false;
+thread_local std::size_t handleAllocationFaults = 0;
 thread_local bool faultInverseAllocation = false;
 thread_local std::size_t inverseAllocationFailures = 0;
 struct ResetCheckpointOnExit
@@ -79,6 +82,19 @@ extern "C" bool TripFilesystemCollectionCheckpoint(unsigned site) noexcept
     return true;
 }
 
+extern "C" bool ArmFilesystemCollectionHandleAllocation(unsigned site) noexcept
+{
+    if (armedHandleAllocationSite != site)
+        return false;
+    armedHandleAllocationSite = 0;
+    faultHandleAllocation = true;
+    return true;
+}
+extern "C" void DisarmFilesystemCollectionHandleAllocation() noexcept
+{
+    faultHandleAllocation = false;
+}
+
 extern "C" void ArmFilesystemCollectionInverseAllocation() noexcept
 {
     faultInverseAllocation = true;
@@ -92,6 +108,12 @@ extern "C" void DisarmFilesystemCollectionInverseAllocation() noexcept
 extern "C" void* __real__Znwm(std::size_t bytes);
 extern "C" void* __wrap__Znwm(std::size_t bytes)
 {
+    if (faultHandleAllocation)
+    {
+        faultHandleAllocation = false;
+        ++handleAllocationFaults;
+        throw std::bad_alloc();
+    }
     if (faultInverseAllocation)
     {
         faultInverseAllocation = false; // Never fault disposal, logging or native seams.
@@ -129,27 +151,29 @@ extern "C" void* __wrap__Znwm(std::size_t bytes)
 // allocate before recording the call or reaching the native close action.
 // This test-only override observes disposal but delegates the actual syscall
 // to the existing native seam; it cannot grant or transfer descriptor ownership.
-struct AllocationCloseContext final : MockContext
+struct AllocationCloseContext final : ::testing::StrictMock<MockContext>
 {
     mutable std::size_t nativeCloses = 0;
     mutable std::size_t failedNativeCloses = 0;
     mutable std::size_t actualNativeCloseFailures = 0;
     mutable bool reportNativeCloseFailure = false;
+    mutable ino_t trackedInode = 0;
+    mutable std::size_t trackedCloses = 0;
 
-    int CloseFileDescriptor(int fd) const noexcept override
+    ComplianceEngine::Result<void> CloseFileDescriptor(int fd) const noexcept override
     {
         ++nativeCloses;
-        const int result = RealCloseFileDescriptor(fd);
-        if (result != 0)
+        struct stat closing = {};
+        if (trackedInode != 0 && ::fstat(fd, &closing) == 0 && closing.st_ino == trackedInode)
+            ++trackedCloses;
+        auto result = RealCloseFileDescriptor(fd);
+        if (!result)
             ++actualNativeCloseFailures;
-        if (result != 0 || reportNativeCloseFailure)
+        if (!result || reportNativeCloseFailure)
         {
             ++failedNativeCloses;
             if (reportNativeCloseFailure)
-            {
-                errno = EIO; // Real close has already released the fd.
-                return -1;
-            }
+                return ComplianceEngine::Error(EIO); // Native close has already released the fd.
         }
         return result;
     }
@@ -185,15 +209,80 @@ struct PreparedTraversalFixture
         output << "content";
         if (!output)
             throw std::runtime_error("Failed to prepare FTW fault file");
+        // No test using this fixture sets its own EXPECT_CALL; each counts
+        // close/open-descriptor behavior by hand (nativeCloses,
+        // actualNativeCloseFailures), not gMock cardinality.
+        context.AllowIncidentalNativeAccess();
     }
 };
+
+// Metadata is a plain value member of Handle, not a separate heap
+// allocation; the allocation under fault is the one remaining heap
+// allocation between acquiring a pin and publishing it: make_shared's
+// combined control-block-plus-Handle block for the root and the unpublished
+// child Component. Both sites still release the unpublished pin's
+// descriptor exactly once and leave the prior Path state untouched.
+TEST(FilesystemCollectionAllocationTest, StagedRootAndChildHandleAllocationReleaseOnlyUnpublishedPin)
+{
+    using ComplianceEngine::Filesystem::Path;
+    AllocationCloseContext context;
+    // No EXPECT_CALL in this test constrains any native seam; the close
+    // count under test (context.trackedCloses) is tracked by the
+    // AllocationCloseContext override itself, not gMock cardinality.
+    context.AllowIncidentalNativeAccess();
+    ComplianceEngine::Filesystem::ResolverLimits limits;
+    limits.shared.retainedBytes = 262144;
+    Path::Policy policy;
+    policy.mounts = ComplianceEngine::Filesystem::MountPolicy::CrossMounts;
+    const auto baseline = OpenDescriptors();
+    struct stat root = {};
+    ASSERT_EQ(0, ::stat("/", &root));
+    context.trackedInode = root.st_ino;
+    armedHandleAllocationSite = 1;
+    const auto rootFaults = handleAllocationFaults;
+    EXPECT_THROW(Path::Make(context, "/", policy, limits), std::bad_alloc);
+    EXPECT_EQ(0u, armedHandleAllocationSite);
+    EXPECT_FALSE(faultHandleAllocation);
+    EXPECT_EQ(rootFaults + 1, handleAllocationFaults);
+    EXPECT_EQ(1u, context.trackedCloses);
+    EXPECT_EQ(baseline, OpenDescriptors());
+
+    const std::string file = context.MakeTempfile("unpublished child");
+    struct stat child = {};
+    ASSERT_EQ(0, ::stat(file.c_str(), &child));
+    auto acquired = Path::Make(context, context.GetTempdirPath(), policy, limits);
+    ASSERT_TRUE(acquired.HasValue());
+    ASSERT_TRUE(acquired.Value().Is<Path>());
+    Path path = ComplianceEngine::As<Path>(std::move(acquired).Value());
+    const std::string previous = path.ToString();
+    const auto pins = path.RetainedDescriptors();
+    context.trackedInode = child.st_ino;
+    context.trackedCloses = 0;
+    armedHandleAllocationSite = 2;
+    const auto childFaults = handleAllocationFaults;
+    const auto beforeResolve = OpenDescriptors();
+    EXPECT_THROW(path.Resolve(file.substr(file.find_last_of("/") + 1), policy), std::bad_alloc);
+    EXPECT_EQ(0u, armedHandleAllocationSite);
+    EXPECT_FALSE(faultHandleAllocation);
+    EXPECT_EQ(childFaults + 1, handleAllocationFaults);
+    EXPECT_EQ(1u, context.trackedCloses);
+    EXPECT_EQ(beforeResolve, OpenDescriptors());
+    EXPECT_EQ(previous, path.ToString());
+    EXPECT_EQ(pins, path.RetainedDescriptors());
+    auto retry = path.Resolve(file.substr(file.find_last_of("/") + 1), policy);
+    ASSERT_TRUE(retry.HasValue());
+    ASSERT_TRUE(retry.Value().Is<Path::Step>());
+    EXPECT_EQ(child.st_ino, ComplianceEngine::As<Path::Step>(retry.Value()).Metadata().Stat().st_ino);
+}
 
 TEST(FilesystemCollectionAllocationTest, StepResultAndVariantTransfersDoNotAllocate)
 {
     using ComplianceEngine::Filesystem::Path;
     static_assert(std::is_nothrow_move_constructible<Path::Step>::value, "Step move cannot allocate");
     static_assert(std::is_nothrow_move_assignable<Path::Step>::value, "Step replacement cannot allocate");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     Path::Policy policy;
     policy.mounts = ComplianceEngine::Filesystem::MountPolicy::CrossMounts;
     ComplianceEngine::Filesystem::ResolverLimits limits;
@@ -230,7 +319,9 @@ TEST(FilesystemCollectionAllocationTest, StepResultAndVariantTransfersDoNotAlloc
 TEST(FilesystemCollectionAllocationTest, PathMoveAndResultTransferDoNotAllocate)
 {
     static_assert(std::is_nothrow_move_constructible<ComplianceEngine::Filesystem::Path>::value, "Path move must be noexcept");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ComplianceEngine::Filesystem::ResolverLimits limits;
     limits.shared.retainedBytes = 262144;
     ComplianceEngine::Filesystem::Path::Policy policy;
@@ -257,6 +348,10 @@ TEST(FilesystemCollectionAllocationTest, FreezeRootAllocationFailuresPreserveSel
 {
     using ComplianceEngine::Filesystem::Path;
     AllocationCloseContext context;
+    // No EXPECT_CALL in this test constrains any native seam; close-failure
+    // counts under test (context.failedNativeCloses) are tracked by the
+    // AllocationCloseContext override itself, not gMock cardinality.
+    context.AllowIncidentalNativeAccess();
     const std::string directory = context.GetTempdirPath();
     ComplianceEngine::Filesystem::ResolverLimits limits;
     limits.shared.retainedBytes = 262144;
@@ -293,14 +388,14 @@ TEST(FilesystemCollectionAllocationTest, FreezeRootAllocationFailuresPreserveSel
             countFreezeAllocations = false;
             EXPECT_EQ(failure, freezeAllocationAttempts);
             EXPECT_EQ(directory, path.ToString());
-            EXPECT_EQ("/", path.Root().LookupName());
+            EXPECT_EQ("/", path.Root().Metadata().LookupName());
             auto frozen = path.Freeze();
             ASSERT_TRUE(frozen.HasValue()) << frozen.Error().message;
             EXPECT_TRUE(frozen.Value());
             EXPECT_FALSE(path.Freeze().Value());
             EXPECT_EQ(directory, path.ToString());
-            EXPECT_EQ("/", path.Root().LookupName());
-            EXPECT_EQ(directory, path.Leaf().EffectiveName());
+            EXPECT_EQ("/", path.Root().Metadata().LookupName());
+            EXPECT_EQ(directory, path.Leaf().Metadata().EffectiveName());
             EXPECT_TRUE(path.Leaf().Stat().HasValue());
         }
         EXPECT_EQ(descriptorsBefore, OpenDescriptors());
@@ -317,7 +412,11 @@ TEST(FilesystemCollectionAllocationTest, RootCopyAllocationFailureReturnsENOMEMB
     ASSERT_TRUE(control.HasValue()) << control.Error().message;
     EXPECT_EQ(request.rootPath, control->rootPath);
 
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // The test wants ZERO calls on these seams; production code returns
+    // ENOMEM before any other native seam is reached (baseline measurement
+    // confirms no incidental warnings here), so no additional catch-all is
+    // declared.
     EXPECT_CALL(context, LstatPath(testing::_, testing::_)).Times(0);
     EXPECT_CALL(context, OpenNativePath(testing::_, testing::_)).Times(0);
 
@@ -338,6 +437,12 @@ TEST(FilesystemCollectionAllocationTest, RootCopyAllocationFailureReturnsENOMEMB
 TEST(FilesystemCollectionAllocationTest, ComponentCopyAndMoveAsCopyRetainSourceWithoutAllocation)
 {
     AllocationCloseContext context;
+    // OpenNativePath stays in the catch-all even though this test later adds
+    // its own Times(0) on it: the catch-all is declared here, strictly
+    // before that narrower expectation, so the newer Times(0) still wins for
+    // every call made during/after the copy-move section (see MockContext.h
+    // helper comment).
+    context.AllowIncidentalNativeAccess();
     const auto before = OpenDescriptors();
     const auto closesBefore = context.nativeCloses;
     {
@@ -351,8 +456,8 @@ TEST(FilesystemCollectionAllocationTest, ComponentCopyAndMoveAsCopyRetainSourceW
         auto path = ComplianceEngine::As<ComplianceEngine::Filesystem::Path>(std::move(opened.Value()));
         auto first = path.Leaf();
         auto second = first;
-        const auto identity = first.Acquired().metadata.st_ino;
-        const auto lookup = first.LookupName();
+        const auto identity = first.Metadata().Stat().st_ino;
+        const auto lookup = first.Metadata().LookupName();
         EXPECT_CALL(context, OpenNativePath(testing::_, testing::_)).Times(0);
         struct ResetFaultOnExit
         {
@@ -371,11 +476,15 @@ TEST(FilesystemCollectionAllocationTest, ComponentCopyAndMoveAsCopyRetainSourceW
         faultTransfers = false;
         EXPECT_EQ(0u, transferAllocations);
         EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-        EXPECT_EQ(identity, first.Acquired().metadata.st_ino);
-        EXPECT_EQ(identity, second.Acquired().metadata.st_ino);
-        EXPECT_EQ(identity, moved.Acquired().metadata.st_ino);
+        // VerifyAndClearExpectations() above cleared every EXPECT_CALL on
+        // context, including the fixture-wide catch-all; the Stat() calls
+        // below are incidental again and need it re-declared.
+        context.AllowIncidentalNativeAccess();
+        EXPECT_EQ(identity, first.Metadata().Stat().st_ino);
+        EXPECT_EQ(identity, second.Metadata().Stat().st_ino);
+        EXPECT_EQ(identity, moved.Metadata().Stat().st_ino);
         EXPECT_TRUE(copied.Stat().HasValue());
-        EXPECT_EQ(lookup, copied.LookupName());
+        EXPECT_EQ(lookup, copied.Metadata().LookupName());
     }
     EXPECT_EQ(before, OpenDescriptors());
     EXPECT_GT(context.nativeCloses, closesBefore);
@@ -386,6 +495,8 @@ TEST(FilesystemCollectionAllocationTest, ApplyAllocationFailuresNeverPublishPart
 {
     using ComplianceEngine::Filesystem::Path;
     AllocationCloseContext context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const std::string directory = context.GetTempdirPath();
     const std::string child = context.MakeTempfile("pinned");
     const std::string name = child.substr(child.find_last_of('/') + 1);
@@ -432,7 +543,7 @@ TEST(FilesystemCollectionAllocationTest, ApplyAllocationFailuresNeverPublishPart
             Path::Step step = ComplianceEngine::As<Path::Step>(std::move(resolved.Value()));
             const std::string oldName = path.ToString();
             const auto oldSize = path.Size();
-            const auto oldIdentity = path.Leaf().Acquired().metadata.st_ino;
+            const auto oldIdentity = path.Leaf().Metadata().Stat().st_ino;
             freezeAllocationAttempts = 0;
             failFreezeAt = failure;
             countFreezeAllocations = true;
@@ -441,7 +552,7 @@ TEST(FilesystemCollectionAllocationTest, ApplyAllocationFailuresNeverPublishPart
             EXPECT_EQ(failure, freezeAllocationAttempts);
             EXPECT_EQ(oldName, path.ToString());
             EXPECT_EQ(oldSize, path.Size());
-            EXPECT_EQ(oldIdentity, path.Leaf().Acquired().metadata.st_ino);
+            EXPECT_EQ(oldIdentity, path.Leaf().Metadata().Stat().st_ino);
             EXPECT_TRUE(step.Target().Stat().HasValue());
         }
         EXPECT_EQ(beforeDescriptors, OpenDescriptors());
@@ -453,6 +564,8 @@ TEST(FilesystemCollectionAllocationTest, FTWFactoryAllocationFaultDoesNotConsume
 {
     using ComplianceEngine::Filesystem::Path;
     AllocationCloseContext context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const std::string directory = context.GetTempdirPath();
     ComplianceEngine::Filesystem::ResolverLimits limits;
     limits.shared.retainedBytes = 262144;
@@ -495,7 +608,7 @@ TEST(FilesystemCollectionAllocationTest, FTWFactoryAllocationFaultDoesNotConsume
             auto selected = makeRoot();
             ASSERT_TRUE(selected.HasValue()) << selected.Error().message;
             Path rootPath = std::move(selected).Value();
-            const auto inode = rootPath.Leaf().Acquired().metadata.st_ino;
+            const auto inode = rootPath.Leaf().Metadata().Stat().st_ino;
             retainedDescriptors = rootPath.RetainedDescriptors();
             closesBefore = context.nativeCloses;
             std::string reportingName = directory; // Allocate before arming, then transfer without a copy.
@@ -508,7 +621,7 @@ TEST(FilesystemCollectionAllocationTest, FTWFactoryAllocationFaultDoesNotConsume
             EXPECT_EQ(ENOMEM, failed.Error().code);
             EXPECT_EQ(failure, freezeAllocationAttempts);
             EXPECT_EQ(directory, rootPath.ToString()); // Path move-as-copy retains its source.
-            EXPECT_EQ(inode, rootPath.Leaf().Acquired().metadata.st_ino);
+            EXPECT_EQ(inode, rootPath.Leaf().Metadata().Stat().st_ino);
             EXPECT_TRUE(rootPath.Leaf().Stat().HasValue());
             EXPECT_EQ(closesBefore, context.nativeCloses); // The original selected root still owns its pins.
         }
@@ -524,6 +637,8 @@ TEST(FilesystemCollectionAllocationTest, FTWRangeAndResultTransfersDoNotAllocate
     using ComplianceEngine::Filesystem::FTW::FileRange;
     static_assert(std::is_nothrow_move_constructible<FileRange>::value, "FTW range move must not allocate");
     AllocationCloseContext context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const std::string directory = context.GetTempdirPath();
     ComplianceEngine::Filesystem::FilesystemCollectionRequest request(directory, ComplianceEngine::Filesystem::FilesystemRootKind::Directory);
     auto opened = ComplianceEngine::Filesystem::FTW::Files(request, context);

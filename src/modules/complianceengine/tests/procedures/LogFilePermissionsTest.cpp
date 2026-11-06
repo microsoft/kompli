@@ -30,7 +30,7 @@ using ComplianceEngine::Status;
 class LogFileRangeTest : public ::testing::Test
 {
 protected:
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     IndicatorsTree indicators;
     std::string testDir = context.GetTempdirPath() + "/logfile-range";
 
@@ -40,6 +40,13 @@ protected:
         context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/bash\n"));
         context.SetSpecialFilePath("/etc/passwd", context.MakeTempfile("root:x:0:0:root:/root:/bin/bash\n"));
         indicators.Push("LogFilePermissions");
+        // No test in this fixture sets its own EXPECT_CALL: each customizes
+        // behavior via ON_CALL only (fault injection, argument-filtered
+        // overrides), and every count it cares about (deniedPins, entries,
+        // closeAttempts) is enforced by hand with EXPECT_EQ, not gMock
+        // cardinality. A single any-argument catch-all per seam group is
+        // therefore safe for the whole fixture.
+        context.AllowIncidentalNativeAccess();
     }
 
     Result<Status> Run(bool remediate, const std::string& path = "")
@@ -176,8 +183,8 @@ TEST_F(LogFileRangeTest, ReachedItemErrorAfterNoncomplianceOutranksCleanupFailur
     });
     ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([](DIR* stream) {
         const int result = closedir(stream);
-        errno = EIO;
-        return result == 0 ? -1 : result;
+        const int nativeCode = errno;
+        return ComplianceEngine::Error(result == 0 ? EIO : nativeCode);
     });
 
     const auto result = Run(false);
@@ -199,8 +206,8 @@ TEST_F(LogFileRangeTest, CloseFailureDoesNotOverrideVerdictForEitherPath)
     ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([&](DIR* stream) {
         ++closeAttempts;
         const int result = closedir(stream);
-        errno = EIO;
-        return result == 0 ? -1 : result;
+        const int nativeCode = errno;
+        return ComplianceEngine::Error(result == 0 ? EIO : nativeCode);
     });
     for (bool remediate : {false, true})
     {
@@ -223,7 +230,7 @@ TEST_F(LogFileRangeTest, CloseFailureDoesNotOverrideVerdictForEitherPath)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto diagnostic = "Cannot close pinned directory cursor: " + std::to_string(EIO);
+    const auto diagnostic = "Failed to close filesystem resource: " + std::string(strerror(EIO));
     const auto first = text.find(diagnostic);
     ASSERT_NE(std::string::npos, first);
     const auto second = text.find(diagnostic, first + diagnostic.size());
@@ -281,7 +288,7 @@ class EnsureLogfileAccessTest : public ::testing::Test
 {
 protected:
     std::string testDir;
-    MockContext mContext;
+    ::testing::StrictMock<MockContext> mContext;
     IndicatorsTree indicators;
     ComplianceEngine::NestedListFormatter mFormatter;
 
@@ -311,6 +318,9 @@ protected:
         testDir = mContext.GetTempdirPath() + "/log-file-permissions";
         ASSERT_EQ(0, mkdir(testDir.c_str(), 0700));
         indicators.Push("EnsureLogfileAccess");
+        // No test in this fixture sets its own EXPECT_CALL on any native
+        // seam.
+        mContext.AllowIncidentalNativeAccess();
     }
 
     void CreateLogFile(const std::string& filename, const std::string& owner, const std::string& group, mode_t permissions)

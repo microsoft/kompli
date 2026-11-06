@@ -105,10 +105,8 @@ void ReadableFile::Close() noexcept
 {
     if (!mDescriptor.HasValue())
         return;
-    Detail::Descriptor owned(std::move(mDescriptor.Value()));
-    mDescriptor.Reset();
+    mDescriptor.Reset(); // Its destructor performs one diagnostic-only native close.
     mAtEnd = false;
-    owned.ReleaseOwned();
 }
 } // namespace Filesystem
 } // namespace ComplianceEngine

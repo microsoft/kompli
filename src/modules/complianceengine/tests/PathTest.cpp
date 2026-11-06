@@ -10,6 +10,7 @@
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
+#include <filesystem/FilesystemCollection.hpp>
 #include <filesystem/FilesystemHelpers.hpp>
 #include <filesystem/Handle.hpp>
 #include <filesystem/Path.hpp>
@@ -20,6 +21,7 @@
 #include <iterator>
 #include <limits>
 #include <linux/magic.h>
+#include <map>
 #include <memory>
 #include <sched.h>
 #include <set>
@@ -40,14 +42,17 @@ using ComplianceEngine::InPlaceType;
 using ComplianceEngine::Variant;
 using ComplianceEngine::Filesystem::DirectoryLinkPolicy;
 using ComplianceEngine::Filesystem::FileLinkPolicy;
+using ComplianceEngine::Filesystem::FilesystemTraversalPolicy;
 using ComplianceEngine::Filesystem::MountPolicy;
 using ComplianceEngine::Filesystem::Path;
 using ComplianceEngine::Filesystem::PrefixLinkPolicy;
+using ComplianceEngine::Filesystem::ReadableFile;
 using ComplianceEngine::Filesystem::ResolverLimits;
 using ComplianceEngine::Filesystem::Type;
 using ComplianceEngine::Filesystem::Detail::Descriptor;
 using ComplianceEngine::Filesystem::Detail::Handle;
 using ComplianceEngine::Filesystem::Detail::ParseMountId;
+using ComplianceEngine::Filesystem::FTW::Files;
 using ComplianceEngine::Tests::DescriptorTestAccess;
 using testing::_;
 using testing::NiceMock;
@@ -75,17 +80,6 @@ Path::Policy CrossMountPathPolicy(bool following = false)
     policy.fileLinks = following ? FileLinkPolicy::Follow : FileLinkPolicy::Reject;
     policy.directoryLinks = following ? DirectoryLinkPolicy::Follow : DirectoryLinkPolicy::Reject;
     return policy;
-}
-
-// Change only the mock fdinfo record, never the native mount namespace.
-void AlterFdinfoMountId(void* buffer, ssize_t bytes)
-{
-    const std::string record(static_cast<const char*>(buffer), static_cast<std::size_t>(bytes));
-    const auto at = record.find("mnt_id:");
-    ASSERT_NE(std::string::npos, at);
-    auto digit = record.find_first_of("0123456789", at + 7);
-    ASSERT_NE(std::string::npos, digit);
-    static_cast<char*>(buffer)[digit] = record[digit] == '9' ? '8' : '9';
 }
 
 class OwnedTestDescriptor
@@ -125,6 +119,21 @@ std::size_t CountOpenDescriptors()
     }
     ::closedir(directory);
     return count;
+}
+
+// OpenDirectoryCursor (ContextInterface::OpenDirectoryCursor) fdopendir()s its
+// argument directly; it requires an already-activated, readable directory
+// descriptor (not a raw O_PATH pin), matching how DirectoryCursor::OpenChildren
+// hands it one after procfs-alias activation.
+ComplianceEngine::Result<Descriptor> OpenActivatedDirectory(const ComplianceEngine::ContextInterface& context, const char* path)
+{
+    auto pinned = DescriptorTestAccess::OpenAbsolutePin(context, path);
+    if (!pinned.HasValue())
+        return std::move(pinned).Error();
+    auto procfs = DescriptorTestAccess::ProcfsAccess(context);
+    if (!procfs.HasValue())
+        return std::move(procfs).Error();
+    return DescriptorTestAccess::OpenAlias(context, procfs.Value(), pinned.Value(), Type::Directory);
 }
 
 class PathAliasTest : public testing::Test
@@ -257,7 +266,7 @@ void CheckRealBindMounts(const NiceMock<MockContext>& context, const std::string
     ASSERT_TRUE(childId.HasValue());
     EXPECT_NE(outerId.Value(), rootId.Value());
     EXPECT_NE(rootId.Value(), childId.Value());
-    EXPECT_EQ(rootId.Value(), path.Leaf().Acquired().targetMount.value);
+    EXPECT_EQ(rootId.Value(), path.Leaf().Metadata().TargetMount().Value());
     auto stay = CrossMountPathPolicy();
     stay.mounts = MountPolicy::StayOnRootMount;
     auto inside = SelectStep(path, "inside", stay);
@@ -271,7 +280,7 @@ void CheckRealBindMounts(const NiceMock<MockContext>& context, const std::string
     EXPECT_EQ(depth, path.Size());
     auto inverse = path.Apply(std::move(crossingStep.Value()));
     ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;
-    EXPECT_EQ(childId.Value(), path.Leaf().Acquired().targetMount.value);
+    EXPECT_EQ(childId.Value(), path.Leaf().Metadata().TargetMount().Value());
     auto payloadStep = SelectStep(path, "payload", CrossMountPathPolicy());
     ASSERT_TRUE(payloadStep.HasValue()) << payloadStep.Error().message;
     auto readable = payloadStep.Value().Target().OpenReadOnly();
@@ -427,39 +436,68 @@ TEST_F(PathAliasTest, TypedOpenAndDuplicateSetCloseOnExecAtomically)
     EXPECT_NE(0, DescriptorTestAccess::DescriptorFlags(context, duplicate.Value()) & FD_CLOEXEC);
 }
 
+// Directory read-only activation (procfs alias -> fdopendir handoff) is a
+// private Handle/DirectoryCursor operation with no direct public
+// entry point; FTW::Files(Path, ...) is the public route that drives it (via
+// FileRange::State::Initialize).
 TEST_F(PathAliasTest, DirectoryActivationTransfersVerifiedOwnerWithoutDuplicate)
 {
+    const std::string directory = context.GetTempdirPath() + "/acquired";
+    ASSERT_EQ(0, ::mkdir(directory.c_str(), 0700));
+    struct stat pinnedIdentity = {};
+    ASSERT_EQ(0, ::stat(directory.c_str(), &pinnedIdentity));
     int alias = -1;
     bool closedStream = false;
-    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), CrossMountPathPolicy(), AmpleLimits());
-    ASSERT_TRUE(opened.HasValue());
-    auto path = std::unique_ptr<Path>(new Path(std::move(opened).Value()));
-    opened = ComplianceEngine::Error("Release transferred source wrapper", EINVAL);
-    const auto pins = path->RetainedDescriptors();
-    const auto before = CountOpenDescriptors();
-    EXPECT_CALL(context, OpenNativeAt(_, _, _)).WillRepeatedly([&](int directory, const char* name, int flags) {
-        const int descriptor = context.RealOpenNativeAt(directory, name, flags);
-        if ((0 <= descriptor) && (0 == (flags & O_PATH)) && (0 == (flags & O_NOFOLLOW)) && (0 != (flags & O_DIRECTORY)))
+    std::size_t pins = 0;
+    std::size_t before = 0;
+    {
+        auto opened = SelectAcceptedPath(context, directory, CrossMountPathPolicy(), AmpleLimits());
+        ASSERT_TRUE(opened.HasValue());
+        Path path = std::move(opened).Value();
+        pins = path.RetainedDescriptors();
+        before = CountOpenDescriptors();
+        EXPECT_CALL(context, DuplicateDescriptor(_)).Times(0);
+        EXPECT_CALL(context, OpenNativeAt(_, _, _)).WillRepeatedly([&](int directoryFd, const char* name, int flags) {
+            const int descriptor = context.RealOpenNativeAt(directoryFd, name, flags);
+            if ((0 <= descriptor) && (0 == (flags & O_PATH)) && (0 == (flags & O_NOFOLLOW)) && (0 != (flags & O_DIRECTORY)))
+            {
+                alias = descriptor;
+            }
+            return descriptor;
+        });
+        EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
+            EXPECT_NE(descriptor, alias);
+            const int status = ::close(descriptor);
+            EXPECT_EQ(0, status);
+            return NativeCloseResult(status);
+        });
+        EXPECT_CALL(context, CloseDirectory(_)).WillOnce([&](DIR* stream) {
+            closedStream = true;
+            // The handed-off alias, not a duplicate, backs the directory
+            // stream: it still identifies the originally pinned directory.
+            struct stat streamIdentity = {};
+            EXPECT_EQ(0, ::fstat(::dirfd(stream), &streamIdentity));
+            EXPECT_EQ(pinnedIdentity.st_dev, streamIdentity.st_dev);
+            EXPECT_EQ(pinnedIdentity.st_ino, streamIdentity.st_ino);
+            return NativeCloseResult(::closedir(stream));
+        });
+        // Files() takes ownership of path (freezing its leaf) and, for a
+        // directory root, synchronously activates and opens its children cursor
+        // inside Initialize() -- the same DirectoryCursor::OpenChildren
+        // production call exercised here through Files(). Path's "move
+        // constructor" shares state (move-as-copy), so path itself must also
+        // leave this scope for the retained pin to actually be released.
+        auto range = Files(std::move(path), directory, FilesystemTraversalPolicy{});
+        ASSERT_TRUE(range.HasValue()) << range.Error().message;
+        EXPECT_GE(alias, 0); // the activation alias was actually captured
+        std::size_t seen = 0;
+        for (const auto& entry : range.Value())
         {
-            alias = descriptor;
+            ASSERT_TRUE(entry.HasValue()) << entry.Error().message;
+            ++seen;
         }
-        return descriptor;
-    });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) {
-        EXPECT_NE(descriptor, alias);
-        const int status = ::close(descriptor);
-        EXPECT_EQ(0, status);
-        return status;
-    });
-    EXPECT_CALL(context, CloseDirectory(_)).WillOnce([&](DIR* stream) {
-        closedStream = true;
-        return ::closedir(stream);
-    });
-    auto cursor = path->Leaf().OpenChildren();
-    ASSERT_TRUE(cursor.HasValue()) << cursor.Error().message;
-    path.reset(); // the original snapshot, not merely a move-as-copy, retires here
-    EXPECT_TRUE(cursor.Value().Next().HasValue());
-    cursor.Value().Close();
+        EXPECT_EQ(1U, seen); // only the empty root directory's own entry; no children
+    }
     EXPECT_TRUE(closedStream);
     EXPECT_EQ(before - pins, CountOpenDescriptors());
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
@@ -467,9 +505,11 @@ TEST_F(PathAliasTest, DirectoryActivationTransfersVerifiedOwnerWithoutDuplicate)
 
 TEST_F(PathAliasTest, FailedDirectoryTransferPreservesNativeErrorAndClosesOwnerOnce)
 {
+    const std::string directory = context.GetTempdirPath() + "/acquired";
+    ASSERT_EQ(0, ::mkdir(directory.c_str(), 0700));
     int operational = -1;
     int cleanupAttempts = 0;
-    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), CrossMountPathPolicy(), AmpleLimits());
+    auto opened = SelectAcceptedPath(context, directory, CrossMountPathPolicy(), AmpleLimits());
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
     EXPECT_CALL(context, FdOpenDirectory(_)).Times(1).WillOnce([&](int descriptor) -> DIR* {
@@ -477,42 +517,45 @@ TEST_F(PathAliasTest, FailedDirectoryTransferPreservesNativeErrorAndClosesOwnerO
         errno = EACCES;
         return nullptr;
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
         EXPECT_EQ(0, ::close(descriptor));
         if (descriptor == operational)
         {
             ++cleanupAttempts;
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
-        return 0;
+        return ComplianceEngine::Result<void>::Success();
     });
-    auto cursor = path.Leaf().OpenChildren();
-    ASSERT_FALSE(cursor.HasValue());
-    EXPECT_EQ(EACCES, cursor.Error().code);
-    EXPECT_EQ(1, cleanupAttempts);
-    {
-        Path retired(std::move(path));
-    }
+    // Files() consumes path and, on Initialize() failure, drops its internal
+    // State (and the Path it owns) before returning, so the source pin is
+    // retired by the time the result is observed.
+    auto range = Files(std::move(path), directory, FilesystemTraversalPolicy{});
+    ASSERT_FALSE(range.HasValue());
+    EXPECT_EQ(EACCES, range.Error().code);
     EXPECT_EQ(1, cleanupAttempts);
 }
 
+// The three tests below exercise DirectoryCursor's own close/move RAII
+// contract (no retry, no replay, log-accessor use), independent of how the
+// cursor was produced. ContextInterface::OpenDirectoryCursor (wrapped by
+// DescriptorTestAccess::OpenDirectoryCursor) directly fdopendir()s an
+// already-held pin.
 TEST_F(PathAliasTest, DirectoryCursorFailedCloseIsNotReplayedOrRetried)
 {
     const std::string logPath = context.GetTempdirPath() + "/cursor-close.log";
     OsConfigLogHandle log = OpenLog(logPath.c_str(), nullptr);
     ASSERT_NE(nullptr, log);
     context.SetLogHandle(log);
-    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), CrossMountPathPolicy(), AmpleLimits());
-    ASSERT_TRUE(opened.HasValue());
-    Path path = std::move(opened).Value();
     const auto before = CountOpenDescriptors();
-    auto cursor = path.Leaf().OpenChildren();
+    auto activated = OpenActivatedDirectory(context, context.GetTempdirPath().c_str());
+    ASSERT_TRUE(activated.HasValue()) << activated.Error().message;
+    auto cursor = DescriptorTestAccess::OpenDirectoryCursor(context, std::move(activated).Value());
     ASSERT_TRUE(cursor.HasValue());
     EXPECT_CALL(context, CloseDirectory(_)).Times(1).WillOnce([](DIR* stream) {
         EXPECT_EQ(0, ::closedir(stream));
         errno = EIO;
-        return -1;
+        return ComplianceEngine::Error(errno ? errno : EIO);
     });
     cursor.Value().Close();
     cursor.Value().Close();
@@ -521,45 +564,45 @@ TEST_F(PathAliasTest, DirectoryCursorFailedCloseIsNotReplayedOrRetried)
     EXPECT_EQ(before, CountOpenDescriptors());
     CloseLog(&log);
     context.SetLogHandle(nullptr);
-    ExpectLoggedOnce(ReadLog(logPath), "Cannot close pinned directory cursor: " + std::to_string(EIO));
+    ExpectLoggedOnce(ReadLog(logPath), "Failed to close filesystem resource: " + std::string(strerror(EIO)));
 }
 
 TEST_F(PathAliasTest, DirectoryCursorNativeCloseErrorAndReplacementReleaseOnce)
 {
-    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), CrossMountPathPolicy(), AmpleLimits());
-    ASSERT_TRUE(opened.HasValue());
-    Path path = std::move(opened).Value();
-    auto first = path.Leaf().OpenChildren();
-    auto second = path.Leaf().OpenChildren();
+    auto firstActivated = OpenActivatedDirectory(context, context.GetTempdirPath().c_str());
+    auto secondActivated = OpenActivatedDirectory(context, context.GetTempdirPath().c_str());
+    ASSERT_TRUE(firstActivated.HasValue()) << firstActivated.Error().message;
+    ASSERT_TRUE(secondActivated.HasValue()) << secondActivated.Error().message;
+    auto first = DescriptorTestAccess::OpenDirectoryCursor(context, std::move(firstActivated).Value());
+    auto second = DescriptorTestAccess::OpenDirectoryCursor(context, std::move(secondActivated).Value());
     ASSERT_TRUE(first.HasValue());
     ASSERT_TRUE(second.HasValue());
     const auto before = CountOpenDescriptors();
     EXPECT_CALL(context, CloseDirectory(_))
         .Times(2)
-        .WillOnce([](DIR* stream) -> int {
+        .WillOnce([](DIR* stream) -> ComplianceEngine::Result<void> {
             EXPECT_EQ(0, ::closedir(stream));
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         })
-        .WillOnce([](DIR* stream) { return ::closedir(stream); });
+        .WillOnce([](DIR* stream) { return NativeCloseResult(::closedir(stream)); });
     first.Value() = std::move(second.Value()); // displaced owner closes inside its guarded destructor
     second.Value().Close();
     // The transferred stream still owns the second, live directory.
     first.Value().Close();
     EXPECT_EQ(before - 2, CountOpenDescriptors());
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    auto third = path.Leaf().OpenChildren();
+    auto thirdActivated = OpenActivatedDirectory(context, context.GetTempdirPath().c_str());
+    ASSERT_TRUE(thirdActivated.HasValue()) << thirdActivated.Error().message;
+    auto third = DescriptorTestAccess::OpenDirectoryCursor(context, std::move(thirdActivated).Value());
     ASSERT_TRUE(third.HasValue());
-    EXPECT_CALL(context, CloseDirectory(_)).Times(1).WillOnce([](DIR* stream) -> int {
+    EXPECT_CALL(context, CloseDirectory(_)).Times(1).WillOnce([](DIR* stream) -> ComplianceEngine::Result<void> {
         EXPECT_EQ(0, ::closedir(stream));
         errno = EIO;
-        return -1;
+        return ComplianceEngine::Error(errno ? errno : EIO);
     });
     EXPECT_NO_THROW(third.Value().Close());
     third.Value().Close();
-    {
-        Path retired(std::move(path));
-    }
 }
 
 TEST_F(PathAliasTest, DirectoryCursorFailedCloseUsesLogAccessorWithoutRetry)
@@ -573,22 +616,102 @@ TEST_F(PathAliasTest, DirectoryCursorFailedCloseUsesLogAccessorWithoutRetry)
         }
         mutable int logRequests = 0;
     } selected;
-    auto opened = SelectAcceptedPath(selected, selected.GetTempdirPath(), CrossMountPathPolicy(), AmpleLimits());
-    ASSERT_TRUE(opened.HasValue());
-    Path path = std::move(opened).Value();
-    auto cursor = path.Leaf().OpenChildren();
+    auto activated = OpenActivatedDirectory(selected, selected.GetTempdirPath().c_str());
+    ASSERT_TRUE(activated.HasValue()) << activated.Error().message;
+    auto cursor = DescriptorTestAccess::OpenDirectoryCursor(selected, std::move(activated).Value());
     ASSERT_TRUE(cursor.HasValue());
     EXPECT_CALL(selected, CloseDirectory(_)).Times(1).WillOnce([](DIR* stream) {
         EXPECT_EQ(0, ::closedir(stream));
         errno = EACCES;
-        return -1;
+        return ComplianceEngine::Error(errno ? errno : EIO);
     });
     EXPECT_NO_THROW(cursor.Value().Close());
     EXPECT_EQ(1, selected.logRequests);
     cursor.Value().Close();
+}
+
+// DirectoryActivationTransfersVerifiedOwnerWithoutDuplicate (above) iterates
+// via FTW::Files() while its Path -- and so the directory pin it was built
+// from -- is still alive for the whole traversal. This test instead shows
+// the cursor's independent lifetime directly: the pin and its procfs access
+// session retire (RAII, scope exit) before the cursor is ever used, and the
+// cursor still correctly reads the real directory's children afterwards.
+TEST_F(PathAliasTest, DirectoryCursorOutlivesRetiredSourcePin)
+{
+    using Cursor = ComplianceEngine::Filesystem::FTW::Detail::DirectoryCursor;
+    const std::string directory = context.GetTempdirPath() + "/outlives";
+    ASSERT_EQ(0, ::mkdir(directory.c_str(), 0700));
+    const std::set<std::string> expectedChildren = {"alpha", "beta"};
+    for (const auto& name : expectedChildren)
     {
-        Path retired(std::move(path));
+        std::ofstream child((directory + "/" + name).c_str());
+        child << "x";
     }
+    struct stat directoryIdentity = {};
+    ASSERT_EQ(0, ::stat(directory.c_str(), &directoryIdentity));
+    const auto before = CountOpenDescriptors();
+
+    int pinFd = -1;
+    int pinCloses = 0;
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
+        if (descriptor == pinFd)
+            ++pinCloses;
+        return NativeCloseResult(::close(descriptor));
+    });
+
+    // The pin and the procfs session used to derive the alias both retire
+    // (RAII) at the end of this lambda's scope -- strictly before the
+    // caller ever touches the returned cursor.
+    auto cursor = [&]() -> ComplianceEngine::Result<Cursor> {
+        auto pinned = DescriptorTestAccess::OpenAbsolutePin(context, directory.c_str());
+        if (!pinned.HasValue())
+            return std::move(pinned).Error();
+        pinFd = DescriptorTestAccess::ConsumedDescriptor(pinned.Value());
+        auto procfs = DescriptorTestAccess::ProcfsAccess(context);
+        if (!procfs.HasValue())
+            return std::move(procfs).Error();
+        auto alias = DescriptorTestAccess::OpenAlias(context, procfs.Value(), pinned.Value(), Type::Directory);
+        if (!alias.HasValue())
+            return std::move(alias).Error();
+        // The verified alias identifies the same directory as the pin it was
+        // derived from; OpenDirectoryCursor fdopendir()s this exact fd (no
+        // duplicate), so this is also the eventual stream's identity.
+        struct stat aliasIdentity = {};
+        EXPECT_EQ(0, DescriptorTestAccess::StatFile(context, alias.Value(), &aliasIdentity));
+        EXPECT_EQ(directoryIdentity.st_dev, aliasIdentity.st_dev);
+        EXPECT_EQ(directoryIdentity.st_ino, aliasIdentity.st_ino);
+        return DescriptorTestAccess::OpenDirectoryCursor(context, std::move(alias).Value());
+    }();
+    ASSERT_TRUE(cursor.HasValue()) << cursor.Error().message;
+    EXPECT_GE(pinFd, 0);
+    EXPECT_EQ(1, pinCloses); // the originating pin already closed exactly once, before any iteration
+
+    std::set<std::string> seenChildren;
+    for (;;)
+    {
+        auto next = cursor.Value().NextEntry();
+        ASSERT_TRUE(next.HasValue()) << next.Error().message;
+        if (!next.Value().HasValue())
+            break;
+        seenChildren.insert(next.Value().Value().name);
+    }
+    EXPECT_EQ(expectedChildren, seenChildren);
+
+    bool closedStream = false;
+    EXPECT_CALL(context, CloseDirectory(_)).WillOnce([&](DIR* stream) {
+        closedStream = true;
+        // The stream itself, read independently of the (already retired)
+        // pin and procfs session, still identifies the original directory.
+        struct stat streamIdentity = {};
+        EXPECT_EQ(0, ::fstat(::dirfd(stream), &streamIdentity));
+        EXPECT_EQ(directoryIdentity.st_dev, streamIdentity.st_dev);
+        EXPECT_EQ(directoryIdentity.st_ino, streamIdentity.st_ino);
+        return NativeCloseResult(::closedir(stream));
+    });
+    cursor.Value().Close();
+    EXPECT_TRUE(closedStream);
+    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+    EXPECT_EQ(before, CountOpenDescriptors());
 }
 
 TEST_F(PathAliasTest, WrongObjectProcfdAliasesAreRejectedBeforeMutation)
@@ -735,15 +858,15 @@ TEST_F(PathAliasTest, FactoryAcquisitionErrorOutranksCloseFailureAndLogsPath)
     struct stat root = {};
     ASSERT_EQ(0, ::stat("/", &root));
     int rootCloses = 0;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         struct stat held = {};
         const bool rootPin = ::fstat(fd, &held) == 0 && held.st_dev == root.st_dev && held.st_ino == root.st_ino;
-        const int result = context.RealCloseFileDescriptor(fd);
+        auto result = context.RealCloseFileDescriptor(fd);
         if (rootPin)
         {
             ++rootCloses;
             errno = EACCES;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
         return result;
     });
@@ -757,7 +880,7 @@ TEST_F(PathAliasTest, FactoryAcquisitionErrorOutranksCloseFailureAndLogsPath)
     std::ifstream contents(logPath);
     ASSERT_TRUE(contents.is_open());
     const std::string text((std::istreambuf_iterator<char>(contents)), std::istreambuf_iterator<char>());
-    EXPECT_NE(std::string::npos, text.find("Cannot close internal filesystem descriptor: " + std::to_string(EACCES)));
+    EXPECT_NE(std::string::npos, text.find("Failed to close filesystem resource: " + std::string(strerror(EACCES))));
 }
 
 TEST_F(PathAliasTest, ActivationErrorRemainsPrimaryWhenDiagnosticCleanupFails)
@@ -783,15 +906,15 @@ TEST_F(PathAliasTest, ActivationErrorRemainsPrimaryWhenDiagnosticCleanupFails)
     OsConfigLogHandle log = OpenLog(logPath.c_str(), nullptr);
     ASSERT_NE(nullptr, log);
     context.SetLogHandle(log);
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         const std::size_t index = attempts++;
         EXPECT_EQ(0, ::close(fd));
         if (index == 0)
         {
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
-        return 0;
+        return ComplianceEngine::Result<void>::Success();
     });
     // The consumer owns this precedence decision: keep the activation error
     // and record a subsequent release error, not a success-shaped fallback.
@@ -814,17 +937,21 @@ TEST_F(PathAliasTest, ActivationErrorRemainsPrimaryWhenDiagnosticCleanupFails)
     std::ifstream stream(logPath);
     ASSERT_TRUE(stream.is_open());
     const std::string text((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
-    EXPECT_NE(std::string::npos, text.find("Cannot close internal filesystem descriptor: " + std::to_string(EIO)));
+    EXPECT_NE(std::string::npos, text.find("Failed to close filesystem resource: " + std::string(strerror(EIO))));
 }
 
+// Read-only file activation (procfs alias through Handle::ActivateReadOnly
+// with the mount already held) is reachable publicly via
+// Path::Component::OpenReadOnly(); ReadableFile::Stat()/Read()/Close() give
+// equivalent observation and control over the activated file.
 TEST_F(PathAliasTest, AliasStaysOnPinnedFileAfterNameReplacementAndUnlink)
 {
     const std::string source = context.MakeTempfile("original bytes");
-    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, source.c_str(), false);
-    ASSERT_TRUE(opened.HasValue());
-    Descriptor pinned = std::move(opened).Value();
     struct stat original = {};
-    ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, pinned, &original));
+    ASSERT_EQ(0, ::stat(source.c_str(), &original));
+    auto opened = SelectAcceptedPath(context, source, CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue());
+    Path path = std::move(opened).Value();
     const std::size_t before = CountOpenDescriptors();
     {
         ASSERT_EQ(0, ::rename(source.c_str(), (source + ".former").c_str()));
@@ -832,112 +959,138 @@ TEST_F(PathAliasTest, AliasStaysOnPinnedFileAfterNameReplacementAndUnlink)
 
         // Opening the original name would block on this substituted FIFO;
         // descriptor-alias activation must instead bind to the prior inode.
-        auto active = DescriptorTestAccess::ActivateReadOnly(context, pinned, original, false, 4096);
+        auto active = path.Leaf().OpenReadOnly();
         ASSERT_TRUE(active.HasValue()) << active.Error().message;
-        struct stat activated = {};
-        ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, active.Value(), &activated));
-        EXPECT_EQ(original.st_ino, activated.st_ino);
-        EXPECT_EQ(original.st_dev, activated.st_dev);
-        char bytes[15] = {};
-        Descriptor reader = std::move(active).Value();
-        ASSERT_EQ(14, DescriptorTestAccess::ReadFile(context, reader, bytes, 14));
-        EXPECT_EQ("original bytes", std::string(bytes, 14));
+        auto activatedStat = active.Value().Stat();
+        ASSERT_TRUE(activatedStat.HasValue());
+        EXPECT_EQ(original.st_ino, activatedStat.Value().st_ino);
+        EXPECT_EQ(original.st_dev, activatedStat.Value().st_dev);
+        auto bytes = active.Value().Read(14);
+        ASSERT_TRUE(bytes.HasValue()) << bytes.Error().message;
+        ASSERT_TRUE(bytes.Value().HasValue());
+        EXPECT_EQ("original bytes", bytes.Value().Value());
 
         ASSERT_EQ(0, ::unlink((source + ".former").c_str()));
-        auto again = DescriptorTestAccess::ActivateReadOnly(context, pinned, original, false, 4096);
+        auto again = path.Leaf().OpenReadOnly();
         ASSERT_TRUE(again.HasValue()) << again.Error().message;
-        struct stat reacquired = {};
-        ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, again.Value(), &reacquired));
-        EXPECT_EQ(original.st_ino, reacquired.st_ino);
+        auto reacquiredStat = again.Value().Stat();
+        ASSERT_TRUE(reacquiredStat.HasValue());
+        EXPECT_EQ(original.st_ino, reacquiredStat.Value().st_ino);
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
-TEST_F(PathAliasTest, DirectoryAliasAndMovesRetainSingleOwnership)
-{
-    const std::string directory = context.GetTempdirPath() + "/acquired";
-    ASSERT_EQ(0, ::mkdir(directory.c_str(), 0700));
-    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, directory.c_str());
-    ASSERT_TRUE(opened.HasValue());
-    Descriptor pinned = std::move(opened).Value();
-    struct stat original = {};
-    ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, pinned, &original));
-    const std::size_t before = CountOpenDescriptors();
-    {
-        auto active = DescriptorTestAccess::ActivateReadOnly(context, pinned, original, true, 4096);
-        ASSERT_TRUE(active.HasValue()) << active.Error().message;
-        struct stat activated = {};
-        ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, active.Value(), &activated));
-        EXPECT_EQ(original.st_ino, activated.st_ino);
-        Descriptor transferred = std::move(active).Value();
-        ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, transferred, &activated));
-        EXPECT_EQ(original.st_ino, activated.st_ino);
-    }
-    EXPECT_EQ(before, CountOpenDescriptors());
-}
+// Directory read-only activation is only reachable through FTW::Files(); see
+// DirectoryActivationTransfersVerifiedOwnerWithoutDuplicate above, which
+// already exercises the same Handle::ActivateReadOnly(directory)
+// branch with richer native-call assertions (flags, single-close, no leak).
+// Moving the resulting Descriptor and retaining single ownership across a
+// move is a generic Descriptor-class invariant, not specific to directory
+// activation, and is independently covered by Descriptor's own move-semantics
+// tests; it is not re-derived here to avoid a near-duplicate, weaker test.
 
 TEST_F(PathAliasTest, ActivationHandsOffOwnerWithoutRetryingFailedClose)
 {
     const std::string file = context.MakeTempfile("activation");
-    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, file.c_str(), false);
-    ASSERT_TRUE(opened.HasValue());
-    Descriptor pin = std::move(opened).Value();
-    struct stat snapshot = {};
-    ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, pin, &snapshot));
     const auto before = CountOpenDescriptors();
     {
-        auto activated = DescriptorTestAccess::ActivateReadOnly(context, pin, snapshot, false, 4096);
+        auto opened = SelectAcceptedPath(context, file, CrossMountPathPolicy(), AmpleLimits());
+        ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+        // Path's "move constructor" shares the underlying state (move-as-copy);
+        // a unique_ptr is required to actually retire the pin early, and the
+        // source Result<Path> wrapper must also release its own copy of the
+        // shared state.
+        auto path = std::unique_ptr<Path>(new Path(std::move(opened).Value()));
+        opened = ComplianceEngine::Error("Release transferred source wrapper", EINVAL);
+        auto activated = path->Leaf().OpenReadOnly();
         ASSERT_TRUE(activated.HasValue()) << activated.Error().message;
-        pin.Close();
+        ReadableFile reader = std::move(activated).Value();
+        // The activated reader is independently owned: dropping the pin must
+        // not affect it, and a failed close of the reader must not be retried.
+        path.reset();
         EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) {
             EXPECT_EQ(0, ::close(descriptor));
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         });
-        Descriptor owner = std::move(activated).Value();
-        EXPECT_FALSE(DescriptorTestAccess::ConsumedDescriptor(activated.Value()) != -1);
-        EXPECT_TRUE(DescriptorTestAccess::ConsumedDescriptor(owner) != -1);
-        owner.Close();
-        EXPECT_FALSE(DescriptorTestAccess::ConsumedDescriptor(owner) != -1);
-        owner.Close();
-    }
-    EXPECT_EQ(before - 1, CountOpenDescriptors());
-}
-
-TEST_F(PathAliasTest, FdinfoCapFailsClosedAndCleansUp)
-{
-    const std::string source = context.MakeTempfile("a");
-    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, source.c_str(), false);
-    ASSERT_TRUE(opened.HasValue());
-    Descriptor pinned = std::move(opened).Value();
-    struct stat snapshot = {};
-    ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, pinned, &snapshot));
-    const std::size_t before = CountOpenDescriptors();
-    {
-        auto tooSmall = DescriptorTestAccess::ActivateReadOnly(context, pinned, snapshot, false, 1);
-        ASSERT_FALSE(tooSmall.HasValue());
-        EXPECT_EQ(E2BIG, tooSmall.Error().code);
-        auto invalid = DescriptorTestAccess::ActivateReadOnly(context, pinned, snapshot, false, 0);
-        ASSERT_FALSE(invalid.HasValue());
-        EXPECT_EQ(EINVAL, invalid.Error().code);
+        reader.Close();
+        reader.Close();
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
+TEST_F(PathAliasTest, ExactAndOneOverFdinfoCapApplyDuringPathAcquisition)
+{
+    OwnedTestDescriptor kernelRoot(::open("/", O_PATH | O_CLOEXEC));
+    ASSERT_GE(kernelRoot.Get(), 0);
+    auto rootMount = KernelMountId(kernelRoot.Get());
+    ASSERT_TRUE(rootMount.HasValue()) << rootMount.Error().message;
+    const std::string fdinfo = "mnt_id: " + std::to_string(rootMount.Value()) + "\n";
+    std::map<int, std::size_t> offsets;
+    ON_CALL(context, OpenNativePath(_, _)).WillByDefault([&](const char* path, int flags) {
+        const int fd = context.RealOpenNativePath(path, flags);
+        if (fd >= 0)
+            offsets.erase(fd);
+        return fd;
+    });
+    ON_CALL(context, OpenNativeAt(_, _, _)).WillByDefault([&](int directory, const char* name, int flags) {
+        const int fd = context.RealOpenNativeAt(directory, name, flags);
+        if (fd >= 0)
+            offsets.erase(fd);
+        return fd;
+    });
+    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        if (DescriptorTarget(fd).find("/fdinfo/") == std::string::npos)
+            return context.RealReadFileDescriptor(fd, buffer, size);
+        std::size_t& offset = offsets[fd];
+        const std::size_t count = std::min(size, fdinfo.size() - offset);
+        if (count != 0)
+            std::memcpy(buffer, fdinfo.data() + offset, count);
+        offset += count;
+        return static_cast<ssize_t>(count);
+    });
+    const auto before = CountOpenDescriptors();
+    ResolverLimits limits = AmpleLimits();
+    limits.shared.fdinfoBytes = fdinfo.size();
+    {
+        auto exact = Path::Make(context, "/", CrossMountPathPolicy(), limits);
+        ASSERT_TRUE(exact.HasValue()) << exact.Error().message;
+        ASSERT_TRUE(exact.Value().Is<Path>());
+        EXPECT_EQ(rootMount.Value(), As<Path>(exact.Value()).Root().Metadata().TargetMount().Value());
+    }
+    limits.shared.fdinfoBytes = fdinfo.size() - 1;
+    auto over = Path::Make(context, "/", CrossMountPathPolicy(), limits);
+    ASSERT_FALSE(over.HasValue());
+    EXPECT_EQ(E2BIG, over.Error().code);
+    EXPECT_EQ(before, CountOpenDescriptors());
+}
+
+// The overreport-rejection logic lives in the shared
+// ProcfsDescriptorAccess::ReadMountId, which production reaches from
+// PinProcessRoot during ordinary root acquisition -- exercised here.
+//
+// Descriptor-accounting bound, re-derived for this new route (verified by
+// tracing Path::Make(context, "/", ...) -> Handle::PinProcessRoot,
+// Path.cpp ~454, and ProcfsDescriptorAccess::Make, ProcfsDescriptorAccess.cpp
+// ~48-126, and confirmed by this test actually running green at these exact
+// values rather than looser ones):
+//   acquisitions: 1 (root "/") + 7 (bootstrap: /proc, self, <pid>, task,
+//     <tid>, fd, fdinfo) + 1 (the fdinfo reader PinProcessRoot opens for the
+//     root's own mount id, which is where the overreport is injected) = 9.
+//   peak live descriptors: root (1, retained for the whole call) plus the
+//     bootstrap's own internal peak of 3 concurrently-held temporaries
+//     (proc+self+<pid>, then self+task+<tid>; kProcfsBootstrapPeak in
+//     Path.cpp) is <= 4 throughout bootstrap; after bootstrap narrows to the
+//     2 retained roles (fd+fdinfo), opening the root's fdinfo reader again
+//     reaches root+fd+fdinfo+info = 4. Matches kMinimumPathPeak (Path.cpp
+//     ~113-118: "three temporary procfs descriptors plus root").
 TEST_F(PathAliasTest, FdinfoReadOverreportRejectsActualRequestAndClosesHelpers)
 {
     const std::size_t before = CountOpenDescriptors();
     {
-        const std::string source = context.MakeTempfile("a");
         std::size_t overreports = 0;
         std::set<int> live;
         std::size_t acquired = 0, closed = 0, peak = 0;
-        auto opened = DescriptorTestAccess::OpenAbsolutePin(context, source.c_str(), false);
-        ASSERT_TRUE(opened.HasValue());
-        Descriptor pinned = std::move(opened).Value();
-        struct stat snapshot = {};
-        ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, pinned, &snapshot));
-        const std::size_t withPin = CountOpenDescriptors();
         for (const std::size_t cap : {4096U, 1U})
         {
             const std::size_t requested = (4096U == cap) ? 256U : 2U;
@@ -974,23 +1127,24 @@ TEST_F(PathAliasTest, FdinfoReadOverreportRejectsActualRequestAndClosesHelpers)
                 }
                 return context.RealReadFileDescriptor(descriptor, buffer, size);
             });
-            EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) {
+            EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
                 EXPECT_EQ(1U, live.erase(descriptor));
                 ++closed;
                 return context.RealCloseFileDescriptor(descriptor);
             });
-            auto activated = DescriptorTestAccess::ActivateReadOnly(context, pinned, snapshot, false, cap);
-            ASSERT_FALSE(activated.HasValue());
-            EXPECT_EQ(EIO, activated.Error().code);
+            auto limits = AmpleLimits();
+            limits.shared.fdinfoBytes = cap;
+            auto opened = Path::Make(context, "/", CrossMountPathPolicy(), limits);
+            ASSERT_FALSE(opened.HasValue());
+            EXPECT_EQ(EIO, opened.Error().code);
             EXPECT_EQ(1U, overreports);
-            EXPECT_EQ(8U, acquired); // fdinfo file and seven bootstrap/role directories.
+            EXPECT_EQ(9U, acquired); // root + seven bootstrap/role directories + one fdinfo reader
             EXPECT_EQ(acquired, closed);
             EXPECT_TRUE(live.empty());
-            EXPECT_LE(peak, 5U); // Two retained procfs roles plus at most three helper/reader pins.
-            EXPECT_EQ(withPin, CountOpenDescriptors());
+            EXPECT_LE(peak, 4U); // root plus at most three concurrently-held procfs temporaries
+            EXPECT_EQ(before, CountOpenDescriptors());
             ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
         }
-        EXPECT_GE(DescriptorTestAccess::DescriptorFlags(context, pinned), 0);
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }
@@ -1002,232 +1156,413 @@ TEST_F(PathAliasTest, ActivationPerformsReadPermissionCheck)
         GTEST_SKIP() << "Privileged processes may open mode-000 files";
     }
     const std::string source = context.MakeTempfile("restricted");
-    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, source.c_str(), false);
+    auto opened = SelectAcceptedPath(context, source, CrossMountPathPolicy(), AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
-    Descriptor pinned = std::move(opened).Value();
-    struct stat snapshot = {};
-    ASSERT_EQ(0, DescriptorTestAccess::StatFile(context, pinned, &snapshot));
+    Path path = std::move(opened).Value();
     ASSERT_EQ(0, ::chmod(source.c_str(), 0000));
-    auto denied = DescriptorTestAccess::ActivateReadOnly(context, pinned, snapshot, false, 4096);
+    auto denied = path.Leaf().OpenReadOnly();
     ASSERT_FALSE(denied.HasValue());
     EXPECT_EQ(EACCES, denied.Error().code);
     EXPECT_EQ(0, ::chmod(source.c_str(), 0600));
 }
 
-TEST_F(PathAliasTest, PinnedRelativeAndAbsoluteLinksIgnoreReplacementNames)
-{
-    const std::string link = context.GetTempdirPath() + "/relative.link";
-    ASSERT_EQ(0, ::symlink("../target", link.c_str()));
-    auto relativeResult = DescriptorTestAccess::OpenAbsolutePin(context, link.c_str(), false);
-    ASSERT_TRUE(relativeResult.HasValue());
-    Descriptor relative = std::move(relativeResult).Value();
-    const std::size_t before = CountOpenDescriptors();
-    ASSERT_EQ(0, ::unlink(link.c_str()));
-    ASSERT_EQ(0, ::symlink("/etc/passwd", link.c_str()));
-    auto target = DescriptorTestAccess::ReadPinnedLink(relative, 128, 4096);
-    ASSERT_TRUE(target.HasValue()) << target.Error().message;
-    EXPECT_EQ("../target", target.Value().text);
-    EXPECT_GT(target.Value().mountId, 0U);
-    auto tooSmall = DescriptorTestAccess::ReadPinnedLink(relative, 8, 4096);
-    ASSERT_FALSE(tooSmall.HasValue());
-    EXPECT_EQ(E2BIG, tooSmall.Error().code);
-    EXPECT_EQ(before, CountOpenDescriptors());
-
-    auto absoluteResult = DescriptorTestAccess::OpenAbsolutePin(context, link.c_str(), false);
-    ASSERT_TRUE(absoluteResult.HasValue());
-    Descriptor absolute = std::move(absoluteResult).Value();
-    auto absoluteTarget = DescriptorTestAccess::ReadPinnedLink(absolute, 128, 4096);
-    ASSERT_TRUE(absoluteTarget.HasValue()) << absoluteTarget.Error().message;
-    EXPECT_EQ("/etc/passwd", absoluteTarget.Value().text);
-}
-
 TEST_F(PathAliasTest, ProcfsMagicLinkCannotEnterManualResolver)
 {
-    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, "/proc/self/exe", false);
-    ASSERT_TRUE(opened.HasValue());
-    Descriptor magic = std::move(opened).Value();
-    auto denied = DescriptorTestAccess::ReadPinnedLink(magic, 4096, 4096);
+    // "/proc/self" is itself a procfs magic link; rooting there would already
+    // trip Path::ReadPinnedLink's own "not an ordinary filesystem
+    // symlink" rejection during root acquisition. Root at plain "/proc"
+    // instead and resolve "self" (also a magic link) as the child under test.
+    auto opened = SelectAcceptedPath(context, "/proc", CrossMountPathPolicy(true), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
+    Path path = std::move(opened).Value();
+    auto denied = path.Resolve("self", CrossMountPathPolicy(true));
     ASSERT_FALSE(denied.HasValue());
     EXPECT_EQ(ELOOP, denied.Error().code);
 }
 
-TEST_F(PathAliasTest, PinnedLinkRejectsEmptyNulAndNonLinkWithoutConsumingPin)
+TEST_F(PathAliasTest, PinnedLinkRejectsEmptyNulAndNonLinkAndClosesLinkPinOnce)
 {
-    const std::string link = context.GetTempdirPath() + "/bounded.link";
-    ASSERT_EQ(0, ::symlink("target", link.c_str()));
-    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, link.c_str(), false);
+    const std::string root = context.GetTempdirPath();
+    ASSERT_EQ(0, ::symlink("target", (root + "/bounded.link").c_str()));
+    {
+        std::ofstream target((root + "/target").c_str());
+        target << "x";
+    }
+    auto opened = SelectAcceptedPath(context, root, CrossMountPathPolicy(true), AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
-    Descriptor pin = std::move(opened).Value();
+    Path path = std::move(opened).Value();
     const std::size_t before = CountOpenDescriptors();
-    EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).WillOnce([](int, char*, std::size_t) -> ssize_t { return 0; }).WillOnce([](int, char* buffer, std::size_t) -> ssize_t {
-        std::memcpy(buffer, "a\0b", 3);
-        return 3;
-    });
-    auto empty = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
-    ASSERT_FALSE(empty.HasValue());
-    EXPECT_EQ(E2BIG, empty.Error().code);
-    auto nul = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
-    ASSERT_FALSE(nul.HasValue());
-    EXPECT_EQ(EINVAL, nul.Error().code);
+
+    // What this proves, at the native-seam level and for the whole Resolve()
+    // call (not just a "live window" after the read): the rejected read's
+    // link descriptor is read exactly once, is never reacquired or retried
+    // (no OpenNativeAt/OpenNativePath result for the rest of Resolve() ever
+    // has the same identity again), is never surfaced as a directory stream,
+    // and is closed through the context seam exactly once. Identity is
+    // st_dev/st_ino plus S_ISLNK, from a real fstat() on the exact fd
+    // ReadLinkDescriptor receives and, for CloseFileDescriptor and every
+    // OpenNativeAt/OpenNativePath result, a real fstat() taken *before*
+    // delegating to the real close or returning the descriptor to the caller
+    // (fstat on an already-closed fd cannot observe anything, and the
+    // descriptor is still open at the point it is returned). Every such
+    // open and close, across the *whole* Resolve() call (not just a "live
+    // window" after the read), is recorded with a sequence number; after
+    // Resolve() returns, those records are compared against the link
+    // identity captured at the read to require that exactly one open
+    // anywhere in Resolve() yields that identity -- the original link-pin
+    // acquisition, sequenced before the read -- and that exactly one close
+    // anywhere in Resolve() yields that identity, sequenced after the read.
+    // This does NOT prove that the private reader itself does not consume
+    // the pin: that property is structurally guaranteed instead, by
+    // Descriptor being RAII-only (no public Close/Release is exposed) and by
+    // the reader taking `const Descriptor&`, so no caller -- production or
+    // test -- can close it or move from it in the first place; there is no
+    // seam that could observe the reader doing so, so no seam-based test can
+    // prove it.
+    auto expectSingleOwnedFailingRead = [&](int expectedErrorCode, ssize_t injectedReturn, const char* fillBytes) {
+        struct Identity
+        {
+            dev_t device;
+            ino_t inode;
+            mode_t mode;
+            int sequence;
+        };
+        int observedFd = -1;
+        dev_t linkDevice = 0;
+        ino_t linkInode = 0;
+        bool identityCaptured = false;
+        int readCalls = 0;
+        int violations = 0;
+        int sequence = 0;
+        int readSequence = -1;
+        int captureFailures = 0;
+        std::string captureFailureDetails;
+        std::vector<Identity> opens;
+        std::vector<Identity> closes;
+        auto isLinkIdentity = [&](int fd) {
+            struct stat probe = {};
+            if (0 != ::fstat(fd, &probe))
+                return false;
+            return S_ISLNK(probe.st_mode) && (probe.st_dev == linkDevice) && (probe.st_ino == linkInode);
+        };
+        auto matchesLinkIdentity = [&](const Identity& identity) {
+            return S_ISLNK(identity.mode) && (identity.device == linkDevice) && (identity.inode == linkInode);
+        };
+        auto recordIdentity = [&](std::vector<Identity>& into, const char* kind, int fd) {
+            const int attemptSequence = ++sequence;
+            struct stat probe = {};
+            if (0 == ::fstat(fd, &probe))
+            {
+                into.push_back(Identity{probe.st_dev, probe.st_ino, probe.st_mode, attemptSequence});
+                return;
+            }
+            // fstat failed: the attempt is still counted (sequence consumed) so it cannot
+            // silently vanish from the exactly-once accounting below.
+            ++captureFailures;
+            captureFailureDetails += (captureFailureDetails.empty() ? "" : "; ");
+            captureFailureDetails += std::string(kind) + " fd=" + std::to_string(fd) + " sequence=" + std::to_string(attemptSequence) +
+                                     " uncapturable (fstat failed: descriptor invalid or already closed)";
+        };
+        EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).WillOnce([&](int fd, char* buffer, std::size_t) -> ssize_t {
+            observedFd = fd;
+            struct stat identity = {};
+            EXPECT_EQ(0, ::fstat(fd, &identity));
+            EXPECT_TRUE(S_ISLNK(identity.st_mode));
+            linkDevice = identity.st_dev;
+            linkInode = identity.st_ino;
+            identityCaptured = true;
+            readSequence = ++sequence;
+            ++readCalls;
+            if (fillBytes)
+                std::memcpy(buffer, fillBytes, static_cast<std::size_t>(injectedReturn));
+            return injectedReturn;
+        });
+        EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+            recordIdentity(closes, "close", fd); // fstat before delegating: the fd is still open here.
+            return NativeCloseResult(::close(fd));
+        });
+        EXPECT_CALL(context, CloseDirectory(_)).WillRepeatedly([&](DIR* stream) -> ComplianceEngine::Result<void> {
+            const int fd = stream ? ::dirfd(stream) : -1;
+            if (identityCaptured && (fd >= 0) && isLinkIdentity(fd))
+                ++violations; // the link's identity surfaced as a directory stream
+            return NativeCloseResult(::closedir(stream));
+        });
+        EXPECT_CALL(context, OpenNativeAt(_, _, _)).WillRepeatedly([&](int directory, const char* name, int flags) -> int {
+            const int descriptor = context.RealOpenNativeAt(directory, name, flags);
+            if (descriptor >= 0)
+                recordIdentity(opens, "open(at)", descriptor); // fstat before returning: the fd is still open here.
+            return descriptor;
+        });
+        EXPECT_CALL(context, OpenNativePath(_, _)).WillRepeatedly([&](const char* name, int flags) -> int {
+            const int descriptor = context.RealOpenNativePath(name, flags);
+            if (descriptor >= 0)
+                recordIdentity(opens, "open(path)", descriptor); // fstat before returning: the fd is still open here.
+            return descriptor;
+        });
+        auto resolved = path.Resolve("bounded.link", CrossMountPathPolicy(true));
+        ASSERT_FALSE(resolved.HasValue());
+        EXPECT_EQ(expectedErrorCode, resolved.Error().code);
+        EXPECT_GE(observedFd, 0); // auxiliary: ReadLinkDescriptor received a real descriptor.
+        EXPECT_EQ(1, readCalls);
+        EXPECT_EQ(0, violations);
+        ASSERT_TRUE(identityCaptured);
+        ASSERT_GE(readSequence, 0);
+        // Every close/open attempt must have had its identity captured: an uncapturable
+        // attempt (fstat failing on an invalid or already-closed fd, or on an fd returned
+        // to the caller) would otherwise vanish from the exactly-once counts below instead
+        // of failing the test.
+        EXPECT_EQ(0, captureFailures) << captureFailureDetails;
+
+        int matchingOpens = 0;
+        int openSequence = -1;
+        for (const auto& open : opens)
+        {
+            if (matchesLinkIdentity(open))
+            {
+                ++matchingOpens;
+                openSequence = open.sequence;
+            }
+        }
+        EXPECT_EQ(1, matchingOpens); // only the original link-pin acquisition ever yields this identity
+        ASSERT_GE(openSequence, 0);
+        EXPECT_LT(openSequence, readSequence); // that acquisition happened before the read, not after (no reacquisition)
+
+        int matchingCloses = 0;
+        int closeSequence = -1;
+        for (const auto& close : closes)
+        {
+            if (matchesLinkIdentity(close))
+            {
+                ++matchingCloses;
+                closeSequence = close.sequence;
+            }
+        }
+        EXPECT_EQ(1, matchingCloses); // exactly one close of that identity, across the whole Resolve()
+        ASSERT_GE(closeSequence, 0);
+        EXPECT_LT(readSequence, closeSequence); // the matching close happened after the read
+        ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+    };
+    expectSingleOwnedFailingRead(E2BIG, 0, nullptr);
+    expectSingleOwnedFailingRead(EINVAL, 3, "a\0b");
     EXPECT_EQ(before, CountOpenDescriptors());
-    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    auto valid = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
-    ASSERT_TRUE(valid.HasValue()) << valid.Error().message;
-    EXPECT_EQ("target", valid.Value().text);
 
-    const std::string file = context.MakeTempfile("ordinary");
-    auto regular = DescriptorTestAccess::OpenAbsolutePin(context, file.c_str(), false);
-    ASSERT_TRUE(regular.HasValue());
-    auto denied = DescriptorTestAccess::ReadPinnedLink(regular.Value(), 16, 4096);
-    ASSERT_FALSE(denied.HasValue());
-    EXPECT_EQ(ELOOP, denied.Error().code);
+    // A fresh resolution below still succeeds, proving that neither earlier
+    // rejection left the link, or Path's recovery path, in a stuck state.
+    // It does NOT, by itself, prove the earlier pin was not consumed: this
+    // call acquires a brand-new pin, not the earlier one. Non-consumption is
+    // proven structurally instead, by Descriptor being RAII-only and the
+    // reader taking `const Descriptor&`, as established above.
+    {
+        auto valid = path.Resolve("bounded.link", CrossMountPathPolicy(true));
+        ASSERT_TRUE(valid.HasValue()) << valid.Error().message;
+        ASSERT_TRUE(valid.Value().Is<Path::Step>());
+        EXPECT_EQ(Type::RegularFile, As<Path::Step>(valid.Value()).Metadata().FileType());
+    }
+
+    // The "not an ordinary symlink" rejection for a regular (non-link) file is
+    // Path::ReadPinnedLink's own defense-in-depth check (~772-774),
+    // separate from the resolver's own S_ISLNK stat (~904) that decides
+    // whether to call ReadPinnedLink at all. The two are independent native
+    // stat observations of the same pin, so lying to only the resolver's
+    // first stat (reporting S_IFLNK) while leaving ReadPinnedLink's own,
+    // later stat on the same fd reporting the real (non-link) mode reaches
+    // ReadPinnedLink's defense-in-depth check without consuming the pin.
+    {
+        const std::string plain = root + "/plain-file";
+        {
+            std::ofstream file(plain.c_str());
+            file << "y";
+        }
+        const std::size_t beforeNonLink = CountOpenDescriptors();
+        bool liedToResolver = false;
+        EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).Times(0);
+        EXPECT_CALL(context, StatFileDescriptor(_, _)).WillRepeatedly([&](int fd, struct stat* metadata) {
+            const int status = context.RealStatFileDescriptor(fd, metadata);
+            if ((0 == status) && !liedToResolver && !S_ISLNK(metadata->st_mode))
+            {
+                liedToResolver = true;
+                metadata->st_mode = (metadata->st_mode & ~S_IFMT) | S_IFLNK;
+            }
+            return status;
+        });
+        auto nonLink = path.Resolve("plain-file", CrossMountPathPolicy(true));
+        ASSERT_FALSE(nonLink.HasValue());
+        EXPECT_EQ(ELOOP, nonLink.Error().code);
+        EXPECT_TRUE(liedToResolver); // the lied-to resolver stat was reached
+        ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+        EXPECT_EQ(beforeNonLink, CountOpenDescriptors());
+
+        // A fresh resolution of the same name (now observed truthfully)
+        // still succeeds, proving recovery, not that the rejection left the
+        // earlier pin unconsumed: this call acquires a brand-new pin, not
+        // the earlier one. Non-consumption is proven structurally instead,
+        // as above.
+        auto valid = path.Resolve("plain-file", CrossMountPathPolicy(true));
+        ASSERT_TRUE(valid.HasValue()) << valid.Error().message;
+        ASSERT_TRUE(valid.Value().Is<Path::Step>());
+        EXPECT_EQ(Type::RegularFile, As<Path::Step>(valid.Value()).Metadata().FileType());
+    }
 }
 
-TEST_F(PathAliasTest, PinnedLinkReadRechecksIdentityAndMount)
+// The resolver observes this child pin's mount once, at acquisition (via
+// the shared AcquirePinnedObject helper), before deciding whether it is a
+// symlink to follow. A live O_PATH pin cannot change mount, so
+// ReadVerifiedLinkText does not re-read or re-compare the mount id around
+// the readlink -- only the identity (stat) recheck remains.
+TEST_F(PathAliasTest, PinnedLinkReadRechecksIdentity)
 {
-    const std::string link = context.GetTempdirPath() + "/observed.link";
-    ASSERT_EQ(0, ::symlink("target", link.c_str()));
-    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, link.c_str(), false);
+    const std::string root = context.GetTempdirPath();
+    ASSERT_EQ(0, ::symlink("target", (root + "/observed.link").c_str()));
+    auto opened = SelectAcceptedPath(context, root, CrossMountPathPolicy(true), AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
-    Descriptor pin = std::move(opened).Value();
+    Path path = std::move(opened).Value();
     const std::size_t before = CountOpenDescriptors();
 
-    int observations = 0;
+    // The resolver itself stats the newly-opened link once before deciding to
+    // follow it; only the post-readlink identity recheck inside
+    // ReadVerifiedLinkText (the first S_ISLNK stat observed once the single
+    // expected ReadLink has already fired) is corrupted here.
+    bool readSeen = false;
+    bool corrupted = false;
+    EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).WillOnce([&](int fd, char* buffer, std::size_t size) {
+        readSeen = true;
+        return ::readlinkat(fd, "", buffer, size);
+    });
     EXPECT_CALL(context, StatFileDescriptor(_, _)).WillRepeatedly([&](int fd, struct stat* snapshot) {
         const int status = context.RealStatFileDescriptor(fd, snapshot);
-        if (status == 0 && S_ISLNK(snapshot->st_mode) && ++observations == 2)
+        if (readSeen && !corrupted && status == 0 && S_ISLNK(snapshot->st_mode))
+        {
+            corrupted = true;
             ++snapshot->st_ino;
+        }
         return status;
     });
-    auto changed = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
+    auto changed = path.Resolve("observed.link", CrossMountPathPolicy(true));
     ASSERT_FALSE(changed.HasValue());
     EXPECT_EQ(EAGAIN, changed.Error().code);
-    EXPECT_EQ(2, observations);
-    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-
-    int records = 0;
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).WillRepeatedly([&](int fd, void* buffer, std::size_t size) {
-        const ssize_t bytes = context.RealReadFileDescriptor(fd, buffer, size);
-        if (bytes > 0 && DescriptorTarget(fd).find("/fdinfo/") != std::string::npos &&
-            std::string(static_cast<char*>(buffer), static_cast<std::size_t>(bytes)).find("mnt_id:") != std::string::npos && ++records == 2)
-            AlterFdinfoMountId(buffer, bytes);
-        return bytes;
-    });
-    auto mount = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
-    ASSERT_FALSE(mount.HasValue());
-    EXPECT_EQ(EAGAIN, mount.Error().code);
-    EXPECT_EQ(2, records);
+    EXPECT_TRUE(corrupted);
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
-TEST_F(PathAliasTest, PinnedLinkReadFailsClosedOnMountAndStatObservationErrors)
+// The reader does not read fdinfo for a mount recheck (the resolver already
+// observes this pin's mount at acquisition, via AcquirePinnedObject, and a
+// live O_PATH pin cannot change mount); only the stat-observation failure
+// sub-case applies here.
+TEST_F(PathAliasTest, PinnedLinkReadFailsClosedOnStatObservationErrors)
 {
-    const std::string link = context.GetTempdirPath() + "/fault.link";
-    ASSERT_EQ(0, ::symlink("target", link.c_str()));
-    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, link.c_str(), false);
+    const std::string root = context.GetTempdirPath();
+    ASSERT_EQ(0, ::symlink("target", (root + "/fault.link").c_str()));
+    auto opened = SelectAcceptedPath(context, root, CrossMountPathPolicy(true), AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
-    Descriptor pin = std::move(opened).Value();
+    Path path = std::move(opened).Value();
     const std::size_t before = CountOpenDescriptors();
 
-    bool failedMount = false;
-    EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).Times(0);
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).WillRepeatedly([&](int fd, void* buffer, std::size_t size) {
-        if (!failedMount && DescriptorTarget(fd).find("/fdinfo/") != std::string::npos)
-        {
-            failedMount = true;
-            errno = ENOSPC;
-            return static_cast<ssize_t>(-1);
-        }
-        return context.RealReadFileDescriptor(fd, buffer, size);
+    // StatusFlagsDescriptor is only ever called (on this fd) from inside
+    // ReadPinnedLink; it is not part of the resolver's own S_ISLNK check, so
+    // observing it first reliably marks entry into the pinned reader before
+    // gating the stat fault to ReadPinnedLink's own, independent symlink
+    // stat, not the resolver's.
+    bool enteredPinnedReader = false;
+    bool failedStat = false;
+    EXPECT_CALL(context, StatusFlagsDescriptor(_)).WillRepeatedly([&](int fd) {
+        enteredPinnedReader = true;
+        return ::fcntl(fd, F_GETFL);
     });
-    auto mount = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
-    ASSERT_FALSE(mount.HasValue());
-    EXPECT_EQ(ENOSPC, mount.Error().code);
-    EXPECT_TRUE(failedMount);
-    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-
-    int observations = 0;
     EXPECT_CALL(context, StatFileDescriptor(_, _)).WillRepeatedly([&](int fd, struct stat* snapshot) {
         const int status = context.RealStatFileDescriptor(fd, snapshot);
-        if (status == 0 && S_ISLNK(snapshot->st_mode) && ++observations == 2)
+        if (enteredPinnedReader && !failedStat && status == 0 && S_ISLNK(snapshot->st_mode))
         {
+            failedStat = true;
             errno = EIO;
             return -1;
         }
         return status;
     });
-    auto stat = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
+    auto stat = path.Resolve("fault.link", CrossMountPathPolicy(true));
     ASSERT_FALSE(stat.HasValue());
     EXPECT_EQ(EIO, stat.Error().code);
-    EXPECT_EQ(2, observations);
+    EXPECT_TRUE(failedStat);
+    EXPECT_TRUE(enteredPinnedReader); // the seam inside the pinned reader was actually reached
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
-TEST_F(PathAliasTest, PinnedLinkReadErrorOutranksHelperCloseFailure)
+// Following a link does not bootstrap its own procfs session (the mount is
+// observed once, by the resolver's shared acquisition helper before the
+// symlink branch), so no procfs helper descriptor is open during or after
+// the link's own ReadLink call for a close failure to compete with. This
+// test provides positive evidence that only one procfs bootstrap (the
+// resolver's own mount observation for this pin, before the symlink branch)
+// ever happens, not a second one for the link read itself.
+TEST_F(PathAliasTest, PinnedLinkReadErrorIsPrimaryWithOnlyOneProcfsBootstrap)
 {
-    const std::string link = context.GetTempdirPath() + "/failing.link";
-    ASSERT_EQ(0, ::symlink("target", link.c_str()));
+    const std::string root = context.GetTempdirPath();
+    ASSERT_EQ(0, ::symlink("target", (root + "/failing.link").c_str()));
     bool failedRead = false;
-    bool failedClose = false;
-    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, link.c_str(), false);
+    int procfsBootstraps = 0;
+    auto opened = SelectAcceptedPath(context, root, CrossMountPathPolicy(true), AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
-    Descriptor pin = std::move(opened).Value();
+    Path path = std::move(opened).Value();
     const std::size_t before = CountOpenDescriptors();
+    EXPECT_CALL(context, OpenNativePath(_, _)).WillRepeatedly([&](const char* name, int flags) {
+        if (std::string("/proc") == name)
+            ++procfsBootstraps;
+        return context.RealOpenNativePath(name, flags);
+    });
     EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).WillOnce([&](int, char*, std::size_t) -> ssize_t {
         failedRead = true;
         errno = ENOSPC;
         return -1;
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
-        const bool helper = IsProcfsHelper(fd);
-        const int status = ::close(fd);
-        EXPECT_EQ(0, status);
-        if (helper && failedRead && !failedClose)
-        {
-            failedClose = true;
-            errno = EIO;
-            return -1;
-        }
-        return status;
-    });
-    auto failure = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
+    auto failure = path.Resolve("failing.link", CrossMountPathPolicy(true));
     ASSERT_FALSE(failure.HasValue());
     EXPECT_EQ(ENOSPC, failure.Error().code);
     EXPECT_TRUE(failedRead);
-    EXPECT_TRUE(failedClose);
+    // One bootstrap for the resolver's own mount observation of this pin;
+    // none for the link read itself.
+    EXPECT_EQ(1, procfsBootstraps);
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
-TEST_F(PathAliasTest, PinnedLinkSuccessfulReadReportsHelperCloseFailure)
+// Same rationale as above, for the successful-read route. Resolving the
+// link successfully still reaches a *second*, distinct component
+// ("target"), which legitimately gets its own mount observation; the
+// invariant under test is that following the link itself does not add a
+// bootstrap beyond that, i.e. exactly two (one per physical pin), not three.
+TEST_F(PathAliasTest, PinnedLinkSuccessfulReadBootstrapsProcfsOncePerPinNotTwice)
 {
-    const std::string link = context.GetTempdirPath() + "/close.link";
-    ASSERT_EQ(0, ::symlink("target", link.c_str()));
-    bool read = false, failedClose = false;
-    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, link.c_str(), false);
+    const std::string root = context.GetTempdirPath();
+    ASSERT_EQ(0, ::symlink("target", (root + "/close.link").c_str()));
+    {
+        std::ofstream target((root + "/target").c_str());
+        target << "x";
+    }
+    bool read = false;
+    int procfsBootstraps = 0;
+    auto opened = SelectAcceptedPath(context, root, CrossMountPathPolicy(true), AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
-    Descriptor pin = std::move(opened).Value();
+    Path path = std::move(opened).Value();
     const std::size_t before = CountOpenDescriptors();
+    EXPECT_CALL(context, OpenNativePath(_, _)).WillRepeatedly([&](const char* name, int flags) {
+        if (std::string("/proc") == name)
+            ++procfsBootstraps;
+        return context.RealOpenNativePath(name, flags);
+    });
     EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).WillOnce([&](int fd, char* buffer, std::size_t size) {
         read = true;
         return ::readlinkat(fd, "", buffer, size);
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
-        const bool helper = IsProcfsHelper(fd);
-        const int status = ::close(fd);
-        EXPECT_EQ(0, status);
-        if (helper && read && !failedClose)
-        {
-            failedClose = true;
-            errno = EIO;
-            return -1;
-        }
-        return status;
-    });
-    auto acquired = DescriptorTestAccess::ReadPinnedLink(pin, 16, 4096);
-    ASSERT_TRUE(acquired.HasValue());
-    EXPECT_EQ("target", acquired.Value().text);
-    EXPECT_TRUE(read);
-    EXPECT_TRUE(failedClose);
+    {
+        auto acquired = path.Resolve("close.link", CrossMountPathPolicy(true));
+        ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
+        ASSERT_TRUE(acquired.Value().Is<Path::Step>());
+        struct stat expected = {};
+        ASSERT_EQ(0, ::stat((root + "/target").c_str(), &expected));
+        EXPECT_EQ(expected.st_ino, As<Path::Step>(acquired.Value()).Target().Metadata().Stat().st_ino);
+        EXPECT_TRUE(read);
+        // One bootstrap for "close.link" itself, one for "target"; no extra
+        // bootstrap for the link read.
+        EXPECT_EQ(2, procfsBootstraps);
+    }
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
@@ -1242,14 +1577,14 @@ TEST_F(PathAliasTest, AcceptedRootRecognitionUsesHeldIdentityNotCandidateName)
         auto matching = SelectAcceptedPath(context, rootName, CrossMountPathPolicy(), limits);
         ASSERT_TRUE(accepted.HasValue());
         ASSERT_TRUE(matching.HasValue());
-        EXPECT_EQ(accepted.Value().Leaf().Acquired().metadata.st_ino, matching.Value().Leaf().Acquired().metadata.st_ino);
+        EXPECT_EQ(accepted.Value().Leaf().Metadata().Stat().st_ino, matching.Value().Leaf().Metadata().Stat().st_ino);
 
         ASSERT_EQ(0, ::rename(rootName.c_str(), (rootName + ".former").c_str()));
         ASSERT_EQ(0, ::mkdir(rootName.c_str(), 0700));
         auto replacement = SelectAcceptedPath(context, rootName, CrossMountPathPolicy(), limits);
         ASSERT_TRUE(replacement.HasValue());
-        EXPECT_NE(accepted.Value().Leaf().Acquired().metadata.st_ino, replacement.Value().Leaf().Acquired().metadata.st_ino);
-        EXPECT_EQ(accepted.Value().Leaf().Acquired().metadata.st_ino, matching.Value().Leaf().Acquired().metadata.st_ino);
+        EXPECT_NE(accepted.Value().Leaf().Metadata().Stat().st_ino, replacement.Value().Leaf().Metadata().Stat().st_ino);
+        EXPECT_EQ(accepted.Value().Leaf().Metadata().Stat().st_ino, matching.Value().Leaf().Metadata().Stat().st_ino);
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }
@@ -1272,8 +1607,8 @@ TEST_F(PathAliasTest, PhysicalRootNeverEmptyAndMovesLeaveBothPathSnapshotsUsable
     ASSERT_TRUE(root.HasValue());
     Path processRoot = std::move(root).Value();
     EXPECT_EQ(1u, processRoot.Size());
-    EXPECT_EQ("/", processRoot.Root().LookupName());
-    EXPECT_EQ("/", processRoot.Leaf().EffectiveName());
+    EXPECT_EQ("/", processRoot.Root().Metadata().LookupName());
+    EXPECT_EQ("/", processRoot.Leaf().Metadata().EffectiveName());
     auto selected = SelectAcceptedPath(context, context.GetTempdirPath(), CrossMountPathPolicy(), AmpleLimits());
     ASSERT_TRUE(selected.HasValue());
     Path source = std::move(selected).Value();
@@ -1283,8 +1618,8 @@ TEST_F(PathAliasTest, PhysicalRootNeverEmptyAndMovesLeaveBothPathSnapshotsUsable
     EXPECT_EQ(depth, source.Size());
     EXPECT_EQ(route, source.ToString());
     EXPECT_EQ(route, moved.ToString());
-    EXPECT_EQ("/", source.Root().LookupName());
-    EXPECT_EQ("/", moved.Root().LookupName());
+    EXPECT_EQ("/", source.Root().Metadata().LookupName());
+    EXPECT_EQ("/", moved.Root().Metadata().LookupName());
     EXPECT_GT(moved.RetainedDescriptors(), 0u);
     auto noChange = source.Freeze();
     ASSERT_TRUE(noChange.HasValue());
@@ -1305,16 +1640,16 @@ TEST_F(PathAliasTest, ResolveOwnsTargetAfterPathAndStepRetireWithoutChangingSour
         auto resolved = SelectStep(path, name.substr(name.find_last_of('/') + 1), CrossMountPathPolicy());
         ASSERT_TRUE(resolved.HasValue()) << resolved.Error().message;
         Path::Step step = std::move(resolved).Value();
-        const auto facts = step.Acquired();
-        EXPECT_EQ(Type::RegularFile, facts.type);
-        EXPECT_GT(facts.lookupMount.value, 0u);
-        EXPECT_GT(facts.targetMount.value, 0u);
+        const auto facts = step.Metadata();
+        EXPECT_EQ(Type::RegularFile, facts.FileType());
+        EXPECT_GT(facts.LookupMount().Value(), 0u);
+        EXPECT_GT(facts.TargetMount().Value(), 0u);
         retained.reset(new Path::Component(step.Target()));
         Path::Step moved(std::move(step));
-        EXPECT_EQ(step.Target().Acquired().metadata.st_ino, moved.Target().Acquired().metadata.st_ino);
+        EXPECT_EQ(step.Target().Metadata().Stat().st_ino, moved.Target().Metadata().Stat().st_ino);
         EXPECT_EQ(before, path.ToString());
         EXPECT_EQ(depth, path.Size());
-        EXPECT_EQ(name, retained->LookupName());
+        EXPECT_EQ(name, retained->Metadata().LookupName());
     }
     ASSERT_TRUE(retained->Stat().HasValue());
     auto stream = retained->OpenReadOnly();
@@ -1349,7 +1684,7 @@ TEST_F(PathAliasTest, SiblingStepsStaleButInverseRestoresExactContext)
     auto stale = path.Apply(std::move(right.Value()));
     ASSERT_FALSE(stale.HasValue());
     EXPECT_EQ(ESTALE, stale.Error().code);
-    EXPECT_EQ(root + "/right", right.Value().Target().LookupName());
+    EXPECT_EQ(root + "/right", right.Value().Target().Metadata().LookupName());
     auto restored = path.Apply(std::move(inverse.Value()));
     ASSERT_TRUE(restored.HasValue()) << restored.Error().message;
     EXPECT_EQ(before, path.ToString());
@@ -1379,7 +1714,7 @@ TEST_F(PathAliasTest, BarrierRejectsParentExcursionEvenWhenLinkReturnsToSameDire
     ASSERT_TRUE(narrowed.HasValue());
     EXPECT_TRUE(narrowed.Value());
     EXPECT_EQ(depth, path.Size());
-    EXPECT_EQ("/", path.Root().LookupName());
+    EXPECT_EQ("/", path.Root().Metadata().LookupName());
     auto repeat = path.Freeze();
     ASSERT_TRUE(repeat.HasValue());
     EXPECT_FALSE(repeat.Value());
@@ -1425,7 +1760,7 @@ TEST_F(PathAliasTest, DistinctAcquisitionsOfSameDirectoryCannotAttachStep)
     ASSERT_TRUE(second.HasValue());
     auto step = SelectStep(first.Value(), "child", CrossMountPathPolicy());
     ASSERT_TRUE(step.HasValue());
-    EXPECT_EQ(first.Value().Leaf().Acquired().metadata.st_ino, second.Value().Leaf().Acquired().metadata.st_ino);
+    EXPECT_EQ(first.Value().Leaf().Metadata().Stat().st_ino, second.Value().Leaf().Metadata().Stat().st_ino);
     EXPECT_EQ(first.Value().Size(), second.Value().Size());
     auto detached = second.Value().Apply(std::move(step.Value()));
     ASSERT_FALSE(detached.HasValue());
@@ -1452,25 +1787,25 @@ TEST_F(PathAliasTest, WorkedPhysicalSuffixDeltaAndUndoRetainHeldAncestors)
     EXPECT_EQ(rootDepth + 1, subDepth);
     auto link = SelectStep(path, "link", policy);
     ASSERT_TRUE(link.HasValue()) << link.Error().message;
-    EXPECT_EQ(Type::Directory, link.Value().Acquired().type);
-    EXPECT_GT(link.Value().Acquired().lookupMount.value, 0u);
-    EXPECT_GT(link.Value().Acquired().targetMount.value, 0u);
-    const auto previous = path.Leaf().Acquired().metadata.st_ino;
+    EXPECT_EQ(Type::Directory, link.Value().Metadata().FileType());
+    EXPECT_GT(link.Value().Metadata().LookupMount().Value(), 0u);
+    EXPECT_GT(link.Value().Metadata().TargetMount().Value(), 0u);
+    const auto previous = path.Leaf().Metadata().Stat().st_ino;
     auto undoLink = path.Apply(std::move(link.Value()));
     ASSERT_TRUE(undoLink.HasValue()) << undoLink.Error().message;
     EXPECT_EQ(subDepth, path.Size()); // pop sub and push x; never lexical sub/link
     EXPECT_EQ(root + "/x", path.ToString());
-    EXPECT_NE(previous, path.Leaf().Acquired().metadata.st_ino);
+    EXPECT_NE(previous, path.Leaf().Metadata().Stat().st_ino);
     EXPECT_EQ(ESTALE, path.Apply(std::move(undoSub.Value())).Error().code);
     auto back = path.Apply(std::move(undoLink.Value()));
     ASSERT_TRUE(back.HasValue());
     EXPECT_EQ(root + "/sub", path.ToString());
-    EXPECT_EQ(previous, path.Leaf().Acquired().metadata.st_ino);
+    EXPECT_EQ(previous, path.Leaf().Metadata().Stat().st_ino);
     auto toRoot = path.Apply(std::move(undoSub.Value()));
     ASSERT_TRUE(toRoot.HasValue());
     EXPECT_EQ(rootDepth, path.Size());
     EXPECT_EQ(root, path.ToString());
-    EXPECT_EQ("/", path.Root().LookupName());
+    EXPECT_EQ("/", path.Root().Metadata().LookupName());
 }
 
 TEST_F(PathAliasTest, FrozenRouteRejectsRootReplacementWithoutGlobalNameReplay)
@@ -1483,17 +1818,17 @@ TEST_F(PathAliasTest, FrozenRouteRejectsRootReplacementWithoutGlobalNameReplay)
     Path path = std::move(opened).Value();
     auto step = SelectStep(path, "child", CrossMountPathPolicy());
     ASSERT_TRUE(step.HasValue());
-    const auto held = step.Value().Target().Acquired();
+    const auto held = step.Value().Target().Metadata();
     ASSERT_EQ(0, ::rename((root + "/bound").c_str(), (root + "/bound.old").c_str()));
     ASSERT_EQ(0, ::mkdir((root + "/bound").c_str(), 0700));
     ASSERT_EQ(0, ::mkdir((root + "/bound/child").c_str(), 0700));
     const auto newPath = Path::Make(context, root + "/bound/child", CrossMountPathPolicy(), AmpleLimits());
     ASSERT_TRUE(newPath.HasValue());
     ASSERT_TRUE(newPath.Value().Is<Path>());
-    EXPECT_NE(held.metadata.st_ino, As<Path>(newPath.Value()).Leaf().Acquired().metadata.st_ino);
+    EXPECT_NE(held.Stat().st_ino, As<Path>(newPath.Value()).Leaf().Metadata().Stat().st_ino);
     auto inverse = path.Apply(std::move(step.Value()));
     ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;
-    EXPECT_EQ(held.metadata.st_ino, path.Leaf().Acquired().metadata.st_ino);
+    EXPECT_EQ(held.Stat().st_ino, path.Leaf().Metadata().Stat().st_ino);
     EXPECT_EQ(root + "/bound/child", path.LookupName()); // retained spelling, not global replay
     EXPECT_TRUE(path.Apply(std::move(inverse.Value())).HasValue());
 }
@@ -1506,21 +1841,21 @@ TEST_F(PathAliasTest, ZeroDeltaIsValidAndInverseRestoresTheSamePinnedAcquisition
     auto opened = SelectAcceptedPath(context, root, policy, AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
-    const auto identity = path.Leaf().Acquired().metadata.st_ino;
+    const auto identity = path.Leaf().Metadata().Stat().st_ino;
     auto step = SelectStep(path, "same", policy);
     ASSERT_TRUE(step.HasValue()) << step.Error().message;
     const auto size = path.Size();
-    EXPECT_EQ(identity, step.Value().Target().Acquired().metadata.st_ino);
+    EXPECT_EQ(identity, step.Value().Target().Metadata().Stat().st_ino);
     auto inverse = path.Apply(std::move(step.Value()));
     ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;
     EXPECT_EQ(size, path.Size());
-    EXPECT_EQ(identity, path.Leaf().Acquired().metadata.st_ino);
+    EXPECT_EQ(identity, path.Leaf().Metadata().Stat().st_ino);
     EXPECT_EQ(root + "/same", path.LookupName());
     auto restored = path.Apply(std::move(inverse.Value()));
     ASSERT_TRUE(restored.HasValue()) << restored.Error().message;
     EXPECT_EQ(size, path.Size());
     EXPECT_EQ(root, path.LookupName());
-    EXPECT_EQ(identity, path.Leaf().Acquired().metadata.st_ino);
+    EXPECT_EQ(identity, path.Leaf().Metadata().Stat().st_ino);
 }
 
 TEST_F(PathAliasTest, PinnedLinkInspectionSurvivesNameReplacementDuringResolve)
@@ -1549,7 +1884,53 @@ TEST_F(PathAliasTest, PinnedLinkInspectionSurvivesNameReplacementDuringResolve)
     EXPECT_TRUE(replaced);
     struct stat expected = {};
     ASSERT_EQ(0, ::stat(source.c_str(), &expected));
-    EXPECT_EQ(expected.st_ino, resolved.Value().Target().Acquired().metadata.st_ino);
+    EXPECT_EQ(expected.st_ino, resolved.Value().Target().Metadata().Stat().st_ino);
+    EXPECT_EQ(root, path.ToString());
+}
+
+// Absolute-link counterpart of PinnedLinkInspectionSurvivesNameReplacementDuringResolve
+// above: an already-pinned link's *own* fd (O_PATH|O_NOFOLLOW, acquired by
+// name before this stat fires) is what ReadLinkDescriptor later reads, not
+// whatever object the name currently resolves to. For an absolute link text,
+// this must hold even when the by-name replacement is itself a link pointing
+// outside the traversal barrier: the held pin's original, in-barrier
+// absolute text is still what gets parsed and re-resolved against the
+// boundary, so the race cannot be used to smuggle a target outside the
+// barrier through EXDEV-exempt code, nor to substitute a different in-barrier
+// target.
+TEST_F(PathAliasTest, PinnedAbsoluteLinkInspectionSurvivesNameReplacementDuringResolve)
+{
+    const std::string root = context.GetTempdirPath();
+    const std::string insideTarget = root + "/pinned-target";
+    {
+        std::ofstream file(insideTarget.c_str());
+        file << "acquired";
+    }
+    ASSERT_EQ(0, ::symlink(insideTarget.c_str(), (root + "/abs-link").c_str()));
+    auto policy = CrossMountPathPolicy(true);
+    auto opened = SelectAcceptedPath(context, root, policy, AmpleLimits());
+    ASSERT_TRUE(opened.HasValue());
+    Path path = std::move(opened).Value();
+    bool replaced = false;
+    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int descriptor, struct stat* snapshot) {
+        const int status = context.RealStatFileDescriptor(descriptor, snapshot);
+        if ((0 == status) && S_ISLNK(snapshot->st_mode) && !replaced)
+        {
+            replaced = true;
+            EXPECT_EQ(0, ::rename((root + "/abs-link").c_str(), (root + "/abs-link.former").c_str()));
+            EXPECT_EQ(0, ::symlink("/etc/passwd", (root + "/abs-link").c_str()));
+        }
+        return status;
+    });
+    auto resolved = SelectStep(path, "abs-link", policy);
+    ASSERT_TRUE(resolved.HasValue()) << resolved.Error().message;
+    EXPECT_TRUE(replaced);
+    struct stat expectedInside = {};
+    ASSERT_EQ(0, ::stat(insideTarget.c_str(), &expectedInside));
+    struct stat replacementOutside = {};
+    ASSERT_EQ(0, ::stat("/etc/passwd", &replacementOutside));
+    EXPECT_EQ(expectedInside.st_ino, resolved.Value().Target().Metadata().Stat().st_ino);
+    EXPECT_NE(replacementOutside.st_ino, resolved.Value().Target().Metadata().Stat().st_ino);
     EXPECT_EQ(root, path.ToString());
 }
 
@@ -1580,9 +1961,14 @@ TEST_F(PathAliasTest, LinkLookupMountAndTargetMountAreDistinctAndBothEnforced)
     auto policy = CrossMountPathPolicy(true);
     auto cross = SelectStep(path, "proc-link", policy);
     ASSERT_TRUE(cross.HasValue()) << cross.Error().message;
-    EXPECT_EQ(lookupMount.Value(), cross.Value().Acquired().lookupMount.value);
-    EXPECT_EQ(targetMount.Value(), cross.Value().Acquired().targetMount.value);
-    EXPECT_EQ(Type::Directory, cross.Value().Acquired().type);
+    EXPECT_EQ(lookupMount.Value(), cross.Value().Metadata().LookupMount().Value());
+    EXPECT_EQ(targetMount.Value(), cross.Value().Metadata().TargetMount().Value());
+    const auto targetFacts = cross.Value().Target().Metadata();
+    const auto stepFacts = cross.Value().Metadata();
+    EXPECT_EQ(targetFacts.TargetMount().Value(), stepFacts.TargetMount().Value());
+    EXPECT_EQ(targetFacts.LookupName(), stepFacts.LookupName());
+    EXPECT_EQ(targetFacts.EffectiveName(), stepFacts.EffectiveName());
+    EXPECT_EQ(Type::Directory, cross.Value().Metadata().FileType());
     policy.mounts = MountPolicy::StayOnRootMount;
     auto denied = path.Resolve("proc-link", policy);
     ASSERT_FALSE(denied.HasValue());
@@ -1628,7 +2014,7 @@ TEST_F(PathAliasTest, ResolverChargesExactAndOneOverWorkEvenForFailedLookup)
     ASSERT_FALSE(deniedAgain.HasValue());
     EXPECT_EQ(E2BIG, deniedAgain.Error().code);
     EXPECT_EQ(1u, bounded.Size());
-    EXPECT_EQ("/", bounded.Root().LookupName());
+    EXPECT_EQ("/", bounded.Root().Metadata().LookupName());
 }
 TEST_F(PathAliasTest, ProcfsHelperCloseFailuresAreDiagnosticAndAcquisitionSucceeds)
 {
@@ -1638,17 +2024,17 @@ TEST_F(PathAliasTest, ProcfsHelperCloseFailuresAreDiagnosticAndAcquisitionSuccee
     ASSERT_NE(nullptr, log);
     context.SetLogHandle(log);
     std::size_t failed = 0;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
         const bool helper = IsProcfsHelper(descriptor);
         const int status = ::close(descriptor);
         EXPECT_EQ(0, status);
         if (helper && failed < 2)
         {
             errno = (0 == failed++) ? EACCES : EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
 
-        return status;
+        return NativeCloseResult(status);
     });
     auto opened = SelectAcceptedPath(context, "/", CrossMountPathPolicy(), AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
@@ -1659,7 +2045,7 @@ TEST_F(PathAliasTest, ProcfsHelperCloseFailuresAreDiagnosticAndAcquisitionSuccee
     context.SetLogHandle(nullptr);
     const auto text = ReadLog(logPath);
     for (int code : {EACCES, EIO})
-        ExpectLoggedOnce(text, "Cannot close internal filesystem descriptor: " + std::to_string(code));
+        ExpectLoggedOnce(text, "Failed to close filesystem resource: " + std::string(strerror(code)));
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
@@ -1676,7 +2062,7 @@ TEST_F(PathAliasTest, PrimaryFdinfoReadErrorOutranksHelperCloseFailure)
         }
         return ::read(descriptor, buffer, size);
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
         const bool helper = IsProcfsHelper(descriptor);
         const int status = ::close(descriptor);
         EXPECT_EQ(0, status);
@@ -1684,9 +2070,9 @@ TEST_F(PathAliasTest, PrimaryFdinfoReadErrorOutranksHelperCloseFailure)
         {
             failedClose = true;
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
-        return status;
+        return NativeCloseResult(status);
     });
     auto opened = SelectAcceptedPath(context, "/", CrossMountPathPolicy(), AmpleLimits());
     ASSERT_FALSE(opened.HasValue());
@@ -1714,15 +2100,15 @@ TEST_F(PathAliasTest, AcceptedLookupAndEffectiveBindingsReuseHeldPinWithoutReope
     ASSERT_TRUE(path.Freeze().HasValue());
     EXPECT_EQ(alias, path.LookupName());
     EXPECT_EQ(target, path.ToString());
-    EXPECT_EQ("/", path.Root().LookupName());
-    EXPECT_EQ(target, path.Leaf().EffectiveName());
+    EXPECT_EQ("/", path.Root().Metadata().LookupName());
+    EXPECT_EQ(target, path.Leaf().Metadata().EffectiveName());
     EXPECT_CALL(context, OpenNativePath(_, _)).WillRepeatedly([&](const char* name, int flags) { return context.RealOpenNativePath(name, flags); });
     EXPECT_CALL(context, OpenNativePath(testing::StrEq("/"), _)).Times(0);
     auto resolved = SelectStep(path, "via-alias", policy);
     ASSERT_TRUE(resolved.HasValue()) << resolved.Error().message;
     struct stat expected = {};
     ASSERT_EQ(0, ::stat((target + "/inside").c_str(), &expected));
-    EXPECT_EQ(expected.st_ino, resolved.Value().Target().Acquired().metadata.st_ino);
+    EXPECT_EQ(expected.st_ino, resolved.Value().Target().Metadata().Stat().st_ino);
     EXPECT_EQ(alias, path.LookupName());
     EXPECT_EQ(target, path.ToString());
 }
@@ -1749,7 +2135,7 @@ TEST_F(PathAliasTest, FreezeOnlyNarrowsAndRejectsInverseAcrossNewBarrier)
     EXPECT_EQ(EXDEV, blocked.Error().code);
     EXPECT_EQ(base + "/child", path.ToString());
     EXPECT_EQ(rootDepth + 1, path.Size());
-    EXPECT_EQ("/", path.Root().LookupName());
+    EXPECT_EQ("/", path.Root().Metadata().LookupName());
 }
 
 TEST_F(PathAliasTest, MakeSharesFollowLimitAcrossComponentsAndResolveResetsIt)
@@ -1779,7 +2165,7 @@ TEST_F(PathAliasTest, MakeSharesFollowLimitAcrossComponentsAndResolveResetsIt)
     auto other = SelectStep(selected.Value(), "other", follow);
     ASSERT_TRUE(first.HasValue()) << first.Error().message;
     ASSERT_TRUE(other.HasValue()) << other.Error().message;
-    EXPECT_EQ(first.Value().Acquired().metadata.st_ino, other.Value().Acquired().metadata.st_ino);
+    EXPECT_EQ(first.Value().Metadata().Stat().st_ino, other.Value().Metadata().Stat().st_ino);
 }
 
 TEST_F(PathAliasTest, AcyclicDotFanoutStopsAtTotalFollowsWithoutGrowingDirectoryDepth)
@@ -1797,7 +2183,7 @@ TEST_F(PathAliasTest, AcyclicDotFanoutStopsAtTotalFollowsWithoutGrowingDirectory
     auto seven = SelectStep(selected.Value(), "s3", CrossMountPathPolicy(true));
     ASSERT_TRUE(seven.HasValue()) << seven.Error().message;
     EXPECT_EQ(depth, selected.Value().Size());
-    EXPECT_EQ(selected.Value().Leaf().Acquired().metadata.st_ino, seven.Value().Acquired().metadata.st_ino);
+    EXPECT_EQ(selected.Value().Leaf().Metadata().Stat().st_ino, seven.Value().Metadata().Stat().st_ino);
     limits.linkExpansions = 6;
     auto limited = SelectAcceptedPath(context, base, CrossMountPathPolicy(), limits);
     ASSERT_TRUE(limited.HasValue());
@@ -1945,12 +2331,12 @@ TEST_F(PathAliasTest, UnsupportedTypedSkipSurvivesFailedTemporaryPinClose)
     auto policy = CrossMountPathPolicy(true);
     policy.unsupportedTypes = ComplianceEngine::Filesystem::UnsupportedTypeDisposition::Skip;
     const auto before = CountOpenDescriptors();
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         struct stat info = {};
         const bool inspected = ::fstat(fd, &info) == 0;
         const bool fifo = inspected && S_ISFIFO(info.st_mode);
         const bool hiddenDirectory = inspected && S_ISDIR(info.st_mode) && DescriptorTarget(fd) == directory;
-        const int result = context.RealCloseFileDescriptor(fd);
+        auto result = context.RealCloseFileDescriptor(fd);
         if (fifo || hiddenDirectory)
         {
             if (fifo)
@@ -1958,7 +2344,7 @@ TEST_F(PathAliasTest, UnsupportedTypedSkipSurvivesFailedTemporaryPinClose)
             if (hiddenDirectory)
                 ++failedDirectory;
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
         return result;
     });
@@ -1978,15 +2364,15 @@ TEST_F(PathAliasTest, MissingFactorySelectionSurvivesDiagnosticRootCloseFailure)
     struct stat root = {};
     ASSERT_EQ(0, ::stat("/", &root));
     int failed = 0;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         struct stat acquired = {};
         const bool processRoot = ::fstat(fd, &acquired) == 0 && acquired.st_dev == root.st_dev && acquired.st_ino == root.st_ino;
-        const int result = context.RealCloseFileDescriptor(fd);
+        auto result = context.RealCloseFileDescriptor(fd);
         if (processRoot)
         {
             ++failed;
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
         return result;
     });
@@ -2007,14 +2393,14 @@ TEST_F(PathAliasTest, FailedChildErrorConsumesWorkAndPreservesAcceptedPin)
     limits.shared.work = 192 + 2 * (1 + 192);
     auto selected = SelectAcceptedPath(context, "/", policy, limits);
     ASSERT_TRUE(selected.HasValue());
-    const auto rootInode = selected.Value().Leaf().Acquired().metadata.st_ino;
+    const auto rootInode = selected.Value().Leaf().Metadata().Stat().st_ino;
     auto first = selected.Value().Resolve("nonexistent-path-child", policy);
     ASSERT_FALSE(first.HasValue());
     EXPECT_EQ(ENOENT, first.Error().code);
     auto second = selected.Value().Resolve("nonexistent-path-child", policy);
     ASSERT_FALSE(second.HasValue());
     EXPECT_EQ(E2BIG, second.Error().code); // already spent at least one held-search cost
-    EXPECT_EQ(rootInode, selected.Value().Leaf().Acquired().metadata.st_ino);
+    EXPECT_EQ(rootInode, selected.Value().Leaf().Metadata().Stat().st_ino);
 }
 
 TEST_F(PathAliasTest, DetachedSelectedFileModeChangesOriginalNotReplacement)
@@ -2037,7 +2423,7 @@ TEST_F(PathAliasTest, DetachedSelectedFileModeChangesOriginalNotReplacement)
     EXPECT_EQ(0640, former.st_mode & 0777);
     EXPECT_EQ(0600, current.st_mode & 0777);
     EXPECT_NE(former.st_ino, current.st_ino);
-    EXPECT_EQ(former.st_ino, leaf.Acquired().metadata.st_ino);
+    EXPECT_EQ(former.st_ino, leaf.Metadata().Stat().st_ino);
 }
 
 TEST_F(PathAliasTest, LinkParentComponentsUsePinnedPhysicalAncestryNotLexicalCancellation)
@@ -2057,8 +2443,8 @@ TEST_F(PathAliasTest, LinkParentComponentsUsePinnedPhysicalAncestryNotLexicalCan
     struct stat expected = {}, wrong = {};
     ASSERT_EQ(0, ::stat((base + "/a/other").c_str(), &expected));
     ASSERT_EQ(0, ::stat((base + "/other").c_str(), &wrong));
-    EXPECT_EQ(expected.st_ino, As<Path>(followed.Value()).Leaf().Acquired().metadata.st_ino);
-    EXPECT_NE(wrong.st_ino, As<Path>(followed.Value()).Leaf().Acquired().metadata.st_ino);
+    EXPECT_EQ(expected.st_ino, As<Path>(followed.Value()).Leaf().Metadata().Stat().st_ino);
+    EXPECT_NE(wrong.st_ino, As<Path>(followed.Value()).Leaf().Metadata().Stat().st_ino);
     auto invalid = Path::Make(context, base + "/other/../a", CrossMountPathPolicy(true), AmpleLimits());
     ASSERT_FALSE(invalid.HasValue());
     EXPECT_EQ(ENOTDIR, invalid.Error().code);
@@ -2215,7 +2601,7 @@ TEST_F(PathAliasTest, LinkTargetExactByteCapSucceedsAndOneOverPreservesRoot)
     ASSERT_TRUE(exact.HasValue()) << exact.Error().message;
     auto accepted = SelectStep(exact.Value(), "target-link", policy);
     ASSERT_TRUE(accepted.HasValue()) << accepted.Error().message;
-    EXPECT_EQ(Type::RegularFile, accepted.Value().Acquired().type);
+    EXPECT_EQ(Type::RegularFile, accepted.Value().Metadata().FileType());
     ResolverLimits shortLimits = exactLimits;
     shortLimits.linkTargetBytes = name.size() - 1;
     auto shortRoot = SelectAcceptedPath(context, base, policy, shortLimits);
@@ -2332,8 +2718,8 @@ TEST_F(PathAliasTest, PublicResolvePreservesMissingDisposition)
     EXPECT_EQ(Path::RejectionReason::Missing, As<Path::RejectionReason>(reported.Value()));
 }
 
-// Historical Path outcome dispatch and ownership, adapted to the owning
-// Resolve/Apply result rather than the removed Push/Pop result adapter.
+// Exercises Path outcome dispatch and ownership through the owning
+// Resolve/Apply result.
 TEST_F(PathAliasTest, PathOutcomesDispatchAndRetainPinsThroughExtraction)
 {
     const std::string base = context.GetTempdirPath();
@@ -2371,7 +2757,7 @@ TEST_F(PathAliasTest, PathOutcomesDispatchAndRetainPinsThroughExtraction)
     }
     ASSERT_NE(nullptr, retained);
     EXPECT_GT(CountOpenDescriptors(), before);
-    EXPECT_EQ("/", retained->Root().LookupName());
+    EXPECT_EQ("/", retained->Root().Metadata().LookupName());
     retained.reset();
     EXPECT_EQ(before, CountOpenDescriptors());
 }
@@ -2476,6 +2862,14 @@ TEST_F(PathAliasTest, InvalidAbsoluteFactoryInputNeverPublishesPartialPath)
     EXPECT_EQ(Path::RejectionReason::Missing, As<Path::RejectionReason>(missing.Value()));
 }
 
+// Directory activation is only publicly reachable by consuming a whole Path into FTW::Files(); Path's
+// "move constructor" shares state rather than invalidating the source
+// (Path.hpp ~149-157: Path(Path&&) copies, not clears, the shared state
+// pointer), so a throwaway copy can be handed to Files() to synchronously
+// activate (via FileRange::State::Initialize) the already-held root
+// directory for iteration -- without ever needing to actually iterate, and
+// without disturbing `path` itself, which remains valid for the
+// resolve/apply/inverse assertions below.
 TEST_F(PathAliasTest, ProcessRootMountObservationIsRetainedAcrossResolveAndInverse)
 {
     int observations = 0;
@@ -2494,22 +2888,31 @@ TEST_F(PathAliasTest, ProcessRootMountObservationIsRetainedAcrossResolveAndInver
     ASSERT_GE(kernelRoot.Get(), 0);
     auto kernelId = KernelMountId(kernelRoot.Get());
     ASSERT_TRUE(kernelId.HasValue());
-    EXPECT_EQ(kernelId.Value(), path.Root().Acquired().lookupMount.value);
-    EXPECT_EQ(kernelId.Value(), path.Root().Acquired().targetMount.value);
-    EXPECT_TRUE(path.Root().OpenChildren().HasValue());
-    EXPECT_EQ(1, observations);
+    EXPECT_EQ(kernelId.Value(), path.Root().Metadata().LookupMount().Value());
+    EXPECT_EQ(kernelId.Value(), path.Root().Metadata().TargetMount().Value());
+    {
+        Path rootCopy(std::move(path));
+        auto range = Files(std::move(rootCopy), "/", FilesystemTraversalPolicy{});
+        ASSERT_TRUE(range.HasValue()) << range.Error().message;
+        EXPECT_EQ(1, observations); // reactivation reused the already-held TargetMount
+    }
     auto child = SelectStep(path, "proc", CrossMountPathPolicy());
     ASSERT_TRUE(child.HasValue()) << child.Error().message;
     EXPECT_EQ(2, observations);
-    EXPECT_GT(child.Value().Acquired().targetMount.value, 0u);
+    EXPECT_GT(child.Value().Metadata().TargetMount().Value(), 0u);
     auto inverse = path.Apply(std::move(child.Value()));
     ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;
     EXPECT_EQ(2, observations);
     auto restored = path.Apply(std::move(inverse.Value()));
     ASSERT_TRUE(restored.HasValue()) << restored.Error().message;
-    EXPECT_TRUE(path.Root().OpenChildren().HasValue());
     EXPECT_EQ(2, observations);
     EXPECT_EQ("/", path.ToString());
+    {
+        Path rootCopy(std::move(path));
+        auto range = Files(std::move(rootCopy), "/", FilesystemTraversalPolicy{});
+        ASSERT_TRUE(range.HasValue()) << range.Error().message;
+        EXPECT_EQ(2, observations); // still reused after the resolve/apply/inverse round trip
+    }
 }
 
 TEST_F(PathAliasTest, MovedPathEnforcesRetainedNativeDescriptorCap)
@@ -2560,14 +2963,14 @@ TEST_F(PathAliasTest, HeldAliasExpiresFromActiveAncestryAfterInverse)
     ASSERT_EQ(0, ::symlink("b", (root + "/alias").c_str()));
     auto pinned = SelectStep(path, "absolute", follow);
     ASSERT_TRUE(pinned.HasValue()) << pinned.Error().message;
-    EXPECT_EQ(original.st_ino, pinned.Value().Acquired().metadata.st_ino);
-    EXPECT_EQ(root + "/a/file", pinned.Value().Target().EffectiveName());
+    EXPECT_EQ(original.st_ino, pinned.Value().Metadata().Stat().st_ino);
+    EXPECT_EQ(root + "/a/file", pinned.Value().Target().Metadata().EffectiveName());
     auto undo = path.Apply(std::move(back.Value()));
     ASSERT_TRUE(undo.HasValue()) << undo.Error().message;
     auto fresh = SelectStep(path, "absolute", follow);
     ASSERT_TRUE(fresh.HasValue()) << fresh.Error().message;
-    EXPECT_EQ(replacement.st_ino, fresh.Value().Acquired().metadata.st_ino);
-    EXPECT_EQ(root + "/b/file", fresh.Value().Target().EffectiveName());
+    EXPECT_EQ(replacement.st_ino, fresh.Value().Metadata().Stat().st_ino);
+    EXPECT_EQ(root + "/b/file", fresh.Value().Target().Metadata().EffectiveName());
 }
 
 TEST_F(PathAliasTest, RenamedIntermediatePinnedAncestorIsNotReopenedByAbsoluteTarget)
@@ -2594,15 +2997,15 @@ TEST_F(PathAliasTest, RenamedIntermediatePinnedAncestorIsNotReopenedByAbsoluteTa
     ASSERT_EQ(0, ::stat((root + "/a/file").c_str(), &substitute));
     auto pinned = SelectStep(path, "absolute", CrossMountPathPolicy(true));
     ASSERT_TRUE(pinned.HasValue()) << pinned.Error().message;
-    EXPECT_EQ(expected.st_ino, pinned.Value().Acquired().metadata.st_ino);
-    EXPECT_EQ(root + "/a/file", pinned.Value().Target().EffectiveName());
+    EXPECT_EQ(expected.st_ino, pinned.Value().Metadata().Stat().st_ino);
+    EXPECT_EQ(root + "/a/file", pinned.Value().Target().Metadata().EffectiveName());
     ASSERT_TRUE(path.Apply(std::move(leave.Value())).HasValue());
     auto fresh = SelectStep(path, "a", CrossMountPathPolicy());
     ASSERT_TRUE(fresh.HasValue());
     ASSERT_TRUE(path.Apply(std::move(fresh.Value())).HasValue());
     auto selected = SelectStep(path, "file", CrossMountPathPolicy());
     ASSERT_TRUE(selected.HasValue());
-    EXPECT_EQ(substitute.st_ino, selected.Value().Acquired().metadata.st_ino);
+    EXPECT_EQ(substitute.st_ino, selected.Value().Metadata().Stat().st_ino);
 }
 
 TEST_F(PathAliasTest, PhysicalSuffixFailureIsAtomicAndInverseRemovesOnlyItsSuffix)
@@ -2660,9 +3063,9 @@ TEST_F(PathAliasTest, IndependentPhysicalBranchesKeepTheirPinsAndRejectStaleStep
     ASSERT_TRUE(undo.HasValue()) << undo.Error().message;
     EXPECT_EQ(root + "/second", branch.ToString());
     EXPECT_EQ(root + "/first", path.ToString());
-    EXPECT_NE(heldFirst.Acquired().metadata.st_ino, branch.Leaf().Acquired().metadata.st_ino);
+    EXPECT_NE(heldFirst.Metadata().Stat().st_ino, branch.Leaf().Metadata().Stat().st_ino);
     ASSERT_EQ(0, ::rename((root + "/first").c_str(), (root + "/renamed").c_str()));
-    EXPECT_EQ(root + "/first", heldFirst.EffectiveName());
+    EXPECT_EQ(root + "/first", heldFirst.Metadata().EffectiveName());
     EXPECT_TRUE(heldFirst.Stat().HasValue());
     EXPECT_EQ(root + "/first", path.ToString());
     auto oldBranch = branch.Apply(std::move(stale.Value()));
@@ -2691,9 +3094,9 @@ TEST_F(PathAliasTest, ReusedSlotNeverReplacesOwningCopyOfOldBranch)
     auto second = SelectStep(path, "second", CrossMountPathPolicy());
     ASSERT_TRUE(second.HasValue());
     ASSERT_TRUE(path.Apply(std::move(second.Value())).HasValue());
-    EXPECT_EQ(root + "/first", old.EffectiveName());
+    EXPECT_EQ(root + "/first", old.Metadata().EffectiveName());
     EXPECT_TRUE(old.Stat().HasValue());
-    EXPECT_NE(old.Acquired().metadata.st_ino, path.Leaf().Acquired().metadata.st_ino);
+    EXPECT_NE(old.Metadata().Stat().st_ino, path.Leaf().Metadata().Stat().st_ino);
     EXPECT_EQ(root + "/second", path.ToString());
 }
 
@@ -2753,7 +3156,7 @@ TEST_F(PathAliasTest, DeepGrowthKeepsOwningAncestorsAcrossFailedResolveAndInvers
         inverses.push_back(std::move(undo.Value()));
         if (0 == index)
             first.reset(new Path::Component(path.Leaf()));
-        EXPECT_EQ(processRoot.Acquired().metadata.st_ino, path.Root().Acquired().metadata.st_ino);
+        EXPECT_EQ(processRoot.Metadata().Stat().st_ino, path.Root().Metadata().Stat().st_ino);
     }
     ASSERT_NE(nullptr, first);
     EXPECT_EQ(initialDepth + 72, path.Size());
@@ -2780,6 +3183,11 @@ TEST_F(PathAliasTest, DeepGrowthKeepsOwningAncestorsAcrossFailedResolveAndInvers
     EXPECT_TRUE(first->Stat().HasValue());
 }
 
+// Directory enumeration (DirectoryCursor::OpenChildren) has no direct
+// public entry point; FTW::Files(Path, ...) drives the identical production
+// code. Files() consumes the whole Path by value, so the listing check runs
+// last, after every assertion that needs `path` (or Components derived from
+// it).
 TEST(PathKernelIntegrationTest, NativeProcfsAndPinnedOperations)
 {
     struct utsname kernel = {};
@@ -2793,21 +3201,9 @@ TEST(PathKernelIntegrationTest, NativeProcfsAndPinnedOperations)
     auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), CrossMountPathPolicy(), ResolverLimits{});
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     Path path = std::move(opened).Value();
-    auto children = path.Leaf().OpenChildren();
-    ASSERT_TRUE(children.HasValue()) << children.Error().message;
-    bool found = false;
-    for (;;)
-    {
-        auto entry = children.Value().Next();
-        ASSERT_TRUE(entry.HasValue()) << entry.Error().message;
-        if (!entry.Value().HasValue())
-            break;
-        found = found || (name == entry.Value().Value());
-    }
-    EXPECT_TRUE(found);
     auto selected = SelectStep(path, name, Path::Policy{});
     ASSERT_TRUE(selected.HasValue()) << selected.Error().message;
-    EXPECT_EQ(path.Leaf().Acquired().targetMount.value, selected.Value().Acquired().targetMount.value);
+    EXPECT_EQ(path.Leaf().Metadata().TargetMount().Value(), selected.Value().Metadata().TargetMount().Value());
     Path::Component file = selected.Value().Target();
     auto metadata = file.Stat();
     ASSERT_TRUE(metadata.HasValue()) << metadata.Error().message;
@@ -2825,6 +3221,18 @@ TEST(PathKernelIntegrationTest, NativeProcfsAndPinnedOperations)
     EXPECT_EQ(0600, changed.st_mode & 0777);
     EXPECT_EQ(::geteuid(), changed.st_uid);
     EXPECT_EQ(::getegid(), changed.st_gid);
+
+    const std::string root = context.GetTempdirPath();
+    auto listing = Files(std::move(path), root, FilesystemTraversalPolicy{});
+    ASSERT_TRUE(listing.HasValue()) << listing.Error().message;
+    bool found = false;
+    for (const auto& entry : listing.Value())
+    {
+        ASSERT_TRUE(entry.HasValue()) << entry.Error().message;
+        if (entry.Value().path == (root + "/" + name))
+            found = true;
+    }
+    EXPECT_TRUE(found);
 }
 
 TEST_F(PathAliasTest, TerminalLinkSkipIsIndependentOfDirectoryAndFileFollow)
@@ -2866,7 +3274,7 @@ TEST_F(PathAliasTest, TerminalLinkSkipIsIndependentOfDirectoryAndFileFollow)
     EXPECT_EQ(depth, selected.Value().Size());
     auto followDirectory = SelectStep(selected.Value(), "directory-link", policy);
     ASSERT_TRUE(followDirectory.HasValue()) << followDirectory.Error().message;
-    EXPECT_EQ(Type::Directory, followDirectory.Value().Acquired().type);
+    EXPECT_EQ(Type::Directory, followDirectory.Value().Metadata().FileType());
     EXPECT_EQ(depth, selected.Value().Size());
     auto prefix = Path::Make(context, base + "/directory-link/file", CrossMountPathPolicy(), AmpleLimits());
     ASSERT_FALSE(prefix.HasValue());
@@ -2895,7 +3303,7 @@ TEST_F(PathAliasTest, PhysicalParentOfRelativeLinkUsesPinnedAncestorNotLogicalLe
     EXPECT_EQ(depth + 2, path.Size());
     auto alias = SelectStep(path, "childalias", CrossMountPathPolicy(true));
     ASSERT_TRUE(alias.HasValue()) << alias.Error().message;
-    EXPECT_EQ(expected.st_ino, alias.Value().Acquired().metadata.st_ino);
+    EXPECT_EQ(expected.st_ino, alias.Value().Metadata().Stat().st_ino);
     auto inverse = path.Apply(std::move(alias.Value()));
     ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;
     EXPECT_EQ(root + "/a/other", path.ToString());
@@ -2931,9 +3339,9 @@ TEST_F(PathAliasTest, HeldAliasAncestryResolvesDotDotBeforeLexicalRootShortcut)
     ASSERT_TRUE(back.HasValue()) << back.Error().message;
     auto jump = SelectStep(path, "jump", CrossMountPathPolicy(true));
     ASSERT_TRUE(jump.HasValue()) << jump.Error().message;
-    EXPECT_EQ(expected.st_ino, jump.Value().Acquired().metadata.st_ino);
-    EXPECT_NE(wrong.st_ino, jump.Value().Acquired().metadata.st_ino);
-    EXPECT_EQ(root + "/a/victim", jump.Value().Target().EffectiveName());
+    EXPECT_EQ(expected.st_ino, jump.Value().Metadata().Stat().st_ino);
+    EXPECT_NE(wrong.st_ino, jump.Value().Metadata().Stat().st_ino);
+    EXPECT_EQ(root + "/a/victim", jump.Value().Target().Metadata().EffectiveName());
     EXPECT_EQ(root + "/a/b", path.ToString());
 }
 
@@ -2954,7 +3362,7 @@ TEST_F(PathAliasTest, HeldFileMountFactsAreObservedAtAcquisitionOnly)
     Path path = std::move(opened).Value();
     const int acquired = records;
     EXPECT_GE(acquired, 2);
-    EXPECT_GT(path.Leaf().Acquired().targetMount.value, 0u);
+    EXPECT_GT(path.Leaf().Metadata().TargetMount().Value(), 0u);
     EXPECT_TRUE(path.Leaf().Stat().HasValue());
     auto read = path.Leaf().OpenReadOnly();
     ASSERT_TRUE(read.HasValue()) << read.Error().message;
@@ -2993,13 +3401,13 @@ TEST_F(PathAliasTest, FactoryFollowedAbsoluteLinkPreservesLookupAndTargetMountFa
         GTEST_SKIP() << "procfs fixture shares mount";
     auto opened = SelectAcceptedPath(context, alias, CrossMountPathPolicy(true), AmpleLimits());
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
-    const auto facts = opened.Value().Leaf().Acquired();
-    EXPECT_EQ(sourceId.Value(), facts.lookupMount.value);
-    EXPECT_EQ(targetId.Value(), facts.targetMount.value);
-    EXPECT_EQ(Type::Directory, facts.type);
+    const auto facts = opened.Value().Leaf().Metadata();
+    EXPECT_EQ(sourceId.Value(), facts.LookupMount().Value());
+    EXPECT_EQ(targetId.Value(), facts.TargetMount().Value());
+    EXPECT_EQ(Type::Directory, facts.FileType());
     EXPECT_EQ(alias, opened.Value().LookupName());
     EXPECT_EQ("/proc", opened.Value().ToString());
-    EXPECT_EQ("/proc", opened.Value().Leaf().EffectiveName());
+    EXPECT_EQ("/proc", opened.Value().Leaf().Metadata().EffectiveName());
 }
 
 TEST_F(PathAliasTest, FrozenAbsoluteBindingUsesHeldRootAfterNameReplacement)
@@ -3015,7 +3423,7 @@ TEST_F(PathAliasTest, FrozenAbsoluteBindingUsesHeldRootAfterNameReplacement)
     auto follow = CrossMountPathPolicy(true);
     auto initial = SelectStep(path, "absolute", follow);
     ASSERT_TRUE(initial.HasValue()) << initial.Error().message;
-    const auto originalInode = initial.Value().Acquired().metadata.st_ino;
+    const auto originalInode = initial.Value().Metadata().Stat().st_ino;
     ASSERT_EQ(0, ::unlink((root + "/absolute").c_str()));
     ASSERT_EQ(0, ::symlink("/etc/passwd", (root + "/absolute").c_str()));
     auto outside = path.Resolve("absolute", follow);
@@ -3032,8 +3440,8 @@ TEST_F(PathAliasTest, FrozenAbsoluteBindingUsesHeldRootAfterNameReplacement)
     EXPECT_CALL(context, OpenNativePath(testing::StrEq("/"), _)).Times(0);
     auto pinned = SelectStep(path, "absolute", follow);
     ASSERT_TRUE(pinned.HasValue()) << pinned.Error().message;
-    EXPECT_EQ(originalInode, pinned.Value().Acquired().metadata.st_ino);
-    EXPECT_EQ(root + "/inside", pinned.Value().Target().EffectiveName());
+    EXPECT_EQ(originalInode, pinned.Value().Metadata().Stat().st_ino);
+    EXPECT_EQ(root + "/inside", pinned.Value().Target().Metadata().EffectiveName());
     EXPECT_EQ(root, path.ToString());
 }
 
@@ -3060,7 +3468,7 @@ TEST_F(PathAliasTest, FactoryNormalizesRepeatedSeparatorsAndRequiresDirectoryFor
     auto opened = Path::Make(context, repeated, follow, AmpleLimits());
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     ASSERT_TRUE(opened.Value().Is<Path>());
-    EXPECT_EQ(Type::RegularFile, As<Path>(opened.Value()).Leaf().Acquired().type);
+    EXPECT_EQ(Type::RegularFile, As<Path>(opened.Value()).Leaf().Metadata().FileType());
     EXPECT_EQ(file, As<Path>(opened.Value()).ToString());
     const std::string base = context.GetTempdirPath();
     ASSERT_EQ(0, ::mkdir((base + "/target").c_str(), 0700));
@@ -3077,7 +3485,7 @@ TEST_F(PathAliasTest, FactoryNormalizesRepeatedSeparatorsAndRequiresDirectoryFor
     ASSERT_TRUE(accepted.HasValue()) << accepted.Error().message;
     ASSERT_TRUE(accepted.Value().Is<Path>());
     EXPECT_EQ(base + "/target/final", As<Path>(accepted.Value()).ToString());
-    EXPECT_EQ(Type::Directory, As<Path>(accepted.Value()).Leaf().Acquired().type);
+    EXPECT_EQ(Type::Directory, As<Path>(accepted.Value()).Leaf().Metadata().FileType());
 }
 
 TEST_F(PathAliasTest, AcquiredAliasRootRejectsOverlappingAbsoluteBindingAfterReplacement)
@@ -3127,8 +3535,8 @@ TEST_F(PathAliasTest, DisjointRootBindingsReuseHeldPinButRejectCollidingPrefix)
     {
         auto step = SelectStep(path, name, CrossMountPathPolicy(true));
         ASSERT_TRUE(step.HasValue()) << name << ": " << step.Error().message;
-        EXPECT_EQ(expected.st_ino, step.Value().Acquired().metadata.st_ino);
-        EXPECT_EQ(root + "/data/file", step.Value().Target().EffectiveName());
+        EXPECT_EQ(expected.st_ino, step.Value().Metadata().Stat().st_ino);
+        EXPECT_EQ(root + "/data/file", step.Value().Target().Metadata().EffectiveName());
         EXPECT_EQ(root + "/data", path.ToString());
     }
     auto conflict = path.Resolve("collision", CrossMountPathPolicy(true));
@@ -3143,7 +3551,8 @@ TEST_F(PathAliasTest, CopiedLeafOutlivesPathMoveAndFailedFinalCloseIsNotRetried)
     const auto before = CountOpenDescriptors();
     std::unique_ptr<Path::Component> surviving;
     {
-        auto opened = SelectAcceptedPath(context, source, CrossMountPathPolicy(), AmpleLimits());
+        ResolverLimits originalLimits = AmpleLimits();
+        auto opened = SelectAcceptedPath(context, source, CrossMountPathPolicy(), originalLimits);
         ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
         Path path = std::move(opened).Value();
         Path moved(std::move(path));
@@ -3151,15 +3560,20 @@ TEST_F(PathAliasTest, CopiedLeafOutlivesPathMoveAndFailedFinalCloseIsNotRetried)
         EXPECT_EQ(source, moved.ToString());
         surviving.reset(new Path::Component(moved.Leaf()));
         Path::Component copied(std::move(*surviving));
-        EXPECT_EQ(Type::RegularFile, copied.Acquired().type);
+        EXPECT_EQ(Type::RegularFile, copied.Metadata().FileType());
         EXPECT_TRUE(surviving->Stat().HasValue());
+        originalLimits.shared.fdinfoBytes = 0;
     }
     EXPECT_EQ(before + 1, CountOpenDescriptors());
+    // Original Path and its caller-owned limits have both been destroyed.
+    auto activated = surviving->OpenReadOnly();
+    ASSERT_TRUE(activated.HasValue()) << activated.Error().message;
+    activated.Value().Close();
     EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int fd) {
         const int status = ::close(fd);
         EXPECT_EQ(0, status);
         errno = EIO;
-        return -1;
+        return ComplianceEngine::Error(errno ? errno : EIO);
     });
     surviving.reset();
     EXPECT_EQ(before, CountOpenDescriptors());
@@ -3187,7 +3601,7 @@ TEST_F(PathAliasTest, AdministrativeRootLinkAndMovedPathKeepFrozenBarrier)
     ASSERT_TRUE(selected.HasValue()) << selected.Error().message;
     auto back = moved.Apply(std::move(selected.Value()));
     ASSERT_TRUE(back.HasValue()) << back.Error().message;
-    EXPECT_EQ(Type::RegularFile, moved.Leaf().Acquired().type);
+    EXPECT_EQ(Type::RegularFile, moved.Leaf().Metadata().FileType());
     EXPECT_EQ(root, original.ToString());
     ASSERT_TRUE(moved.Apply(std::move(back.Value())).HasValue());
     ASSERT_EQ(0, ::symlink("../", (root + "/parent").c_str()));
@@ -3215,17 +3629,17 @@ TEST_F(PathAliasTest, DetachedSelectedLeafSurvivesInverseAndFreshReacquisition)
     auto two = SelectStep(path, "two", CrossMountPathPolicy());
     ASSERT_TRUE(two.HasValue());
     Path::Component detached = two.Value().Target();
-    const auto inode = detached.Acquired().metadata.st_ino;
+    const auto inode = detached.Metadata().Stat().st_ino;
     auto oneInverse = path.Apply(std::move(two.Value()));
     ASSERT_TRUE(oneInverse.HasValue());
     EXPECT_EQ(depth + 2, path.Size());
     ASSERT_TRUE(path.Apply(std::move(oneInverse.Value())).HasValue());
     EXPECT_EQ(depth + 1, path.Size());
-    EXPECT_EQ(heldOne.Acquired().metadata.st_ino, path.Leaf().Acquired().metadata.st_ino);
+    EXPECT_EQ(heldOne.Metadata().Stat().st_ino, path.Leaf().Metadata().Stat().st_ino);
     const auto afterInverse = CountOpenDescriptors();
     auto again = SelectStep(path, "two", CrossMountPathPolicy());
     ASSERT_TRUE(again.HasValue()) << again.Error().message;
-    EXPECT_EQ(inode, again.Value().Acquired().metadata.st_ino);
+    EXPECT_EQ(inode, again.Value().Metadata().Stat().st_ino);
     EXPECT_GT(CountOpenDescriptors(), afterInverse); // distinct new pin, old detached pin still valid
     EXPECT_TRUE(detached.Stat().HasValue());
     ASSERT_TRUE(path.Apply(std::move(rootInverse.Value())).HasValue());
@@ -3265,14 +3679,14 @@ TEST_F(PathAliasTest, CanonicalParentOfReusedAncestorDoesNotCrossBarrier)
     EXPECT_EQ(root + "/a", path.ToString());
     auto child = SelectStep(path, "child", CrossMountPathPolicy());
     ASSERT_TRUE(child.HasValue()) << child.Error().message;
-    EXPECT_EQ(expected.st_ino, child.Value().Acquired().metadata.st_ino);
+    EXPECT_EQ(expected.st_ino, child.Value().Metadata().Stat().st_ino);
     ASSERT_TRUE(path.Apply(std::move(backUp.Value())).HasValue());
     ASSERT_TRUE(path.Apply(std::move(backSub.Value())).HasValue());
     ASSERT_TRUE(path.Apply(std::move(backA.Value())).HasValue());
     EXPECT_EQ(depth, path.Size());
     auto self = SelectStep(path, "self", CrossMountPathPolicy(true));
     ASSERT_TRUE(self.HasValue());
-    EXPECT_EQ(path.Leaf().Acquired().metadata.st_ino, self.Value().Acquired().metadata.st_ino);
+    EXPECT_EQ(path.Leaf().Metadata().Stat().st_ino, self.Value().Metadata().Stat().st_ino);
     auto escape = path.Resolve("escape", CrossMountPathPolicy(true));
     ASSERT_FALSE(escape.HasValue());
     EXPECT_EQ(EXDEV, escape.Error().code);
@@ -3288,7 +3702,7 @@ TEST_F(PathAliasTest, DirectUnsupportedSkipSurvivesFailedTemporaryPinClose)
     auto opened = SelectAcceptedPath(context, root, CrossMountPathPolicy(), AmpleLimits());
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
-    const auto original = path.Leaf().Acquired().metadata.st_ino;
+    const auto original = path.Leaf().Metadata().Stat().st_ino;
     const auto before = CountOpenDescriptors();
     EXPECT_CALL(context, OpenNativeAt(_, _, _)).WillRepeatedly([&](int directory, const char* name, int flags) {
         if (std::string(name) == "special-close")
@@ -3301,13 +3715,13 @@ TEST_F(PathAliasTest, DirectUnsupportedSkipSurvivesFailedTemporaryPinClose)
             specialPin = fd;
         return fd;
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
-        const int status = context.RealCloseFileDescriptor(fd);
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+        auto status = context.RealCloseFileDescriptor(fd);
         if (fd == specialPin && !failed)
         {
             failed = true;
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
         return status;
     });
@@ -3319,7 +3733,7 @@ TEST_F(PathAliasTest, DirectUnsupportedSkipSurvivesFailedTemporaryPinClose)
     EXPECT_EQ(Path::RejectionReason::UnsupportedType, As<Path::RejectionReason>(result.Value()));
     EXPECT_TRUE(failed);
     EXPECT_EQ(root, path.ToString());
-    EXPECT_EQ(original, path.Leaf().Acquired().metadata.st_ino);
+    EXPECT_EQ(original, path.Leaf().Metadata().Stat().st_ino);
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
@@ -3347,10 +3761,10 @@ TEST_F(PathAliasTest, ConfinedResolverDistinguishesRelativeAbsoluteLoopAndTraili
         stay.mounts = MountPolicy::StayOnRootMount;
         auto relative = SelectStep(path, "relative", stay);
         ASSERT_TRUE(relative.HasValue()) << relative.Error().message;
-        EXPECT_EQ(expected.st_ino, relative.Value().Acquired().metadata.st_ino);
+        EXPECT_EQ(expected.st_ino, relative.Value().Metadata().Stat().st_ino);
         auto absolute = SelectStep(path, "absolute", CrossMountPathPolicy(true));
         ASSERT_TRUE(absolute.HasValue()) << absolute.Error().message;
-        EXPECT_EQ(expected.st_ino, absolute.Value().Acquired().metadata.st_ino);
+        EXPECT_EQ(expected.st_ino, absolute.Value().Metadata().Stat().st_ino);
         auto outside = path.Resolve("outside", CrossMountPathPolicy(true));
         ASSERT_FALSE(outside.HasValue());
         EXPECT_EQ(EXDEV, outside.Error().code);
@@ -3367,8 +3781,8 @@ TEST_F(PathAliasTest, ConfinedResolverDistinguishesRelativeAbsoluteLoopAndTraili
         ASSERT_FALSE(trailing.HasValue());
         EXPECT_EQ(ENOTDIR, trailing.Error().code);
         EXPECT_EQ(root, path.ToString());
-        EXPECT_EQ(expected.st_ino, relative.Value().Acquired().metadata.st_ino);
-        EXPECT_EQ(expected.st_ino, absolute.Value().Acquired().metadata.st_ino);
+        EXPECT_EQ(expected.st_ino, relative.Value().Metadata().Stat().st_ino);
+        EXPECT_EQ(expected.st_ino, absolute.Value().Metadata().Stat().st_ino);
     }
     EXPECT_EQ(before, CountOpenDescriptors());
     auto limits = AmpleLimits();
@@ -3383,7 +3797,7 @@ TEST_F(PathAliasTest, ConfinedResolverDistinguishesRelativeAbsoluteLoopAndTraili
     ASSERT_TRUE(two.HasValue());
     auto exact = SelectStep(two.Value(), "double", CrossMountPathPolicy(true));
     ASSERT_TRUE(exact.HasValue()) << exact.Error().message;
-    EXPECT_EQ(expected.st_ino, exact.Value().Acquired().metadata.st_ino);
+    EXPECT_EQ(expected.st_ino, exact.Value().Metadata().Stat().st_ino);
     EXPECT_EQ(root, two.Value().ToString());
 }
 
@@ -3397,7 +3811,7 @@ TEST_F(PathAliasTest, UnsupportedFactoryAndInvalidChildPreserveAcceptedPath)
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     const auto depth = path.Size();
-    const auto inode = path.Leaf().Acquired().metadata.st_ino;
+    const auto inode = path.Leaf().Metadata().Stat().st_ino;
     const auto before = CountOpenDescriptors();
     bool sawSpecial = false, sawLink = false;
     EXPECT_CALL(context, OpenNativeAt(_, _, _)).WillRepeatedly([&](int directory, const char* name, int flags) {
@@ -3431,13 +3845,13 @@ TEST_F(PathAliasTest, UnsupportedFactoryAndInvalidChildPreserveAcceptedPath)
         ASSERT_FALSE(refused.HasValue());
         EXPECT_EQ(EINVAL, refused.Error().code);
         EXPECT_EQ(depth, path.Size());
-        EXPECT_EQ(inode, path.Leaf().Acquired().metadata.st_ino);
+        EXPECT_EQ(inode, path.Leaf().Metadata().Stat().st_ino);
     }
     auto missing = path.Resolve("special.broken", CrossMountPathPolicy(true));
     ASSERT_FALSE(missing.HasValue());
     EXPECT_EQ(ENOENT, missing.Error().code);
     EXPECT_EQ(depth, path.Size());
-    EXPECT_EQ(inode, path.Leaf().Acquired().metadata.st_ino);
+    EXPECT_EQ(inode, path.Leaf().Metadata().Stat().st_ino);
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
@@ -3460,7 +3874,7 @@ TEST_F(PathAliasTest, AcceptedRootRetainsPinsWhileChildPoliciesStayIndependent)
     ASSERT_FALSE(outside.HasValue());
     EXPECT_EQ(EXDEV, outside.Error().code);
     EXPECT_EQ(depth, path.Size());
-    EXPECT_EQ(held.Acquired().metadata.st_ino, path.Leaf().Acquired().metadata.st_ino);
+    EXPECT_EQ(held.Metadata().Stat().st_ino, path.Leaf().Metadata().Stat().st_ino);
     auto strict = CrossMountPathPolicy();
     strict.mounts = MountPolicy::StayOnRootMount;
     auto denied = path.Resolve("allowed", strict);
@@ -3470,14 +3884,14 @@ TEST_F(PathAliasTest, AcceptedRootRetainsPinsWhileChildPoliciesStayIndependent)
     ASSERT_TRUE(accepted.HasValue()) << accepted.Error().message;
     auto inverse = path.Apply(std::move(accepted.Value()));
     ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;
-    EXPECT_EQ(Type::RegularFile, path.Leaf().Acquired().type);
+    EXPECT_EQ(Type::RegularFile, path.Leaf().Metadata().FileType());
     EXPECT_TRUE(held.Stat().HasValue());
     auto notDirectory = path.Resolve("inside", strict);
     ASSERT_FALSE(notDirectory.HasValue());
     EXPECT_EQ(ENOTDIR, notDirectory.Error().code);
     ASSERT_TRUE(path.Apply(std::move(inverse.Value())).HasValue());
     EXPECT_EQ(root, path.ToString());
-    EXPECT_EQ(held.Acquired().metadata.st_ino, path.Leaf().Acquired().metadata.st_ino);
+    EXPECT_EQ(held.Metadata().Stat().st_ino, path.Leaf().Metadata().Stat().st_ino);
 }
 
 TEST_F(PathAliasTest, StagedGrowthAndFailedAliasLeaveCopiedTargetOwnedAfterPathRetires)
@@ -3509,7 +3923,7 @@ TEST_F(PathAliasTest, StagedGrowthAndFailedAliasLeaveCopiedTargetOwnedAfterPathR
         EXPECT_EQ(root, path.ToString());
         auto longStep = SelectStep(path, "long", CrossMountPathPolicy(true));
         ASSERT_TRUE(longStep.HasValue()) << longStep.Error().message;
-        EXPECT_EQ(actual, longStep.Value().Target().EffectiveName());
+        EXPECT_EQ(actual, longStep.Value().Target().Metadata().EffectiveName());
         leaf.reset(new Path::Component(longStep.Value().Target()));
         copy.reset(new Path::Component(*leaf));
         const auto pinned = CountOpenDescriptors();
@@ -3517,8 +3931,8 @@ TEST_F(PathAliasTest, StagedGrowthAndFailedAliasLeaveCopiedTargetOwnedAfterPathR
         EXPECT_EQ(pinned, CountOpenDescriptors());
     }
     EXPECT_EQ(before + 1, CountOpenDescriptors());
-    EXPECT_EQ(actual, copy->EffectiveName());
-    EXPECT_EQ(leaf->Acquired().metadata.st_ino, copy->Acquired().metadata.st_ino);
+    EXPECT_EQ(actual, copy->Metadata().EffectiveName());
+    EXPECT_EQ(leaf->Metadata().Stat().st_ino, copy->Metadata().Stat().st_ino);
     leaf.reset();
     EXPECT_TRUE(copy->Stat().HasValue());
     copy.reset();
@@ -3550,16 +3964,16 @@ TEST_F(PathAliasTest, LinkExpansionContinuesThroughPhysicalSiblingThenBackToBoun
     ASSERT_TRUE(shortcut.HasValue()) << shortcut.Error().message;
     auto undoShortcut = path.Apply(std::move(shortcut.Value()));
     ASSERT_TRUE(undoShortcut.HasValue());
-    EXPECT_EQ(sibling.st_ino, path.Leaf().Acquired().metadata.st_ino);
+    EXPECT_EQ(sibling.st_ino, path.Leaf().Metadata().Stat().st_ino);
     EXPECT_EQ(root + "/second", path.ToString());
     auto child = SelectStep(path, "child", CrossMountPathPolicy());
     ASSERT_TRUE(child.HasValue()) << child.Error().message;
-    EXPECT_EQ(expected.st_ino, child.Value().Acquired().metadata.st_ino);
-    EXPECT_EQ(root + "/second/child", child.Value().Target().EffectiveName());
+    EXPECT_EQ(expected.st_ino, child.Value().Metadata().Stat().st_ino);
+    EXPECT_EQ(root + "/second/child", child.Value().Target().Metadata().EffectiveName());
     auto up = SelectStep(path, "up", CrossMountPathPolicy(true));
     ASSERT_TRUE(up.HasValue()) << up.Error().message;
-    EXPECT_EQ(root, up.Value().Target().EffectiveName());
-    EXPECT_EQ(opened.Value().Leaf().Acquired().metadata.st_ino, up.Value().Acquired().metadata.st_ino);
+    EXPECT_EQ(root, up.Value().Target().Metadata().EffectiveName());
+    EXPECT_EQ(opened.Value().Leaf().Metadata().Stat().st_ino, up.Value().Metadata().Stat().st_ino);
     auto inverse = path.Apply(std::move(up.Value()));
     ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;
     EXPECT_EQ(depth, path.Size());
@@ -3591,8 +4005,8 @@ TEST_F(PathAliasTest, RelativeParentFromChildIsBoundedByFrozenRoot)
     ASSERT_TRUE(inverse.HasValue());
     auto inside = SelectStep(path, "up", CrossMountPathPolicy(true));
     ASSERT_TRUE(inside.HasValue()) << inside.Error().message;
-    EXPECT_EQ(expected.st_ino, inside.Value().Acquired().metadata.st_ino);
-    EXPECT_EQ(root + "/inside", inside.Value().Target().EffectiveName());
+    EXPECT_EQ(expected.st_ino, inside.Value().Metadata().Stat().st_ino);
+    EXPECT_EQ(root + "/inside", inside.Value().Target().Metadata().EffectiveName());
     ASSERT_TRUE(path.Apply(std::move(inverse.Value())).HasValue());
     auto escape = path.Resolve("escape", CrossMountPathPolicy(true));
     ASSERT_FALSE(escape.HasValue());

@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <utility>
 
 struct stat;
@@ -34,26 +35,24 @@ public:
 
     const ContextInterface& Context() const noexcept
     {
-        return *mContext;
+        return mContext.get();
     }
-
-    // Relinquish ownership before the syscall. A failed close is never
-    // retried, even if the kernel has already recycled its fd number.
-    void Close() & noexcept;
 
 private:
     friend class ::ComplianceEngine::ContextInterface;
-    friend class ProcfsDescriptorAccess;
     friend class ::ComplianceEngine::Filesystem::ReadableFile;
     friend class ::ComplianceEngine::Tests::DescriptorTestAccess;
-    Descriptor(const ContextInterface& context, int descriptor, ContextInterface::CloseDiagnostic closeDiagnostic);
-    int RequireOwned() const;
+    Descriptor(const ContextInterface& context, int descriptor);
+    // A temporary context would dangle past construction: this owner retains
+    // the context reference for its own lifetime (see mContext below).
+    Descriptor(const ContextInterface&&, int) = delete;
+    // Disposal: a consumed (moved-from) owner is a silent no-op; otherwise
+    // close through the owning context and log any failure. Shared by the
+    // destructor and move-assignment so they stay in sync by construction.
     void ReleaseOwned() noexcept;
-    void ReportUseAfterMove() const noexcept;
 
-    const ContextInterface* mContext;
+    std::reference_wrapper<const ContextInterface> mContext;
     int mDescriptor;
-    ContextInterface::CloseDiagnostic mCloseDiagnostic;
 };
 
 } // namespace Detail

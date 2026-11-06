@@ -35,9 +35,16 @@ class ProcfsDescriptorAccess;
 class Handle;
 struct LinkTarget;
 } // namespace Detail
+namespace FTW
+{
+namespace Detail
+{
 class DirectoryCursor;
+}
+} // namespace FTW
 class Path;
 class ReadableFile;
+enum class Type; // Directory or RegularFile; full definition in filesystem/Handle.hpp.
 } // namespace Filesystem
 // A single network interface as reported by the system: its name and the IFF_* flags
 // bitmask (see <net/if.h>). Produced by ContextInterface::GetNetworkInterfaces().
@@ -66,12 +73,6 @@ public:
         FollowAliasPin,
         FollowAliasPinDirectory
     };
-    enum class CloseDiagnostic
-    {
-        Descriptor,
-        ReadableActivation,
-        DirectoryActivation
-    };
 
 private:
     // Fail closed when the caller's native process or task identity cannot be read.
@@ -80,23 +81,22 @@ private:
     // Only the context syscall boundary extracts native descriptor numbers.
     // Open/duplicate atomically set CLOEXEC. Duplicate shares the open-file
     // description (including offset); it is not an independent reader.
-    Result<Filesystem::Detail::Descriptor> OpenAbsolutePin(const char* path, bool directory = true) const&;
-    Result<Filesystem::Detail::Descriptor> OpenAbsolutePin(const char*, bool = true) const&& = delete;
-    Result<Filesystem::Detail::Descriptor> OpenAt(const Filesystem::Detail::Descriptor& directory, const char* name, OpenProfile profile,
-        CloseDiagnostic diagnostic = CloseDiagnostic::Descriptor) const&;
-    Result<Filesystem::Detail::Descriptor> OpenAt(const Filesystem::Detail::Descriptor&, const char*, OpenProfile,
-        CloseDiagnostic = CloseDiagnostic::Descriptor) const&& = delete;
+    Result<Filesystem::Detail::Descriptor> OpenAbsolutePin(const char* path) const&;
+    Result<Filesystem::Detail::Descriptor> OpenAbsolutePin(const char*) const&& = delete;
+    Result<Filesystem::Detail::Descriptor> OpenAt(const Filesystem::Detail::Descriptor& directory, const char* name, OpenProfile profile) const&;
+    Result<Filesystem::Detail::Descriptor> OpenAt(const Filesystem::Detail::Descriptor&, const char*, OpenProfile) const&& = delete;
     // The verified helper supplies the fd/fdinfo role; a generic directory
     // owner cannot select a procfs alias or descriptor-information target.
     Result<Filesystem::Detail::Descriptor> OpenFdinfo(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Filesystem::Detail::Descriptor& target) const&;
     Result<Filesystem::Detail::Descriptor> OpenFdinfo(const Filesystem::Detail::ProcfsDescriptorAccess&, const Filesystem::Detail::Descriptor&) const&& = delete;
     Result<Filesystem::Detail::Descriptor> OpenAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs,
-        const Filesystem::Detail::Descriptor& target, bool directoryAlias, CloseDiagnostic diagnostic = CloseDiagnostic::Descriptor) const&;
-    Result<Filesystem::Detail::Descriptor> OpenAlias(const Filesystem::Detail::ProcfsDescriptorAccess&, const Filesystem::Detail::Descriptor&, bool,
-        CloseDiagnostic = CloseDiagnostic::Descriptor) const&& = delete;
+        const Filesystem::Detail::Descriptor& target, Filesystem::Type directoryAlias) const&;
+    Result<Filesystem::Detail::Descriptor> OpenAlias(const Filesystem::Detail::ProcfsDescriptorAccess&, const Filesystem::Detail::Descriptor&,
+        Filesystem::Type) const&& = delete;
     Result<Filesystem::Detail::Descriptor> OpenPinAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs,
-        const Filesystem::Detail::Descriptor& target, bool directoryAlias) const&;
-    Result<Filesystem::Detail::Descriptor> OpenPinAlias(const Filesystem::Detail::ProcfsDescriptorAccess&, const Filesystem::Detail::Descriptor&, bool) const&& = delete;
+        const Filesystem::Detail::Descriptor& target, Filesystem::Type directoryAlias) const&;
+    Result<Filesystem::Detail::Descriptor> OpenPinAlias(const Filesystem::Detail::ProcfsDescriptorAccess&, const Filesystem::Detail::Descriptor&,
+        Filesystem::Type) const&& = delete;
     Result<Filesystem::Detail::Descriptor> Duplicate(const Filesystem::Detail::Descriptor& source) const&;
     Result<Filesystem::Detail::Descriptor> Duplicate(const Filesystem::Detail::Descriptor&) const&& = delete;
     int StatFile(const Filesystem::Detail::Descriptor& owner, struct stat* metadata) const;
@@ -107,12 +107,12 @@ private:
     int DescriptorFlags(const Filesystem::Detail::Descriptor& owner) const;
     int ChownPinned(const Filesystem::Detail::Descriptor& owner, uid_t user, gid_t group) const;
     int ChmodAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Filesystem::Detail::Descriptor& pin, mode_t mode) const;
-    Result<Filesystem::DirectoryCursor> OpenDirectoryCursor(Filesystem::Detail::Descriptor&& owner) const&;
-    Result<Filesystem::DirectoryCursor> OpenDirectoryCursor(Filesystem::Detail::Descriptor&&) const&& = delete;
+    Result<Filesystem::FTW::Detail::DirectoryCursor> OpenDirectoryCursor(Filesystem::Detail::Descriptor&& owner) const&;
+    Result<Filesystem::FTW::Detail::DirectoryCursor> OpenDirectoryCursor(Filesystem::Detail::Descriptor&&) const&& = delete;
     // Internal disposal only: a consumed owner is a silent no-op. Checked native
     // access validates ownership separately, before entering this noexcept path.
     // Relinquish ownership and budget before the single native close attempt.
-    int CloseOwnedDescriptor(Filesystem::Detail::Descriptor& owner) const noexcept;
+    Result<void> CloseOwnedDescriptor(Filesystem::Detail::Descriptor& owner) const noexcept;
 
 public:
     // POSIX directory and path operations. A null ReadDirectory result is EOF
@@ -120,7 +120,7 @@ public:
     // Overrides must preserve errno on failure, including stat failures.
     virtual DIR* OpenDirectory(const char* path) const noexcept;
     virtual struct dirent* ReadDirectory(DIR* directory) const noexcept;
-    virtual int CloseDirectory(DIR* directory) const noexcept;
+    virtual Result<void> CloseDirectory(DIR* directory) const noexcept;
     virtual int StatPath(const char* path, struct stat* metadata) const noexcept;
     virtual int LstatPath(const char* path, struct stat* metadata) const noexcept;
     // Native account lookup forward; callers distinguish absent groups from
@@ -169,7 +169,7 @@ protected:
     virtual int DescriptorFlagsDescriptor(int descriptor) const noexcept;
     virtual int DuplicateDescriptor(int descriptor) const noexcept;
     virtual DIR* FdOpenDirectory(int descriptor) const noexcept;
-    virtual int CloseFileDescriptor(int descriptor) const noexcept;
+    virtual Result<void> CloseFileDescriptor(int descriptor) const noexcept;
     virtual int ChownPinnedFileDescriptor(int descriptor, uid_t owner, gid_t group) const noexcept;
     virtual int ChmodPinnedAlias(int procfsDirectory, const char* decimalAlias, mode_t mode) const noexcept;
     virtual pid_t NativeProcessId() const noexcept;
@@ -181,12 +181,13 @@ private:
     friend class Filesystem::Detail::Handle;
     friend class Filesystem::Path;
     friend class Filesystem::ReadableFile;
-    friend class Filesystem::DirectoryCursor;
+    friend class Filesystem::FTW::Detail::DirectoryCursor;
     friend class Tests::DescriptorTestAccess;
 
     // The only followed bootstrap link is /proc/self, reached from the
     // helper's verified procfs pin; generic OpenAt cannot request it.
     Result<Filesystem::Detail::Descriptor> OpenProcfsSelf(const Filesystem::Detail::Descriptor& proc) const&;
+    Result<Filesystem::Detail::Descriptor> OpenProcfsSelf(const Filesystem::Detail::Descriptor&) const&& = delete;
     class Reservation;
     struct ManagedDescriptorBudget
     {
@@ -199,9 +200,9 @@ private:
     mutable ManagedDescriptorBudget mManagedDescriptors;
     // The fdopendir transfer keeps the charge held by its input Descriptor;
     // closedir releases it exactly once even when the native close fails.
-    int CloseOwnedDirectoryCursor(DIR* stream) const noexcept;
-    Result<Filesystem::Detail::Descriptor> OpenVerifiedAt(const Filesystem::Detail::Descriptor& directory, const char* name, OpenProfile profile,
-        CloseDiagnostic diagnostic) const&;
+    Result<void> CloseOwnedDirectoryCursor(DIR* stream) const noexcept;
+    Result<Filesystem::Detail::Descriptor> OpenVerifiedAt(const Filesystem::Detail::Descriptor& directory, const char* name, OpenProfile profile) const&;
+    Result<Filesystem::Detail::Descriptor> OpenVerifiedAt(const Filesystem::Detail::Descriptor&, const char*, OpenProfile) const&& = delete;
 };
 } // namespace ComplianceEngine
 #endif // COMPLIANCEENGINE_CONTEXT_H

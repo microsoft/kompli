@@ -34,7 +34,7 @@ class EvaluatorTest : public ::testing::Test
 {
 protected:
     std::map<std::string, std::string> mParameters;
-    MockContext mContext;
+    ::testing::StrictMock<MockContext> mContext;
     ComplianceEngine::DebugFormatter mFormatter;
 };
 
@@ -428,6 +428,11 @@ TEST_F(EvaluatorTest, SubstitutedLogfileRootRejectsRelativeInputWithoutComplianc
 {
     mContext.SetSpecialFilePath("/etc/shells", mContext.MakeTempfile("/bin/sh\n"));
     mContext.SetSpecialFilePath("/etc/passwd", mContext.MakeTempfile("root:x:0:0:root:/root:/bin/sh\n"));
+    // Unlike every other test in this fixture, this one reaches real
+    // LogFilePermissions/account-list setup before the relative-path
+    // rejection, so it performs incidental native filesystem calls this
+    // test isn't checking.
+    mContext.AllowIncidentalNativeAccess();
     auto json = JsonWrapper::FromString("{\"LogFilePermissions\":{\"path\":\"$logRoot\"}}");
     ASSERT_TRUE(json.HasValue());
     mParameters["logRoot"] = ".";
@@ -868,13 +873,15 @@ TEST_F(EvaluatorTest, ThreeValuedLogic_AnyOf_NotApplicable_Compliant)
 
 TEST(UserDotFilePermissionsErrorsTest, InvalidAccountPatternRemainsError)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     ComplianceEngine::IndicatorsTree indicators;
     indicators.Push("UserDotFilePermissions");
     const std::string home = context.GetTempdirPath() + "/home";
     ASSERT_EQ(0, mkdir(home.c_str(), 0700));
     std::ofstream(home + "/.config") << "settings\n";
     context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const auto* group = getgrnam("root");
     ASSERT_NE(nullptr, group);
     const std::string passwd =
@@ -888,8 +895,10 @@ TEST(UserDotFilePermissionsErrorsTest, InvalidAccountPatternRemainsError)
 
 TEST(UserDotFilePermissionsErrorsTest, MissingGroupIgnoresStaleErrnoInAudit)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const gid_t absent = std::numeric_limits<gid_t>::max();
     errno = 0;
     if (nullptr != getgrgid(absent))
@@ -908,13 +917,22 @@ TEST(UserDotFilePermissionsErrorsTest, MissingGroupIgnoresStaleErrnoInAudit)
 
 TEST(UserDotFilePermissionsErrorsTest, GroupLookupEIOPropagatesInAudit)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
     const gid_t groupId = 23456;
     const std::string home = context.GetTempdirPath() + "/unopened-home";
     const std::string passwd =
         context.MakeTempfile("fixture:x:" + std::to_string(getuid()) + ":" + std::to_string(groupId) + "::" + home + ":/bin/sh\n");
 
+    // GetGroupById is excluded: this test constrains it below with an exact
+    // Times(1) expectation for the single user processed. Chown/Chmod aren't
+    // covered by this helper at all -- they get their own Times(0) below.
+    context.AllowProcfsBootstrap();
+    context.AllowNativeOpen();
+    context.AllowDescriptorInspection();
+    context.AllowFileRead();
+    context.AllowDescriptorClose();
+    context.AllowDirectoryEnumeration();
     EXPECT_CALL(context, GetGroupById(groupId)).Times(1).WillRepeatedly([](gid_t) -> struct group* {
         errno = EIO;
         return nullptr;
@@ -934,13 +952,15 @@ TEST(UserDotFilePermissionsErrorsTest, GroupLookupEIOPropagatesInAudit)
 
 TEST(UserDotFilePermissionsErrorsTest, ForbiddenDotFileRemainsOrdinaryVerdict)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     ComplianceEngine::IndicatorsTree indicators;
     indicators.Push("UserDotFilePermissions");
     const std::string home = context.GetTempdirPath() + "/home";
     ASSERT_EQ(0, mkdir(home.c_str(), 0700));
     std::ofstream(home + "/.rhosts") << "host\n";
     context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const auto* group = getgrnam("root");
     ASSERT_NE(nullptr, group);
     const std::string passwd =
@@ -953,11 +973,13 @@ TEST(UserDotFilePermissionsErrorsTest, ForbiddenDotFileRemainsOrdinaryVerdict)
 
 TEST(UserDotFilePermissionsErrorsTest, NonDirectoryHomeRemainsWalkError)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     ComplianceEngine::IndicatorsTree indicators;
     indicators.Push("UserDotFilePermissions");
     const std::string home = context.MakeTempfile("not a directory");
     context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const auto* group = getgrnam("root");
     ASSERT_NE(nullptr, group);
     const std::string passwd =
@@ -970,7 +992,7 @@ TEST(UserDotFilePermissionsErrorsTest, NonDirectoryHomeRemainsWalkError)
 
 TEST(UserDotFilePermissionsErrorsTest, RegularDotFileRetainsPermissionVerdict)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     ComplianceEngine::IndicatorsTree indicators;
     indicators.Push("UserDotFilePermissions");
     const std::string home = context.GetTempdirPath() + "/home";
@@ -979,6 +1001,8 @@ TEST(UserDotFilePermissionsErrorsTest, RegularDotFileRetainsPermissionVerdict)
     std::ofstream(filename) << "settings\n";
     ASSERT_EQ(0, chmod(filename.c_str(), 0666));
     context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const auto* user = getpwuid(getuid());
     ASSERT_NE(nullptr, user);
     const auto* group = getgrgid(user->pw_gid);
@@ -993,9 +1017,12 @@ TEST(UserDotFilePermissionsErrorsTest, RegularDotFileRetainsPermissionVerdict)
 
 TEST(UserDotFilePermissionsErrorsTest, RemediationIsDisabledBeforeOpeningPasswdFileOrHome)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     ComplianceEngine::IndicatorsTree indicators;
     indicators.Push("UserDotFilePermissions");
+    // Remediation returns before touching any native seam, so this test's
+    // own Times(0) expectations exhaustively describe the (empty) call
+    // pattern; no incidental-access catch-all is needed.
     EXPECT_CALL(context, GetGroupById(testing::_)).Times(0);
     EXPECT_CALL(context, OpenNativePath(testing::_, testing::_)).Times(0);
     EXPECT_CALL(context, ChownPinnedFileDescriptor(testing::_, testing::_, testing::_)).Times(0);
@@ -1014,7 +1041,7 @@ TEST(UserDotFilePermissionsErrorsTest, RemediationIsDisabledBeforeOpeningPasswdF
 
 TEST(UserDotFilePermissionsErrorsTest, DisabledRemediationDoesNotMutateNoncompliantDotfile)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     const auto home = context.GetTempdirPath() + "/home";
     ASSERT_EQ(0, mkdir(home.c_str(), 0700));
     const auto target = home + "/.config";
@@ -1027,6 +1054,11 @@ TEST(UserDotFilePermissionsErrorsTest, DisabledRemediationDoesNotMutateNoncompli
     context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
     const auto passwd = context.MakeTempfile(std::string(user->pw_name) + ":x:" + std::to_string(user->pw_uid) + ":" + std::to_string(user->pw_gid) +
                                              "::" + home + ":/bin/sh\n");
+    // The audit call below performs real, incidental native access; the
+    // later remediate calls return before touching any native seam. Chown/
+    // Chmod aren't covered by this helper at all -- they get their own
+    // Times(0) below.
+    context.AllowIncidentalNativeAccess();
 
     ComplianceEngine::IndicatorsTree indicators;
     indicators.Push("UserDotFilePermissions");
@@ -1060,7 +1092,7 @@ TEST(UserDotFilePermissionsErrorsTest, DisabledRemediationDoesNotMutateNoncompli
 class UserDotFileRangeTest : public ::testing::Test
 {
 protected:
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     ComplianceEngine::IndicatorsTree indicators;
 
     void SetUp() override
@@ -1068,6 +1100,11 @@ protected:
         context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));
         indicators.Push("UserDotFilePermissions");
         ASSERT_NE(nullptr, getgrgid(getgid()));
+        // No test in this fixture sets its own EXPECT_CALL: each customizes
+        // behavior via ON_CALL only, and every count it cares about
+        // (observations, closeAttempts) is enforced by hand with EXPECT_EQ,
+        // not gMock cardinality.
+        context.AllowIncidentalNativeAccess();
     }
 
     std::string User(const std::string& name, const std::string& home) const
@@ -1239,8 +1276,8 @@ TEST_F(UserDotFileRangeTest, CloseFailureDoesNotOverrideEarlyAuditVerdict)
     ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([&](DIR* stream) {
         ++closeAttempts;
         const int result = closedir(stream);
-        errno = EIO;
-        return result == 0 ? -1 : result;
+        const int nativeCode = errno;
+        return ComplianceEngine::Error(result == 0 ? EIO : nativeCode);
     });
     const auto result = Run(User("fixture", home));
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
@@ -1252,7 +1289,7 @@ TEST_F(UserDotFileRangeTest, CloseFailureDoesNotOverrideEarlyAuditVerdict)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto diagnostic = "Cannot close pinned directory cursor: " + std::to_string(EIO);
+    const auto diagnostic = "Failed to close filesystem resource: " + std::string(strerror(EIO));
     const auto first = text.find(diagnostic);
     ASSERT_NE(std::string::npos, first);
     EXPECT_EQ(std::string::npos, text.find(diagnostic, first + diagnostic.size()));
@@ -1311,7 +1348,9 @@ TEST_F(UserDotFileRangeTest, FollowsRootDirectoryLinkAndReportsDepthOverflow)
 
 TEST(UserHomeDirectoryPermissionsErrorsTest, FailedChildRemediationPropagatesWithoutMutatingHome)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ComplianceEngine::IndicatorsTree indicators;
     indicators.Push("UserHomeDirectoryPermissions");
     const std::string home = context.GetTempdirPath() + "/home";
@@ -1344,7 +1383,9 @@ TEST(UserHomeDirectoryPermissionsErrorsTest, FailedChildRemediationPropagatesWit
 
 TEST(UserHomeDirectoryPermissionsErrorsTest, SuccessfulChildRetainsOrdinaryVerdict)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ComplianceEngine::IndicatorsTree indicators;
     indicators.Push("UserHomeDirectoryPermissions");
     const std::string home = context.GetTempdirPath() + "/home";
@@ -1366,7 +1407,9 @@ namespace
 {
 void CheckHomeRemediationResults(const std::vector<std::string>& outcomes, Status expectedStatus, bool expectError = false)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ComplianceEngine::IndicatorsTree indicators;
     indicators.Push("UserHomeDirectoryPermissions");
     context.SetSpecialFilePath("/etc/shells", context.MakeTempfile("/bin/sh\n"));

@@ -26,7 +26,7 @@ static const char* cLoginDefsPath = "/etc/login.defs";
 class EnsureAccountsWithoutShellAreLockedTest : public ::testing::Test
 {
 protected:
-    MockContext mContext;
+    ::testing::StrictMock<MockContext> mContext;
     IndicatorsTree mIndicators;
     CompactListFormatter mFormatter;
     string mTempDir;
@@ -38,6 +38,11 @@ protected:
         mContext.SetSpecialFilePath("/etc/passwd", filename);
         filename = mContext.MakeTempfile("# comment\n/bin/bash\n/bin/nologin");
         mContext.SetSpecialFilePath("/etc/shells", filename);
+        // No test in this fixture adds a specific EXPECT_CALL on any native
+        // seam below; the three EXPECT_CALLs in this file target
+        // GetFileContents, a separate, non-native seam this helper doesn't
+        // cover.
+        mContext.AllowIncidentalNativeAccess();
     }
 
     void TearDown() override

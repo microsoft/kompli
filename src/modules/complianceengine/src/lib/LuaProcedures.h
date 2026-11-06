@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <functional>
+
 // Forward declare lua_State from Lua headers to avoid pulling them in everywhere
 struct lua_State;
 namespace ComplianceEngine
@@ -15,11 +17,11 @@ enum class Action : int;
 
 struct LuaCallContext
 {
-    IndicatorsTree& indicators; // reference to indicators root
-    ContextInterface& ctx;      // reference to execution context
-    const char* procedureName;  // optional procedure name
-    Action action;              // current action (Audit/Remediate)
-    unsigned indicatorsDepth;   // depth of indicators stack at start of procedure
+    IndicatorsTree& indicators;                   // reference to indicators root
+    std::reference_wrapper<ContextInterface> ctx; // reference to execution context
+    const char* procedureName;                    // optional procedure name
+    Action action;                                // current action (Audit/Remediate)
+    unsigned indicatorsDepth;                     // depth of indicators stack at start of procedure
 };
 
 // Registers additional custom helper procedures exposed to Lua under the `ce` table.

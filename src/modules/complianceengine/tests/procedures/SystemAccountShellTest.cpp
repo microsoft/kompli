@@ -38,7 +38,7 @@ string LoginDefsAtByteLimit()
 class EnsureSystemAccountsDoNotHaveValidShellTest : public ::testing::Test
 {
 protected:
-    MockContext mContext;
+    ::testing::StrictMock<MockContext> mContext;
     IndicatorsTree mIndicators;
     CompactListFormatter mFormatter;
     string mTempDir;
@@ -52,6 +52,9 @@ protected:
         mContext.SetSpecialFilePath("/etc/login.defs", filename);
         filename = CreateTestPasswdFile(101, "/bin/bash");
         mContext.SetSpecialFilePath("/etc/passwd", filename);
+        // No test in this fixture sets its own EXPECT_CALL on any native
+        // seam.
+        mContext.AllowIncidentalNativeAccess();
     }
 
     void TearDown() override

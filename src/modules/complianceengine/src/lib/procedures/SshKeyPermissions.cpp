@@ -161,7 +161,7 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
     if (root.Value().Is<Filesystem::Path::RejectionReason>())
         return Status::Compliant;
     // FTW freezes the selected starting leaf at its common entry point.
-    if (As<Filesystem::Path>(root.Value()).Leaf().Acquired().type != Filesystem::Type::Directory)
+    if (As<Filesystem::Path>(root.Value()).Leaf().Metadata().FileType() != Filesystem::Type::Directory)
         return Error("Expected directory root at '" + baseDir + "'", ENOTDIR);
     auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), resolved.Value().rootPath,
         Filesystem::CollectionContinuation(resolved.Value()));

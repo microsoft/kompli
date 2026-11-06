@@ -223,7 +223,7 @@ Result<Status> WalkLogfiles(const std::string& path, const DaemonUidSet& daemonU
     if (root.Value().Is<Filesystem::Path::RejectionReason>())
         return Status::Compliant; // missing/excluded root: no matching files
     // FTW freezes the selected starting leaf at its common entry point.
-    if (As<Filesystem::Path>(root.Value()).Leaf().Acquired().type != Filesystem::Type::Directory)
+    if (As<Filesystem::Path>(root.Value()).Leaf().Metadata().FileType() != Filesystem::Type::Directory)
         return Error("Expected directory root at '" + path + "'", ENOTDIR);
     auto opened = Filesystem::FTW::Files(As<Filesystem::Path>(std::move(root).Value()), resolved.Value().rootPath,
         Filesystem::CollectionContinuation(resolved.Value()));

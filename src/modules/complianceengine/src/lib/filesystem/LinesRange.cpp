@@ -296,8 +296,8 @@ Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string
 
     // The selected file is the leaf; freezing a file does not aid reading it.
     auto leaf = pins.Leaf();
-    const auto acquiredFacts = leaf.Acquired();
-    if (acquiredFacts.type != Filesystem::Type::RegularFile)
+    const auto acquiredFacts = leaf.Metadata();
+    if (acquiredFacts.FileType() != Filesystem::Type::RegularFile)
         return Error("File target is not regular", EINVAL);
 
     auto opened = leaf.OpenReadOnly(ReadableFile::Policy(policy.limits.maxInterruptedReads));
@@ -310,7 +310,7 @@ Result<LinesRange> LinesRange::Make(const ContextInterface& context, std::string
         return std::move(inspected).Error();
 
     const struct stat before = inspected.Value();
-    const struct stat held = acquiredFacts.metadata;
+    const struct stat held = acquiredFacts.Stat();
     if (held.st_dev != before.st_dev || held.st_ino != before.st_ino || !S_ISREG(before.st_mode))
         return Error("Pinned file identity changed", EAGAIN);
 

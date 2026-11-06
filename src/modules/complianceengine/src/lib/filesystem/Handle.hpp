@@ -1,159 +1,291 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-
 #ifndef COMPLIANCEENGINE_FILESYSTEM_HANDLE_HPP
 #define COMPLIANCEENGINE_FILESYSTEM_HANDLE_HPP
 
 #include "Descriptor.hpp"
-#include "Optional.h"
+#include "PrefixLimits.hpp"
 #include "ReadableFile.hpp"
 #include "Result.h"
 
-#include <cstddef>
 #include <cstdint>
-#include <dirent.h>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <type_traits>
+#include <utility>
 
 namespace ComplianceEngine
 {
 class ContextInterface;
-
 namespace Filesystem
 {
+class Path;
+namespace FTW
+{
+namespace Detail
+{
+class DirectoryCursor;
+}
+} // namespace FTW
+namespace Detail
+{
+class Handle;
+class ProcfsDescriptorAccess;
+} // namespace Detail
 enum class Type
 {
     Directory,
     RegularFile
 };
-struct LookupMountId
+// Non-const data members: provenance is sealed by the private constructor and
+// friendship below, not by const members (which would delete assignment and
+// force throwing copies on every move). Moves stay noexcept.
+class LookupMountId
 {
+public:
+    LookupMountId(const LookupMountId&) noexcept = default;
+    LookupMountId& operator=(const LookupMountId&) noexcept = default;
+    LookupMountId(LookupMountId&&) noexcept = default;
+    LookupMountId& operator=(LookupMountId&&) noexcept = default;
+    std::uint64_t Value() const noexcept
+    {
+        return mValue;
+    }
+
+private:
+    friend class Path;
+    friend class Detail::Handle;
     explicit LookupMountId(std::uint64_t id) noexcept
-        : value(id)
+        : mValue(id)
     {
     }
-    std::uint64_t value;
+    std::uint64_t mValue;
 };
-struct TargetMountId
+class TargetMountId
 {
+public:
+    TargetMountId(const TargetMountId&) noexcept = default;
+    TargetMountId& operator=(const TargetMountId&) noexcept = default;
+    TargetMountId(TargetMountId&&) noexcept = default;
+    TargetMountId& operator=(TargetMountId&&) noexcept = default;
+    std::uint64_t Value() const noexcept
+    {
+        return mValue;
+    }
+
+private:
+    friend class Path;
+    friend class Detail::Handle;
     explicit TargetMountId(std::uint64_t id) noexcept
-        : value(id)
+        : mValue(id)
     {
     }
-    std::uint64_t value;
+    std::uint64_t mValue;
 };
-struct UserId
+class UserId
 {
+public:
     explicit UserId(uid_t id) noexcept
-        : value(id)
+        : mValue(id)
     {
     }
-    uid_t value;
+    UserId(const UserId&) noexcept = default;
+    UserId& operator=(const UserId&) noexcept = default;
+    UserId(UserId&&) noexcept = default;
+    UserId& operator=(UserId&&) noexcept = default;
+    uid_t Value() const noexcept
+    {
+        return mValue;
+    }
+
+private:
+    uid_t mValue;
 };
-struct GroupId
+class GroupId
 {
+public:
     explicit GroupId(gid_t id) noexcept
-        : value(id)
+        : mValue(id)
     {
     }
-    gid_t value;
-};
-struct AcquisitionFacts
-{
-    Type type;
-    struct stat metadata;
-    LookupMountId lookupMount;
-    TargetMountId targetMount;
+    GroupId(const GroupId&) noexcept = default;
+    GroupId& operator=(const GroupId&) noexcept = default;
+    GroupId(GroupId&&) noexcept = default;
+    GroupId& operator=(GroupId&&) noexcept = default;
+    gid_t Value() const noexcept
+    {
+        return mValue;
+    }
+
+private:
+    gid_t mValue;
 };
 namespace Detail
 {
-class ProcfsDescriptorAccess;
-class Handle;
-struct LookupSpelling
-{
-    std::string value;
-};
-struct EffectiveSpelling
-{
-    std::string value;
-};
-} // namespace Detail
-class Path;
-class ReadableFile;
-struct DirectoryChild
-{
-    std::string name;
-    unsigned char type = DT_UNKNOWN; // untrusted readdir type hint, not acquired metadata
-};
-// Move-only directory stream on a verified descriptor alias. Its
-// originating context must remain alive through Close/destruction; the
-// originating Handle may be closed or destroyed.
-class DirectoryCursor
+class LookupSpelling
 {
 public:
-    DirectoryCursor(DirectoryCursor&& other) noexcept;
-    DirectoryCursor& operator=(DirectoryCursor&& other) & noexcept;
-    DirectoryCursor(const DirectoryCursor&) = delete;
-    DirectoryCursor& operator=(const DirectoryCursor&) = delete;
-    ~DirectoryCursor() noexcept;
-    Result<Optional<std::string>> Next();
-    Result<Optional<DirectoryChild>> NextEntry();
-    // Single-attempt diagnostic-only release; never retry a reused descriptor.
-    void Close() noexcept;
+    LookupSpelling(const LookupSpelling&) = default;
+    LookupSpelling& operator=(const LookupSpelling&) = default;
+    LookupSpelling(LookupSpelling&&) noexcept = default;
+    LookupSpelling& operator=(LookupSpelling&&) noexcept = default;
+    // Allocates: returns a fresh copy so a temporary Metadata/Handle result
+    // can be destroyed without dangling a bound const reference.
+    std::string Value() const
+    {
+        return mValue;
+    }
 
 private:
-    friend class ::ComplianceEngine::ContextInterface;
-    DirectoryCursor(const ContextInterface& context, DIR* stream) noexcept;
-    const ContextInterface* mContext = nullptr;
-    DIR* mStream = nullptr;
+    friend class ::ComplianceEngine::Filesystem::Path;
+    friend class Handle;
+    explicit LookupSpelling(std::string name)
+        : mValue(std::move(name))
+    {
+    }
+    std::string mValue;
 };
-// Internal unique acquisition; ordinary callers retain only Path::Component.
+class EffectiveSpelling
+{
+public:
+    EffectiveSpelling(const EffectiveSpelling&) = default;
+    EffectiveSpelling& operator=(const EffectiveSpelling&) = default;
+    EffectiveSpelling(EffectiveSpelling&&) noexcept = default;
+    EffectiveSpelling& operator=(EffectiveSpelling&&) noexcept = default;
+    std::string Value() const
+    {
+        return mValue;
+    }
+
+private:
+    friend class ::ComplianceEngine::Filesystem::Path;
+    friend class Handle;
+    explicit EffectiveSpelling(std::string name)
+        : mValue(std::move(name))
+    {
+    }
+    std::string mValue;
+};
+} // namespace Detail
+class Metadata
+{
+public:
+    Metadata(const Metadata&) = default;
+    Metadata& operator=(const Metadata&) = default;
+    Metadata(Metadata&&) noexcept = default;
+    Metadata& operator=(Metadata&&) noexcept = default;
+    // "Type()" would clash with the enum class Type above once declared as a
+    // member name in this class; GCC rejects the resulting self-reference.
+    Type FileType() const noexcept
+    {
+        return mType;
+    }
+    struct stat Stat() const noexcept
+    {
+        return mStat;
+    }
+    LookupMountId LookupMount() const noexcept
+    {
+        return mLookupMount;
+    }
+    TargetMountId TargetMount() const noexcept
+    {
+        return mTargetMount;
+    }
+    // Allocates: a const-ref getter would dangle on a temporary Metadata().
+    std::string LookupName() const
+    {
+        return mLookupName.Value();
+    }
+    std::string EffectiveName() const
+    {
+        return mEffectiveName.Value();
+    }
+
+private:
+    friend class Path;
+    friend class Detail::Handle;
+    Metadata(Type kind, const struct stat& info, LookupMountId lookup, TargetMountId target, Detail::LookupSpelling source, Detail::EffectiveSpelling effective)
+        : mType(kind),
+          mStat(info),
+          mLookupMount(lookup),
+          mTargetMount(target),
+          mLookupName(std::move(source)),
+          mEffectiveName(std::move(effective))
+    {
+    }
+    Type mType;
+    struct stat mStat;
+    LookupMountId mLookupMount;
+    TargetMountId mTargetMount;
+    Detail::LookupSpelling mLookupName;
+    Detail::EffectiveSpelling mEffectiveName;
+};
+static_assert(std::is_nothrow_move_constructible<Metadata>::value,
+    "Metadata must be nothrow move constructible (shared Handle allocation relies on it)");
+static_assert(std::is_nothrow_move_assignable<Metadata>::value, "Metadata must be nothrow move assignable");
 namespace Detail
 {
 class Handle
 {
 public:
+    Handle() = delete;
     Handle(const Handle&) = delete;
     Handle& operator=(const Handle&) = delete;
     Handle(Handle&& other) noexcept;
     Handle& operator=(Handle&& other) & noexcept;
     ~Handle() noexcept = default;
-
-    AcquisitionFacts Acquired() const noexcept;
-    std::string LookupName() const;
-    std::string EffectiveName() const;
+    ::ComplianceEngine::Filesystem::Metadata Metadata() const;
     Result<struct stat> Stat() const;
     Result<bool> SetOwnership(UserId owner, GroupId group) const;
     Result<bool> SetMode(mode_t mode) const;
     Result<ReadableFile> OpenReadOnly() const;
     Result<ReadableFile> OpenReadOnly(ReadableFile::Policy policy) const;
-    Result<DirectoryCursor> OpenChildren() const;
 
 private:
     friend class ::ComplianceEngine::Filesystem::Path;
-    friend class ::ComplianceEngine::Tests::DescriptorTestAccess;
-    static Result<Descriptor> ActivateReadOnly(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory,
-        std::size_t fdinfoByteCap);
-    static Result<Descriptor> ActivateReadOnlyImpl(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, bool directory,
-        std::size_t fdinfoByteCap, const std::uint64_t* heldMount);
+    friend class ::ComplianceEngine::Filesystem::FTW::Detail::DirectoryCursor;
+    // The live O_PATH pin holds its kernel path (including mount). A verified
+    // current-task procfd alias of that pin opens the same path; inode/type
+    // checks reject a wrong-object alias. Every helper below dispatches
+    // through ContextInterface's friend-gated native surface, so it stays a
+    // member of Handle (or a nested type it returns), not a free function.
     static Result<Descriptor> OpenAndVerifyAlias(const ContextInterface& context, const ProcfsDescriptorAccess& procfs, const Descriptor& pin,
-        const struct stat& before, bool directory, std::size_t fdinfoByteCap, const std::uint64_t* heldMount);
-    Handle(Descriptor descriptor, AcquisitionFacts facts, LookupSpelling lookup, EffectiveSpelling effective, std::size_t fdinfoByteCap);
-    static Result<Handle> PinProcessRoot(const ContextInterface& context, std::size_t fdinfoBytes);
-    static Result<bool> RecognizeAcceptedRoot(const Handle& acceptedRoot, const Handle& candidate, std::size_t fdinfoByteCap);
-    Result<struct stat> Inspect() const;
-    Result<bool> SetModeWithProcfs(const ProcfsDescriptorAccess& procfs, mode_t mode) const;
-    void Swap(Handle& other) noexcept;
-
+        const struct stat& before, Type directory);
+    // The returned Descriptor retains the context used to open its alias: a
+    // temporary argument here would dangle in the caller.
+    static Result<Descriptor> OpenAndVerifyAlias(const ContextInterface&&, const ProcfsDescriptorAccess&, const Descriptor&, const struct stat&, Type) = delete;
+    static Result<Descriptor> ActivateReadOnly(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, Type directory);
+    // Delegates to OpenAndVerifyAlias, so it retains context the same way.
+    static Result<Descriptor> ActivateReadOnly(const ContextInterface&&, const Descriptor&, const struct stat&, Type) = delete;
+    static Result<struct stat> Inspect(const Handle& owner);
+    static Result<bool> SetModeWithProcfs(const Handle& owner, const ProcfsDescriptorAccess& procfs, mode_t mode);
+    // Bundles an already-opened pin's identity snapshot with its verified
+    // fdinfo mount id, observed together through one scoped procfs session
+    // (which retires before this returns). The single acquisition helper
+    // used by both the root-pin site (PinProcessRoot) and the resolver's
+    // child-pin site, so neither calls ReadMountId directly.
+    struct AcquiredPin
+    {
+        Descriptor pin;
+        struct stat snapshot;
+        std::uint64_t mount;
+    };
+    // No deleted rvalue overload: context is used only transiently here
+    // (StatFile, a local ProcfsDescriptorAccess::Make/ReadMountId that
+    // retires before return); the returned pin keeps whichever context it
+    // was already opened with, not a binding created by this function.
+    static Result<AcquiredPin> AcquirePinnedObject(const ContextInterface& context, Descriptor pin, std::size_t fdinfoByteCap, const char* statFailureMessage);
+    static Result<Handle> PinProcessRoot(const ContextInterface& context, PrefixLimits limits);
+    // The returned Handle retains the context used to pin "/" (OpenAbsolutePin):
+    // a temporary argument here would dangle in the caller.
+    static Result<Handle> PinProcessRoot(const ContextInterface&&, PrefixLimits) = delete;
+    Handle(Descriptor descriptor, ::ComplianceEngine::Filesystem::Metadata metadata);
     Descriptor mDescriptor;
-    AcquisitionFacts mFacts;
-    LookupSpelling mLookupName;
-    EffectiveSpelling mEffectiveName;
-    std::size_t mFdinfoBytes;
+    ::ComplianceEngine::Filesystem::Metadata mMetadata;
 };
 } // namespace Detail
 } // namespace Filesystem
 } // namespace ComplianceEngine
-
 #endif // COMPLIANCEENGINE_FILESYSTEM_HANDLE_HPP

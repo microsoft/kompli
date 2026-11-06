@@ -3,13 +3,8 @@
 
 #include "ContextInterface.h"
 
-#include "filesystem/FilesystemHelpers.hpp"
-#include "filesystem/Handle.hpp"
-#include "filesystem/ProcfsDescriptorAccess.hpp"
-
 #include <algorithm>
 #include <cerrno>
-#include <cstring>
 #include <fcntl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -51,312 +46,8 @@ void ContextInterface::ReleaseManagedDescriptor() const noexcept
     --mManagedDescriptors.owned; // only an owned descriptor/cursor relinquishes
 }
 
-class ContextInterface::Reservation
-{
-public:
-    explicit Reservation(const ContextInterface& context)
-        : mContext(context)
-    {
-        auto reserved = context.ReserveManagedDescriptor();
-        if (reserved.HasValue())
-            mReserved = true;
-        else
-            mError = std::move(reserved).Error();
-    }
-    ~Reservation() noexcept
-    {
-        if (mReserved)
-            mContext.ReleaseManagedDescriptor();
-    }
-    bool Acquired() const noexcept
-    {
-        return mReserved;
-    }
-    const Error& Failure() const
-    {
-        return mError.Value();
-    }
-    void Transfer() noexcept
-    {
-        mReserved = false;
-    }
-
-private:
-    const ContextInterface& mContext;
-    bool mReserved = false;
-    Optional<Error> mError;
-};
 // Provide a definition for the virtual destructor
 ContextInterface::~ContextInterface() = default;
-
-using Filesystem::Detail::Descriptor;
-
-Result<pid_t> ContextInterface::CurrentProcessId() const
-{
-    const pid_t id = NativeProcessId();
-    if (0 >= id)
-        return Error("Cannot identify current process", (0 > id) ? (errno ? errno : EIO) : EPROTO);
-    return id;
-}
-
-Result<pid_t> ContextInterface::CurrentThreadId() const
-{
-    const pid_t id = NativeThreadId();
-    if (0 >= id)
-        return Error("Cannot identify current task", (0 > id) ? (errno ? errno : EIO) : EPROTO);
-    return id;
-}
-
-Result<Descriptor> ContextInterface::OpenAbsolutePin(const char* path, bool directory) const&
-{
-    if (!path || *path != '/')
-    {
-        return Error("Unsupported absolute pin path", EINVAL);
-    }
-    Reservation charge(*this);
-    if (!charge.Acquired())
-        return charge.Failure();
-    const int fd = OpenNativePath(path, O_PATH | O_NOFOLLOW | O_CLOEXEC | (directory ? O_DIRECTORY : 0));
-    if (fd < 0)
-    {
-        return Error("Cannot open absolute pin", errno ? errno : EIO);
-    }
-    charge.Transfer();
-    return Descriptor(*this, fd, CloseDiagnostic::Descriptor);
-}
-
-Result<Descriptor> ContextInterface::OpenAt(const Descriptor& directory, const char* name, OpenProfile profile, CloseDiagnostic diagnostic) const&
-{
-    directory.RequireOwned();
-    switch (profile)
-    {
-        case OpenProfile::PinSelfDirectory:
-        case OpenProfile::ReadFdinfo:
-        case OpenProfile::FollowAliasFile:
-        case OpenProfile::FollowAliasDirectory:
-        case OpenProfile::FollowAliasPin:
-        case OpenProfile::FollowAliasPinDirectory:
-            return Error("Procfs following and alias profiles require verified directories", EINVAL);
-        default:
-            return OpenVerifiedAt(directory, name, profile, diagnostic);
-    }
-}
-
-Result<Descriptor> ContextInterface::OpenProcfsSelf(const Descriptor& proc) const&
-{
-    return OpenVerifiedAt(proc, "self", OpenProfile::PinSelfDirectory, CloseDiagnostic::Descriptor);
-}
-
-Result<Descriptor> ContextInterface::OpenVerifiedAt(const Descriptor& directory, const char* name, OpenProfile profile, CloseDiagnostic diagnostic) const&
-{
-    directory.RequireOwned();
-    if (directory.mContext != this || !name || !*name || *name == '/')
-    {
-        return Error("Invalid directory context or relative name", EINVAL);
-    }
-    int flags = O_CLOEXEC;
-    switch (profile)
-    {
-        case OpenProfile::PinDirectory:
-            flags |= O_PATH | O_DIRECTORY | O_NOFOLLOW;
-            break;
-        case OpenProfile::PinSelfDirectory:
-            flags |= O_PATH | O_DIRECTORY;
-            break;
-        case OpenProfile::PinChild:
-            if (!Filesystem::Detail::IsSingleChildComponent(name))
-                return Error("Child pin requires a single component", EINVAL);
-            flags |= O_PATH | O_NOFOLLOW;
-            break;
-        case OpenProfile::PinChildDirectory:
-            if (!Filesystem::Detail::IsSingleChildComponent(name))
-                return Error("Child pin requires a single component", EINVAL);
-            flags |= O_PATH | O_NOFOLLOW | O_DIRECTORY;
-            break;
-        case OpenProfile::ReadFdinfo:
-            flags |= O_RDONLY | O_NOFOLLOW;
-            break;
-        case OpenProfile::FollowAliasFile:
-            flags |= O_RDONLY;
-            break;
-        case OpenProfile::FollowAliasDirectory:
-            flags |= O_RDONLY | O_DIRECTORY;
-            break;
-        case OpenProfile::FollowAliasPin:
-            flags |= O_PATH;
-            break;
-        case OpenProfile::FollowAliasPinDirectory:
-            flags |= O_PATH | O_DIRECTORY;
-            break;
-        default:
-            return Error("Unsupported descriptor open profile", EINVAL);
-    }
-    Reservation charge(*this);
-    if (!charge.Acquired())
-        return charge.Failure();
-    const int fd = OpenNativeAt(directory.RequireOwned(), name, flags);
-    if (fd < 0)
-    {
-        return Error("Cannot open relative descriptor", errno ? errno : EIO);
-    }
-    charge.Transfer();
-    return Descriptor(*this, fd, diagnostic);
-}
-
-Result<Descriptor> ContextInterface::OpenFdinfo(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Descriptor& target) const&
-{
-    target.RequireOwned();
-    if (!procfs.VerifyRole(*this, true))
-        return Error("Unverified procfs fdinfo directory", EINVAL);
-    target.RequireOwned();
-    if (target.mContext != this)
-    {
-        return Error("Foreign descriptor information target", EINVAL);
-    }
-    const std::string alias = std::to_string(target.RequireOwned());
-    return OpenVerifiedAt(procfs.mRoles[static_cast<std::size_t>(Filesystem::Detail::ProcfsDescriptorAccess::Role::Fdinfo)], alias.c_str(),
-        OpenProfile::ReadFdinfo, CloseDiagnostic::Descriptor);
-}
-
-Result<Descriptor> ContextInterface::OpenAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Descriptor& target, bool directoryAlias,
-    CloseDiagnostic diagnostic) const&
-{
-    target.RequireOwned();
-    if (!procfs.VerifyRole(*this, false))
-        return Error("Unverified procfs fd directory", EINVAL);
-    target.RequireOwned();
-    if (target.mContext != this)
-    {
-        return Error("Foreign alias target", EINVAL);
-    }
-    const std::string alias = std::to_string(target.RequireOwned());
-    return OpenVerifiedAt(procfs.mRoles[static_cast<std::size_t>(Filesystem::Detail::ProcfsDescriptorAccess::Role::Fd)], alias.c_str(),
-        directoryAlias ? OpenProfile::FollowAliasDirectory : OpenProfile::FollowAliasFile, diagnostic);
-}
-
-Result<Descriptor> ContextInterface::OpenPinAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Descriptor& target, bool directoryAlias) const&
-{
-    target.RequireOwned();
-    if (!procfs.VerifyRole(*this, false))
-        return Error("Unverified procfs fd directory", EINVAL);
-    target.RequireOwned();
-    if (target.mContext != this)
-    {
-        return Error("Foreign alias target", EINVAL);
-    }
-    const std::string alias = std::to_string(target.RequireOwned());
-    return OpenVerifiedAt(procfs.mRoles[static_cast<std::size_t>(Filesystem::Detail::ProcfsDescriptorAccess::Role::Fd)], alias.c_str(),
-        directoryAlias ? OpenProfile::FollowAliasPinDirectory : OpenProfile::FollowAliasPin, CloseDiagnostic::Descriptor);
-}
-
-Result<Descriptor> ContextInterface::Duplicate(const Descriptor& source) const&
-{
-    source.RequireOwned();
-    if (source.mContext != this)
-    {
-        return Error("Cannot duplicate a foreign descriptor", EINVAL);
-    }
-    Reservation charge(*this);
-    if (!charge.Acquired())
-        return charge.Failure();
-    const int fd = DuplicateDescriptor(source.RequireOwned());
-    if (fd < 0)
-    {
-        return Error("Cannot duplicate descriptor", errno ? errno : EIO);
-    }
-    charge.Transfer();
-    return Descriptor(*this, fd, CloseDiagnostic::Descriptor);
-}
-
-#define CHECK_OWNER(owner, failure)                                                                                                                    \
-    static_cast<void>((owner).RequireOwned());                                                                                                         \
-    if ((owner).mContext != this)                                                                                                                      \
-    {                                                                                                                                                  \
-        errno = EINVAL;                                                                                                                                \
-        return failure;                                                                                                                                \
-    }
-
-int ContextInterface::StatFile(const Descriptor& owner, struct stat* metadata) const
-{
-    CHECK_OWNER(owner, -1)
-    return StatFileDescriptor(owner.RequireOwned(), metadata);
-}
-int ContextInterface::StatFilesystem(const Descriptor& owner, struct statfs* metadata) const
-{
-    CHECK_OWNER(owner, -1)
-    return StatFilesystemDescriptor(owner.RequireOwned(), metadata);
-}
-ssize_t ContextInterface::ReadFile(const Descriptor& owner, void* buffer, std::size_t size) const
-{
-    CHECK_OWNER(owner, -1)
-    return ReadFileDescriptor(owner.RequireOwned(), buffer, size);
-}
-ssize_t ContextInterface::ReadLink(const Descriptor& owner, char* buffer, std::size_t size) const
-{
-    CHECK_OWNER(owner, -1)
-    return ReadLinkDescriptor(owner.RequireOwned(), buffer, size);
-}
-int ContextInterface::StatusFlags(const Descriptor& owner) const
-{
-    CHECK_OWNER(owner, -1)
-    return StatusFlagsDescriptor(owner.RequireOwned());
-}
-int ContextInterface::DescriptorFlags(const Descriptor& owner) const
-{
-    CHECK_OWNER(owner, -1)
-    return DescriptorFlagsDescriptor(owner.RequireOwned());
-}
-int ContextInterface::ChownPinned(const Descriptor& owner, uid_t user, gid_t group) const
-{
-    CHECK_OWNER(owner, -1)
-    return ChownPinnedFileDescriptor(owner.RequireOwned(), user, group);
-}
-int ContextInterface::ChmodAlias(const Filesystem::Detail::ProcfsDescriptorAccess& procfs, const Descriptor& pin, mode_t mode) const
-{
-    CHECK_OWNER(pin, -1)
-    if (!procfs.VerifyRole(*this, false))
-    {
-        errno = EINVAL;
-        return -1;
-    }
-    const std::string alias = std::to_string(pin.RequireOwned());
-    return ChmodPinnedAlias(procfs.mRoles[static_cast<std::size_t>(Filesystem::Detail::ProcfsDescriptorAccess::Role::Fd)].RequireOwned(), alias.c_str(), mode);
-}
-int ContextInterface::CloseOwnedDescriptor(Descriptor& owner) const noexcept
-{
-    if (0 > owner.mDescriptor)
-        return 0; // Internal cleanup never treats a consumed owner as native access.
-    if (owner.mContext != this)
-    {
-        errno = EINVAL;
-        return -1; // A foreign live owner must retain its fd and budget.
-    }
-    const int fd = owner.mDescriptor;
-    owner.mDescriptor = -1;
-    ReleaseManagedDescriptor();
-    return CloseFileDescriptor(fd);
-}
-int ContextInterface::CloseOwnedDirectoryCursor(DIR* stream) const noexcept
-{
-    ReleaseManagedDescriptor();
-    return CloseDirectory(stream);
-}
-Result<Filesystem::DirectoryCursor> ContextInterface::OpenDirectoryCursor(Descriptor&& owner) const&
-{
-    owner.RequireOwned();
-    if (owner.mContext != this)
-    {
-        return Error("Foreign directory stream descriptor", EINVAL);
-    }
-    DIR* stream = FdOpenDirectory(owner.RequireOwned());
-    if (!stream)
-    {
-        return Error("Cannot open directory stream", errno ? errno : EIO);
-    }
-    owner.mDescriptor = -1;
-    return Filesystem::DirectoryCursor(*this, stream);
-}
-#undef CHECK_OWNER
 
 int ContextInterface::OpenNativePath(const char* path, int flags) const noexcept
 {
@@ -402,9 +93,14 @@ ssize_t ContextInterface::ReadFileDescriptor(int descriptor, void* buffer, std::
     return ::read(descriptor, buffer, size);
 }
 
-int ContextInterface::CloseFileDescriptor(int descriptor) const noexcept
+Result<void> ContextInterface::CloseFileDescriptor(int descriptor) const noexcept
 {
-    return ::close(descriptor);
+    if (::close(descriptor) != 0)
+    {
+        const int saved = errno ? errno : EIO;
+        return Error(saved);
+    }
+    return Result<void>::Success();
 }
 
 int ContextInterface::ChownPinnedFileDescriptor(int descriptor, uid_t owner, gid_t group) const noexcept
@@ -437,9 +133,14 @@ struct dirent* ContextInterface::ReadDirectory(DIR* directory) const noexcept
     return ::readdir(directory);
 }
 
-int ContextInterface::CloseDirectory(DIR* directory) const noexcept
+Result<void> ContextInterface::CloseDirectory(DIR* directory) const noexcept
 {
-    return ::closedir(directory);
+    if (::closedir(directory) != 0)
+    {
+        const int saved = errno ? errno : EIO;
+        return Error(saved);
+    }
+    return Result<void>::Success();
 }
 
 int ContextInterface::StatPath(const char* path, struct stat* metadata) const noexcept

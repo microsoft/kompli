@@ -274,6 +274,7 @@ target_link_libraries(complianceenginetests
 add_executable(filesystem-collection-allocation-test
     FilesystemCollectionAllocationTest.cpp
     ../src/lib/filesystem/FilesystemCollection.cpp
+    ../src/lib/filesystem/Path.cpp
 )
 target_compile_definitions(filesystem-collection-allocation-test PRIVATE KOMPLI_TEST_ROOT_COPY_ALLOCATION=1)
 target_link_options(filesystem-collection-allocation-test PRIVATE "LINKER:--wrap=_Znwm")

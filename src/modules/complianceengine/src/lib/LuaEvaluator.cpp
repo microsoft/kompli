@@ -292,7 +292,7 @@ int LuaEvaluator::LuaProcedureWrapper(lua_State* L)
         lua_error(L);
         return 0;
     }
-    auto log = callContext->ctx.GetLogHandle();
+    auto log = callContext->ctx.get().GetLogHandle();
     lua_pushvalue(L, lua_upvalueindex(1));
     if (!lua_isstring(L, -1))
     {
@@ -366,7 +366,7 @@ int LuaEvaluator::LuaProcedureWrapper(lua_State* L)
 
     if (result.HasValue())
     {
-        OsConfigLogInfo(callContext->ctx.GetLogHandle(), "Lua procedure '%s' executed: %scompliant", procedureName.c_str(),
+        OsConfigLogInfo(callContext->ctx.get().GetLogHandle(), "Lua procedure '%s' executed: %scompliant", procedureName.c_str(),
             (result.Value() == Status::NonCompliant) ? "non-" : "");
         lua_pushboolean(L, result.Value() == ComplianceEngine::Status::Compliant);
 
@@ -377,7 +377,7 @@ int LuaEvaluator::LuaProcedureWrapper(lua_State* L)
     }
     else
     {
-        OsConfigLogWarning(callContext->ctx.GetLogHandle(), "LUA script execution ended with an error: %s", result.Error().message.c_str());
+        OsConfigLogWarning(callContext->ctx.get().GetLogHandle(), "LUA script execution ended with an error: %s", result.Error().message.c_str());
         lua_pushstring(L, result.Error().message.c_str());
         lua_error(L);
         return 0;

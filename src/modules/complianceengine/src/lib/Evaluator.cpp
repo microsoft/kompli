@@ -39,7 +39,7 @@ Result<AuditResult> Evaluator::ExecuteAudit(const PayloadFormatter& formatter)
     auto result = EvaluateProcedure(mJson, Action::Audit);
     if (!result.HasValue())
     {
-        OsConfigLogError(mContext.GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
+        OsConfigLogError(mContext.get().GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
         return result.Error();
     }
 
@@ -48,7 +48,7 @@ Result<AuditResult> Evaluator::ExecuteAudit(const PayloadFormatter& formatter)
     auto payloadResult = formatter.Format(mIndicators);
     if (!payloadResult.HasValue())
     {
-        OsConfigLogError(mContext.GetLogHandle(), "Failed to format payload: %s", payloadResult.Error().message.c_str());
+        OsConfigLogError(mContext.get().GetLogHandle(), "Failed to format payload: %s", payloadResult.Error().message.c_str());
         return AuditResult{result.Value(), std::string("Failed to format payload: ") + payloadResult.Error().message};
     }
 
@@ -60,7 +60,7 @@ Result<Status> Evaluator::ExecuteRemediation()
     auto result = EvaluateProcedure(mJson, Action::Remediate);
     if (!result.HasValue())
     {
-        OsConfigLogError(mContext.GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
+        OsConfigLogError(mContext.get().GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
         return result.Error();
     }
 
@@ -73,7 +73,7 @@ Result<Status> Evaluator::EvaluateProcedure(const JSON_Object* object, const Act
 {
     if (nullptr == object)
     {
-        OsConfigLogError(mContext.GetLogHandle(), "invalid argument");
+        OsConfigLogError(mContext.get().GetLogHandle(), "invalid argument");
         return Error("invalid json argument", EINVAL);
     }
 
@@ -81,7 +81,7 @@ Result<Status> Evaluator::EvaluateProcedure(const JSON_Object* object, const Act
     const auto* value = json_object_get_value_at(object, 0);
     if ((nullptr == name) || (nullptr == value))
     {
-        OsConfigLogError(mContext.GetLogHandle(), "Rule name or value is null");
+        OsConfigLogError(mContext.get().GetLogHandle(), "Rule name or value is null");
         return Error("Rule name or value is null");
     }
 
@@ -91,7 +91,7 @@ Result<Status> Evaluator::EvaluateProcedure(const JSON_Object* object, const Act
         const auto result = EvaluateList(value, action, !strcmp(name, "anyOf") ? ListAction::AnyOf : ListAction::AllOf);
         if (!result.HasValue())
         {
-            OsConfigLogError(mContext.GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
+            OsConfigLogError(mContext.get().GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
             return result;
         }
         mIndicators.Back().status = result.Value();
@@ -105,7 +105,7 @@ Result<Status> Evaluator::EvaluateProcedure(const JSON_Object* object, const Act
         const auto result = EvaluateNot(value, action);
         if (!result.HasValue())
         {
-            OsConfigLogError(mContext.GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
+            OsConfigLogError(mContext.get().GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
             return result;
         }
         mIndicators.Back().status = result.Value();
@@ -119,7 +119,7 @@ Result<Status> Evaluator::EvaluateProcedure(const JSON_Object* object, const Act
         const auto result = EvaluateLua(value, action);
         if (!result.HasValue())
         {
-            OsConfigLogError(mContext.GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
+            OsConfigLogError(mContext.get().GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
             return result;
         }
         mIndicators.Back().status = result.Value();
@@ -131,7 +131,7 @@ Result<Status> Evaluator::EvaluateProcedure(const JSON_Object* object, const Act
     auto result = EvaluateBuiltinProcedure(name, value, action);
     if (!result.HasValue())
     {
-        OsConfigLogError(mContext.GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
+        OsConfigLogError(mContext.get().GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
         return result;
     }
     mIndicators.Back().status = result.Value();
@@ -143,17 +143,17 @@ Result<Status> Evaluator::EvaluateProcedure(const JSON_Object* object, const Act
 Result<Status> Evaluator::EvaluateList(const json_value_t* value, const Action action, const ListAction listAction)
 {
     const char* actionName = ((listAction == ListAction::AnyOf) ? "anyOf" : "allOf");
-    OsConfigLogDebug(mContext.GetLogHandle(), "Evaluating %s operator", actionName);
+    OsConfigLogDebug(mContext.get().GetLogHandle(), "Evaluating %s operator", actionName);
 
     if (nullptr == value)
     {
-        OsConfigLogError(mContext.GetLogHandle(), "invalid argument");
+        OsConfigLogError(mContext.get().GetLogHandle(), "invalid argument");
         return Error("invalid argument", EINVAL);
     }
 
     if (json_value_get_type(value) != JSONArray)
     {
-        OsConfigLogError(mContext.GetLogHandle(), "%s value is not an array", actionName);
+        OsConfigLogError(mContext.get().GetLogHandle(), "%s value is not an array", actionName);
         return Error(std::string(actionName) + " value is not an array", EINVAL);
     }
 
@@ -166,19 +166,19 @@ Result<Status> Evaluator::EvaluateList(const json_value_t* value, const Action a
         const auto result = EvaluateProcedure(subObject, action);
         if (!result.HasValue())
         {
-            OsConfigLogError(mContext.GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
+            OsConfigLogError(mContext.get().GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
             return result;
         }
 
         if (result.Value() == Status::Compliant && listAction == ListAction::AnyOf)
         {
-            OsConfigLogDebug(mContext.GetLogHandle(), "Evaluation returned compliant status at index %zu", i);
+            OsConfigLogDebug(mContext.get().GetLogHandle(), "Evaluation returned compliant status at index %zu", i);
             return Status::Compliant;
         }
 
         if (result.Value() == Status::NonCompliant && listAction == ListAction::AllOf)
         {
-            OsConfigLogDebug(mContext.GetLogHandle(), "Evaluation returned non-compliant status at index %zu", i);
+            OsConfigLogDebug(mContext.get().GetLogHandle(), "Evaluation returned non-compliant status at index %zu", i);
             return Status::NonCompliant;
         }
 
@@ -193,62 +193,62 @@ Result<Status> Evaluator::EvaluateList(const json_value_t* value, const Action a
 
 Result<Status> Evaluator::EvaluateNot(const json_value_t* value, const Action action)
 {
-    OsConfigLogDebug(mContext.GetLogHandle(), "Evaluating not operator");
+    OsConfigLogDebug(mContext.get().GetLogHandle(), "Evaluating not operator");
 
     if (nullptr == value)
     {
-        OsConfigLogError(mContext.GetLogHandle(), "invalid argument");
+        OsConfigLogError(mContext.get().GetLogHandle(), "invalid argument");
         return Error("invalid argument", EINVAL);
     }
 
     if (json_value_get_type(value) != JSONObject)
     {
-        OsConfigLogError(mContext.GetLogHandle(), "not value is not an object");
+        OsConfigLogError(mContext.get().GetLogHandle(), "not value is not an object");
         return Error("not value is not an object", EINVAL);
     }
 
     // NOT can be only used as an audit!
     if (action != Action::Audit)
     {
-        OsConfigLogInfo(mContext.GetLogHandle(), "not used in remediation: falling back to audit mode. Some issues may not be remediated.");
+        OsConfigLogInfo(mContext.get().GetLogHandle(), "not used in remediation: falling back to audit mode. Some issues may not be remediated.");
     }
 
     auto result = EvaluateProcedure(json_value_get_object(value), Action::Audit);
     if (!result.HasValue())
     {
-        OsConfigLogError(mContext.GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
+        OsConfigLogError(mContext.get().GetLogHandle(), "Evaluation failed: %s", result.Error().message.c_str());
         return result;
     }
 
     if (result.Value() == Status::NotApplicable)
     {
-        OsConfigLogDebug(mContext.GetLogHandle(), "not: inner result is not-applicable, propagating");
+        OsConfigLogDebug(mContext.get().GetLogHandle(), "not: inner result is not-applicable, propagating");
         return Status::NotApplicable;
     }
 
     if (result.Value() == Status::Compliant)
     {
-        OsConfigLogDebug(mContext.GetLogHandle(), "Evaluation returned compliant status");
+        OsConfigLogDebug(mContext.get().GetLogHandle(), "Evaluation returned compliant status");
         return Status::NonCompliant;
     }
 
-    OsConfigLogDebug(mContext.GetLogHandle(), "Evaluation returned non-compliant status");
+    OsConfigLogDebug(mContext.get().GetLogHandle(), "Evaluation returned non-compliant status");
     return Status::Compliant;
 }
 
 Result<Status> Evaluator::EvaluateLua(const json_value_t* value, const Action action)
 {
-    OsConfigLogDebug(mContext.GetLogHandle(), "Evaluating Lua operator");
+    OsConfigLogDebug(mContext.get().GetLogHandle(), "Evaluating Lua operator");
 
     if (nullptr == value)
     {
-        OsConfigLogError(mContext.GetLogHandle(), "invalid argument");
+        OsConfigLogError(mContext.get().GetLogHandle(), "invalid argument");
         return Error("invalid argument", EINVAL);
     }
 
     if (json_value_get_type(value) != JSONObject)
     {
-        OsConfigLogError(mContext.GetLogHandle(), "Lua value is not an object");
+        OsConfigLogError(mContext.get().GetLogHandle(), "Lua value is not an object");
         return Error("Lua value is not an object", EINVAL);
     }
 
@@ -257,7 +257,7 @@ Result<Status> Evaluator::EvaluateLua(const json_value_t* value, const Action ac
     auto arguments = GetBuiltinProcedureArguments(value);
     if (!arguments.HasValue())
     {
-        OsConfigLogError(mContext.GetLogHandle(), "Failed to get Lua arguments: %s", arguments.Error().message.c_str());
+        OsConfigLogError(mContext.get().GetLogHandle(), "Failed to get Lua arguments: %s", arguments.Error().message.c_str());
         return arguments.Error();
     }
 
@@ -265,14 +265,14 @@ Result<Status> Evaluator::EvaluateLua(const json_value_t* value, const Action ac
     auto scriptIt = arguments.Value().find("script");
     if (scriptIt == arguments.Value().end())
     {
-        OsConfigLogError(mContext.GetLogHandle(), "No script content provided");
+        OsConfigLogError(mContext.get().GetLogHandle(), "No script content provided");
         return Error("No script content provided", EINVAL);
     }
 
     auto result = mLuaEvaluator->Evaluate(scriptIt->second, mIndicators, mContext, action);
     if (!result.HasValue())
     {
-        OsConfigLogError(mContext.GetLogHandle(), "Lua evaluation failed: %s", result.Error().message.c_str());
+        OsConfigLogError(mContext.get().GetLogHandle(), "Lua evaluation failed: %s", result.Error().message.c_str());
         return result.Error();
     }
 
@@ -285,7 +285,7 @@ Result<map<string, string>> Evaluator::GetBuiltinProcedureArguments(const json_v
 
     if ((nullptr == value) || (json_value_get_type(value) != JSONObject))
     {
-        OsConfigLogError(mContext.GetLogHandle(), "invalid argument");
+        OsConfigLogError(mContext.get().GetLogHandle(), "invalid argument");
         return Error("invalid argument", EINVAL);
     }
 
@@ -298,13 +298,13 @@ Result<map<string, string>> Evaluator::GetBuiltinProcedureArguments(const json_v
 
         if ((nullptr == key) || (nullptr == val))
         {
-            OsConfigLogError(mContext.GetLogHandle(), "Key or value is null");
+            OsConfigLogError(mContext.get().GetLogHandle(), "Key or value is null");
             return Error("Key or value is null", EINVAL);
         }
 
         if (json_value_get_type(val) != JSONString)
         {
-            OsConfigLogError(mContext.GetLogHandle(), "Argument type is not a string for a key '%s'", key);
+            OsConfigLogError(mContext.get().GetLogHandle(), "Argument type is not a string for a key '%s'", key);
             return Error("Argument type is not a string", EINVAL);
         }
 
@@ -315,7 +315,7 @@ Result<map<string, string>> Evaluator::GetBuiltinProcedureArguments(const json_v
             auto paramSubstitution = mParameters.find(paramValue.substr(1));
             if (paramSubstitution == mParameters.end())
             {
-                OsConfigLogError(mContext.GetLogHandle(), "Unknown parameter '%s'", paramValue.c_str());
+                OsConfigLogError(mContext.get().GetLogHandle(), "Unknown parameter '%s'", paramValue.c_str());
                 return Error("Unknown parameter", EINVAL);
             }
             it->second = paramSubstitution->second;
@@ -327,25 +327,25 @@ Result<map<string, string>> Evaluator::GetBuiltinProcedureArguments(const json_v
 
 Result<Status> Evaluator::EvaluateBuiltinProcedure(const string& procedureName, const json_value_t* value, const Action action)
 {
-    OsConfigLogDebug(mContext.GetLogHandle(), "Evaluating builtin procedure '%s'", procedureName.c_str());
+    OsConfigLogDebug(mContext.get().GetLogHandle(), "Evaluating builtin procedure '%s'", procedureName.c_str());
 
     if ((nullptr == value) || (json_value_get_type(value) != JSONObject))
     {
-        OsConfigLogError(mContext.GetLogHandle(), "invalid argument");
+        OsConfigLogError(mContext.get().GetLogHandle(), "invalid argument");
         return Error("invalid argument");
     }
 
     auto arguments = GetBuiltinProcedureArguments(value);
     if (!arguments.HasValue())
     {
-        OsConfigLogError(mContext.GetLogHandle(), "Failed to get builtin procedure arguments: %s", arguments.Error().message.c_str());
+        OsConfigLogError(mContext.get().GetLogHandle(), "Failed to get builtin procedure arguments: %s", arguments.Error().message.c_str());
         return arguments.Error();
     }
 
     const auto procedure = mProcedureMap.find(procedureName);
     if (procedure == mProcedureMap.end())
     {
-        OsConfigLogError(mContext.GetLogHandle(), "Unknown function '%s'", procedureName.c_str());
+        OsConfigLogError(mContext.get().GetLogHandle(), "Unknown function '%s'", procedureName.c_str());
         return Error("Unknown function '" + procedureName + "'", ENOENT);
     }
 
@@ -355,7 +355,7 @@ Result<Status> Evaluator::EvaluateBuiltinProcedure(const string& procedureName, 
         fn = procedure->second.remediate;
         if (nullptr == fn)
         {
-            OsConfigLogInfo(mContext.GetLogHandle(), "No remediation function found for '%s', using audit function", procedureName.c_str());
+            OsConfigLogInfo(mContext.get().GetLogHandle(), "No remediation function found for '%s', using audit function", procedureName.c_str());
             fn = procedure->second.audit;
         }
     }
@@ -365,14 +365,14 @@ Result<Status> Evaluator::EvaluateBuiltinProcedure(const string& procedureName, 
     }
     if (nullptr == fn)
     {
-        OsConfigLogError(mContext.GetLogHandle(), "Function not found");
+        OsConfigLogError(mContext.get().GetLogHandle(), "Function not found");
         return Error("Function not found", ENOENT);
     }
 
     auto result = fn(arguments.Value(), mIndicators, mContext);
     if (!result.HasValue())
     {
-        OsConfigLogError(mContext.GetLogHandle(), "Builtin procedure evaluation failed: %s", result.Error().message.c_str());
+        OsConfigLogError(mContext.get().GetLogHandle(), "Builtin procedure evaluation failed: %s", result.Error().message.c_str());
         return result.Error();
     }
 

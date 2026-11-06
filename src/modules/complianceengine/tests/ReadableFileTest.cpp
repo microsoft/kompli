@@ -141,7 +141,7 @@ TEST_F(ReadableFileTest, IsOpaqueAndMoveOnly)
         "ReadableFile close reports only a guarded diagnostic");
 }
 
-TEST_F(ReadableFileTest, DescriptorExplicitCloseLogsNativeErrorOnceWithoutRetryInMoveOrDestruction)
+TEST_F(ReadableFileTest, DescriptorFinalScopeLogsNativeErrorOnceWithoutRetryInMoveOrDestruction)
 {
     const std::string logPath = context.GetTempdirPath() + "/descriptor-close.log";
     OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
@@ -154,21 +154,21 @@ TEST_F(ReadableFileTest, DescriptorExplicitCloseLogsNativeErrorOnceWithoutRetryI
         EXPECT_CALL(context, CloseFileDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) {
             EXPECT_EQ(0, ::close(descriptor));
             errno = EACCES;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         });
-        owner.Close();
+        DescriptorTestAccess::Dispose(owner);
         EXPECT_FALSE(DescriptorTestAccess::ConsumedDescriptor(owner) != -1);
-        owner.Close();
+        DescriptorTestAccess::Dispose(owner);
         Descriptor moved(std::move(owner));
         moved = std::move(owner);
-        moved.Close();
+        DescriptorTestAccess::Dispose(moved);
     }
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const std::string expected = "Cannot close internal filesystem descriptor: " + std::to_string(EACCES);
+    const std::string expected = "Failed to close filesystem resource: " + std::string(strerror(EACCES));
     const auto occurrence = text.find(expected);
     ASSERT_NE(std::string::npos, occurrence);
     EXPECT_EQ(std::string::npos, text.find(expected, occurrence + expected.size()));
@@ -185,21 +185,23 @@ TEST_F(ReadableFileTest, DescriptorMoveReplacementRoutesFailedCloseToOldContextO
     ASSERT_TRUE(incomingResult.HasValue()) << incomingResult.Error().message;
     Descriptor incoming = std::move(incomingResult).Value();
     {
-        EXPECT_CALL(oldContext, CloseFileDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) -> int {
+        EXPECT_CALL(oldContext, CloseFileDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) -> ComplianceEngine::Result<void> {
             EXPECT_EQ(0, ::close(descriptor));
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         });
-        EXPECT_CALL(incomingContext, CloseFileDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
+        EXPECT_CALL(incomingContext, CloseFileDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) {
+            return NativeCloseResult(::close(descriptor));
+        });
         testing::internal::CaptureStderr();
         old = std::move(incoming);
-        incoming.Close();
-        old.Close();
-        old.Close();
+        DescriptorTestAccess::Dispose(incoming);
+        DescriptorTestAccess::Dispose(old);
+        DescriptorTestAccess::Dispose(old);
         const auto logged = testing::internal::GetCapturedStderr();
         if (IsConsoleLoggingEnabled() && GetLoggingLevel() >= LoggingLevelError)
         {
-            const auto expected = "Cannot close internal filesystem descriptor: " + std::to_string(EIO);
+            const auto expected = "Failed to close filesystem resource: " + std::string(strerror(EIO));
             const auto occurrence = logged.find(expected);
             ASSERT_NE(std::string::npos, occurrence);
             EXPECT_EQ(std::string::npos, logged.find(expected, occurrence + expected.size()));
@@ -237,7 +239,7 @@ TEST_F(ReadableFileTest, AliasOpenFailureDoesNotReopenNameOrLeak)
         }
         return context.RealOpenNativeAt(directory, name, flags);
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
         struct statfs filesystem = {};
         const bool procfs = (0 == ::fstatfs(descriptor, &filesystem)) && (PROC_SUPER_MAGIC == filesystem.f_type);
         const int status = ::close(descriptor);
@@ -246,9 +248,9 @@ TEST_F(ReadableFileTest, AliasOpenFailureDoesNotReopenNameOrLeak)
         {
             cleanupFailed = true;
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
-        return status;
+        return NativeCloseResult(status);
     });
     auto readable = pinned.Value().OpenReadOnly();
     ASSERT_FALSE(readable.HasValue());
@@ -278,7 +280,7 @@ TEST_F(ReadableFileTest, AliasOutputRemainsReadableWhenProcfsHelperCloseFails)
         }
         return descriptor;
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
         struct statfs filesystem = {};
         const bool procfs = (0 == ::fstatfs(descriptor, &filesystem)) && (PROC_SUPER_MAGIC == filesystem.f_type);
         const int status = ::close(descriptor);
@@ -287,9 +289,9 @@ TEST_F(ReadableFileTest, AliasOutputRemainsReadableWhenProcfsHelperCloseFails)
         {
             failed = true;
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
-        return status;
+        return NativeCloseResult(status);
     });
     auto readable = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(readable.HasValue());
@@ -309,7 +311,7 @@ TEST_F(ReadableFileTest, SurvivesPinAndNameReplacementAndInspectsReadableDescrip
     const std::string original = context.MakeTempfile("first");
     auto pinned = Pin(Component(original));
     ASSERT_TRUE(pinned.HasValue());
-    const ino_t inode = pinned.Value().Acquired().metadata.st_ino;
+    const ino_t inode = pinned.Value().Metadata().Stat().st_ino;
     auto pinnedBefore = pinned.Value().Stat();
     ASSERT_TRUE(pinnedBefore.HasValue());
     EXPECT_EQ(inode, pinnedBefore.Value().st_ino);
@@ -334,7 +336,7 @@ TEST_F(ReadableFileTest, SurvivesPinAndNameReplacementAndInspectsReadableDescrip
     ASSERT_TRUE(after.HasValue());
     EXPECT_EQ(before.Value().st_ino, after.Value().st_ino);
     EXPECT_EQ(before.Value().st_size, after.Value().st_size);
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
     readable.Close();
     readable.Close();
     EXPECT_EQ(EBADF, readable.Read(1).Error().code);
@@ -396,7 +398,7 @@ TEST_F(ReadableFileTest, NativeDescriptorZeroRemainsOwnedThroughEofUntilClose)
             {
                 ::_exit(6);
             }
-            EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) {
+            EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
                 if (descriptor == STDIN_FILENO)
                 {
                     if (closed)
@@ -405,7 +407,7 @@ TEST_F(ReadableFileTest, NativeDescriptorZeroRemainsOwnedThroughEofUntilClose)
                     }
                     closed = true;
                 }
-                return ::close(descriptor);
+                return NativeCloseResult(::close(descriptor));
             });
             readable.Close();
             readable.Close();
@@ -920,11 +922,11 @@ TEST_F(ReadableFileTest, ResolvedTargetSurvivesPathAndStepDestruction)
         leaf.reset(new Path::Component(std::move(target)));
     }
     ASSERT_TRUE(leaf->Stat().HasValue());
-    EXPECT_EQ(source, leaf->LookupName());
-    EXPECT_EQ(source, leaf->EffectiveName());
-    EXPECT_EQ(ComplianceEngine::Filesystem::Type::RegularFile, leaf->Acquired().type);
-    EXPECT_GT(leaf->Acquired().lookupMount.value, 0u);
-    EXPECT_GT(leaf->Acquired().targetMount.value, 0u);
+    EXPECT_EQ(source, leaf->Metadata().LookupName());
+    EXPECT_EQ(source, leaf->Metadata().EffectiveName());
+    EXPECT_EQ(ComplianceEngine::Filesystem::Type::RegularFile, leaf->Metadata().FileType());
+    EXPECT_GT(leaf->Metadata().LookupMount().Value(), 0u);
+    EXPECT_GT(leaf->Metadata().TargetMount().Value(), 0u);
     auto activated = leaf->OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
@@ -992,7 +994,7 @@ TEST_F(ReadableFileTest, CloseFailureIsReportedOnceAndDoesNotCloseReusedDescript
     int reused = -1;
     {
         ReadableFile readable = std::move(activated).Value();
-        EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([&](int descriptor) {
+        EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([&](int descriptor) -> ComplianceEngine::Result<void> {
             EXPECT_EQ(0, ::close(descriptor));
             const int replacement = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
             EXPECT_GE(replacement, 0);
@@ -1006,7 +1008,7 @@ TEST_F(ReadableFileTest, CloseFailureIsReportedOnceAndDoesNotCloseReusedDescript
                 }
             }
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         });
         readable.Close();
         readable.Close();
@@ -1020,7 +1022,7 @@ TEST_F(ReadableFileTest, CloseFailureIsReportedOnceAndDoesNotCloseReusedDescript
     std::ifstream record(logPath);
     ASSERT_TRUE(record.is_open());
     const std::string text((std::istreambuf_iterator<char>(record)), std::istreambuf_iterator<char>());
-    const std::string entry = "Cannot close readable-file activation: " + std::to_string(EIO);
+    const std::string entry = "Failed to close filesystem resource: " + std::string(strerror(EIO));
     const auto at = text.find(entry);
     ASSERT_NE(std::string::npos, at);
     EXPECT_EQ(std::string::npos, text.find(entry, at + entry.size()));
@@ -1044,9 +1046,9 @@ TEST_F(ReadableFileTest, FailedCloseTransfersNoErrorThroughMoveConstructionOrAss
             .WillOnce([](int descriptor) {
                 EXPECT_EQ(0, ::close(descriptor));
                 errno = EIO;
-                return -1;
+                return ComplianceEngine::Error(errno ? errno : EIO);
             })
-            .WillOnce([](int descriptor) { return ::close(descriptor); });
+            .WillOnce([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
         failed.Close();
         ReadableFile moved(std::move(failed));
         failed.Close();
@@ -1070,10 +1072,10 @@ TEST_F(ReadableFileTest, NativeCloseErrorIsReportedOnceAndDoesNotRetry)
     pinned = ComplianceEngine::Error("Release pin", EINVAL);
     {
         ReadableFile readable = std::move(activated).Value();
-        EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) -> int {
+        EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) -> ComplianceEngine::Result<void> {
             EXPECT_EQ(0, ::close(descriptor));
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         });
         EXPECT_NO_THROW(readable.Close());
         readable.Close();
@@ -1098,13 +1100,13 @@ TEST_F(ReadableFileTest, DestructorReportsFailedNativeCloseOnce)
             EXPECT_CALL(selectedContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) {
                 EXPECT_EQ(0, ::close(descriptor));
                 errno = EACCES;
-                return -1;
+                return ComplianceEngine::Error(errno ? errno : EIO);
             });
         }
         const auto logged = testing::internal::GetCapturedStderr();
         if (IsConsoleLoggingEnabled() && GetLoggingLevel() >= LoggingLevelError)
         {
-            const std::string closeEntry = "Cannot close readable-file activation: " + std::to_string(EACCES);
+            const std::string closeEntry = "Failed to close filesystem resource: " + std::string(strerror(EACCES));
             const auto first = logged.find(closeEntry);
             ASSERT_NE(std::string::npos, first);
             EXPECT_EQ(std::string::npos, logged.find(closeEntry, first + closeEntry.size()));
@@ -1140,19 +1142,19 @@ TEST_F(ReadableFileTest, MoveAssignmentReportsFailedCloseAndRetainsIncomingOwner
                 .WillOnce([](int descriptor) {
                     EXPECT_EQ(0, ::close(descriptor));
                     errno = EIO;
-                    return -1;
+                    return ComplianceEngine::Error(errno ? errno : EIO);
                 })
                 .WillOnce([](int descriptor) {
                     const int result = ::close(descriptor);
                     EXPECT_EQ(0, result);
-                    return result;
+                    return NativeCloseResult(result);
                 });
             testing::internal::CaptureStderr();
             destination = std::move(source);
             const auto logged = testing::internal::GetCapturedStderr();
             if (IsConsoleLoggingEnabled() && GetLoggingLevel() >= LoggingLevelError)
             {
-                EXPECT_NE(std::string::npos, logged.find("Cannot close readable-file activation: " + std::to_string(EIO)));
+                EXPECT_NE(std::string::npos, logged.find("Failed to close filesystem resource: " + std::string(strerror(EIO))));
             }
             EXPECT_EQ(1, selectedContext.logHandleRequests);
             EXPECT_EQ(EBADF, source.Stat().Error().code);
@@ -1187,13 +1189,13 @@ TEST_F(ReadableFileTest, DestructorAndMoveAssignmentCloseOnce)
         ReadableFile moved = std::move(second).Value();
         EXPECT_CALL(context, CloseFileDescriptor(_))
             .Times(2)
-            .WillOnce([](int descriptor) {
+            .WillOnce([](int descriptor) -> ComplianceEngine::Result<void> {
                 const int result = ::close(descriptor);
                 EXPECT_EQ(0, result);
                 errno = EIO; // destructor of replaced ownership sees failed close
-                return -1;
+                return ComplianceEngine::Error(errno ? errno : EIO);
             })
-            .WillOnce([](int descriptor) { return ::close(descriptor); });
+            .WillOnce([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
         readable = std::move(moved);
         EXPECT_EQ(EBADF, moved.Stat().Error().code);
     }
@@ -1220,7 +1222,7 @@ TEST_F(ReadableFileTest, SameContextMoveConstructorAssignmentAndSelfMoveKeepSing
     EXPECT_TRUE(moved.Stat().HasValue());
 
     ReadableFile incoming = std::move(second).Value();
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(2).WillRepeatedly([](int descriptor) { return ::close(descriptor); });
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(2).WillRepeatedly([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
     ReadableFile& self = moved;
     moved = std::move(self);
     EXPECT_TRUE(moved.Stat().HasValue());
@@ -1258,13 +1260,13 @@ TEST_F(ReadableFileTest, CrossContextMoveAssignmentClosesOldOwnerAndRoutesIncomi
 
     ReadableFile destination = std::move(activated).Value();
     ReadableFile source = std::move(foreignActivated).Value();
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([&](int descriptor) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([&](int descriptor) -> ComplianceEngine::Result<void> {
         oldDescriptor = descriptor;
-        return ::close(descriptor);
+        return NativeCloseResult(::close(descriptor));
     });
-    EXPECT_CALL(foreignContext, CloseFileDescriptor(_)).Times(1).WillOnce([&](int descriptor) {
+    EXPECT_CALL(foreignContext, CloseFileDescriptor(_)).Times(1).WillOnce([&](int descriptor) -> ComplianceEngine::Result<void> {
         EXPECT_EQ(incomingDescriptor, descriptor);
-        return ::close(descriptor);
+        return NativeCloseResult(::close(descriptor));
     });
     EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(0);
     EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
@@ -1324,9 +1326,9 @@ TEST_F(ReadableFileTest, CrossContextMoveReplacementReportsOldOwnerCloseFailure)
     EXPECT_CALL(oldContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) {
         EXPECT_EQ(0, ::close(descriptor));
         errno = EIO;
-        return -1;
+        return ComplianceEngine::Error(errno ? errno : EIO);
     });
-    EXPECT_CALL(newContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
+    EXPECT_CALL(newContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
     destination = std::move(source);
     EXPECT_EQ(1, oldContext.logHandleRequests);
     EXPECT_FALSE(source.AtEnd());
@@ -1363,8 +1365,8 @@ TEST_F(ReadableFileTest, CrossContextClosedAndMovedFromAssignmentsTransferEofAnd
     ASSERT_TRUE(bytes.Value().HasValue());
     EXPECT_EQ("b", bytes.Value().Value());
     EXPECT_TRUE(source.AtEnd());
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
-    EXPECT_CALL(foreignContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return ::close(descriptor); });
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
+    EXPECT_CALL(foreignContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
     destination.Close();
     EXPECT_FALSE(destination.AtEnd());
     ReadableFile closedOld(std::move(destination));
@@ -1418,7 +1420,7 @@ TEST_F(ReadableFileTest, FailedChildNativeOpenNeverFallsBackToTargetName)
         ASSERT_TRUE(opened.Value().Is<Path>());
         Path path = ComplianceEngine::As<Path>(std::move(opened.Value()));
         ASSERT_TRUE(path.Freeze().HasValue());
-        const auto original = path.Leaf().Acquired().metadata.st_ino;
+        const auto original = path.Leaf().Metadata().Stat().st_ino;
         EXPECT_CALL(context, OpenNativePath(testing::StrEq(source.c_str()), _)).Times(0);
         EXPECT_CALL(context, OpenNativeAt(_, testing::StrEq(name.c_str()), _)).WillOnce([](int, const char*, int) {
             errno = EACCES;
@@ -1427,7 +1429,7 @@ TEST_F(ReadableFileTest, FailedChildNativeOpenNeverFallsBackToTargetName)
         auto failed = path.Resolve(name, CrossMountExtension());
         ASSERT_FALSE(failed.HasValue());
         EXPECT_EQ(EACCES, failed.Error().code);
-        EXPECT_EQ(original, path.Leaf().Acquired().metadata.st_ino);
+        EXPECT_EQ(original, path.Leaf().Metadata().Stat().st_ino);
         ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
         EXPECT_TRUE(path.Leaf().Stat().HasValue());
         // The pinned root and its external context stay alive until all copies die.
@@ -1465,14 +1467,14 @@ TEST_F(ReadableFileTest, ChildStatFailureOutranksDiagnosticPinRelease)
         }
         return context.RealStatFileDescriptor(fd, out);
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         const bool child = fd == childFd;
-        const int result = context.RealCloseFileDescriptor(fd);
+        auto result = context.RealCloseFileDescriptor(fd);
         if (child)
         {
             disposalFailed = true;
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
         return result;
     });
@@ -1508,7 +1510,7 @@ TEST_F(ReadableFileTest, InverseStepReleasesSelectedBudgetButRetainedTargetSurvi
         ASSERT_TRUE(selected.Value().Is<Path::Step>());
         Path::Step step = ComplianceEngine::As<Path::Step>(std::move(selected.Value()));
         retained.reset(new Path::Component(step.Target()));
-        const auto inode = retained->Acquired().metadata.st_ino;
+        const auto inode = retained->Metadata().Stat().st_ino;
         auto inverse = path.Apply(std::move(step));
         ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;
         EXPECT_GT(path.RetainedDescriptors(), initialPins);
@@ -1517,7 +1519,7 @@ TEST_F(ReadableFileTest, InverseStepReleasesSelectedBudgetButRetainedTargetSurvi
         ASSERT_TRUE(restored.HasValue()) << restored.Error().message;
         EXPECT_EQ(initialPins, path.RetainedDescriptors());
         EXPECT_EQ(initialBytes, path.RetainedBytes());
-        EXPECT_EQ(inode, retained->Acquired().metadata.st_ino);
+        EXPECT_EQ(inode, retained->Metadata().Stat().st_ino);
         // A detached copy is outside the stack charge; a fresh child still fits.
         auto second = path.Resolve(Component(source), CrossMountExtension());
         ASSERT_TRUE(second.HasValue()) << second.Error().message;
@@ -1530,7 +1532,7 @@ TEST_F(ReadableFileTest, InverseStepReleasesSelectedBudgetButRetainedTargetSurvi
         EXPECT_EQ(initialBytes, path.RetainedBytes());
     }
     ASSERT_TRUE(retained->Stat().HasValue());
-    EXPECT_EQ(source, retained->LookupName());
+    EXPECT_EQ(source, retained->Metadata().LookupName());
     retained.reset();
     EXPECT_EQ(before, OpenDescriptors());
 }
@@ -1540,11 +1542,13 @@ TEST_F(ReadableFileTest, DetachedFileFactsStayImmutableAcrossFreshModeAndUnlink)
     const std::string source = context.MakeTempfile("held");
     ASSERT_EQ(0, ::chmod(source.c_str(), 0600));
     const std::size_t before = OpenDescriptors();
+    std::unique_ptr<const ComplianceEngine::Filesystem::Metadata> retainedEvidence;
     {
         auto pinned = Pin(Component(source));
         ASSERT_TRUE(pinned.HasValue()) << pinned.Error().message;
         Path::Component detached = pinned.Value();
-        const auto facts = detached.Acquired();
+        const auto facts = detached.Metadata();
+        retainedEvidence.reset(new ComplianceEngine::Filesystem::Metadata(facts));
         ASSERT_EQ(0, ::link(source.c_str(), (source + ".link").c_str()));
         auto linked = detached.Stat();
         ASSERT_TRUE(linked.HasValue());
@@ -1555,12 +1559,12 @@ TEST_F(ReadableFileTest, DetachedFileFactsStayImmutableAcrossFreshModeAndUnlink)
         ASSERT_TRUE(detached.SetMode(0640).HasValue());
         auto fresh = detached.Stat();
         ASSERT_TRUE(fresh.HasValue());
-        EXPECT_EQ(facts.metadata.st_ino, fresh.Value().st_ino);
+        EXPECT_EQ(facts.Stat().st_ino, fresh.Value().st_ino);
         EXPECT_EQ(0640, fresh.Value().st_mode & 07777);
-        EXPECT_EQ(0600, facts.metadata.st_mode & 07777);
-        EXPECT_EQ(source, detached.LookupName());
-        EXPECT_GT(facts.lookupMount.value, 0u);
-        EXPECT_GT(facts.targetMount.value, 0u);
+        EXPECT_EQ(0600, facts.Stat().st_mode & 07777);
+        EXPECT_EQ(source, detached.Metadata().LookupName());
+        EXPECT_GT(facts.LookupMount().Value(), 0u);
+        EXPECT_GT(facts.TargetMount().Value(), 0u);
         struct stat replacement = {};
         ASSERT_EQ(0, ::lstat(source.c_str(), &replacement));
         EXPECT_TRUE(S_ISFIFO(replacement.st_mode));
@@ -1570,10 +1574,14 @@ TEST_F(ReadableFileTest, DetachedFileFactsStayImmutableAcrossFreshModeAndUnlink)
         auto unlinked = detached.Stat();
         ASSERT_TRUE(unlinked.HasValue());
         EXPECT_EQ(0, unlinked.Value().st_nlink);
-        EXPECT_EQ(facts.metadata.st_ino, unlinked.Value().st_ino);
+        EXPECT_EQ(facts.Stat().st_ino, unlinked.Value().st_ino);
         EXPECT_EQ(0400, unlinked.Value().st_mode & 07777);
     }
     EXPECT_EQ(before, OpenDescriptors());
+    ASSERT_TRUE(retainedEvidence);
+    EXPECT_EQ(source, retainedEvidence->LookupName());
+    EXPECT_EQ(source, retainedEvidence->EffectiveName());
+    EXPECT_EQ(0600, retainedEvidence->Stat().st_mode & 07777);
 }
 
 TEST_F(ReadableFileTest, DetachedOwnershipAndDirectoryModeNeverMutateReplacement)
@@ -1611,13 +1619,13 @@ TEST_F(ReadableFileTest, DetachedOwnershipAndDirectoryModeNeverMutateReplacement
         ASSERT_TRUE(opened.HasValue());
         ASSERT_TRUE(opened.Value().Is<Path>());
         Path::Component detached = ComplianceEngine::As<Path>(std::move(opened.Value())).Leaf();
-        const auto original = detached.Acquired();
+        const auto original = detached.Metadata();
         ASSERT_EQ(0, ::rename(directory.c_str(), (directory + ".former").c_str()));
         ASSERT_EQ(0, ::mkdir(directory.c_str(), 0700));
         ASSERT_TRUE(detached.SetMode(0750).HasValue());
         auto current = detached.Stat();
         ASSERT_TRUE(current.HasValue());
-        EXPECT_EQ(original.metadata.st_ino, current.Value().st_ino);
+        EXPECT_EQ(original.Stat().st_ino, current.Value().st_ino);
         EXPECT_EQ(0750, current.Value().st_mode & 07777);
         struct stat replacement = {};
         ASSERT_EQ(0, ::stat(directory.c_str(), &replacement));
@@ -1697,7 +1705,7 @@ TEST_F(ReadableFileTest, DeniedMutationsInspectHeldPinAndPreserveReplacedName)
         auto pinned = Pin(Component(source));
         ASSERT_TRUE(pinned.HasValue()) << pinned.Error().message;
         Path::Component held = pinned.Value();
-        const auto snapshot = held.Acquired();
+        const auto snapshot = held.Metadata();
         ASSERT_EQ(0, ::rename(source.c_str(), (source + ".former").c_str()));
         ASSERT_EQ(0, ::mkfifo(source.c_str(), 0600));
         struct stat replacement = {};
@@ -1705,8 +1713,8 @@ TEST_F(ReadableFileTest, DeniedMutationsInspectHeldPinAndPreserveReplacedName)
         EXPECT_CALL(context, ChownPinnedFileDescriptor(_, static_cast<uid_t>(-1), static_cast<gid_t>(-1))).Times(1).WillOnce([&](int fd, uid_t, gid_t) {
             struct stat observed = {};
             EXPECT_EQ(0, ::fstat(fd, &observed));
-            EXPECT_EQ(snapshot.metadata.st_ino, observed.st_ino);
-            EXPECT_EQ(snapshot.metadata.st_dev, observed.st_dev);
+            EXPECT_EQ(snapshot.Stat().st_ino, observed.st_ino);
+            EXPECT_EQ(snapshot.Stat().st_dev, observed.st_dev);
             errno = EPERM;
             return -1;
         });
@@ -1721,7 +1729,7 @@ TEST_F(ReadableFileTest, DeniedMutationsInspectHeldPinAndPreserveReplacedName)
             EXPECT_TRUE(S_ISDIR(role.st_mode));
             const int fd = std::stoi(alias);
             EXPECT_EQ(0, ::fstat(fd, &observed));
-            EXPECT_EQ(snapshot.metadata.st_ino, observed.st_ino);
+            EXPECT_EQ(snapshot.Stat().st_ino, observed.st_ino);
             errno = EACCES;
             return -1;
         });
@@ -1731,14 +1739,14 @@ TEST_F(ReadableFileTest, DeniedMutationsInspectHeldPinAndPreserveReplacedName)
         ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
         auto fresh = held.Stat();
         ASSERT_TRUE(fresh.HasValue());
-        EXPECT_EQ(snapshot.metadata.st_ino, fresh.Value().st_ino);
-        EXPECT_EQ(snapshot.metadata.st_uid, fresh.Value().st_uid);
-        EXPECT_EQ(snapshot.metadata.st_gid, fresh.Value().st_gid);
+        EXPECT_EQ(snapshot.Stat().st_ino, fresh.Value().st_ino);
+        EXPECT_EQ(snapshot.Stat().st_uid, fresh.Value().st_uid);
+        EXPECT_EQ(snapshot.Stat().st_gid, fresh.Value().st_gid);
         EXPECT_EQ(0600, fresh.Value().st_mode & 07777);
         struct stat original = {}, stillReplacement = {};
         ASSERT_EQ(0, ::stat((source + ".former").c_str(), &original));
         ASSERT_EQ(0, ::lstat(source.c_str(), &stillReplacement));
-        EXPECT_EQ(snapshot.metadata.st_ino, original.st_ino);
+        EXPECT_EQ(snapshot.Stat().st_ino, original.st_ino);
         EXPECT_EQ(0600, original.st_mode & 07777);
         EXPECT_EQ(replacement.st_ino, stillReplacement.st_ino);
         EXPECT_TRUE(S_ISFIFO(stillReplacement.st_mode));
@@ -1772,7 +1780,7 @@ TEST_F(ReadableFileTest, InverseStepKeepsPhysicalDirectoryAfterNameReplacement)
     auto inverse = path.Apply(ComplianceEngine::As<Path::Step>(std::move(viaLink.Value())));
     ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;
     EXPECT_EQ(root + "/physical", path.ToString());
-    const auto inode = path.Leaf().Acquired().metadata.st_ino;
+    const auto inode = path.Leaf().Metadata().Stat().st_ino;
     auto child = path.Resolve("child", policy);
     ASSERT_TRUE(child.HasValue());
     ASSERT_TRUE(child.Value().Is<Path::Step>());
@@ -1784,14 +1792,14 @@ TEST_F(ReadableFileTest, InverseStepKeepsPhysicalDirectoryAfterNameReplacement)
     auto again = path.Resolve("child", policy);
     ASSERT_TRUE(again.HasValue()) << again.Error().message;
     ASSERT_TRUE(again.Value().Is<Path::Step>());
-    EXPECT_EQ(detached.Acquired().metadata.st_ino, ComplianceEngine::As<Path::Step>(again.Value()).Target().Acquired().metadata.st_ino);
-    EXPECT_EQ(inode, path.Leaf().Acquired().metadata.st_ino);
+    EXPECT_EQ(detached.Metadata().Stat().st_ino, ComplianceEngine::As<Path::Step>(again.Value()).Target().Metadata().Stat().st_ino);
+    EXPECT_EQ(inode, path.Leaf().Metadata().Stat().st_ino);
     auto back = path.Apply(std::move(inverse.Value()));
     ASSERT_TRUE(back.HasValue()) << back.Error().message;
     EXPECT_EQ(root, path.ToString());
     auto heldFile = detached.Stat();
     ASSERT_TRUE(heldFile.HasValue());
-    EXPECT_EQ(detached.Acquired().metadata.st_ino, heldFile.Value().st_ino);
+    EXPECT_EQ(detached.Metadata().Stat().st_ino, heldFile.Value().st_ino);
 }
 
 TEST_F(ReadableFileTest, PathOwnersLogEachFailedDisposalOnceAndDoNotRetryReusedNumber)
@@ -1816,10 +1824,10 @@ TEST_F(ReadableFileTest, PathOwnersLogEachFailedDisposalOnceAndDoNotRetryReusedN
         opened = ComplianceEngine::Error("Release factory wrapper", EINVAL);
         const auto pins = path->RetainedDescriptors();
         ASSERT_GT(pins, 1u);
-        const auto target = path->Leaf().Acquired().metadata;
+        const auto target = path->Leaf().Metadata().Stat();
         Path::Component retained = path->Leaf();
         Path moved(std::move(*path)); // move-as-copy keeps both snapshots owning the same pins
-        EXPECT_CALL(context, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) {
+        EXPECT_CALL(context, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
             ++closed;
             struct stat observed = {};
             const bool isTarget = ::fstat(fd, &observed) == 0 && observed.st_ino == target.st_ino && observed.st_dev == target.st_dev;
@@ -1839,14 +1847,14 @@ TEST_F(ReadableFileTest, PathOwnersLogEachFailedDisposalOnceAndDoNotRetryReusedN
                     }
                 }
                 errno = EACCES;
-                return -1;
+                return ComplianceEngine::Error(errno ? errno : EIO);
             }
             if (injected == 0 && closed == 1)
             {
                 errno = EIO;
-                return -1;
+                return ComplianceEngine::Error(errno ? errno : EIO);
             }
-            return 0;
+            return ComplianceEngine::Result<void>::Success();
         });
         path.reset();
         EXPECT_TRUE(retained.Stat().HasValue());
@@ -1866,11 +1874,11 @@ TEST_F(ReadableFileTest, PathOwnersLogEachFailedDisposalOnceAndDoNotRetryReusedN
     std::ifstream record(logPath);
     ASSERT_TRUE(record.is_open());
     const std::string text((std::istreambuf_iterator<char>(record)), std::istreambuf_iterator<char>());
-    const std::string entry = "Cannot close internal filesystem descriptor: " + std::to_string(EACCES);
+    const std::string entry = "Failed to close filesystem resource: " + std::string(strerror(EACCES));
     const auto first = text.find(entry);
     ASSERT_NE(std::string::npos, first);
     EXPECT_EQ(std::string::npos, text.find(entry, first + entry.size()));
-    const std::string otherEntry = "Cannot close internal filesystem descriptor: " + std::to_string(EIO);
+    const std::string otherEntry = "Failed to close filesystem resource: " + std::string(strerror(EIO));
     const auto other = text.find(otherEntry);
     ASSERT_NE(std::string::npos, other);
     EXPECT_EQ(std::string::npos, text.find(otherEntry, other + otherEntry.size()));
@@ -1896,17 +1904,17 @@ TEST_F(ReadableFileTest, PathMoveAssignmentReleasesReplacedPinThroughOriginalCon
     const auto replacedPins = replaced->RetainedDescriptors();
     const auto incomingPins = incoming->RetainedDescriptors();
     std::size_t oldCloses = 0, incomingCloses = 0;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(replacedPins).WillRepeatedly([&](int fd) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(replacedPins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         ++oldCloses;
-        const int result = context.RealCloseFileDescriptor(fd);
+        auto result = context.RealCloseFileDescriptor(fd);
         if (oldCloses == 1)
         {
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
         return result;
     });
-    EXPECT_CALL(incomingContext, CloseFileDescriptor(_)).Times(incomingPins).WillRepeatedly([&](int fd) {
+    EXPECT_CALL(incomingContext, CloseFileDescriptor(_)).Times(incomingPins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         ++incomingCloses;
         return incomingContext.RealCloseFileDescriptor(fd);
     });
@@ -1937,20 +1945,20 @@ TEST_F(ReadableFileTest, FailedPinDisposalAndLoggerDoNotSkipRemainingOwners)
     const auto pins = path->RetainedDescriptors();
     ASSERT_GT(pins, 1u);
     std::size_t attempts = 0;
-    EXPECT_CALL(selected, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) -> int {
+    EXPECT_CALL(selected, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         ++attempts;
         EXPECT_EQ(0, ::close(fd));
         if (attempts == 1)
         {
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
         if (attempts == 2)
         {
             errno = EACCES;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
-        return 0;
+        return ComplianceEngine::Result<void>::Success();
     });
     EXPECT_NO_THROW(path.reset());
     EXPECT_EQ(pins, attempts);
@@ -1980,7 +1988,7 @@ TEST_F(ReadableFileTest, DiagnosticTransitionReleasePreservesUndoAndHeldTarget)
     ASSERT_TRUE(selected.HasValue());
     ASSERT_TRUE(selected.Value().Is<Path::Step>());
     Path::Component held = ComplianceEngine::As<Path::Step>(selected.Value()).Target();
-    const auto inode = held.Acquired().metadata.st_ino;
+    const auto inode = held.Metadata().Stat().st_ino;
     auto undo = path.Apply(ComplianceEngine::As<Path::Step>(std::move(selected.Value())));
     ASSERT_TRUE(undo.HasValue()) << undo.Error().message;
     auto restore = path.Apply(std::move(undo.Value()));
@@ -1992,14 +2000,14 @@ TEST_F(ReadableFileTest, DiagnosticTransitionReleasePreservesUndoAndHeldTarget)
     selected = ComplianceEngine::Error("Release selected Step", EINVAL);
     undo = ComplianceEngine::Error("Release inverse Step", EINVAL);
     restore = ComplianceEngine::Error("Release restored Step", EINVAL);
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([&](int fd) -> int {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([&](int fd) -> ComplianceEngine::Result<void> {
         ++attempts;
         struct stat target = {};
         EXPECT_EQ(0, ::fstat(fd, &target));
         EXPECT_EQ(inode, target.st_ino);
         EXPECT_EQ(0, ::close(fd));
         errno = EIO;
-        return -1;
+        return ComplianceEngine::Error(errno ? errno : EIO);
     });
     {
         Path::Component released(std::move(held)); // move-as-copy keeps both shares
@@ -2014,7 +2022,7 @@ TEST_F(ReadableFileTest, DiagnosticTransitionReleasePreservesUndoAndHeldTarget)
     auto next = path.Resolve(Component(source), CrossMountExtension());
     ASSERT_TRUE(next.HasValue());
     ASSERT_TRUE(next.Value().Is<Path::Step>());
-    EXPECT_EQ(inode, ComplianceEngine::As<Path::Step>(next.Value()).Target().Acquired().metadata.st_ino);
+    EXPECT_EQ(inode, ComplianceEngine::As<Path::Step>(next.Value()).Target().Metadata().Stat().st_ino);
     EXPECT_GE(OpenDescriptors(), before);
 }
 
@@ -2040,17 +2048,17 @@ TEST_F(ReadableFileTest, ChildAcquisitionSurvivesFailedProcfsHelperDisposal)
             childOpened = true;
         return fd;
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         const std::string alias = "/proc/self/fd/" + std::to_string(fd);
         char target[256] = {};
         const ssize_t length = ::readlink(alias.c_str(), target, sizeof(target));
         const bool procfs = length >= 6 && std::string(target, static_cast<std::size_t>(length)).find("/proc/") == 0;
-        const int result = context.RealCloseFileDescriptor(fd);
+        auto result = context.RealCloseFileDescriptor(fd);
         if (childOpened && procfs && !helperFailed)
         {
             helperFailed = true;
             errno = EACCES;
-            return -1;
+            return ComplianceEngine::Error(errno ? errno : EIO);
         }
         return result;
     });
@@ -2060,7 +2068,7 @@ TEST_F(ReadableFileTest, ChildAcquisitionSurvivesFailedProcfsHelperDisposal)
     EXPECT_TRUE(childOpened);
     EXPECT_TRUE(helperFailed);
     auto target = ComplianceEngine::As<Path::Step>(selected.Value()).Target();
-    EXPECT_EQ(source, target.LookupName());
+    EXPECT_EQ(source, target.Metadata().LookupName());
     EXPECT_TRUE(target.Stat().HasValue());
     EXPECT_TRUE(path.Leaf().Stat().HasValue());
     EXPECT_GE(OpenDescriptors(), before);
@@ -2096,7 +2104,7 @@ TEST_F(ReadableFileTest, RetiringResolvedPathVisitsRootPhysicalAncestorAndLeafPi
     const std::size_t pins = path->RetainedDescriptors();
     ASSERT_GT(pins, 2u);
     std::size_t closes = 0;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) {
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         ++closes;
         return context.RealCloseFileDescriptor(fd);
     });

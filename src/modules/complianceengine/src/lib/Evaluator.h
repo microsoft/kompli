@@ -140,7 +140,7 @@ private:
     Result<std::map<std::string, std::string>> GetBuiltinProcedureArguments(const json_value_t* value) const;
     const struct json_object_t* mJson;
     const ParameterMap& mParameters;
-    ContextInterface& mContext;
+    std::reference_wrapper<ContextInterface> mContext;
     static const size_t cLogstreamMaxSize = 4096;
 
     // List of indicators which determine the final state of the evaluation

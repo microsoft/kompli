@@ -27,11 +27,15 @@ static const char kPrivateKeyHeader[] = "-----BEGIN OPENSSH PRIVATE KEY-----\n";
 
 TEST(SshKeyRangeTest, MissingRootRemainsCompliantAndDeniedRootIsAnError)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     IndicatorsTree indicators;
     indicators.Push("SSH");
     const std::string root = context.GetTempdirPath() + "/missing-ssh";
     context.SetSpecialFilePath("/etc/ssh", root);
+    // No EXPECT_CALL in this test constrains any native seam; the only
+    // customization is an ON_CALL default-action override on OpenNativeAt
+    // for a specific pin name, which doesn't add an expectation of its own.
+    context.AllowIncidentalNativeAccess();
     SshKeyPermissionsParams params;
     params.type = SshKeyType::Public;
     const auto absent = AuditSshKeyPermissions(params, indicators, context);
@@ -54,7 +58,7 @@ TEST(SshKeyRangeTest, MissingRootRemainsCompliantAndDeniedRootIsAnError)
 
 TEST(SshKeyRangeTest, FirstNoncomplianceBreaksWithoutReadingRemainderAndCloseDoesNotOverride)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     IndicatorsTree indicators;
     indicators.Push("SSH");
     const std::string root = context.GetTempdirPath() + "/ssh";
@@ -62,6 +66,10 @@ TEST(SshKeyRangeTest, FirstNoncomplianceBreaksWithoutReadingRemainderAndCloseDoe
     const std::string key = root + "/key";
     std::ofstream(key) << kPublicKeySample;
     context.SetSpecialFilePath("/etc/ssh", root);
+    // GetFileContents is a separate, non-native seam this helper doesn't
+    // cover; ReadDirectory/CloseDirectory below only get ON_CALL default-
+    // action overrides, not their own EXPECT_CALL, so the catch-all is safe.
+    context.AllowIncidentalNativeAccess();
     EXPECT_CALL(context, GetFileContents(::testing::_)).Times(0);
     std::size_t entries = 0;
     ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([&entries](DIR * directory) -> struct dirent* {
@@ -95,9 +103,9 @@ TEST(SshKeyRangeTest, FirstNoncomplianceBreaksWithoutReadingRemainderAndCloseDoe
         if (0 == result)
         {
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(EIO));
         }
-        return result;
+        return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     entries = 0;
     const auto closeResult = AuditSshKeyPermissions(params, indicators, context);
@@ -110,7 +118,7 @@ TEST(SshKeyRangeTest, FirstNoncomplianceBreaksWithoutReadingRemainderAndCloseDoe
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto diagnostic = "Cannot close pinned directory cursor: " + std::to_string(EIO);
+    const auto diagnostic = "Failed to close filesystem resource: " + std::string(strerror(EIO));
     const auto first = text.find(diagnostic);
     ASSERT_NE(std::string::npos, first);
     EXPECT_EQ(std::string::npos, text.find(diagnostic, first + diagnostic.size()));
@@ -118,7 +126,7 @@ TEST(SshKeyRangeTest, FirstNoncomplianceBreaksWithoutReadingRemainderAndCloseDoe
 
 TEST(SshKeyRangeTest, ReplacementAfterPinCannotRedirectClassificationOrRemediation)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     IndicatorsTree indicators;
     indicators.Push("SSH");
     const std::string root = context.GetTempdirPath() + "/ssh";
@@ -133,6 +141,17 @@ TEST(SshKeyRangeTest, ReplacementAfterPinCannotRedirectClassificationOrRemediati
     struct stat original = {};
     ASSERT_EQ(0, ::stat(key.c_str(), &original));
     context.SetSpecialFilePath("/etc/ssh", root);
+    // OpenNativeAt is excluded: this test constrains it below with its own
+    // full-wildcard EXPECT_CALL/WillRepeatedly (the file-swap side effect).
+    // ChownPinnedFileDescriptor/ChmodPinnedAlias aren't covered by this
+    // helper at all -- they get their own EXPECT_CALL further down.
+    context.AllowProcfsBootstrap();
+    EXPECT_CALL(context, OpenNativePath(::testing::_, ::testing::_)).Times(::testing::AnyNumber());
+    context.AllowDescriptorInspection();
+    context.AllowFileRead();
+    context.AllowDescriptorClose();
+    context.AllowDirectoryEnumeration();
+    context.AllowIdentityLookup();
     EXPECT_CALL(context, GetFileContents(::testing::_)).Times(0);
     bool swapped = false;
     EXPECT_CALL(context, OpenNativeAt(::testing::_, ::testing::_, ::testing::_)).WillRepeatedly([&](int directory, const char* name, int flags) {
@@ -178,7 +197,7 @@ TEST(SshKeyRangeTest, ReplacementAfterPinCannotRedirectClassificationOrRemediati
 
 TEST(SshKeyRangeTest, RequiredNonYieldedDirectoryFailureAndReachedReadErrorPropagate)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     IndicatorsTree indicators;
     indicators.Push("SSH");
     const std::string root = context.GetTempdirPath() + "/ssh";
@@ -186,6 +205,9 @@ TEST(SshKeyRangeTest, RequiredNonYieldedDirectoryFailureAndReachedReadErrorPropa
     const std::string nested = root + "/nested";
     ASSERT_EQ(0, mkdir(nested.c_str(), 0700));
     context.SetSpecialFilePath("/etc/ssh", root);
+    // No EXPECT_CALL in this test constrains any native seam; both
+    // ReadDirectory overrides below are ON_CALL default actions only.
+    context.AllowIncidentalNativeAccess();
     struct stat expectedNested = {};
     ASSERT_EQ(0, stat(nested.c_str(), &expectedNested));
     ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([expectedNested](DIR * stream) -> struct dirent* {
@@ -214,7 +236,7 @@ TEST(SshKeyRangeTest, RequiredNonYieldedDirectoryFailureAndReachedReadErrorPropa
 
 TEST(SshKeyRangeTest, OriginalKeyReadErrorOutranksDestructorCloseFailure)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     IndicatorsTree indicators;
     indicators.Push("SSH");
     const std::string root = context.GetTempdirPath() + "/ssh";
@@ -224,6 +246,16 @@ TEST(SshKeyRangeTest, OriginalKeyReadErrorOutranksDestructorCloseFailure)
     context.SetSpecialFilePath("/etc/ssh", root);
     struct stat expectedKey = {};
     ASSERT_EQ(0, ::stat(key.c_str(), &expectedKey));
+    // ReadFileDescriptor is excluded: this test constrains it below with its
+    // own full-wildcard EXPECT_CALL/WillRepeatedly (the read-fault
+    // injection). CloseDirectory only gets an ON_CALL default-action
+    // override, not its own EXPECT_CALL, so it stays in the catch-all.
+    context.AllowProcfsBootstrap();
+    context.AllowNativeOpen();
+    context.AllowDescriptorInspection();
+    context.AllowDescriptorClose();
+    context.AllowDirectoryEnumeration();
+    context.AllowIdentityLookup();
     EXPECT_CALL(context, GetFileContents(::testing::_)).Times(0);
     EXPECT_CALL(context, ReadFileDescriptor(::testing::_, ::testing::_, ::testing::_)).WillRepeatedly([&](int fd, void* data, std::size_t size) {
         struct stat actual = {};
@@ -239,9 +271,9 @@ TEST(SshKeyRangeTest, OriginalKeyReadErrorOutranksDestructorCloseFailure)
         if (0 == result)
         {
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(EIO));
         }
-        return result;
+        return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     SshKeyPermissionsParams params;
     params.type = SshKeyType::Private;
@@ -253,12 +285,15 @@ TEST(SshKeyRangeTest, OriginalKeyReadErrorOutranksDestructorCloseFailure)
 
 TEST(SshKeyRangeTest, DeepTraversalRejectsDescriptorBudgetEvenThoughDirectoriesAreNotYielded)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     IndicatorsTree indicators;
     indicators.Push("SSH");
     std::string directory = context.GetTempdirPath() + "/ssh";
     ASSERT_EQ(0, mkdir(directory.c_str(), 0700));
     context.SetSpecialFilePath("/etc/ssh", directory);
+    // No test-specific expectation in this test; it only exercises the
+    // descriptor-budget rejection path.
+    context.AllowIncidentalNativeAccess();
     for (int depth = 0; depth < 33; ++depth)
     {
         directory += "/d";
@@ -274,7 +309,7 @@ TEST(SshKeyRangeTest, DeepTraversalRejectsDescriptorBudgetEvenThoughDirectoriesA
 
 TEST(SshKeyRangeTest, RootSymlinkIsFollowedButInteriorDirectorySymlinkIsNot)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     IndicatorsTree indicators;
     indicators.Push("SSH");
     const std::string root = context.GetTempdirPath() + "/ssh";
@@ -286,6 +321,9 @@ TEST(SshKeyRangeTest, RootSymlinkIsFollowedButInteriorDirectorySymlinkIsNot)
     const std::string alias = context.GetTempdirPath() + "/ssh-alias";
     ASSERT_EQ(0, symlink(root.c_str(), alias.c_str()));
     context.SetSpecialFilePath("/etc/ssh", alias);
+    // GetFileContents is a separate, non-native seam this helper doesn't
+    // cover.
+    context.AllowIncidentalNativeAccess();
     EXPECT_CALL(context, GetFileContents(::testing::_)).Times(0);
     SshKeyPermissionsParams params;
     params.type = SshKeyType::Public;
@@ -297,7 +335,7 @@ TEST(SshKeyRangeTest, RootSymlinkIsFollowedButInteriorDirectorySymlinkIsNot)
 class EnsureSshKeyPermsTest : public ::testing::Test
 {
 protected:
-    MockContext mContext;
+    ::testing::StrictMock<MockContext> mContext;
     IndicatorsTree mIndicators;
     std::string mSshDir;
     std::size_t mKeyReads = 0;
@@ -310,6 +348,17 @@ protected:
         ASSERT_EQ(0, ::mkdir(mSshDir.c_str(), 0755));
         mContext.SetSpecialFilePath("/etc/ssh", mSshDir);
         EXPECT_CALL(mContext, GetFileContents(::testing::_)).Times(0);
+        // ReadFileDescriptor is excluded here: every test that reads a key
+        // constrains it itself via ExpectPinnedKeyReads() below with its own
+        // full-wildcard EXPECT_CALL/WillRepeatedly; a test with no key to
+        // read (no ExpectPinnedKeyReads call) declares AllowFileRead()
+        // itself instead.
+        mContext.AllowProcfsBootstrap();
+        mContext.AllowNativeOpen();
+        mContext.AllowDescriptorInspection();
+        mContext.AllowDescriptorClose();
+        mContext.AllowDirectoryEnumeration();
+        mContext.AllowIdentityLookup();
     }
 
     void ExpectPinnedKeyReads(const std::string& path, std::size_t count, int readError = 0)
@@ -365,6 +414,10 @@ TEST_F(EnsureSshKeyPermsTest, RegularFileRootPropagatesTraversalError)
     const auto root = mContext.GetTempdirPath() + "/ssh-root-file";
     std::ofstream(root) << "not a directory\n";
     mContext.SetSpecialFilePath("/etc/ssh", root);
+    // No key to read in this test (the root itself is rejected first); the
+    // fixture excludes ReadFileDescriptor from its catch-all because other
+    // tests constrain it via ExpectPinnedKeyReads().
+    mContext.AllowFileRead();
     SshKeyPermissionsParams params;
     params.type = SshKeyType::Public;
 
@@ -478,6 +531,10 @@ TEST_F(EnsureSshKeyPermsTest, PrivateKeyRemediation)
 
 TEST_F(EnsureSshKeyPermsTest, RemediationNoKeys)
 {
+    // No key to read in this test (the directory is empty); the fixture
+    // excludes ReadFileDescriptor from its catch-all because other tests
+    // constrain it via ExpectPinnedKeyReads().
+    mContext.AllowFileRead();
     SshKeyPermissionsParams params;
     params.type = SshKeyType::Public;
     auto result = RemediateSshKeyPermissions(params, mIndicators, mContext);

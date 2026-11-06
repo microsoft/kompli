@@ -303,7 +303,7 @@ static int LuaGetFilesystemEntriesWithPerms(lua_State* L)
         return 0;
     }
     auto* view = reinterpret_cast<LuaCallContext*>(cc);
-    FilesystemScanner& scanner = view->ctx.GetFilesystemScanner();
+    FilesystemScanner& scanner = view->ctx.get().GetFilesystemScanner();
     auto full = scanner.GetFullFilesystem();
     if (!full)
     {
@@ -574,7 +574,7 @@ int LuaLogImpl(lua_State* L, LoggingLevel level)
 
     // The message is passed as the %s argument, never as the format string,
     // preventing format-string injection from Lua-supplied content.
-    OsConfigLog(view->ctx.GetLogHandle(), level, "[Lua] %s", message);
+    OsConfigLog(view->ctx.get().GetLogHandle(), level, "[Lua] %s", message);
     return 0;
 }
 

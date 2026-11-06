@@ -7,7 +7,6 @@
 #include "Descriptor.hpp"
 
 #include <cstddef>
-#include <cstdint>
 #include <string>
 
 namespace ComplianceEngine
@@ -17,11 +16,13 @@ namespace Filesystem
 namespace Detail
 {
 // Checked pinned-link observation returned by Path's private helper.
-// No kernel-follow of link text, including procfs magic links.
+// No kernel-follow of link text, including procfs magic links. The pin's
+// mount is observed once at acquisition (see the resolver's child-pin site
+// and the ProcfsDescriptorAccess-based acquisition helper); a live O_PATH
+// pin cannot change mount, so this reader does not re-observe it.
 struct LinkTarget
 {
     std::string text;
-    std::uint64_t mountId = 0;
 };
 } // namespace Detail
 } // namespace Filesystem

@@ -4,6 +4,7 @@
 #include "ContextInterface.h"
 #include "TemporaryDirectory.h"
 
+#include <cerrno>
 #include <cstdio>
 #include <fstream>
 #include <gmock/gmock.h>
@@ -15,6 +16,17 @@
 #include <unistd.h>
 #include <utility>
 #include <vector>
+
+// Convert a real native close into the typed, code-only mock seam.
+inline ComplianceEngine::Result<void> NativeCloseResult(int status) noexcept
+{
+    if (status != 0)
+    {
+        const int saved = errno ? errno : EIO;
+        return ComplianceEngine::Error(saved);
+    }
+    return ComplianceEngine::Result<void>::Success();
+}
 
 struct MockContext : public ComplianceEngine::ContextInterface
 {
@@ -36,7 +48,7 @@ struct MockContext : public ComplianceEngine::ContextInterface
     {
         return ContextInterface::ReadFileDescriptor(fd, buffer, size);
     }
-    int RealCloseFileDescriptor(int fd) const
+    ComplianceEngine::Result<void> RealCloseFileDescriptor(int fd) const
     {
         return ContextInterface::CloseFileDescriptor(fd);
     }
@@ -64,14 +76,14 @@ struct MockContext : public ComplianceEngine::ContextInterface
     MOCK_METHOD(int, DescriptorFlagsDescriptor, (int descriptor), (const, noexcept, override));
     MOCK_METHOD(int, DuplicateDescriptor, (int descriptor), (const, noexcept, override));
     MOCK_METHOD(DIR*, FdOpenDirectory, (int descriptor), (const, noexcept, override));
-    MOCK_METHOD(int, CloseFileDescriptor, (int descriptor), (const, noexcept, override));
+    MOCK_METHOD(ComplianceEngine::Result<void>, CloseFileDescriptor, (int descriptor), (const, noexcept, override));
     MOCK_METHOD(int, ChownPinnedFileDescriptor, (int descriptor, uid_t owner, gid_t group), (const, noexcept, override));
     MOCK_METHOD(int, ChmodPinnedAlias, (int procfsDirectory, const char* decimalAlias, mode_t mode), (const, noexcept, override));
     MOCK_METHOD(pid_t, NativeProcessId, (), (const, noexcept, override));
     MOCK_METHOD(pid_t, NativeThreadId, (), (const, noexcept, override));
     MOCK_METHOD(DIR*, OpenDirectory, (const char* path), (const, noexcept, override));
     MOCK_METHOD(struct dirent*, ReadDirectory, (DIR * directory), (const, noexcept, override));
-    MOCK_METHOD(int, CloseDirectory, (DIR * directory), (const, noexcept, override));
+    MOCK_METHOD(ComplianceEngine::Result<void>, CloseDirectory, (DIR * directory), (const, noexcept, override));
     MOCK_METHOD(int, StatPath, (const char* path, struct stat* metadata), (const, noexcept, override));
     MOCK_METHOD(int, LstatPath, (const char* path, struct stat* metadata), (const, noexcept, override));
     MOCK_METHOD(struct group*, GetGroupById, (gid_t id), (const, noexcept, override));
@@ -172,6 +184,101 @@ struct MockContext : public ComplianceEngine::ContextInterface
         std::string mLockfilePath = mTempdir + "/fsscanner-lock";
         mFsScannerp =
             std::unique_ptr<ComplianceEngine::FilesystemScanner>(new ComplianceEngine::FilesystemScanner(mTempRootDir, mCachePath, mLockfilePath, 60, 120, 10));
+    }
+
+    // --- Incidental-native-call helpers -------------------------------------
+    //
+    // gMock warns "Uninteresting mock function call" for any mocked call that
+    // isn't covered by an EXPECT_CALL, even when ON_CALL supplies its default
+    // action (see testing/MockContext.h ON_CALL block above). Most native
+    // seams below are plumbing a test doesn't care about -- declare them
+    // explicitly as allowed with `Times(AnyNumber())` so a real fixture can
+    // run under `testing::StrictMock<MockContext>`. Call the helper(s) this
+    // fixture needs from SetUp() (or at the top of an individual test),
+    // before any test-specific EXPECT_CALL on the same seam: gMock matches
+    // the newest expectation first, so a later, more specific EXPECT_CALL
+    // still takes priority over these catch-alls. Do not call the helper for
+    // a group whose seam a particular test already constrains with its own
+    // EXPECT_CALL (exact count, Times(0), or an InSequence step) -- that
+    // would silently convert an argument-mismatched "unexpected call"
+    // failure into a pass. Group by what the call represents, not just by
+    // mocked signature, so a caller can allow identity/bootstrap noise while
+    // still holding e.g. close-once behavior to an exact expectation.
+
+    // getpid()/gettid() calls used only to resolve the verified /proc/self
+    // procfs pin; never the property under test.
+    void AllowProcfsBootstrap()
+    {
+        EXPECT_CALL(*this, NativeProcessId()).Times(testing::AnyNumber());
+        EXPECT_CALL(*this, NativeThreadId()).Times(testing::AnyNumber());
+    }
+
+    // open()/openat() calls that acquire a root pin or a child descriptor;
+    // incidental setup for tests that aren't checking open() arguments or
+    // open-call counts themselves.
+    void AllowNativeOpen()
+    {
+        EXPECT_CALL(*this, OpenNativePath(testing::_, testing::_)).Times(testing::AnyNumber());
+        EXPECT_CALL(*this, OpenNativeAt(testing::_, testing::_, testing::_)).Times(testing::AnyNumber());
+    }
+
+    // fstat()/fstatfs()/fcntl(F_GETFL|F_GETFD)/readlinkat() calls that
+    // inspect an already-open descriptor (type, filesystem, flags, link
+    // target); incidental unless the test is exercising that inspection.
+    void AllowDescriptorInspection()
+    {
+        EXPECT_CALL(*this, StatFileDescriptor(testing::_, testing::_)).Times(testing::AnyNumber());
+        EXPECT_CALL(*this, StatFilesystemDescriptor(testing::_, testing::_)).Times(testing::AnyNumber());
+        EXPECT_CALL(*this, StatusFlagsDescriptor(testing::_)).Times(testing::AnyNumber());
+        EXPECT_CALL(*this, DescriptorFlagsDescriptor(testing::_)).Times(testing::AnyNumber());
+        EXPECT_CALL(*this, ReadLinkDescriptor(testing::_, testing::_, testing::_)).Times(testing::AnyNumber());
+    }
+
+    // read() calls against an already-open descriptor; incidental unless the
+    // test is exercising read content/retry/short-read behavior itself.
+    void AllowFileRead()
+    {
+        EXPECT_CALL(*this, ReadFileDescriptor(testing::_, testing::_, testing::_)).Times(testing::AnyNumber());
+    }
+
+    // close() calls on a file descriptor; incidental RAII cleanup unless the
+    // test is specifically exercising close-once/no-retry/close-failure
+    // behavior, which should keep its own exact expectation instead.
+    void AllowDescriptorClose()
+    {
+        EXPECT_CALL(*this, CloseFileDescriptor(testing::_)).Times(testing::AnyNumber());
+    }
+
+    // fdopendir()/readdir()/closedir() calls; incidental unless the test is
+    // exercising directory enumeration order, pagination, or cursor-close
+    // behavior itself.
+    void AllowDirectoryEnumeration()
+    {
+        EXPECT_CALL(*this, FdOpenDirectory(testing::_)).Times(testing::AnyNumber());
+        EXPECT_CALL(*this, ReadDirectory(testing::_)).Times(testing::AnyNumber());
+        EXPECT_CALL(*this, CloseDirectory(testing::_)).Times(testing::AnyNumber());
+    }
+
+    // getgrgid() calls; incidental unless the test is exercising group-name
+    // resolution itself.
+    void AllowIdentityLookup()
+    {
+        EXPECT_CALL(*this, GetGroupById(testing::_)).Times(testing::AnyNumber());
+    }
+
+    // Convenience: every group above. Only use this when a fixture/test has
+    // no specific EXPECT_CALL on any of these seams; otherwise call the
+    // narrower per-seam-group helpers and skip the group(s) that overlap a
+    // specific expectation (see the per-seam helpers' comments above).
+    void AllowIncidentalNativeAccess()
+    {
+        AllowProcfsBootstrap();
+        AllowNativeOpen();
+        AllowDescriptorInspection();
+        AllowFileRead();
+        AllowDescriptorClose();
+        AllowDirectoryEnumeration();
+        AllowIdentityLookup();
     }
 
     ~MockContext() override

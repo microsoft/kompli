@@ -50,19 +50,26 @@ namespace
 {
 static_assert(std::is_same<decltype(std::declval<const FilesystemCollectionEntry&>().LiveComponent()), ComplianceEngine::Optional<Path::Component>>::value,
     "LiveComponent must return an owning optional value");
-static_assert(std::is_same<decltype(std::declval<const Path::Step&>().Acquired()), ComplianceEngine::Filesystem::AcquisitionFacts>::value,
+static_assert(std::is_same<decltype(std::declval<const Path::Step&>().Metadata()), ComplianceEngine::Filesystem::Metadata>::value,
     "Step facts must be copied, not borrowed");
 
 Result<ComplianceEngine::Filesystem::FilesystemCollectionResult> CollectFilesystem(const FilesystemCollectionRequest& request)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // Every caller of this convenience overload only checks the returned
+    // Result, never a mock expectation (the context isn't visible to it), so
+    // a blanket incidental-access catch-all here is safe for all of them.
+    context.AllowIncidentalNativeAccess();
     return ComplianceEngine::Filesystem::CollectFilesystem(request, context);
 }
 
 Result<ComplianceEngine::Filesystem::FilesystemCollectionResult> StreamFilesystemCollection(const FilesystemCollectionRequest& request,
     const ComplianceEngine::Filesystem::FilesystemCollectionVisitor& visitor)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // See CollectFilesystem() above: no caller can add its own expectation on
+    // this hidden context.
+    context.AllowIncidentalNativeAccess();
     return ComplianceEngine::Filesystem::StreamFilesystemCollection(request, visitor, context);
 }
 FilesystemCollectionRequest Request()
@@ -146,7 +153,9 @@ std::vector<std::string> Paths(const std::vector<FilesystemCollectionEntry>& ent
 
 TEST(FilesystemCollectionTest, UnifiedRangeRetainsLiveLeafAndSupportsRootDeviceScope)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     TestTree tree;
     tree.Directory("root");
     tree.File("root/.settings");
@@ -166,7 +175,7 @@ TEST(FilesystemCollectionTest, UnifiedRangeRetainsLiveLeafAndSupportsRootDeviceS
     ASSERT_TRUE(entry->HasValue()) << entry->Error().message;
     EXPECT_EQ(tree.Path("administrative") + "/.settings", entry->Value().path);
     ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
-    EXPECT_EQ(ComplianceEngine::Filesystem::Type::RegularFile, entry->Value().LiveComponent().Value().Acquired().type);
+    EXPECT_EQ(ComplianceEngine::Filesystem::Type::RegularFile, entry->Value().LiveComponent().Value().Metadata().FileType());
     followed.Value().Stop();
 
     request.rootDirectoryLinkAction = SymlinkPolicy::DoNotFollow;
@@ -186,7 +195,14 @@ TEST(FilesystemCollectionTest, UnifiedRangeRetainsLiveLeafAndSupportsRootDeviceS
 
 TEST(FilesystemCollectionTest, CoreNoRootReplayAfterAcceptedDirectoryRenameAndReplacement)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // The initial root acquisition below performs real, incidental native
+    // access (including procfs-self OpenNativeAt calls) before the test's
+    // own OpenNativeAt expectations are declared further down; this
+    // catch-all covers that, and those later, narrower expectations
+    // (declared after, so newest) still win once they're set (see
+    // MockContext.h helper comment).
+    context.AllowIncidentalNativeAccess();
     TestTree tree;
     tree.Directory("root");
     tree.File("root/original");
@@ -201,7 +217,7 @@ TEST(FilesystemCollectionTest, CoreNoRootReplayAfterAcceptedDirectoryRenameAndRe
     ASSERT_TRUE(root.Value().Is<Path>());
     Path accepted = As<Path>(std::move(root).Value());
     ASSERT_TRUE(accepted.Freeze().HasValue());
-    const ino_t acceptedInode = accepted.Leaf().Acquired().metadata.st_ino;
+    const ino_t acceptedInode = accepted.Leaf().Metadata().Stat().st_ino;
     ASSERT_EQ(0, ::rename(tree.Path("root").c_str(), tree.Path("moved").c_str()));
     tree.Directory("root");
     tree.File("root/replacement");
@@ -219,7 +235,7 @@ TEST(FilesystemCollectionTest, CoreNoRootReplayAfterAcceptedDirectoryRenameAndRe
         seen.push_back(entry.Value().path);
         struct stat original = {};
         ASSERT_EQ(0, ::stat(tree.Path("moved/original").c_str(), &original));
-        EXPECT_EQ(original.st_ino, entry.Value().LiveComponent().Value().Acquired().metadata.st_ino);
+        EXPECT_EQ(original.st_ino, entry.Value().LiveComponent().Value().Metadata().Stat().st_ino);
     }
     EXPECT_EQ((std::vector<std::string>{tree.Path("root/original")}), seen);
     EXPECT_NE(0, acceptedInode);
@@ -228,7 +244,9 @@ TEST(FilesystemCollectionTest, CoreNoRootReplayAfterAcceptedDirectoryRenameAndRe
 
 TEST(FilesystemCollectionTest, MovedRootReportsOriginalSpellingWithoutUsingItAsAuthority)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     TestTree tree;
     tree.Directory("actual");
     tree.File("actual/file");
@@ -281,7 +299,9 @@ TEST(FilesystemCollectionTest, InverseRestoresPhysicalParentAfterSiblingLink)
 
 TEST(FilesystemCollectionTest, NestedInverseRestoresOriginalPhysicalBindingsAfterRootReplacement)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     TestTree tree;
     tree.Directory("actual");
     tree.Directory("actual/a");
@@ -366,13 +386,13 @@ TEST(FilesystemCollectionTest, NestedInverseRestoresOriginalPhysicalBindingsAfte
         errno = EBADF;
         return nullptr;
     });
-    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) noexcept -> int {
+    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) noexcept -> ComplianceEngine::Result<void> {
         struct stat held = {};
         if (0 == ::fstat(::dirfd(stream), &held))
             for (auto& cursor : cursors)
                 if (cursor.inode == held.st_ino)
                     cursor.position = 0;
-        return ::closedir(stream);
+        return ::closedir(stream) == 0 ? ComplianceEngine::Result<void>::Success() : ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     auto opened = Files(std::move(accepted), request.rootPath, CollectionContinuation(resolved.Value()));
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
@@ -385,7 +405,7 @@ TEST(FilesystemCollectionTest, NestedInverseRestoresOriginalPhysicalBindingsAfte
         auto pin = item.Value().LiveComponent();
         ASSERT_TRUE(pin.HasValue());
         seen.push_back(item.Value().path);
-        inodes.push_back(pin.Value().Acquired().metadata.st_ino);
+        inodes.push_back(pin.Value().Metadata().Stat().st_ino);
         EXPECT_EQ(item.Value().metadata.st_ino, inodes.back());
         if (seen.size() == 1)
             retainedNestedTarget = std::move(pin);
@@ -405,7 +425,9 @@ TEST(FilesystemCollectionTest, NestedInverseRestoresOriginalPhysicalBindingsAfte
 
 TEST(FilesystemCollectionTest, LinkedRootAcceptsDistinctAbsoluteBindingsAfterReplacement)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     TestTree tree;
     tree.Directory("actual");
     tree.Directory("actual/a");
@@ -453,7 +475,9 @@ TEST(FilesystemCollectionTest, LinkedRootAcceptsDistinctAbsoluteBindingsAfterRep
 
 TEST(FilesystemCollectionTest, AcquiredRootAndChildContinuationPoliciesRemainSeparate)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     TestTree tree;
     tree.Directory("real");
     tree.File("real/ordinary");
@@ -518,7 +542,9 @@ TEST(FilesystemCollectionTest, OwnedLiveEntryOutlivesRangeButCollectedSnapshotHa
     ASSERT_EQ(1u, snapshot->entries.size());
     EXPECT_FALSE(snapshot->entries.front().LiveComponent().HasValue());
 
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ComplianceEngine::Optional<FilesystemCollectionEntry> owned;
     ino_t inode = 0;
     {
@@ -555,7 +581,9 @@ TEST(FilesystemCollectionTest, StopBeforeFirstPullReleasesUnyieldedFilePinOnce)
     tree.File("file");
     struct stat expected = {};
     ASSERT_EQ(0, stat(tree.Path("file").c_str(), &expected));
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     struct Pin
     {
         int descriptor = -1;
@@ -625,9 +653,9 @@ TEST(FilesystemCollectionTest, StopBeforeFirstPullReleasesUnyieldedFilePinOnce)
         if (fail)
         {
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return result;
+        return result == 0 ? ComplianceEngine::Result<void>::Success() : ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     std::vector<std::size_t> ownedPins;
     {
@@ -692,7 +720,9 @@ TEST(FilesystemCollectionTest, StopAttemptsCursorAndPinsAndReportsEachFailureOnc
 {
     TestTree tree;
     tree.Directory("root");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const auto logPath = context.GetTempdirPath() + "/range-stop.log";
     OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
     ASSERT_NE(nullptr, logHandle);
@@ -702,16 +732,16 @@ TEST(FilesystemCollectionTest, StopAttemptsCursorAndPinsAndReportsEachFailureOnc
     ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) {
         ++cursorCloses;
         const int result = closedir(stream);
-        errno = EACCES;
-        return result == 0 ? -1 : result;
+        const int nativeCode = errno;
+        return ComplianceEngine::Error(result == 0 ? EACCES : nativeCode);
     });
     auto opened = Files(FilesystemCollectionRequest(tree.Path("root"), FilesystemRootKind::Directory), context);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     ON_CALL(context, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
         ++pinCloses;
         const int result = close(descriptor);
-        errno = EIO;
-        return result == 0 ? -1 : result;
+        const int nativeCode = errno;
+        return ComplianceEngine::Error(result == 0 ? EIO : nativeCode);
     });
     opened->Stop();
     EXPECT_EQ(1u, cursorCloses);
@@ -725,11 +755,11 @@ TEST(FilesystemCollectionTest, StopAttemptsCursorAndPinsAndReportsEachFailureOnc
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const auto cursorDiagnostic = "Cannot close pinned directory cursor: " + std::to_string(EACCES);
+    const auto cursorDiagnostic = "Failed to close filesystem resource: " + std::string(strerror(EACCES));
     const auto cursorOccurrence = text.find(cursorDiagnostic);
     ASSERT_NE(std::string::npos, cursorOccurrence);
     EXPECT_EQ(std::string::npos, text.find(cursorDiagnostic, cursorOccurrence + cursorDiagnostic.size()));
-    const auto pinDiagnostic = "Cannot close internal filesystem descriptor: " + std::to_string(EIO);
+    const auto pinDiagnostic = "Failed to close filesystem resource: " + std::string(strerror(EIO));
     std::size_t loggedPins = 0;
     for (std::size_t pos = text.find(pinDiagnostic); pos != std::string::npos; pos = text.find(pinDiagnostic, pos + pinDiagnostic.size()))
         ++loggedPins;
@@ -742,7 +772,9 @@ TEST(FilesystemCollectionTest, FailedNativeCursorCloseReleasesRangeWithoutRetryi
     tree.Directory("root");
     tree.Directory("root/sub");
     tree.Directory("root/sub/nested");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     int livePins[256] = {};
     DIR* liveStreams[256] = {};
     std::size_t livePinCount = 0;
@@ -833,7 +865,7 @@ TEST(FilesystemCollectionTest, FailedNativeCursorCloseReleasesRangeWithoutRetryi
     ON_CALL(context, CloseFileDescriptor(testing::_)).WillByDefault([&](int fd) {
         releasePin(fd);
         ++pinCloses;
-        return ::close(fd);
+        return ::close(fd) == 0 ? ComplianceEngine::Result<void>::Success() : ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.direction = FilesystemDirection::Down;
@@ -855,7 +887,7 @@ TEST(FilesystemCollectionTest, FailedNativeCursorCloseReleasesRangeWithoutRetryi
     ASSERT_GT(livePinCount, 0u);
 
     int reused = -1;
-    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) -> int {
+    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) -> ComplianceEngine::Result<void> {
         ++cursorCloses;
         releaseStream(stream);
         const int fd = dirfd(stream);
@@ -878,9 +910,9 @@ TEST(FilesystemCollectionTest, FailedNativeCursorCloseReleasesRangeWithoutRetryi
                 }
             }
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return 0;
+        return ComplianceEngine::Result<void>::Success();
     });
     files.Stop(); // Native close failure is diagnostic; no second close is attempted.
     // Closing the range releases its frames and cursors, but the last
@@ -915,7 +947,9 @@ TEST(FilesystemCollectionTest, VisitorErrorOutranksPathPinCloseFailure)
 {
     TestTree tree;
     tree.Directory("root");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     bool failClose = false;
     std::size_t failedPins = 0;
     ON_CALL(context, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
@@ -924,9 +958,9 @@ TEST(FilesystemCollectionTest, VisitorErrorOutranksPathPinCloseFailure)
         {
             ++failedPins;
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return result;
+        return result == 0 ? ComplianceEngine::Result<void>::Success() : ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     const auto streamed = ComplianceEngine::Filesystem::StreamFilesystemCollection(
         FilesystemCollectionRequest(tree.Path("root"), FilesystemRootKind::Directory),
@@ -945,7 +979,9 @@ TEST(FilesystemCollectionTest, MissingRegularNameReportsWithoutFabricatingAMetad
     TestTree tree;
     tree.Directory("root");
     tree.File("root/vanishing");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const std::string vanishing = tree.Path("root/vanishing");
     int unlinkStatus = -1;
     int unlinkError = 0;
@@ -1011,7 +1047,10 @@ TEST(FilesystemCollectionTest, MissingPolicyDoesNotSwallowPinnedChildInspectionF
     tree.File("root/item");
     struct stat expected = {};
     ASSERT_EQ(0, stat(tree.Path("root/item").c_str(), &expected));
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam; it only
+    // customizes StatFileDescriptor's default action via ON_CALL.
+    context.AllowIncidentalNativeAccess();
     ON_CALL(context, StatFileDescriptor(testing::_, testing::_)).WillByDefault([&context, expected](int descriptor, struct stat* metadata) {
         struct stat actual = {};
         if ((0 == fstat(descriptor, &actual)) && (actual.st_dev == expected.st_dev) && (actual.st_ino == expected.st_ino))
@@ -1032,7 +1071,7 @@ TEST(FilesystemCollectionTest, MissingPolicyDoesNotSwallowPinnedChildInspectionF
 
 TEST(FilesystemCollectionTest, RejectsInvalidAcquisitionRootsBeforeLookup)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     EXPECT_CALL(context, LstatPath(testing::_, testing::_)).Times(0);
     EXPECT_CALL(context, StatPath(testing::_, testing::_)).Times(0);
     EXPECT_CALL(context, OpenDirectory(testing::_)).Times(0);
@@ -1332,7 +1371,9 @@ TEST(FilesystemCollectionTest, RejectsNegativeResourceLimits)
 
 TEST(FilesystemCollectionTest, ShortPathBudgetDoesNotLimitProcfsInspection)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     FilesystemCollectionRequest request("/", FilesystemRootKind::Directory);
     request.fullPathBytes = 2;
     request.scope = FilesystemScope::All;
@@ -1343,7 +1384,12 @@ TEST(FilesystemCollectionTest, ShortPathBudgetDoesNotLimitProcfsInspection)
 
 TEST(FilesystemCollectionTest, ContinuationCannotUnderstateAcquiredRootInspectionBound)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // The root acquisition below performs real, incidental native access;
+    // the later Times(0) expectations are declared after this catch-all, so
+    // they still win for the rejected continuation attempt (see
+    // MockContext.h helper comment).
+    context.AllowIncidentalNativeAccess();
     FilesystemCollectionRequest request("/", FilesystemRootKind::Directory);
     request.scope = FilesystemScope::All;
     auto resolved = ResolveFilesystemCollectionRequest(request);
@@ -1366,11 +1412,17 @@ TEST(FilesystemCollectionTest, ContinuationCannotUnderstateAcquiredRootInspectio
     EXPECT_EQ(EINVAL, rejected.Error().code);
     EXPECT_EQ("Filesystem continuation fdinfo byte limit is below the acquired root's bound inspection limit", rejected.Error().message);
     EXPECT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
+    // VerifyAndClearExpectations() above cleared every EXPECT_CALL on
+    // context, including the catch-all; the remaining locals' destructors
+    // (closing the acquired root's descriptor) are incidental again.
+    context.AllowIncidentalNativeAccess();
 }
 
 TEST(FilesystemCollectionTest, PathContinuationAutomaticallyFreezesUnfrozenNestedStart)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     TestTree tree;
     tree.Directory("root");
     tree.Directory("root/nested");
@@ -1469,7 +1521,9 @@ TEST(FilesystemCollectionTest, UnknownTypeHiddenDirectoryDescendsWithoutDeliveri
     tree.Directory("root/.hidden");
     tree.File("root/.hidden/.dotfile");
     tree.File("root/visible");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ON_CALL(context, ReadDirectory(testing::_)).WillByDefault([](DIR * stream) -> struct dirent* {
         struct dirent* entry = readdir(stream);
         if ((nullptr != entry) && (0 == std::strcmp(entry->d_name, ".hidden")))
@@ -1696,7 +1750,9 @@ TEST(FilesystemCollectionTest, FileTargetDoesNotChangePhysicalParentAndRemainsPi
     tree.File("root/first");
     tree.File("root/second");
     tree.Link("first", "root/alias");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.yieldType = FilesystemYieldType::RegularFiles;
     request.childFileLinkAction = SymlinkPolicy::Follow;
@@ -1714,7 +1770,7 @@ TEST(FilesystemCollectionTest, FileTargetDoesNotChangePhysicalParentAndRemainsPi
             {
                 alias = result.Value().LiveComponent();
                 ASSERT_TRUE(alias.HasValue());
-                inode = alias.Value().Acquired().metadata.st_ino;
+                inode = alias.Value().Metadata().Stat().st_ino;
             }
         }
         EXPECT_EQ((std::set<std::string>{tree.Path("root/alias"), tree.Path("root/first"), tree.Path("root/second")}), paths);
@@ -1734,7 +1790,9 @@ TEST(FilesystemCollectionTest, ObservedDirectoryTargetDoesNotApplyAndRemainsPinn
     tree.Directory("root");
     tree.Directory("root/folder");
     tree.File("root/sibling");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.direction = FilesystemDirection::None;
     request.yieldType = FilesystemYieldType::All;
@@ -1751,7 +1809,7 @@ TEST(FilesystemCollectionTest, ObservedDirectoryTargetDoesNotApplyAndRemainsPinn
         {
             directory = result.Value().LiveComponent();
             ASSERT_TRUE(directory.HasValue());
-            directoryInode = directory.Value().Acquired().metadata.st_ino;
+            directoryInode = directory.Value().Metadata().Stat().st_ino;
         }
     }
     EXPECT_EQ((std::set<std::string>{tree.Path("root"), tree.Path("root/folder"), tree.Path("root/sibling")}), seen);
@@ -1957,7 +2015,9 @@ TEST(FilesystemCollectionTest, RetentionExhaustionIsExplicitRatherThanReplayingN
 
 TEST(FilesystemCollectionTest, InverseHistoryHasAnExactRetainedByteBoundary)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     TestTree tree;
     tree.Directory("root");
     std::string branch = "root";
@@ -2011,7 +2071,9 @@ TEST(FilesystemCollectionTest, InverseHistoryHasAnExactRetainedByteBoundary)
 
 TEST(FilesystemCollectionTest, InverseHistoryHasAnExactDescriptorBoundary)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     TestTree tree;
     tree.Directory("root");
     std::string branch = "root";
@@ -2061,12 +2123,18 @@ TEST(FilesystemCollectionTest, InverseHistoryHasAnExactDescriptorBoundary)
 
 TEST(FilesystemCollectionTest, PoppedInverseChargeMatchesIndependentStepDifference)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam; it only
+    // customizes ReadDirectory/CloseDirectory default actions via ON_CALL.
+    context.AllowIncidentalNativeAccess();
     TestTree tree;
     tree.Directory("root");
-    const char* const ancestors[] = {"a", "d", "d", "d", "d", "d", "d", "d", "d", "d", "d", "d"};
-    constexpr std::size_t depth = sizeof(ancestors) / sizeof(ancestors[0]);
-    std::string directories[depth + 3];
+    // Common inverse frames must dominate even the deeper link's Resolve/Apply
+    // preparation peak at the shallower traversal cap.
+    const std::size_t depth = 40;
+    std::vector<const char*> ancestors(depth, "d");
+    ancestors.front() = "a";
+    std::vector<std::string> directories(depth + 3);
     directories[0] = "root";
     std::string branch = "root";
     for (std::size_t i = 0; i < depth; ++i)
@@ -2091,9 +2159,10 @@ TEST(FilesystemCollectionTest, PoppedInverseChargeMatchesIndependentStepDifferen
     request.direction = FilesystemDirection::Down;
     request.scope = FilesystemScope::All;
     request.childDirectoryLinkAction = SymlinkPolicy::Follow;
-    // The default derived cap is 28 on the audited TMPDIR root; 12 ordinary
-    // inverse steps plus 13 cursors already charge 49 before either link.
-    // Byte scans need FTW headroom; descriptor scans override liveDescriptors.
+    request.maxDepth = static_cast<int>(depth + 1); // Reach both links without disabling the depth bound.
+    // FTW retains an inverse and a cursor for each common ancestor. Explicit
+    // cursor headroom leaves both link charges observable; do not raise defaults.
+    // Byte scans use the same configured shared cap for Path and FTW.
     request.openDirectories = 256;
     request.yieldType = FilesystemYieldType::RegularFiles; // Empty targets: no entry pin charges.
     auto resolved = ResolveFilesystemCollectionRequest(request);
@@ -2114,7 +2183,7 @@ TEST(FilesystemCollectionTest, PoppedInverseChargeMatchesIndependentStepDifferen
                 limits.shared.liveDescriptors = cap;
         }
         auto acquired = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), limits);
-        EXPECT_TRUE(acquired.HasValue());
+        EXPECT_TRUE(acquired.HasValue()) << acquired.Error().message;
         if (!acquired.HasValue() || !acquired.Value().Is<Path>())
             return {0, 0};
         Path physical = As<Path>(std::move(acquired).Value());
@@ -2125,7 +2194,7 @@ TEST(FilesystemCollectionTest, PoppedInverseChargeMatchesIndependentStepDifferen
         for (const char* name : ancestors)
         {
             auto forward = physical.Resolve(name, childPolicy);
-            EXPECT_TRUE(forward.HasValue());
+            EXPECT_TRUE(forward.HasValue()) << forward.Error().message;
             if (!forward.HasValue() || !forward.Value().Is<Path::Step>())
                 return {0, 0};
             auto undo = physical.Apply(As<Path::Step>(std::move(forward).Value()));
@@ -2134,7 +2203,7 @@ TEST(FilesystemCollectionTest, PoppedInverseChargeMatchesIndependentStepDifferen
                 return {0, 0};
         }
         auto forward = physical.Resolve(link, childPolicy);
-        EXPECT_TRUE(forward.HasValue());
+        EXPECT_TRUE(forward.HasValue()) << forward.Error().message;
         if (!forward.HasValue() || !forward.Value().Is<Path::Step>())
             return {0, 0};
         const std::size_t before = physical.Size();
@@ -2196,13 +2265,13 @@ TEST(FilesystemCollectionTest, PoppedInverseChargeMatchesIndependentStepDifferen
         errno = EBADF;
         return nullptr;
     });
-    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) noexcept -> int {
+    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) noexcept -> ComplianceEngine::Result<void> {
         struct stat held = {};
         if (0 == ::fstat(::dirfd(stream), &held))
             for (auto& cursor : cursors)
                 if (cursor.inode == held.st_ino)
                     cursor.position = 0;
-        return ::closedir(stream);
+        return ::closedir(stream) == 0 ? ComplianceEngine::Result<void>::Success() : ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     const auto scan = [&](std::size_t cap, bool bytes, bool useDeep) -> int {
         for (auto& cursor : cursors)
@@ -2262,15 +2331,21 @@ TEST(FilesystemCollectionTest, PoppedInverseChargeMatchesIndependentStepDifferen
         // a binary search for each branch alone would still find some cap.
         EXPECT_EQ(shallowCap + delta, deepCap);
         EXPECT_EQ(0, scan(shallowCap, bytes, false));
+        EXPECT_EQ(1u, linkVisits);
         EXPECT_EQ(bytes ? E2BIG : EMFILE, scan(shallowCap - 1, bytes, false));
+        EXPECT_EQ(1u, linkVisits); // Exhaustion follows selection of the link, not an earlier frame.
         EXPECT_EQ(0, scan(deepCap, bytes, true));
+        EXPECT_EQ(1u, linkVisits);
         EXPECT_EQ(bytes ? E2BIG : EMFILE, scan(deepCap - 1, bytes, true));
+        EXPECT_EQ(1u, linkVisits);
     }
 }
 
 TEST(FilesystemCollectionTest, PoppedInversePinsHaveExactBoundariesAndRefundBeforeNextSibling)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     TestTree tree;
     tree.Directory("root");
     tree.Directory("root/a");
@@ -2389,13 +2464,13 @@ TEST(FilesystemCollectionTest, PoppedInversePinsHaveExactBoundariesAndRefundBefo
     });
     // The same pinned directory may be opened again by the next logical
     // sibling. Reset only when that cursor closes, not when another is read.
-    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) noexcept -> int {
+    ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) noexcept -> ComplianceEngine::Result<void> {
         struct stat held = {};
         if (0 == ::fstat(::dirfd(stream), &held))
             for (auto& cursor : cursors)
                 if (cursor.inode == held.st_ino)
                     cursor.position = 0;
-        return ::closedir(stream);
+        return ::closedir(stream) == 0 ? ComplianceEngine::Result<void>::Success() : ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     const auto scan = [&](std::size_t cap, bool bytes, bool both) -> int {
         for (auto& cursor : cursors)
@@ -2449,7 +2524,9 @@ TEST(FilesystemCollectionTest, PoppedInversePinsHaveExactBoundariesAndRefundBefo
 
 TEST(FilesystemCollectionTest, IteratorOverlapRetainsBothOutputPinCharges)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     TestTree tree;
     tree.Directory("root");
     // Equal-width sibling names make each acquired Step's charge identical.
@@ -2609,7 +2686,9 @@ TEST(FilesystemCollectionTest, ExhaustionKeepsCollectedEntriesAndSkippedRootExcl
     EXPECT_EQ(tree.Path("root/skipped"), streamed->exclusions[0].path);
     EXPECT_EQ("link policy", streamed->exclusions[0].reason);
 
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     auto range = Files(request, context);
     ASSERT_TRUE(range.HasValue()) << range.Error().message;
     EXPECT_TRUE(range->RootExists());
@@ -2665,7 +2744,9 @@ TEST(FilesystemCollectionTest, RootDirectoryLinkSkipIsAnExclusionNotAnAbsentRoot
     EXPECT_EQ(tree.Path("alias"), skipped->exclusions[0].path);
     EXPECT_EQ("link policy", skipped->exclusions[0].reason);
 
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     auto range = Files(request, context);
     ASSERT_TRUE(range.HasValue());
     EXPECT_TRUE(range->RootExists());
@@ -2742,7 +2823,9 @@ TEST(FilesystemCollectionTest, SkippedDanglingLinksDoNotStatTargetsOrBecomeMissi
     TestTree tree;
     tree.Directory("root");
     tree.Link("missing", "root/dangling");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     int targetStats = 0;
     ON_CALL(context, StatPath(testing::_, testing::_)).WillByDefault([&](const char* path, struct stat* metadata) {
         ++targetStats;
@@ -2845,7 +2928,9 @@ TEST(FilesystemCollectionTest, ReplacingPinnedChildLinkKeepsAcceptedTargetIdenti
     tree.Link("first", "root/alias");
     struct stat original = {};
     ASSERT_EQ(0, lstat(tree.Path("root/alias").c_str(), &original));
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     bool replaced = false;
     int renameStatus = -1;
     int renameError = 0;
@@ -2893,7 +2978,9 @@ TEST(FilesystemCollectionTest, ReplacingPinnedRootLinkKeepsAcceptedTargetIdentit
     tree.File("first");
     tree.File("second");
     tree.Link("first", "alias");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     struct stat original = {};
     ASSERT_EQ(0, lstat(tree.Path("alias").c_str(), &original));
     bool replaced = false;
@@ -2934,7 +3021,9 @@ TEST(FilesystemCollectionTest, ReplacingPinnedRootLinkKeepsAcceptedTargetIdentit
 
 TEST(FilesystemCollectionTest, FactoryPropagatesNativeRootOpenFailureWithoutTreatingItAsMissing)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ON_CALL(context, OpenNativePath(testing::_, testing::_)).WillByDefault([](const char*, int) -> int {
         errno = EACCES;
         return -1;
@@ -2998,7 +3087,9 @@ TEST(FilesystemCollectionTest, UnsupportedSkipDoesNotTurnMissingRegularChildInto
     TestTree tree;
     tree.Directory("root");
     tree.File("root/lost");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ON_CALL(context, OpenNativeAt(testing::_, testing::_, testing::_)).WillByDefault([&](int directory, const char* name, int flags) {
         if (std::strcmp(name, "lost") == 0)
         {
@@ -3046,7 +3137,9 @@ TEST(FilesystemCollectionTest, RequiredDirectoryReadFailureDoesNotProducePartial
     TestTree tree;
     tree.Directory("root");
     tree.File("root/item");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ON_CALL(context, ReadDirectory(testing::_)).WillByDefault([](DIR*) -> struct dirent* {
         errno = EIO;
         return nullptr;
@@ -3061,7 +3154,9 @@ TEST(FilesystemCollectionTest, RequiredStatFailurePropagatesItsOriginalCode)
 {
     TestTree tree;
     tree.Directory("root");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ON_CALL(context, StatFileDescriptor(testing::_, testing::_)).WillByDefault([](int, struct stat*) {
         errno = EACCES;
         return -1;
@@ -3076,15 +3171,17 @@ TEST(FilesystemCollectionTest, StandaloneCloseFailureDoesNotReplaceResultsOrCall
     TestTree tree;
     tree.Directory("root");
     tree.File("root/child");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([](DIR* stream) {
         const int status = closedir(stream);
         if (0 != status)
         {
-            return status;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
         errno = EIO;
-        return -1;
+        return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     const FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     const auto standalone = ComplianceEngine::Filesystem::CollectFilesystem(request, context);
@@ -3113,15 +3210,17 @@ TEST(FilesystemCollectionTest, ChildCloseFailureDoesNotStopTraversal)
     tree.Directory("root/child");
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.direction = FilesystemDirection::Down;
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([](DIR* stream) {
         const int status = closedir(stream);
         if (0 != status)
         {
-            return status;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
         errno = EIO;
-        return -1;
+        return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     const auto result = ComplianceEngine::Filesystem::CollectFilesystem(request, context);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
@@ -3133,7 +3232,9 @@ TEST(FilesystemCollectionTest, RootDeviceAndDefinedSelectSameMount)
     TestTree tree;
     tree.Directory("root");
     tree.File("root/other-device");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     const auto bounded = ComplianceEngine::Filesystem::CollectFilesystem(request, context);
     ASSERT_TRUE(bounded.HasValue());
@@ -3163,7 +3264,9 @@ TEST(FilesystemCollectionTest, MountScopeFiltersBothLookupAndTargetFactsWithoutM
     for (int changedFact = 0; changedFact != 2; ++changedFact)
     {
         SCOPED_TRACE(changedFact);
-        MockContext context;
+        ::testing::StrictMock<MockContext> context;
+        // No EXPECT_CALL in this test constrains any native seam.
+        context.AllowIncidentalNativeAccess();
         const std::string spoofedPath = tree.Path(changedFact == 0 ? "root/alias" : "root/target");
         std::size_t changed = 0;
         // Spoof ONLY the sealed context fdinfo read for this pinned object;
@@ -3236,7 +3339,9 @@ TEST(FilesystemCollectionTest, FactoryAcquiresRootButReadsDescendantsOnePullAtAT
     TestTree tree;
     tree.Directory("root");
     tree.File("root/item");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     std::size_t stats = 0;
     std::size_t reads = 0;
     ON_CALL(context, LstatPath(testing::_, testing::_)).WillByDefault([&stats](const char* path, struct stat* metadata) {
@@ -3273,7 +3378,7 @@ TEST(FilesystemCollectionTest, FactoryAcquiresRootButReadsDescendantsOnePullAtAT
     EXPECT_EQ(0u, stats);
     EXPECT_EQ(1u, reads);
     ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
-    EXPECT_EQ(ComplianceEngine::Filesystem::Type::RegularFile, entry->Value().LiveComponent().Value().Acquired().type);
+    EXPECT_EQ(ComplianceEngine::Filesystem::Type::RegularFile, entry->Value().LiveComponent().Value().Metadata().FileType());
 
     ++entry;
     EXPECT_EQ(entry, files.end());
@@ -3287,7 +3392,9 @@ TEST(FilesystemCollectionTest, RangeForRetainsEachRegularFilePinWithoutReacquiri
     tree.Directory("root");
     tree.File("root/first");
     tree.File("root/second");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const std::string rootPath = tree.Path("root");
     std::size_t rootLookups = 0;
     bool unexpectedLookup = false;
@@ -3309,7 +3416,7 @@ TEST(FilesystemCollectionTest, RangeForRetainsEachRegularFilePinWithoutReacquiri
         const std::string name = item.Value().path;
         const auto component = item.Value().LiveComponent();
         ASSERT_TRUE(component.HasValue());
-        const auto inode = component.Value().Acquired().metadata.st_ino;
+        const auto inode = component.Value().Metadata().Stat().st_ino;
         ASSERT_EQ(0, unlink(name.c_str()));
         auto inspected = component.Value().Stat();
         ASSERT_TRUE(inspected.HasValue()) << inspected.Error().message;
@@ -3327,7 +3434,9 @@ TEST(FilesystemCollectionTest, FactorySeparatesAbsentRootFromInitializationFailu
 {
     TestTree tree;
     tree.Directory("root");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     FilesystemCollectionRequest request(tree.Path("missing"), FilesystemRootKind::Directory);
     auto absent = Files(request, context);
     ASSERT_TRUE(absent.HasValue());
@@ -3386,7 +3495,9 @@ TEST(FilesystemCollectionTest, YieldSelectionDoesNotSuppressDescentOrWorkBudgets
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.direction = FilesystemDirection::Down;
     request.yieldType = FilesystemYieldType::RegularFiles;
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const auto selected = ComplianceEngine::Filesystem::CollectFilesystem(request, context);
     ASSERT_TRUE(selected.HasValue());
     EXPECT_EQ(std::vector<std::string>{tree.Path("root/nested/file")}, Paths(selected->entries));
@@ -3429,7 +3540,9 @@ TEST(FilesystemCollectionTest, LinkSelectionPublishesAcceptedTargetMetadata)
     tree.Directory("root");
     tree.File("root/target");
     tree.Link("target", "root/link");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.direction = FilesystemDirection::Down;
     request.yieldType = FilesystemYieldType::RegularFiles;
@@ -3480,7 +3593,9 @@ TEST(FilesystemCollectionTest, ExplicitDepthErrorIsNotAQuietStop)
     request.maxDepth = 0;
     request.depthAction = FilesystemDepthAction::Error;
     request.yieldType = FilesystemYieldType::RegularFiles;
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     const auto result = ComplianceEngine::Filesystem::CollectFilesystem(request, context);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ("Maximum recursion depth reached", result.Error().message);
@@ -3488,7 +3603,7 @@ TEST(FilesystemCollectionTest, ExplicitDepthErrorIsNotAQuietStop)
 
 TEST(FilesystemCollectionTest, FactoryPolicyFailurePrecedesRootAcquisition)
 {
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     EXPECT_CALL(context, LstatPath(testing::_, testing::_)).Times(0);
     FilesystemCollectionRequest request("", FilesystemRootKind::Directory);
     const auto opened = Files(request, context);
@@ -3501,9 +3616,12 @@ TEST(FilesystemCollectionTest, DescendantOpenFailureIsDeferredUntilAfterItsEntry
     TestTree tree;
     tree.Directory("root");
     tree.Directory("root/child");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     struct stat expectedChild = {};
     ASSERT_EQ(0, stat(tree.Path("root/child").c_str(), &expectedChild));
+    // No EXPECT_CALL in this test constrains any native seam; it only
+    // customizes ReadDirectory's default action via ON_CALL.
+    context.AllowIncidentalNativeAccess();
     ON_CALL(context, ReadDirectory(testing::_)).WillByDefault([expectedChild](DIR * stream) -> struct dirent* {
         struct stat actual = {};
         if ((0 == fstat(dirfd(stream), &actual)) && (actual.st_dev == expectedChild.st_dev) && (actual.st_ino == expectedChild.st_ino))
@@ -3526,7 +3644,7 @@ TEST(FilesystemCollectionTest, DescendantOpenFailureIsDeferredUntilAfterItsEntry
     ASSERT_TRUE(entry->HasValue());
     EXPECT_EQ(tree.Path("root/child"), entry->Value().path);
     ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
-    const auto childInode = entry->Value().LiveComponent().Value().Acquired().metadata.st_ino;
+    const auto childInode = entry->Value().LiveComponent().Value().Metadata().Stat().st_ino;
     EXPECT_EQ(expectedChild.st_ino, childInode);
     ++entry;
     ASSERT_NE(entry, files.end());
@@ -3542,7 +3660,9 @@ TEST(FilesystemCollectionTest, LateReadErrorIsYieldedOnceAndNeverCertifiesComple
 {
     TestTree tree;
     tree.Directory("root");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ON_CALL(context, ReadDirectory(testing::_)).WillByDefault([](DIR*) -> struct dirent* {
         errno = EIO;
         return nullptr;
@@ -3573,15 +3693,17 @@ TEST(FilesystemCollectionTest, ExhaustionCloseFailureDoesNotReplaceCompleteTrave
 {
     TestTree tree;
     tree.Directory("root");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([](DIR* stream) {
         const int result = closedir(stream);
         if (0 == result)
         {
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return result;
+        return result == 0 ? ComplianceEngine::Result<void>::Success() : ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     auto opened = Files(FilesystemCollectionRequest(tree.Path("root"), FilesystemRootKind::Directory), context);
     ASSERT_TRUE(opened.HasValue());
@@ -3599,12 +3721,14 @@ TEST(FilesystemCollectionTest, EarlyStopIsIdempotentAndDoesNotReadUnseenEntries)
     TestTree tree;
     tree.Directory("root");
     tree.File("root/item");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     std::size_t closed = 0;
     std::size_t reads = 0;
     ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&closed](DIR* stream) {
         ++closed;
-        return closedir(stream);
+        return closedir(stream) == 0 ? ComplianceEngine::Result<void>::Success() : ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     ON_CALL(context, ReadDirectory(testing::_)).WillByDefault([&reads](DIR* stream) {
         ++reads;
@@ -3647,7 +3771,9 @@ TEST(FilesystemCollectionTest, MovedFromRangeHasNoRootOrEntriesAndNewOwnerTraver
     TestTree tree;
     tree.Directory("root");
     tree.File("root/item");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam.
+    context.AllowIncidentalNativeAccess();
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.direction = FilesystemDirection::Down;
     auto opened = Files(request, context);
@@ -3670,11 +3796,14 @@ TEST(FilesystemCollectionTest, MoveAssignmentLeavesSourceInertAndFinalizesReplac
 {
     TestTree tree;
     tree.Directory("root");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     int cursorCloses = 0;
+    // No EXPECT_CALL in this test constrains any native seam; it only
+    // customizes CloseDirectory's default action via ON_CALL.
+    context.AllowIncidentalNativeAccess();
     ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) {
         ++cursorCloses;
-        return closedir(stream);
+        return closedir(stream) == 0 ? ComplianceEngine::Result<void>::Success() : ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     const FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     auto first = Files(request, context);
@@ -3698,12 +3827,16 @@ TEST(FilesystemCollectionTest, StopOnMovedFromRangeIsInert)
 {
     TestTree tree;
     tree.Directory("root");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     int cursorCloses = 0;
+    // The root acquisition below performs real, incidental native access;
+    // the ReadDirectory Times(0) is declared after this catch-all, so it
+    // still wins for the whole test (see MockContext.h helper comment).
+    context.AllowIncidentalNativeAccess();
     EXPECT_CALL(context, ReadDirectory(testing::_)).Times(0);
     ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&](DIR* stream) {
         ++cursorCloses;
-        return closedir(stream);
+        return closedir(stream) == 0 ? ComplianceEngine::Result<void>::Success() : ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     auto opened = Files(FilesystemCollectionRequest(tree.Path("root"), FilesystemRootKind::Directory), context);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
@@ -3720,14 +3853,18 @@ TEST(FilesystemCollectionTest, AbandonedRangeClosesWithoutPullingDescendants)
     TestTree tree;
     tree.Directory("root");
     tree.File("root/item");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     std::size_t closed = 0;
+    // The root acquisition below performs real, incidental native access;
+    // the ReadDirectory Times(0) is declared after this catch-all, so it
+    // still wins for the whole test (see MockContext.h helper comment).
+    context.AllowIncidentalNativeAccess();
     EXPECT_CALL(context, ReadDirectory(testing::_)).Times(0);
     ON_CALL(context, CloseDirectory(testing::_)).WillByDefault([&closed](DIR* stream) {
         ++closed;
         const int status = closedir(stream);
-        errno = EIO;
-        return 0 == status ? -1 : status;
+        const int nativeCode = errno;
+        return ComplianceEngine::Error(status == 0 ? EIO : nativeCode);
     });
     {
         auto opened = Files(FilesystemCollectionRequest(tree.Path("root"), FilesystemRootKind::Directory), context);
@@ -3742,7 +3879,10 @@ TEST(FilesystemCollectionTest, EarlyStopDisposalIsDiagnosticOnly)
     TestTree tree;
     tree.Directory("root");
     tree.File("root/item");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
+    // No EXPECT_CALL in this test constrains any native seam; it only
+    // customizes CloseDirectory's default action via ON_CALL below.
+    context.AllowIncidentalNativeAccess();
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.direction = FilesystemDirection::Down;
     auto opened = Files(request, context);
@@ -3759,9 +3899,9 @@ TEST(FilesystemCollectionTest, EarlyStopDisposalIsDiagnosticOnly)
         if (0 == result)
         {
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return result;
+        return result == 0 ? ComplianceEngine::Result<void>::Success() : ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
     files.Stop();
     files.Stop();
@@ -3772,9 +3912,13 @@ TEST(FilesystemCollectionTest, VisitorStopDoesNotDrainUnvisitedEntries)
     TestTree tree;
     tree.Directory("root");
     tree.File("root/item");
-    MockContext context;
+    ::testing::StrictMock<MockContext> context;
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.direction = FilesystemDirection::Down;
+    // The root acquisition below performs real, incidental native access;
+    // the ReadDirectory Times(0) is declared after this catch-all, so it
+    // still wins for the whole test (see MockContext.h helper comment).
+    context.AllowIncidentalNativeAccess();
     EXPECT_CALL(context, ReadDirectory(testing::_)).Times(0);
     const auto stopped = StreamFilesystemCollection(
         request, [](const FilesystemCollectionEntry&) { return ComplianceEngine::Result<FilesystemVisitAction>(FilesystemVisitAction::Stop); }, context);

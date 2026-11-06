@@ -37,7 +37,7 @@ protected:
         return flags >= 0 && !(flags & O_PATH) && (flags & O_ACCMODE) == O_RDONLY && ::fstat(fd, &held) == 0 && ::stat(path.c_str(), &fixture) == 0 &&
                held.st_dev == fixture.st_dev && held.st_ino == fixture.st_ino;
     }
-    MockContext mContext;
+    ::testing::StrictMock<MockContext> mContext;
     IndicatorsTree mIndicators;
     std::string mTempdir;
 
@@ -46,6 +46,12 @@ protected:
         mTempdir = mContext.GetTempdirPath() + "/no-duplicate-entries";
         ASSERT_EQ(0, mkdir(mTempdir.c_str(), 0700));
         mIndicators.Push("EnsureNoDuplicateEntriesExist");
+        // No test in this fixture constrains open/stat/identity seams; only
+        // OpenNativeAt/ReadFileDescriptor/CloseFileDescriptor get
+        // test-specific ON_CALL overrides in a few tests below, each paired
+        // with its own later EXPECT_CALL that takes priority over this
+        // catch-all.
+        mContext.AllowIncidentalNativeAccess();
     }
 
     std::string CreateTestFile(const std::string& content)
@@ -294,6 +300,7 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, FailedOpenRetainsHistoricalEnoentContr
         }
         return mContext.RealOpenNativeAt(directory, component, flags);
     });
+    EXPECT_CALL(mContext, OpenNativeAt(_, _, _)).Times(testing::AnyNumber());
     auto denied = AuditNoDuplicateEntries(params, mIndicators, mContext);
     ASSERT_FALSE(denied.HasValue());
     EXPECT_EQ(ENOENT, denied.Error().code);
@@ -324,18 +331,23 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, ReachedReadFailureRejectsPartialResult
         return -1;
     });
     ON_CALL(mContext, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
-        const int nativeResult = mContext.RealCloseFileDescriptor(fd);
+        const auto nativeResult = mContext.RealCloseFileDescriptor(fd);
         if (fd != readerFd)
             return nativeResult;
         ++closes;
-        EXPECT_EQ(0, nativeResult);
-        if ((1 == closes) && (0 == nativeResult))
+        EXPECT_TRUE(nativeResult.HasValue());
+        if ((1 == closes) && (nativeResult.HasValue()))
         {
             errno = EBADF;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
         return nativeResult;
     });
+    // Newer than the fixture's catch-all; the exact read/close-count property
+    // is already enforced below via the hand-counted reads/closes, not gMock
+    // cardinality.
+    EXPECT_CALL(mContext, ReadFileDescriptor(_, _, _)).Times(testing::AnyNumber());
+    EXPECT_CALL(mContext, CloseFileDescriptor(_)).Times(testing::AnyNumber());
     NoDuplicateEntriesParams params;
     params.filename = filename;
     params.delimiter = ",";
@@ -351,7 +363,7 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, ReachedReadFailureRejectsPartialResult
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const string closeEntry = "Cannot close readable-file activation (ownership bug, EBADF): " + std::to_string(EBADF);
+    const string closeEntry = "Failed to close filesystem resource: " + std::string(strerror(EBADF)) + " (ownership bug)";
     const auto first = text.find(closeEntry);
     ASSERT_NE(string::npos, first);
     EXPECT_EQ(string::npos, text.find(closeEntry, first + closeEntry.size()));
@@ -409,10 +421,14 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, CloseFailurePreservesDuplicateVerdictA
         {
             ++closes;
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return 0;
+        return ComplianceEngine::Result<void>::Success();
     });
+    // Newer than the fixture's catch-all; the exact close-count property is
+    // already enforced below via the hand-counted `closes`, not gMock
+    // cardinality.
+    EXPECT_CALL(mContext, CloseFileDescriptor(_)).Times(testing::AnyNumber());
     NoDuplicateEntriesParams params;
     params.filename = filename;
     params.delimiter = ",";
@@ -427,7 +443,7 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, CloseFailurePreservesDuplicateVerdictA
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const string closeEntry = "Cannot close readable-file activation: " + std::to_string(EIO);
+    const string closeEntry = "Failed to close filesystem resource: " + std::string(strerror(EIO));
     const auto first = text.find(closeEntry);
     ASSERT_NE(string::npos, first);
     EXPECT_EQ(string::npos, text.find(closeEntry, first + closeEntry.size()));

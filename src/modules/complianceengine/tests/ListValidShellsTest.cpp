@@ -15,6 +15,7 @@
 
 using ComplianceEngine::ListValidShells;
 using testing::_;
+using testing::AnyNumber;
 
 namespace
 {
@@ -34,7 +35,16 @@ protected:
         context.SetSpecialFilePath("/etc/shells", context.MakeTempfile(std::move(contents)));
     }
 
-    MockContext context;
+    void SetUp() override
+    {
+        // No test in this fixture constrains open/stat/identity seams; only
+        // ReadFileDescriptor/CloseFileDescriptor get test-specific ON_CALL
+        // overrides below, each paired with its own later EXPECT_CALL that
+        // takes priority over this catch-all.
+        context.AllowIncidentalNativeAccess();
+    }
+
+    ::testing::StrictMock<MockContext> context;
 };
 } // namespace
 
@@ -116,10 +126,17 @@ TEST_F(ValidShellsTest, ReachedReadErrorTakesPrecedenceOverCloseError)
         {
             ++closes;
             errno = EBADF;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return 0;
+        return ComplianceEngine::Result<void>::Success();
     });
+    // Newer than the fixture's AllowIncidentalNativeAccess() catch-all: these
+    // seams are read/close fault injection for this test, but the exact
+    // property under test (2 reads then an IO error, 1 close attempt) is
+    // already enforced below via the hand-counted reads/closes, not via
+    // gMock cardinality.
+    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(AnyNumber());
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(AnyNumber());
     auto failed = ListValidShells(context);
     ASSERT_FALSE(failed.HasValue());
     EXPECT_EQ(EIO, failed.Error().code);
@@ -143,10 +160,14 @@ TEST_F(ValidShellsTest, CloseFailureAfterEofPreservesCompletedSetAndLogsOnce)
         {
             ++closes;
             errno = EIO;
-            return -1;
+            return ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
         }
-        return 0;
+        return ComplianceEngine::Result<void>::Success();
     });
+    // Newer than the fixture's catch-all; the exact close-count property is
+    // already enforced below via the hand-counted `closes`, not gMock
+    // cardinality.
+    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(AnyNumber());
     auto shells = ListValidShells(context);
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);
@@ -156,7 +177,7 @@ TEST_F(ValidShellsTest, CloseFailureAfterEofPreservesCompletedSetAndLogsOnce)
     std::ifstream log(logPath);
     ASSERT_TRUE(log.is_open());
     const std::string text((std::istreambuf_iterator<char>(log)), std::istreambuf_iterator<char>());
-    const std::string closeEntry = "Cannot close readable-file activation: " + std::to_string(EIO);
+    const std::string closeEntry = "Failed to close filesystem resource: " + std::string(strerror(EIO));
     const auto first = text.find(closeEntry);
     ASSERT_NE(std::string::npos, first);
     EXPECT_EQ(std::string::npos, text.find(closeEntry, first + closeEntry.size()));
