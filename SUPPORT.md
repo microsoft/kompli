@@ -38,7 +38,7 @@ guidelines.
 
 ## Response expectations
 
-Kompli is maintained by Microsoft. Issues and pull requests are reviewed on a
+kompli is maintained by Microsoft. Issues and pull requests are reviewed on a
 best-effort basis and the maintainers aim to respond to new, well-formed issues
 within a few business days. There is no guaranteed service-level agreement for
 this open-source project, and response times may vary around holidays and release

@@ -16,8 +16,12 @@ This folder contains the artifacts and scripts used by our engineering systems (
   - `terraform` - terraform modules for provisioning Azure resources for E2E tests
 - `rpm` - RPM packaging scripts
 
-## Updating Build contaienrs used for CI builds
-The `docker/<os>-<arch>` - Build containers are used by ci [ci.yml](.github/workflows/ci.yml)
-Their version(digest's) are stored inside [test-matrix.json](.github/test-matrix.json)
-The [build-containers.yml](.github/workflows/build-contains.yml) is ran whenever any Build Containers dockerfile is changed.
-The [build-containers.yml](.github/workflows/build-contains.yml) produces new-test-matrix.json that can be copted to [test-matrix.json](.github/test-matrix.json) and commited. Then next [ci.yml](.github/workflows/ci.yml) will use updated containers to run builds & tests.
+## Updating build containers used for CI
+
+The `docker/<os>-<arch>` build containers are used by
+[ci.yml](../.github/workflows/ci.yml). Their image digests are recorded in
+[test-matrix.json](../.github/test-matrix.json).
+The [build-containers workflow](../.github/workflows/build-containers.yml)
+runs when container Dockerfiles change and produces `new-test-matrix.json`.
+Review that output before updating the checked-in matrix for subsequent CI
+builds and tests.

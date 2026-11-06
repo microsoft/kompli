@@ -1,13 +1,13 @@
-Kompli - North Star Architecture
+kompli - North Star Architecture
 ========================================
 
 # 1. Introduction
 
-Kompli is a modular security configuration stack for Linux. Kompli supports management over Azure and Azure Portal and local CLI.
+kompli is a modular security configuration stack for Linux. kompli supports management over Azure and Azure Portal and local CLI.
 
 This document describes the North Star architecture of this project. Its prime target is to guide the people who develop kompli. The doc can be also useful to anyone who is interested to learn about this project.
 
-Kompli design principles are the following:
+kompli design principles are the following:
 
 - Policy evaluator engine.
 - Modular architecture.
@@ -15,7 +15,7 @@ Kompli design principles are the following:
 - Simple and focused on what is truly needed.
 - Not permanently tied to any management authority.
 
-The main way to extend kompli is by developing new [procedures](../src/modules/complianceengine/src/lib/procedures/).
+The main way to extend kompli is by developing new [procedures](../src/engine/procedures/).
 
 # 2. Overall kompli Architecture
 
@@ -24,35 +24,31 @@ The main way to extend kompli is by developing new [procedures](../src/modules/c
 ```
 src/
   adapters/
-    mc/
-      complianceengine/   NRP adapter (Baseline.c, OsConfigResource.c, generated MOF)
+    mc/                 Native resource provider (OsConfigResource.c)
+      complianceengine/ Compliance bridge (Baseline.c) and shell MOF
   common/
     commonutils/        Shared OS utility functions
     logging/            Circular file logging
     mpiclient/          MPI REST API client
     parson/             Vendored JSON parser
-    telemetry/          Telemetry support
-  modules/
-    complianceengine/   ComplianceEngine module and tests
-      src/lib/          Core engine, evaluator, procedures, Lua integration
-      src/so/           Module shared-object entry point
-      src/benchmarkio/  Benchmark-definition parsing + input-file security
-      src/kompli/       kompli CLI tool
-      src/lua-evaluator/ Lua evaluator tool
-      tests/            Unit tests
-    inc/                Module interface headers (Mmi.h)
-    mim/                ComplianceEngine MIM definition
-    schema/             MIM validation schema
+  engine/               Core engine, evaluator, procedures, Lua integration
+    tests/              Unit tests
+  benchmarkio/          Benchmark-definition parsing + input-file security
+  kompli/               kompli CLI tool
+  tools/
+    lua-evaluator/      Lua evaluator tool
+  telemetry/            Telemetry support
   tests/
-    fuzzer/             ComplianceEngine libFuzzer target
+    fuzzer/             Shared utility libFuzzer targets
 ```
 
 ## 2.2. Scenarios
 
-Kompli supports two integration scenarios that share the same ComplianceEngine module:
+kompli supports two integration scenarios that share the C++ core in
+`src/engine/`:
 
-- **Machine Configuration (NRP)** — a standalone shared library loaded by the GC worker on demand. The augmentation engine generates MOF files that drive audit and remediation per rule.
-- **CLI (`kompli`)** — a standalone CLI tool (`src/modules/complianceengine/src/kompli/`) that builds plans from one or more benchmark-definition JSON files and executes each plan's per-rule audit/remediation choices without platform or daemon involvement. Definition and plan inputs are required on-disk files; stdin is not supported for them.
+- **Machine Configuration (NRP)** — a standalone adapter library loaded by the GC worker on demand. MOF resource instances supply each rule's audit and remediation inputs.
+- **CLI (`kompli`)** — a standalone CLI tool (`src/kompli/`) that builds plans from one or more benchmark-definition JSON files and executes each plan's per-rule audit/remediation choices without platform or daemon involvement. Definition and plan inputs are required on-disk files; stdin is not supported for them.
 
 Benchmark definitions bind the file-level identity tuple (`framework`,
 `distribution`, `distributionVersion`, `benchmarkVersion`) in metadata. Each
@@ -85,7 +81,7 @@ fatal; the process does not retry under a different parent.
 
 # 3. kompli Agent
 
-Kompli will be able to run as a standalone daemon that can evaluate policy given requests from external sources.
+kompli will be able to run as a standalone daemon that can evaluate policy given requests from external sources.
 
 ## 3.1. MMI
 
@@ -188,11 +184,11 @@ The payload argument contains a JSON formatted, not null terminated UTF-8 string
 - Boolean payload example: ```"true"```
 - Complex payload example combining all the above as fields into same object payload: ```"{"valueOne":123,"valueTwo":"This is a test.","valueThree":true}"``` where "valueOne", "valueTwo" and "valueThree" are the respective field names.
 
-Kompli will not attempt to parse and validate the payload and payloadSizeBytes arguments. It is the responsability of the respective Module to do this and return errors if appropriate. Modules must also validate the clientSession, componentName and objectName arguments against invalid values.
+kompli will not attempt to parse and validate the payload and payloadSizeBytes arguments. It is the responsability of the respective Module to do this and return errors if appropriate. Modules must also validate the clientSession, componentName and objectName arguments against invalid values.
 
 The maximum size of payload will be limited to the size specified via MmiOpen if that's a non-zero value (0 meaning unlimited).
 
-MmiSet may be called with the same payload several times. Kompli must be able to handle these calls either by reapplying the desired payload or detect when the respective desired configuration was already applied and in that case return MMI_OK without reapplying the payload and without logging errors.
+MmiSet may be called with the same payload several times. kompli must be able to handle these calls either by reapplying the desired payload or detect when the respective desired configuration was already applied and in that case return MMI_OK without reapplying the payload and without logging errors.
 
 ## 3.6. MmiGet
 
@@ -247,14 +243,15 @@ The MPI has two different implementations:
 
 MPI REST API calls include GET (MpiGet, MpiGetReported) and POST (MpiSet, MpiSetDesired).
 
-The MPI C API header file is [src/common/mpiclient/Mpi.h](../src/common/mpiclient/Mpi.h]
+The MPI C API header file is [src/common/mpiclient/Mpi.h](../src/common/mpiclient/Mpi.h)
 
 The MPI is almost identical to the MMI, except that:
 
 - MMI has one extra method, MmiGetInfo, that each Management Module must implement but it is not needed for the MPI
 - MPI has the MpiSetDesired and MpiGetReported that the MMI does not have.
 
-For more details on the MMI C API and the similar MmiOpen, MmiClose, MmiFree, MmiSet and MmiGet see the [OSConfig Management Modules](modules.md) specification.
+For the MMI C API declarations, including MmiOpen, MmiClose, MmiFree, MmiSet
+and MmiGet, see [Mmi.h](../src/modules/inc/Mmi.h).
 
 For more about MpiGetReported and MpiSetDesired see the next section.
 
@@ -272,21 +269,22 @@ Example:
 {"CommandRunner":{"commandArguments":{"commandId":"726","arguments":"ls", "action":4}}, "Settings":{"deviceHealthTelemetryConfiguration":2, "deliveryOptimizationPolicies":{"percentageDownloadThrottle":90,"cacheHostSource":2, "cacheHost":"Test cache host","cacheHostFallback":2021}}}
 ```
 
-This format is following the MIM JSON payload schema described in the [OSConfig Management Modules](modules.md) specification.
+The [MIM JSON Schema](../src/modules/schema/mim.schema.json) describes this
+payload format.
 
 ## 4.3. Orchestrator
 
 
 ## 4.9. Logging
 
-Kompli provides a Logging library component that makes it easy for all kompli components to log in a standard fashion to date and time stamped self-rolled log files.
+kompli provides a Logging library component that makes it easy for all kompli components to log in a standard fashion to date and time stamped self-rolled log files.
 
 
 # 5. kompli Management Modules
 
 ## 5.1. ComplianceEngine Module
 
-The ComplianceEngine module (`src/modules/complianceengine/`) evaluates security compliance rules using recursive JSON payloads with logical combinators (`allOf`, `anyOf`, `not`), built-in C++ procedures, and Lua scripts. It is implemented as a dynamically linked shared object (`.so`) and exposes a single MIM component: `Compliance`.
+The ComplianceEngine C++ core (`src/engine/`) evaluates security compliance rules using recursive JSON payloads with logical combinators (`allOf`, `anyOf`, `not`), built-in C++ procedures, and Lua scripts. It is linked into a dynamically loaded shared object (`.so`) exposing a single MIM component: `Compliance`; the MC adapter (`src/adapters/mc/complianceengine/`) is a separate component.
 
 The MIM definition is at `src/modules/schema/mim.schema.json`.
 
@@ -308,7 +306,7 @@ Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns 
 
 ## 5.3. kompli CLI Mode
 
-The kompli CLI (`src/modules/complianceengine/src/kompli/`) is a standalone CLI
+The kompli CLI (`src/kompli/`) is a standalone CLI
 tool that reads a benchmark-definition JSON file and drives the engine directly
 — no platform daemon, MPI, or RC/DC files are involved.
 
@@ -395,7 +393,7 @@ Direct MMI calls are used (no MPI communication) to match the existing ASB imple
 
 ## 6.2. MOF File Structure
 
-The augmentation engine generates one MOF resource instance per compliance rule:
+A MOF resource instance describes one compliance rule:
 
 ```
 instance of OsConfigResource as $OsConfigResource0ref {

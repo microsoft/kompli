@@ -66,7 +66,7 @@ see §2.
 argument (the benchmark-definition file for `plan`/`list`, the plan file for
 `run`); a missing path or `-` is a hard error — stdin is deliberately
 unsupported for definitions (see the input-hardening posture in
-`src/modules/complianceengine/src/kompli/THREAT_MODEL.md`). `render` is a
+`src/kompli/THREAT_MODEL.md`). `render` is a
 root-free, pure transformation and does accept stdin.
 
 There is no whole-file, single-mode command — `plan`+`run` (§2) is the only
@@ -323,7 +323,7 @@ is out of scope here.
 A rule reference (`id`, which plan/run key on, and which is
 kompli's *sole* per-rule identifier) must be unambiguous within one file for any of the above to safely rely on
 it. `BenchmarkDefinition::ParseString`/`ParseFile`
-(`src/modules/complianceengine/src/benchmarkio/BenchmarkDefinition.hpp`) must
+(`src/benchmarkio/BenchmarkDefinition.hpp`) must
 **reject** a document with a duplicate `id` across its rules, checked as each
 rule is parsed.
 

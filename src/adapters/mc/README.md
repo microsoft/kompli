@@ -1,4 +1,4 @@
-# Kompli Universal Native Resource Provider (NRP) for Azure Automanage Machine Configuration (MC)
+# kompli Universal Native Resource Provider (NRP) for Azure Automanage Machine Configuration (MC)
 
 ## 1. About Machine Configuration
 
