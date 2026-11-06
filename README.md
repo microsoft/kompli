@@ -3,15 +3,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/microsoft/kompli/badge)](https://scorecard.dev/viewer/?uri=github.com/microsoft/kompli)
 
-kompli is a Linux security compliance engine for evaluating and remediating system configuration against industry benchmarks (CIS, STIG, etc.). It is derived from the [Azure OSConfig](https://github.com/Azure/azure-osconfig) project, with its [kompli core](docs/glossary.md#engine) in [`src/engine/`](src/engine/), a local CLI and a separate Machine Configuration adapter.
-
-See the [glossary](docs/glossary.md) for project and interface terminology.
+kompli is a Linux security compliance engine for evaluating and remediating system configuration against industry benchmarks (CIS, STIG, etc.). It is derived from the [Azure OSConfig](https://github.com/Azure/azure-osconfig) project, with its C++ core in [`src/engine/`](src/engine/), a local CLI and a separate Machine Configuration adapter.
 
 ## History
 
-This codebase originates from **Azure OSConfig** — a modular security configuration stack for Linux Edge devices developed by Microsoft, supporting multi-authority device management over Azure IoT Hub and local management. OSConfig consisted of a platform daemon, a PnP/MC adapter layer, and a set of management modules (CommandRunner, SecurityBaseline, DeviceInfo, Networking, Firewall, and others).
+This codebase originates from **Azure OSConfig** — a modular security configuration stack for Linux Edge devices developed by Microsoft, supporting multi-authority device management over Azure IoT Hub, GitOps, and local management. OSConfig consisted of a platform daemon, a PnP/MC adapter layer, and a set of management modules (CommandRunner, SecurityBaseline, DeviceInfo, Networking, Firewall, and others).
 
-kompli focuses on the project core and its execution entry points rather
+kompli focuses on the compliance core and its execution entry points rather
 than the original platform's full management stack. The MC (Machine
 Configuration) adapter, shared utilities, logging, JSON support and optional
 telemetry support the core.
@@ -20,7 +18,7 @@ telemetry support the core.
 
 ```
 src/
-├── adapters/mc/complianceengine/   MC adapter for the engine
+├── adapters/mc/complianceengine/   MC adapter for ComplianceEngine
 ├── common/
 │   ├── commonutils/                Shared C utilities (pruned to CE dependencies)
 │   ├── logging/                    Logging library
@@ -79,7 +77,7 @@ cd build && ctest
 
 ## Configuration
 
-The engine is configured via `/etc/kompli/kompli.json`:
+ComplianceEngine is configured via `/etc/kompli/kompli.json`:
 
 ```json
 {

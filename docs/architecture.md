@@ -3,9 +3,7 @@ kompli - North Star Architecture
 
 # 1. Introduction
 
-kompli combines a shared [kompli core](glossary.md#engine), a local
-[CLI](glossary.md#kompli-cli) and a
-[Machine Configuration adapter](glossary.md#mc-adapter) for Linux.
+kompli is a modular security configuration stack for Linux. kompli supports management over Azure and Azure Portal and local CLI.
 
 This document describes the North Star architecture of this project. Its prime target is to guide the people who develop kompli. The doc can be also useful to anyone who is interested to learn about this project.
 
@@ -282,11 +280,11 @@ payload format.
 kompli provides a Logging library component that makes it easy for all kompli components to log in a standard fashion to date and time stamped self-rolled log files.
 
 
-# 5. kompli core and CLI
+# 5. kompli Management Modules
 
-## 5.1. kompli core
+## 5.1. ComplianceEngine Module
 
-The kompli core (`src/engine/`) evaluates rules using recursive JSON payloads with logical combinators (`allOf`, `anyOf`, `not`), built-in C++ procedures, and Lua scripts. It is linked into a dynamically loaded shared object (`.so`) exposing a single MIM component: `Compliance`; the MC adapter (`src/adapters/mc/complianceengine/`) is a separate component.
+The ComplianceEngine C++ core (`src/engine/`) evaluates security compliance rules using recursive JSON payloads with logical combinators (`allOf`, `anyOf`, `not`), built-in C++ procedures, and Lua scripts. It is linked into a dynamically loaded shared object (`.so`) exposing a single MIM component: `Compliance`; the MC adapter (`src/adapters/mc/complianceengine/`) is a separate component.
 
 The MIM definition is at `src/modules/schema/mim.schema.json`.
 
@@ -372,7 +370,7 @@ downstream benchmark packages must preserve it when present.
 The MC adapter writes `/var/log/kompli/kompli.log`, and the telemetry helper
 writes `/var/log/kompli/telemetry.log`. The `/var/log/kompli/` directory is
 created if needed. Each log rotates to the same basename with a `.bak`
-extension. The standalone module shared object does not write a log file.
+extension. The standalone ComplianceEngine module does not write a log file.
 The CLI continues to log to stderr unless `--log-file` is supplied.
 
 Telemetry-enabled builds use `/var/lib/kompli/telemetry.events.json` for the
@@ -385,7 +383,7 @@ The kompli Universal Native Resource Provider (NRP) Adapter links kompli to the 
 
 Using MC and the kompli Universal NRP, we can create Azure Policies that automatically target for compliance audit or remediation all Linux devices in a particular Azure subscription and Azure resource group.
 
-## 6.1. MC NRP adapter
+## 6.1. Compliance NRP Adapter
 
 The NRP scenario uses a standalone shared library (`src/adapters/mc/complianceengine/`) bundled in a policy package. The GC worker dynamically loads the library periodically and uses the `OsConfigResource` class as its interface.
 

@@ -6,8 +6,7 @@
 
 kompli is a Linux security compliance engine derived from Azure OSConfig. The
 C++ core lives in `src/engine/`, separate from the local CLI and Machine
-Configuration adapter. Use the [glossary](../docs/glossary.md) for project and
-interface terminology; call the shared evaluator the kompli core or engine.
+Configuration adapter.
 
 The code is written in C11/C++11, uses CMake and vcpkg, and targets Linux only.
 
@@ -16,9 +15,9 @@ The code is written in C11/C++11, uses CMake and vcpkg, and targets Linux only.
 ```
 src/
   CMakeLists.txt                  Root CMake file and build options
-  adapters/mc/complianceengine/   Machine Configuration adapter for the engine
+  adapters/mc/complianceengine/   Machine Configuration adapter for ComplianceEngine
   common/
-    commonutils/                  Shared OS utility functions used by the engine
+    commonutils/                  Shared OS utility functions used by ComplianceEngine
     logging/                      Circular file logging
     mpiclient/                    MPI REST API client used by the MC adapter
     parson/                       Vendored JSON parser
@@ -27,7 +26,7 @@ src/
   benchmarkio/                    Benchmark-definition parsing + input-file security
   kompli/                         kompli CLI tool
   tools/lua-evaluator/            Lua evaluator tool
-  telemetry/                      Telemetry support used by the engine
+  telemetry/                      Telemetry support used by ComplianceEngine
   tests/fuzzer/                   Shared utility libFuzzer targets
 external/vcpkg/                   vcpkg package manager submodule
 devops/                           Remaining build, package, and container assets
@@ -71,11 +70,11 @@ Run pre-commit before submitting changes:
 python3 -m pre_commit run --all-files
 ```
 
-The clang-format and clang-tidy hooks focus on engine and telemetry C++ sources.
+The clang-format and clang-tidy hooks focus on ComplianceEngine and telemetry C++ sources.
 
-## kompli core
+## C++ compliance core
 
-The [kompli core](../docs/glossary.md#engine) evaluates rules using recursive payloads with logical combinators (`allOf`, `anyOf`, `not`), built-in C++ procedures, and Lua scripts. It supports audit and remediation actions.
+ComplianceEngine evaluates security compliance rules using recursive payloads with logical combinators (`allOf`, `anyOf`, `not`), built-in C++ procedures, and Lua scripts. It supports audit and remediation actions.
 
 Rule payloads are JSON objects, base64-encoded into MOF fields consumed by the MC adapter.
 

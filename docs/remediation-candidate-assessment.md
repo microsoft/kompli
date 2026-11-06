@@ -1,9 +1,9 @@
 # Remediation candidate assessment
 
-This assessment combines engine handler availability with procedure
+This assessment combines ComplianceEngine handler availability with procedure
 usage across 8,112 sampled benchmark rules. Usage is shown as
 `rules / positive leaves`; negated leaves are excluded
-because negating an audit does not specify a safe inverse change.
+because remediation generation intentionally does not invert audit procedures.
 
 ## Recommendation
 
