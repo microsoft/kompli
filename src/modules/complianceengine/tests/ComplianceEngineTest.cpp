@@ -214,9 +214,9 @@ TEST_F(ComplianceEngineTest, ValidatePayload_OverrideFile)
 
     bool createdDir = false;
     struct stat dirSt;
-    if (0 != stat("/etc/osconfig", &dirSt))
+    if (0 != stat("/etc/kompli", &dirSt))
     {
-        createdDir = (0 == mkdir("/etc/osconfig", 0755));
+        createdDir = (0 == mkdir("/etc/kompli", 0755));
     }
 
     std::ofstream overrideFile(DistributionInfo::cDefaultOverrideFilePath);
@@ -224,7 +224,7 @@ TEST_F(ComplianceEngineTest, ValidatePayload_OverrideFile)
     {
         if (createdDir)
         {
-            rmdir("/etc/osconfig");
+            rmdir("/etc/kompli");
         }
         GTEST_SKIP() << "Cannot create override file (insufficient permissions or missing directory)";
     }
@@ -236,7 +236,7 @@ TEST_F(ComplianceEngineTest, ValidatePayload_OverrideFile)
     EXPECT_EQ(0, remove(DistributionInfo::cDefaultOverrideFilePath));
     if (createdDir)
     {
-        rmdir("/etc/osconfig");
+        rmdir("/etc/kompli");
     }
     ASSERT_NE(nullptr, handle);
     auto& engine = *reinterpret_cast<ComplianceEngine::Engine*>(handle);

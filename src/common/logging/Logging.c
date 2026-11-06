@@ -138,6 +138,30 @@ static int RestrictLogFileAccess(const char* fileName)
     return chmod(fileName, S_IRUSR | S_IWUSR | S_IRGRP);
 }
 
+// Creates the parent directories of fileName if they do not exist yet
+static void CreateLogDirectory(const char* fileName)
+{
+    char path[PATH_MAX] = {0};
+    char* separator = NULL;
+    size_t length = strlen(fileName);
+
+    if (length >= sizeof(path))
+    {
+        return;
+    }
+
+    memcpy(path, fileName, length + 1);
+    for (separator = strchr(path + 1, '/'); NULL != separator; separator = strchr(separator + 1, '/'))
+    {
+        *separator = '\0';
+        if ((0 != mkdir(path, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH )) && (EEXIST != errno))
+        {
+            return;
+        }
+        *separator = '/';
+    }
+}
+
 OsConfigLogHandle OpenLog(const char* logFileName, const char* bakLogFileName)
 {
     OsConfigLog* newLog = (OsConfigLog*)malloc(sizeof(OsConfigLog));
@@ -153,6 +177,7 @@ OsConfigLogHandle OpenLog(const char* logFileName, const char* bakLogFileName)
 
     if (NULL != newLog->logFileName)
     {
+        CreateLogDirectory(newLog->logFileName);
         newLog->log = fopen(newLog->logFileName, "a");
         RestrictLogFileAccess(newLog->logFileName);
     }

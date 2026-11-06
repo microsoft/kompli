@@ -5,11 +5,11 @@
 #include <BenchmarkInfo.h>
 #include <DistributionInfo.h>
 #include <Evaluator.h>
-#include <Regex.h>
 #include <Resource.hpp>
 #include <gtest/gtest.h>
 #include <map>
 #include <parson.h>
+#include <regex>
 #include <string>
 
 using ComplianceEngine::Action;
@@ -108,7 +108,7 @@ TEST(BenchmarkFormatterTest, EnvelopeContainsRequiredTopLevelFields)
     {
         const char* ts = json_object_get_string(doc.object, "timestamp");
         ASSERT_NE(ts, nullptr);
-        EXPECT_TRUE(regex_match(ts, regex(R"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)"))) << "timestamp not ISO 8601 UTC: " << ts;
+        EXPECT_TRUE(std::regex_match(ts, std::regex(R"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)"))) << "timestamp not ISO 8601 UTC: " << ts;
     }
     // `action` is per-rule now (a single `run` can mix audit/remediate across
     // rules), not a top-level field - see AddEntryEmitsPerRuleAction below.
@@ -229,6 +229,28 @@ TEST(BenchmarkFormatterTest, AddEntryEmitsTitleIdRuleIdRuleNameStatus)
     EXPECT_EQ(json_value_get_type(json_object_get_value(rule, "parameters")), JSONObject);
     // The legacy alias must be gone.
     EXPECT_EQ(json_object_has_value(rule, "resourceID"), 0) << "resourceID must be renamed to title";
+}
+
+TEST(BenchmarkFormatterTest, EqualTitlesAndEngineNamesRemainSeparateResults)
+{
+    auto formatterResult = BenchmarkFormatter::Begin(TestDistribution());
+    ASSERT_TRUE(formatterResult.HasValue());
+    auto& formatter = formatterResult.Value();
+    ASSERT_FALSE(formatter.AddEntry(MakeResource("SV-1", "Same title", "SameTitle"), Status::Compliant, "[]", {}, Action::Audit).HasValue());
+    ASSERT_FALSE(formatter.AddEntry(MakeResource("SV-2", "Same title", "SameTitle"), Status::NonCompliant, "[]", {}, Action::Audit).HasValue());
+    auto result = std::move(formatter).Finish(Status::NonCompliant);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    ParsedJson doc(result.Value());
+    ASSERT_NE(doc.object, nullptr);
+    JSON_Array* rules = json_object_get_array(doc.object, "rules");
+    ASSERT_NE(rules, nullptr);
+    ASSERT_EQ(json_array_get_count(rules), 2u);
+    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 0), "id"), "SV-1");
+    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 1), "id"), "SV-2");
+    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 0), "title"), "Same title");
+    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 1), "title"), "Same title");
+    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 0), "status"), "Compliant");
+    EXPECT_STREQ(json_object_get_string(json_array_get_object(rules, 1), "status"), "NonCompliant");
 }
 
 TEST(BenchmarkFormatterTest, AddEntryEmitsTagsAndMetadata)

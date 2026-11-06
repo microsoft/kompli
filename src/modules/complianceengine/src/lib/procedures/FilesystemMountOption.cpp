@@ -5,7 +5,6 @@
 
 #include <CommonUtils.h>
 #include <FilesystemMountOption.h>
-#include <Regex.h>
 #include <StringTools.h>
 #include <algorithm>
 #include <ctime>
@@ -13,6 +12,7 @@
 #include <linux/limits.h>
 #include <map>
 #include <mntent.h>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -129,14 +129,14 @@ Result<Status> AuditFilesystemMountOption(const FilesystemMountOptionParams& par
         std::copy(params.optionsNotSet->items.cbegin(), params.optionsNotSet->items.cend(), std::inserter(optionsNotSet, optionsNotSet.begin()));
     }
 
-    Optional<regex> mountpointPattern;
+    Optional<std::regex> mountpointPattern;
     if (params.mountpointIsPattern.Value())
     {
         try
         {
-            mountpointPattern = regex(params.mountpoint);
+            mountpointPattern = std::regex(params.mountpoint);
         }
-        catch (const regex_error& error)
+        catch (const std::regex_error& error)
         {
             return Error("Invalid mountpoint pattern " + params.mountpoint + ": " + std::string(error.what()), EINVAL);
         }
@@ -145,7 +145,7 @@ Result<Status> AuditFilesystemMountOption(const FilesystemMountOptionParams& par
     bool found = false;
     for (const auto& entry : mtabEntries.Value())
     {
-        const bool matches = mountpointPattern.HasValue() ? regex_search(entry.first, mountpointPattern.Value()) : entry.first == params.mountpoint;
+        const bool matches = mountpointPattern.HasValue() ? std::regex_search(entry.first, mountpointPattern.Value()) : entry.first == params.mountpoint;
         if (!matches)
         {
             continue;

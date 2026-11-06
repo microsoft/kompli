@@ -8,9 +8,11 @@
 #include <cerrno>
 #include <cstdint>
 #include <parson.h>
+#include <pugixml.hpp>
 #include <sstream>
 #include <streambuf>
 #include <string>
+#include <utility>
 
 namespace ComplianceEngine
 {
@@ -71,11 +73,6 @@ public:
         return mValue;
     }
 
-    void RemoveLast(size_t count)
-    {
-        mValue.resize(mValue.size() - count);
-    }
-
 protected:
     std::streamsize xsputn(const char* data, std::streamsize count) override
     {
@@ -106,56 +103,60 @@ private:
     string mValue;
 };
 
-// Attribute whitespace needs character references to survive XML parsing.
-// Illegal ASCII controls are normalized only in legacy element text; attributes
-// retain them so the completed document validation can reject them.
-void EscapeXml(const string& in, std::ostream& out, bool attribute = false)
+// Charge a lower bound on each node's serialized bytes before inserting it.
+// Every element/attribute has fixed XML syntax and a name; validated values
+// cannot get shorter when escaped in UTF-8. This bounds DOM construction
+// proportionally to the 16 MiB output cap without rejecting compact XML just
+// because pugixml's per-node allocation exceeds its serialized representation.
+// The one fixed-size declaration is excluded; BoundedXmlWriter independently
+// enforces the exact serialized size, including the declaration and escaping.
+class XmlBudget
 {
-    for (const char ch : in)
+public:
+    bool Add(size_t bytes)
     {
-        switch (ch)
+        if (bytes > kMaxJUnitBytes - mUsed)
         {
-            case '&':
-                out << "&amp;";
-                break;
-            case '<':
-                out << "&lt;";
-                break;
-            case '>':
-                out << "&gt;";
-                break;
-            case '"':
-                out << "&quot;";
-                break;
-            case '\'':
-                out << "&apos;";
-                break;
-            case '\t':
-                out << (attribute ? "&#9;" : "\t");
-                break;
-            case '\n':
-                out << (attribute ? "&#10;" : "\n");
-                break;
-            case '\r':
-                out << (attribute ? "&#13;" : "\r");
-                break;
-            default:
-                if (!attribute && static_cast<unsigned char>(ch) < 0x20 && ch != '\t' && ch != '\n' && ch != '\r')
-                {
-                    out << ' ';
-                }
-                else
-                {
-                    out << ch;
-                }
-                break;
+            return false;
         }
-        if (!out)
+        mUsed += bytes;
+        return true;
+    }
+
+private:
+    size_t mUsed = 0;
+};
+
+class BoundedXmlWriter : public pugi::xml_writer
+{
+public:
+    explicit BoundedXmlWriter(size_t limit)
+        : mBuffer(limit)
+    {
+    }
+
+    void write(const void* data, size_t size) override
+    {
+        if (mValid && mBuffer.sputn(static_cast<const char*>(data), static_cast<std::streamsize>(size)) != static_cast<std::streamsize>(size))
         {
-            return;
+            mValid = false;
         }
     }
-}
+
+    bool Valid() const
+    {
+        return mValid;
+    }
+
+    const string& Value() const
+    {
+        return mBuffer.Value();
+    }
+
+private:
+    BoundedXmlBuffer mBuffer;
+    bool mValid = true;
+};
 
 bool HasValidXmlCharacters(const string& xml)
 {
@@ -207,6 +208,67 @@ bool HasValidXmlCharacters(const string& xml)
             return false;
         }
         i += length;
+    }
+    return true;
+}
+
+Result<pugi::xml_node> AddElement(pugi::xml_node parent, const char* name, XmlBudget& budget)
+{
+    // At least <name/> even when there are no children.
+    if (!budget.Add(3 + std::char_traits<char>::length(name)))
+    {
+        return Error("JUnit result exceeds the maximum output size", EFBIG);
+    }
+    auto node = parent.append_child(name);
+    if (!node)
+    {
+        return Error("Failed to allocate JUnit XML element", ENOMEM);
+    }
+    return node;
+}
+
+Result<bool> AddAttribute(pugi::xml_node node, const char* name, const string& value, XmlBudget& budget)
+{
+    if (!HasValidXmlCharacters(value))
+    {
+        return Error("Canonical result contains invalid XML 1.0 characters or UTF-8", EINVAL);
+    }
+    // At least: space + name + =" + value + ".
+    if (!budget.Add(4 + std::char_traits<char>::length(name)) || !budget.Add(value.size()))
+    {
+        return Error("JUnit result exceeds the maximum output size", EFBIG);
+    }
+    auto attribute = node.append_attribute(name);
+    if (!attribute || !attribute.set_value(value.c_str()))
+    {
+        return Error("Failed to allocate JUnit XML attribute", ENOMEM);
+    }
+    return true;
+}
+
+Result<bool> AddText(pugi::xml_node node, string value, XmlBudget& budget)
+{
+    // Retain the legacy policy: illegal ASCII controls in report bodies are
+    // spaces, while invalid Unicode and all illegal attribute data are errors.
+    for (char& ch : value)
+    {
+        if (static_cast<unsigned char>(ch) < 0x20 && ch != '\t' && ch != '\n' && ch != '\r')
+        {
+            ch = ' ';
+        }
+    }
+    if (!HasValidXmlCharacters(value))
+    {
+        return Error("Canonical result contains invalid XML 1.0 characters or UTF-8", EINVAL);
+    }
+    if (!budget.Add(value.size()))
+    {
+        return Error("JUnit result exceeds the maximum output size", EFBIG);
+    }
+    auto text = node.append_child(pugi::node_pcdata);
+    if (!text || !text.set_value(value.c_str()))
+    {
+        return Error("Failed to allocate JUnit XML text", ENOMEM);
     }
     return true;
 }
@@ -273,13 +335,13 @@ Result<string> BuildBody(const JSON_Object* rule)
             if (valueStr.empty() && nullptr != value && json_value_get_type(value) != JSONString)
             {
                 char* serialized = json_serialize_to_string(value);
-                if (nullptr != serialized)
+                if (nullptr == serialized)
                 {
-                    // Deliberately deep-copy into our own std::string before
-                    // freeing parson's buffer, so the value survives the free.
-                    valueStr = std::string(serialized);
-                    json_free_serialized_string(serialized);
+                    return Error("Failed to serialize JUnit parameter", ENOMEM);
                 }
+                // Deep-copy before freeing parson's buffer.
+                valueStr = std::string(serialized);
+                json_free_serialized_string(serialized);
             }
             body << "  - " << key << ": " << valueStr << "\n";
         }
@@ -294,9 +356,8 @@ Result<string> BuildBody(const JSON_Object* rule)
     return buffer.Value();
 }
 
-// Renders a rule's `tags` array as a <tags> block. Returns false when
-// there are no tags, so a bare passing testcase can still self-close.
-Result<bool> BuildTags(const JSON_Object* rule, std::ostream& out)
+// Renders a rule's `tags` array as a <tags> block.
+Result<bool> BuildTags(const JSON_Object* rule, pugi::xml_node testcase, XmlBudget& budget)
 {
     const JSON_Value* tagsValue = json_object_get_value(rule, "tags");
     if (nullptr == tagsValue)
@@ -312,7 +373,11 @@ Result<bool> BuildTags(const JSON_Object* rule, std::ostream& out)
     {
         return false;
     }
-    out << "    <tags>\n";
+    auto tagsNode = AddElement(testcase, "tags", budget);
+    if (!tagsNode.HasValue())
+    {
+        return tagsNode.Error();
+    }
     const size_t count = json_array_get_count(tags);
     for (size_t i = 0; i < count; ++i)
     {
@@ -339,18 +404,16 @@ Result<bool> BuildTags(const JSON_Object* rule, std::ostream& out)
         {
             return Error("Canonical result JSON rule has an invalid 'axis:value' tag", EINVAL);
         }
-        out << "      <tag value=\"";
-        EscapeXml(value, out, true);
-        out << "\"/>\n";
-        if (!out)
+        auto tagNode = AddElement(tagsNode.Value(), "tag", budget);
+        if (!tagNode.HasValue())
         {
-            return Error("JUnit result exceeds the maximum output size", EFBIG);
+            return tagNode.Error();
         }
-    }
-    out << "    </tags>\n";
-    if (!out)
-    {
-        return Error("JUnit result exceeds the maximum output size", EFBIG);
+        auto attribute = AddAttribute(tagNode.Value(), "value", value, budget);
+        if (!attribute.HasValue())
+        {
+            return attribute.Error();
+        }
     }
     return true;
 }
@@ -425,8 +488,28 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
     const size_t ruleCount = json_array_get_count(rules);
     size_t failureCount = 0;
     size_t skippedCount = 0;
-    BoundedXmlBuffer casesBuffer(kMaxJUnitBytes);
-    std::ostream cases(&casesBuffer);
+    XmlBudget budget;
+    pugi::xml_document document;
+    auto declaration = document.append_child(pugi::node_declaration);
+    if (!declaration || !declaration.append_attribute("version").set_value("1.0") || !declaration.append_attribute("encoding").set_value("UTF-8"))
+    {
+        return Error("Failed to allocate JUnit XML declaration", ENOMEM);
+    }
+    auto suites = AddElement(document, "testsuites", budget);
+    if (!suites.HasValue())
+    {
+        return suites.Error();
+    }
+    auto suite = AddElement(suites.Value(), "testsuite", budget);
+    if (!suite.HasValue())
+    {
+        return suite.Error();
+    }
+    auto suiteAttribute = AddAttribute(suite.Value(), "name", suiteName, budget);
+    if (!suiteAttribute.HasValue())
+    {
+        return suiteAttribute.Error();
+    }
     for (size_t i = 0; i < ruleCount; ++i)
     {
         const JSON_Object* rule = json_array_get_object(rules, i);
@@ -486,21 +569,22 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             return Error("Canonical result JSON rule has invalid 'status' value: '" + status + "'", EINVAL);
         }
 
-        cases << "  <testcase classname=\"";
-        EscapeXml(classname.Value(), cases, true);
-        cases << "\" name=\"";
-        EscapeXml(title, cases, true);
-        cases << "\"";
-        if (!cases)
+        auto testcase = AddElement(suite.Value(), "testcase", budget);
+        if (!testcase.HasValue())
         {
-            return Error("JUnit result exceeds the maximum output size", EFBIG);
+            return testcase.Error();
         }
-        cases << ">\n";
-        if (!cases)
+        auto classAttribute = AddAttribute(testcase.Value(), "classname", classname.Value(), budget);
+        if (!classAttribute.HasValue())
         {
-            return Error("JUnit result exceeds the maximum output size", EFBIG);
+            return classAttribute.Error();
         }
-        auto hasTags = BuildTags(rule, cases);
+        auto nameAttribute = AddAttribute(testcase.Value(), "name", title, budget);
+        if (!nameAttribute.HasValue())
+        {
+            return nameAttribute.Error();
+        }
+        auto hasTags = BuildTags(rule, testcase.Value(), budget);
         if (!hasTags.HasValue())
         {
             return hasTags.Error();
@@ -513,10 +597,26 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             {
                 return body.Error();
             }
-            cases << "    <failure message=\"Rule is non-compliant\" type=\"NonCompliant\">";
-            EscapeXml(body.Value(), cases);
-            cases << "</failure>\n";
-            cases << "  </testcase>\n";
+            auto failure = AddElement(testcase.Value(), "failure", budget);
+            if (!failure.HasValue())
+            {
+                return failure.Error();
+            }
+            auto message = AddAttribute(failure.Value(), "message", "Rule is non-compliant", budget);
+            if (!message.HasValue())
+            {
+                return message.Error();
+            }
+            auto type = AddAttribute(failure.Value(), "type", "NonCompliant", budget);
+            if (!type.HasValue())
+            {
+                return type.Error();
+            }
+            auto text = AddText(failure.Value(), std::move(body.Value()), budget);
+            if (!text.HasValue())
+            {
+                return text.Error();
+            }
         }
         else if (status == "NotApplicable" || status == "Skipped")
         {
@@ -528,48 +628,41 @@ Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
             {
                 return body.Error();
             }
-            cases << "    <skipped message=\"" << message << "\">";
-            EscapeXml(body.Value(), cases);
-            cases << "</skipped>\n";
-            cases << "  </testcase>\n";
-        }
-        else if (hasTags.Value())
-        {
-            // status == "Compliant" but tags are present: can't self-close.
-            cases << "  </testcase>\n";
-        }
-        else
-        {
-            // status == "Compliant", no tags: a bare passing test case.
-            casesBuffer.RemoveLast(2);
-            cases << "/>\n";
-        }
-        if (!cases)
-        {
-            return Error("JUnit result exceeds the maximum output size", EFBIG);
+            auto skipped = AddElement(testcase.Value(), "skipped", budget);
+            if (!skipped.HasValue())
+            {
+                return skipped.Error();
+            }
+            auto attribute = AddAttribute(skipped.Value(), "message", message, budget);
+            if (!attribute.HasValue())
+            {
+                return attribute.Error();
+            }
+            auto text = AddText(skipped.Value(), std::move(body.Value()), budget);
+            if (!text.HasValue())
+            {
+                return text.Error();
+            }
         }
     }
 
-    BoundedXmlBuffer outputBuffer(kMaxJUnitBytes);
-    std::ostream out(&outputBuffer);
-    out << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
-    out << "<testsuites>\n";
-    out << "  <testsuite name=\"";
-    EscapeXml(suiteName, out, true);
-    out << "\" tests=\"" << ruleCount << "\" failures=\"" << failureCount << "\" skipped=\"" << skippedCount << "\">\n";
-    out << casesBuffer.Value();
-    out << "  </testsuite>\n";
-    out << "</testsuites>\n";
-    if (!out)
+    for (const auto& count : {std::make_pair("tests", ruleCount), std::make_pair("failures", failureCount), std::make_pair("skipped", skippedCount)})
+    {
+        auto attribute = AddAttribute(suite.Value(), count.first, std::to_string(count.second), budget);
+        if (!attribute.HasValue())
+        {
+            return attribute.Error();
+        }
+    }
+    BoundedXmlWriter writer(kMaxJUnitBytes);
+    // format_raw avoids inserting whitespace into failure/skipped mixed content;
+    // pugixml escapes attribute TAB/LF/CR as character references by default.
+    document.save(writer, "", pugi::format_raw, pugi::encoding_utf8);
+    if (!writer.Valid())
     {
         return Error("JUnit result exceeds the maximum output size", EFBIG);
     }
-    const string xml = outputBuffer.Value();
-    if (!HasValidXmlCharacters(xml))
-    {
-        return Error("Canonical result contains invalid XML 1.0 characters or UTF-8", EINVAL);
-    }
-    return xml;
+    return writer.Value();
 }
 
 } // namespace Kompli

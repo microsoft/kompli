@@ -6,6 +6,7 @@
 
 #include <Pattern.h>
 #include <Result.h>
+#include <regex>
 #include <string>
 #include <sys/types.h>
 
@@ -27,7 +28,7 @@ Result<int> Parse<int>(const std::string& input);
 
 // Parse a regex parameter
 template <>
-Result<regex> Parse<regex>(const std::string& input);
+Result<std::regex> Parse<std::regex>(const std::string& input);
 
 // Parse a regex parameter
 template <>

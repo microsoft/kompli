@@ -2,9 +2,9 @@
 // Licensed under the MIT License.
 
 #include <Bindings.h>
-#include <Regex.h>
 #include <gtest/gtest.h>
 #include <map>
+#include <regex>
 #include <string>
 
 using ComplianceEngine::Optional;
@@ -23,7 +23,7 @@ struct BuiltinTypesParams
     int intValue;
     bool boolValue;
     string stringValue;
-    regex regexValue;
+    std::regex regexValue;
     Pattern patternValue;
     mode_t octalValue;
     Separated<string, ','> separatedValue;
@@ -64,9 +64,9 @@ TEST_F(BindingsTest, ValidInput_1)
     EXPECT_EQ(params.intValue, 42);
     EXPECT_EQ(params.boolValue, true);
     EXPECT_EQ(params.stringValue, "test");
-    EXPECT_TRUE(regex_match("test", params.regexValue));
+    EXPECT_TRUE(std::regex_match("test", params.regexValue));
     EXPECT_EQ(params.patternValue.GetPattern(), string("te.*"));
-    EXPECT_TRUE(regex_match("test", params.patternValue.GetRegex()));
+    EXPECT_TRUE(std::regex_match("test", params.patternValue.GetRegex()));
     EXPECT_EQ(params.octalValue, 0755u);
     ASSERT_EQ(params.separatedValue.items.size(), 3u);
     EXPECT_EQ(params.separatedValue.items[0], "foo");
@@ -113,9 +113,9 @@ TEST_F(BindingsTest, MissingValues_1)
     EXPECT_EQ(params.intValue, 42);
     EXPECT_EQ(params.boolValue, true);
     EXPECT_EQ(params.stringValue, "test");
-    EXPECT_TRUE(regex_match("test", params.regexValue));
+    EXPECT_TRUE(std::regex_match("test", params.regexValue));
     EXPECT_EQ(params.patternValue.GetPattern(), string("te.*"));
-    EXPECT_TRUE(regex_match("test", params.patternValue.GetRegex()));
+    EXPECT_TRUE(std::regex_match("test", params.patternValue.GetRegex()));
     EXPECT_EQ(params.octalValue, 0755u);
     ASSERT_EQ(params.separatedValue.items.size(), 3u);
     EXPECT_EQ(params.separatedValue.items[0], "foo");
@@ -172,9 +172,9 @@ TEST_F(BindingsTest, InvalidValues_1)
     EXPECT_EQ(params.intValue, 0);
     EXPECT_EQ(params.boolValue, true);
     EXPECT_EQ(params.stringValue, "test");
-    EXPECT_TRUE(regex_match("test", params.regexValue));
+    EXPECT_TRUE(std::regex_match("test", params.regexValue));
     EXPECT_EQ(params.patternValue.GetPattern(), string("te.*"));
-    EXPECT_TRUE(regex_match("test", params.patternValue.GetRegex()));
+    EXPECT_TRUE(std::regex_match("test", params.patternValue.GetRegex()));
     EXPECT_EQ(params.octalValue, 0755u);
     ASSERT_EQ(params.separatedValue.items.size(), 3u);
     EXPECT_EQ(params.separatedValue.items[0], "foo");

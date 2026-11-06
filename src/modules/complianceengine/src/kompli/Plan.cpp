@@ -5,7 +5,6 @@
 
 #include "BenchmarkDefinition.hpp"
 #include "InputSecurity.hpp"
-#include "Regex.h"
 
 #include <JsonWrapper.h>
 #include <cctype>
@@ -17,6 +16,7 @@
 #include <fcntl.h>
 #include <istream>
 #include <parson.h>
+#include <regex>
 #include <sys/stat.h>
 #include <tuple>
 #include <unistd.h>
@@ -117,8 +117,8 @@ Optional<Error> ValidateParameters(const string& benchmarkFile, const string& ru
         }
         try
         {
-            const regex pattern(metadataIt->second.validationRegex.Value(), std::regex_constants::ECMAScript);
-            if (!regex_match(parameter.second, pattern))
+            const std::regex pattern(metadataIt->second.validationRegex.Value(), std::regex_constants::ECMAScript);
+            if (!std::regex_match(parameter.second, pattern))
             {
                 return Error(metadataIt->second.validationFailedMessage.HasValue() ?
                                  metadataIt->second.validationFailedMessage.Value() :
@@ -126,7 +126,7 @@ Optional<Error> ValidateParameters(const string& benchmarkFile, const string& ru
                     EINVAL);
             }
         }
-        catch (const regex_error&)
+        catch (const std::regex_error&)
         {
             return Error("Parameter '" + parameter.first + "' has an invalid validationRegex", EINVAL);
         }

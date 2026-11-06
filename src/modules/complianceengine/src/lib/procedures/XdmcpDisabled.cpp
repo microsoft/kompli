@@ -3,9 +3,9 @@
 
 #include <AtomicFile.h>
 #include <CommonUtils.h>
-#include <Regex.h>
 #include <XdmcpDisabled.h>
 #include <fstream>
+#include <regex>
 #include <string>
 
 namespace ComplianceEngine
@@ -16,8 +16,8 @@ const std::vector<std::string> cXdmcpFiles = {"/etc/gdm3/custom.conf", "/etc/gdm
 
 std::string DisableXdmcp(const std::string& contents, bool& changed)
 {
-    static const regex section(R"(^\s*\[xdmcp\]\s*(#.*)?$)");
-    static const regex setting(R"(^(\s*Enable\s*=\s*)true(\s*(#.*)?)$)");
+    static const std::regex section(R"(^\s*\[xdmcp\]\s*(#.*)?$)");
+    static const std::regex setting(R"(^(\s*Enable\s*=\s*)true(\s*(#.*)?)$)");
     std::istringstream input(contents);
     std::ostringstream output;
     std::string line;
@@ -31,7 +31,7 @@ std::string DisableXdmcp(const std::string& contents, bool& changed)
         }
         first = false;
 
-        if (regex_match(line, section))
+        if (std::regex_match(line, section))
         {
             inSection = true;
         }
@@ -40,8 +40,8 @@ std::string DisableXdmcp(const std::string& contents, bool& changed)
             inSection = false;
         }
 
-        smatch match;
-        if (inSection && regex_match(line, match, setting))
+        std::smatch match;
+        if (inSection && std::regex_match(line, match, setting))
         {
             output << match[1].str() << "false" << match[2].str();
             changed = true;

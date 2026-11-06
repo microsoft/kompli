@@ -61,6 +61,10 @@ stable `ruleId` for external correlation. Framework is required and
 participates in identity, but it does not select parsing or execution behavior;
 all frameworks use the same definition shape. The Machine Configuration path
 continues to carry the same tuple plus its rule section in each payload key.
+The human-readable `title` is preserved verbatim (including any existing
+`id` prefix) and need not be unique. `ruleName` dispatches the engine procedure
+and is not a rule identity or uniqueness guarantee; distinct rules remain
+distinguished by `id` within their benchmark.
 
 ### 2.2.1. Ephemeral CLI state
 
@@ -358,6 +362,22 @@ expansion during XML escaping.
 - The process umask is tightened to at least `S_IRWXG | S_IRWXO` at startup (preserving any stricter inherited mask), restricting file-creation permissions.
 - The positional benchmark-definition filename is checked for path traversal and a writable parent directory, then opened with `O_NOFOLLOW`, before it is read.
 - The `--log-file` path is validated to refuse symlinks and attacker-writable locations before the log handle is opened.
+
+### Log and telemetry paths
+
+Telemetry-enabled MC shell packages include the executable `kompliTelemetry`
+beside `libOsConfigResource.so`. The adapter invokes this helper on unload;
+downstream benchmark packages must preserve it when present.
+
+The MC adapter writes `/var/log/kompli/kompli.log`, and the telemetry helper
+writes `/var/log/kompli/telemetry.log`. The `/var/log/kompli/` directory is
+created if needed. Each log rotates to the same basename with a `.bak`
+extension. The standalone ComplianceEngine module does not write a log file.
+The CLI continues to log to stderr unless `--log-file` is supplied.
+
+Telemetry-enabled builds use `/var/lib/kompli/telemetry.events.json` for the
+event file and `/var/lib/kompli/telemetry.cache.db` for the telemetry cache.
+Existing logs and telemetry data under the old OSConfig paths are not migrated.
 
 # 6. kompli Universal Native Resource Provider (NRP)
 

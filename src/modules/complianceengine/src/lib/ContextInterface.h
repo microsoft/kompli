@@ -10,6 +10,7 @@
 #include "Telemetry.h"
 
 #include <cstddef>
+#include <map>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -60,6 +61,19 @@ public:
 
     // Returns the path to be used for storing state.
     virtual std::string GetStatePath() const = 0;
+
+    void SetBenchmarkSettings(std::map<std::string, std::string> settings)
+    {
+        mBenchmarkSettings = std::move(settings);
+    }
+
+    const std::map<std::string, std::string>& GetBenchmarkSettings() const noexcept
+    {
+        return mBenchmarkSettings;
+    }
+
+private:
+    std::map<std::string, std::string> mBenchmarkSettings;
 };
 } // namespace ComplianceEngine
 #endif // COMPLIANCEENGINE_CONTEXT_H

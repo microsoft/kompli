@@ -45,11 +45,11 @@ static constexpr const char* cModuleTestClientName = "ModuleTestClient";
 static constexpr const char* cNRPClientName = "ComplianceEngine";
 OsConfigLogHandle g_log = nullptr;
 static const std::set<int> g_criticalErrors = {ENOMEM};
-static constexpr const char* g_configurationFile = "/etc/osconfig/osconfig.json";
+static constexpr const char* g_configurationFile = "/etc/kompli/kompli.json";
 #ifdef BUILD_TELEMETRY
-static constexpr const char* telemetry_log_dir = "/var/lib/osconfig/telemetry/";
-static constexpr const char* telemetry_log_file = "complianceengine.telemetry";
-static constexpr const char* telemetry_binary = "OSConfigTelemetry";
+static constexpr const char* telemetry_log_dir = "/var/lib/kompli/";
+static constexpr const char* telemetry_log_file = "telemetry.events.json";
+static constexpr const char* telemetry_binary = "kompliTelemetry";
 static constexpr int telemetry_teardown_time = 10;
 static std::chrono::system_clock::time_point g_benchmarkRunCreatedAt;
 static std::chrono::steady_clock::time_point g_benchmarkRunBeginAt;
@@ -378,6 +378,11 @@ int ComplianceEngineMmiSet(MMI_HANDLE clientSession, const char* componentName, 
     try
     {
         std::string payloadStr(payload, payloadSizeBytes);
+        if (payloadStr.find('\0') != std::string::npos)
+        {
+            OsConfigLogError(engine.Log(), "ComplianceEngineMmiSet failed: payload contains embedded NUL");
+            return EINVAL;
+        }
         auto json = JsonWrapper::FromString(payloadStr.c_str());
         if (!json.HasValue())
         {
@@ -393,7 +398,14 @@ int ComplianceEngineMmiSet(MMI_HANDLE clientSession, const char* componentName, 
         std::string realPayload;
         if (json_value_get_type(json->get()) == JSONString)
         {
-            realPayload = json_value_get_string(json->get());
+            const char* decoded = json_value_get_string(json->get());
+            const std::size_t decodedLength = json_value_get_string_len(json->get());
+            if (nullptr != std::memchr(decoded, '\0', decodedLength))
+            {
+                OsConfigLogError(engine.Log(), "ComplianceEngineMmiSet failed: decoded payload contains embedded NUL");
+                return EINVAL;
+            }
+            realPayload.assign(decoded, decodedLength);
         }
         else
         {

@@ -42,6 +42,8 @@ pip3 install pre_commit && python3 -m pre_commit install
 
 cmake >= 3.21 is required. vcpkg is used for additional dependencies (googletest, parson) and is bootstrapped automatically.
 
+A C++11 compiler and standard library with working `std::regex` support are required; the legacy POSIX regex fallback is no longer provided.
+
 ### Build
 
 ```bash
@@ -72,7 +74,7 @@ cd build && ctest
 
 ## Configuration
 
-ComplianceEngine is configured via `/etc/osconfig/osconfig.json`:
+ComplianceEngine is configured via `/etc/kompli/kompli.json`:
 
 ```json
 {
@@ -84,7 +86,7 @@ ComplianceEngine is configured via `/etc/osconfig/osconfig.json`:
 
 ### Distribution override
 
-To override automatic OS detection (useful for testing), create `/etc/osconfig/system_id.override`:
+To override automatic OS detection (useful for testing), create `/etc/kompli/system_id.override`:
 
 ```
 OS="Linux" ARCH="x86_64" DISTRO="ubuntu" VERSION="24.04"

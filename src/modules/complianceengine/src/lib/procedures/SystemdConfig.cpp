@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <fts.h>
 #include <iostream>
+#include <regex>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -331,7 +332,7 @@ Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, I
 
     if (params.valueRegex.HasValue())
     {
-        if (!regex_match(actualValue, params.valueRegex.Value()))
+        if (!std::regex_match(actualValue, params.valueRegex.Value()))
         {
             OsConfigLogInfo(log, "Parameter '%s' in file '%s' does not match regex", params.parameter.c_str(), sourceFile.c_str());
             return indicators.NonCompliant("Parameter '" + params.parameter + "' value '" + actualValue + "' in file '" + sourceFile +
@@ -345,8 +346,8 @@ Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, I
     else if (params.value.HasValue() && !params.op.HasValue())
     {
         // value without op: treat value as regex pattern
-        regex valueAsRegex(params.value.Value());
-        if (!regex_match(actualValue, valueAsRegex))
+        std::regex valueAsRegex(params.value.Value());
+        if (!std::regex_match(actualValue, valueAsRegex))
         {
             OsConfigLogInfo(log, "Parameter '%s' in file '%s' does not match regex", params.parameter.c_str(), sourceFile.c_str());
             return indicators.NonCompliant("Parameter '" + params.parameter + "' value '" + actualValue + "' in file '" + sourceFile +

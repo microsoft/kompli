@@ -29,6 +29,7 @@ set(LIB_SOURCES
 )
 
 add_library(${lib_name} STATIC ${LIB_SOURCES})
+find_package(pugixml CONFIG REQUIRED)
 
 target_include_directories(${lib_name} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -42,6 +43,7 @@ target_link_libraries(${lib_name} PUBLIC
     complianceenginelib
     benchmarkio
     )
+target_link_libraries(${lib_name} PRIVATE pugixml::pugixml)
 
 add_executable(${target_name} Main.cpp)
 

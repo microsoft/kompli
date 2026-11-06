@@ -25,7 +25,8 @@ target_link_libraries(OsConfigResourceComplianceEngine
 
 if(BUILD_TELEMETRY)
     list(APPEND STAGING_COMMANDS
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${BINARY_DIR}/bin/telemetrybin" ${PROJECT_BINARY_DIR}/StagingComplianceEngineShell/Modules/DscNativeResources/OsConfigResource/OSConfigTelemetry)
+        COMMAND ${CMAKE_COMMAND} -E rm -f ${PROJECT_BINARY_DIR}/StagingComplianceEngineShell/Modules/DscNativeResources/OsConfigResource/OSConfigTelemetry
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${BINARY_DIR}/bin/telemetrybin" ${PROJECT_BINARY_DIR}/StagingComplianceEngineShell/Modules/DscNativeResources/OsConfigResource/kompliTelemetry)
 endif()
 
 add_custom_target(stage_create_compliance_engine_shell_zip

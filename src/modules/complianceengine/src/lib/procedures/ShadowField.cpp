@@ -4,11 +4,11 @@
 #include <CommonUtils.h>
 #include <Evaluator.h>
 #include <PasswordEntriesIterator.h>
-#include <Regex.h>
 #include <ScopeGuard.h>
 #include <ShadowField.h>
 #include <StringTools.h>
 #include <TypedComparison.h>
+#include <regex>
 #include <shadow.h>
 #include <vector>
 
@@ -113,7 +113,7 @@ Result<bool> StringComparison(const string& lhs, const string& rhs, ComparisonOp
         try
         {
             OsConfigLogDebug(nullptr, "Performing regex match: '%s' against '%s'", lhs.c_str(), rhs.c_str());
-            return regex_search(rhs, regex(lhs));
+            return std::regex_search(rhs, std::regex(lhs));
         }
         catch (const std::exception& e)
         {
