@@ -1,6 +1,6 @@
 # Introduction
 
-kompli is a modular security compliance stack for Linux devices. kompli supports multi-authority device management over Azure and Azure Portal/CLI (via Azure Policy), GitOps, as well as local management. For more information on kompli see [Architecture](docs/architecture.md).
+kompli is a modular security compliance stack for Linux devices. kompli supports multi-authority device management over Azure and Azure Portal/CLI (via Azure Policy), as well as local management. For more information see the [architecture](docs/architecture.md) and [glossary](docs/glossary.md).
 
 # Code of conduct
 
@@ -8,7 +8,8 @@ This project has adopted the [Microsoft Open Source Code of Conduct](https://ope
 
 # Contributing
 
-We welcome contributions to kompli. The main way of contributing to and extending kompli is via developing new procedure [Procedures](src/engine/procedures)
+We welcome contributions to kompli. The main way to extend the project is by
+developing new engine [procedures](src/engine/procedures).
 
 Pull requests with few exceptions must contain appropriate unit-tests. We cannot allow test coverage to go down. Pull requests containing code changes without accompanying unit tests may be rejected.
 Pull requests need to be formatted according to `.pre-commit-config.yaml`. Each pull request is checked by [Formatting Tests](https://github.com/microsoft/kompli/blob/main/.github/workflows/formatting.yml).
@@ -21,8 +22,8 @@ To help set expectations for external contributors and keep review focused, the 
 
 **In scope** (external contributions welcome):
 
-- New ComplianceEngine [procedures](src/engine/procedures) and Lua rules, with accompanying unit tests and schema/procedure-map updates.
-- Bug fixes in the ComplianceEngine, MC adapter, and the retained common libraries (`commonutils`, `logging`, `mpiclient`, `telemetry`, `parson`).
+- New engine [procedures](src/engine/procedures) and Lua rules, with accompanying unit tests and schema/procedure-map updates.
+- Bug fixes in the kompli core, MC adapter, and the retained common libraries (`commonutils`, `logging`, `mpiclient`, `telemetry`, `parson`).
 - Additional benchmark coverage, test fixtures, and improvements to existing test reliability.
 - Documentation fixes and clarifications.
 - Build, packaging, and CI improvements that do not change the project's supported scope.
@@ -30,7 +31,7 @@ To help set expectations for external contributors and keep review focused, the 
 **Out of scope** (please open an issue to discuss first; PRs may be declined):
 
 - Changes to the Machine Configuration trust model or the MC channel itself, which are trusted by design and managed outside this repository.
-- New top-level modules or product areas beyond the ComplianceEngine that kompli retains from Azure OSConfig.
+- New product areas beyond the kompli core and its supported integrations.
 - Vendored third-party code under `external/` (for example, the vcpkg submodule); update these upstream instead.
 - Large refactors or dependency changes without a prior issue describing the motivation and approach.
 - Security vulnerability reports — do **not** file these as issues or PRs; follow [SECURITY.md](SECURITY.md) instead.

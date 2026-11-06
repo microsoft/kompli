@@ -1,7 +1,9 @@
 # kompli CLI contract
 
 This document defines the commands, arguments, options, exit behavior, and
-on-disk formats exposed by the `kompli` CLI.
+on-disk formats exposed by the [kompli CLI](glossary.md#kompli-cli).
+The [glossary](glossary.md) distinguishes definitions, plans, procedures and
+the different result forms.
 
 ## 1. Command overview
 
