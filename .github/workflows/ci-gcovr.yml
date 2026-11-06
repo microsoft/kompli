@@ -159,6 +159,12 @@ jobs:
               } else if (filename ~ /^src\/modules\//) {
                   match(filename, /^src\/modules\/[^\/]+/)
                   group = substr(filename, RSTART, RLENGTH)
+              } else if (filename ~ /^src\/tools\/[^\/]+\//) {
+                  match(filename, /^src\/tools\/[^\/]+/)
+                  group = substr(filename, RSTART, RLENGTH)
+              } else if (filename ~ /^src\/[^\/]+\//) {
+                  match(filename, /^src\/[^\/]+/)
+                  group = substr(filename, RSTART, RLENGTH)
               } else {
                   group = "other directories"
               }

@@ -48,26 +48,27 @@ repos:
         additional_dependencies: [clang-tidy]
         files: |
           (?x)(
-          ^src/modules/complianceengine/src/.*\.h$|
-          ^src/modules/complianceengine/src/.*\.hpp$|
-          ^src/modules/complianceengine/src/.*\.cpp$|
-          ^src/common/telemetry/.*\.h$|
-          ^src/common/telemetry/.*\.hpp$|
-          ^src/common/telemetry/.*\.c$
+          ^src/(engine|benchmarkio|kompli|tools/lua-evaluator|modules/complianceengine/src)/.*\.h$|
+          ^src/(engine|benchmarkio|kompli|tools/lua-evaluator|modules/complianceengine/src)/.*\.hpp$|
+          ^src/(engine|benchmarkio|kompli|tools/lua-evaluator|modules/complianceengine/src)/.*\.cpp$|
+          ^src/telemetry/.*\.h$|
+          ^src/telemetry/.*\.hpp$|
+          ^src/telemetry/.*\.c$
             )
+        exclude: ^src/engine/tests/
   - repo: local
     hooks:
       - id: compliance-engine-interface
         name: Generate symbolic compliance engine interface
         types_or: [c++, json]
-        entry: src/modules/complianceengine/src/lib/GenInterface.py
+        entry: src/engine/GenInterface.py
         language: python
         require_serial: true
         files: |
           (?x)(
-          ^src/modules/complianceengine/src/lib/payload.schema.json$|
-          ^src/modules/complianceengine/src/lib/procedures/.*\.h$|
-          ^src/modules/complianceengine/src/lib/procedures/.*\.schema.json$
+          ^src/engine/payload.schema.json$|
+          ^src/engine/procedures/.*\.h$|
+          ^src/engine/procedures/.*\.schema.json$
             )
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: v14.0.6
@@ -75,15 +76,15 @@ repos:
     - id: clang-format
       files: |
          (?x)(
-          ^src/modules/complianceengine/.*\.h$|
-          ^src/modules/complianceengine/.*\.hpp$|
-          ^src/modules/complianceengine/.*\.cpp$|
-          ^src/common/telemetry/.*\.h$|
-          ^src/common/telemetry/.*\.hpp$|
-          ^src/common/telemetry/.*\.c$
+          ^src/(engine|benchmarkio|kompli|tools/lua-evaluator|modules/complianceengine)/.*\.h$|
+          ^src/(engine|benchmarkio|kompli|tools/lua-evaluator|modules/complianceengine)/.*\.hpp$|
+          ^src/(engine|benchmarkio|kompli|tools/lua-evaluator|modules/complianceengine)/.*\.cpp$|
+          ^src/telemetry/.*\.h$|
+          ^src/telemetry/.*\.hpp$|
+          ^src/telemetry/.*\.c$
             )
       exclude: |
         (?x)(
-        ^src/modules/complianceengine/src/lib/ProcedureMap.h$|
-        ^src/modules/complianceengine/src/lib/ProcedureMap.cpp$
+        ^src/engine/ProcedureMap.h$|
+        ^src/engine/ProcedureMap.cpp$
         )

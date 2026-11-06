@@ -64,10 +64,10 @@ find_package(unofficial-sqlite3 REQUIRED NO_DEFAULT_PATH PATHS ${VCPKG_PACKAGES_
 find_package(nlohmann_json REQUIRED NO_DEFAULT_PATH PATHS ${VCPKG_PACKAGES_DIR})
 
 if(BUILD_EXTERNAL)
-    include_directories(../../telemetry)
-    add_subdirectory(../../parson ${CMAKE_CURRENT_BINARY_DIR}/parson)
-    add_subdirectory(../../logging ${CMAKE_CURRENT_BINARY_DIR}/logging)
-    add_subdirectory(../../commonutils ${CMAKE_CURRENT_BINARY_DIR}/commonutils)
+    include_directories(${KOMPLI_SOURCE_DIR}/telemetry)
+    add_subdirectory(${KOMPLI_SOURCE_DIR}/common/parson ${CMAKE_CURRENT_BINARY_DIR}/parson)
+    add_subdirectory(${KOMPLI_SOURCE_DIR}/common/logging ${CMAKE_CURRENT_BINARY_DIR}/logging)
+    add_subdirectory(${KOMPLI_SOURCE_DIR}/common/commonutils ${CMAKE_CURRENT_BINARY_DIR}/commonutils)
 endif()
 
 # Add telemetry ingestion key (if defined)
@@ -106,7 +106,6 @@ target_link_libraries(telemetrylib
 
 target_include_directories(telemetrylib
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}../
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_BINARY_DIR}
         ${MAT_SDK_INCLUDE}

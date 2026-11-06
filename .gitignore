@@ -6,6 +6,7 @@ node_modules
 .vscode-test
 *.vsix
 **/bin/
+!src/telemetry/bin/
 **/obj/
 
 # Terraform

@@ -30,7 +30,7 @@ if (BUILD_TELEMETRY)
         INSTALL_COMMAND ""  # No install target on telemetry target
         BUILD_ALWAYS TRUE
         SOURCE_DIR
-            ${COMMON_SRC_DIR}/telemetry
+            ${CMAKE_SOURCE_DIR}/telemetry
         CMAKE_ARGS
             -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
             ${CMAKE_ARGS}
@@ -74,7 +74,7 @@ if (BUILD_TELEMETRY)
     target_include_directories(telemetry-interface
         INTERFACE
             ${BINARY_DIR}
-            ${CMAKE_SOURCE_DIR}/common/telemetry/lib
+            ${CMAKE_SOURCE_DIR}/telemetry/lib
             ${MAT_SDK_INCLUDE}
             ${TELEMETRY_LIB_DIR}
     )
