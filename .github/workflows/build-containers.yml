@@ -93,6 +93,8 @@ jobs:
       contents: read
       packages: write
       id-token: write # required for keyless cosign signing via OIDC
+      attestations: write
+      artifact-metadata: write
     strategy:
       fail-fast: false
       matrix:
@@ -186,6 +188,13 @@ jobs:
           path: digest-*.json
           retention-days: 1
 
+      - name: Attest image build provenance
+        if: needs.pr-author-permission.outputs.is_collaborator == 'true'
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.build_and_push.outputs.digest }}
+          push-to-registry: true
 
   post-build:
     name: Post-Build Digest Collector
