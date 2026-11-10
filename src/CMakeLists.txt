@@ -116,7 +116,7 @@ else()
     message(STATUS "Skipping initial vcpkg install (dependencies already up to date).")
 endif()
 
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 4.4.2)
 project(kompli)
 
 set (CMAKE_C_STANDARD 11)
