@@ -4,9 +4,9 @@ on:
   pull_request:
     paths:
       - devops/docker/**/Dockerfile
+      - devops/scripts/install-container-cmake.sh
       - devops/scripts/prepare-container-dependencies.sh
       - devops/scripts/download-vcpkg-asset.sh
-      - devops/scripts/tests/test_container_dependencies.py
       - external/vcpkg
       - src/vcpkg*.json
       - src/CMakeLists.txt
@@ -19,6 +19,7 @@ on:
       - main
     paths:
       - devops/docker/**/Dockerfile
+      - devops/scripts/install-container-cmake.sh
       - devops/scripts/prepare-container-dependencies.sh
       - devops/scripts/download-vcpkg-asset.sh
       - external/vcpkg
