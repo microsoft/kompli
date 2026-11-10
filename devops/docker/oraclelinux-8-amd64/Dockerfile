@@ -1,8 +1,6 @@
 # TODO: Add mcr.io retagged images
 FROM oraclelinux:8@sha256:1f74281d8cc37c6e4adef0559f4c583022193dcfa8562d2e4a87161b6cd54df8
 
-ARG CMAKE_VERSION=v3.30.1
-
 RUN yum install -y \
     autoconf \
     gcc \
@@ -23,8 +21,12 @@ ENV PATH="/opt/kompli-venv/bin:${PATH}"
 WORKDIR /git
 
 # CMake
-RUN git clone https://github.com/Kitware/CMake --recursive -b ${CMAKE_VERSION}
-RUN cd CMake && ./bootstrap && make -j$(nproc) && make install && hash -r && rm -rf /git/CMake
+COPY external/vcpkg/scripts/vcpkg-tools.json /git/vcpkg-tools.json
+RUN CMAKE_VERSION=$(jq -er '.tools[] | select(.name == "cmake" and .os == "linux" and .arch == "amd64") | .version' /git/vcpkg-tools.json) && \
+    git clone https://github.com/Kitware/CMake --recursive -b "v${CMAKE_VERSION}" && \
+    cd CMake && ./bootstrap && make -j$(nproc) && make install && hash -r && \
+    cmake --version | grep -Fx "cmake version ${CMAKE_VERSION}" && \
+    rm -rf /git/CMake && rm /git/vcpkg-tools.json
 
 COPY .  /src
 WORKDIR /src

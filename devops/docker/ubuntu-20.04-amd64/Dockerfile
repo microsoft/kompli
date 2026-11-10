@@ -1,6 +1,5 @@
 FROM mcr.microsoft.com/mirror/docker/library/ubuntu:20.04@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214
 
-ARG CMAKE_VERSION=v3.30.1
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt -y update && apt-get -y install software-properties-common
@@ -37,8 +36,12 @@ RUN apt-get update && apt-get install -y dotnet-sdk-5.0
 WORKDIR /git
 
 # CMake
-RUN git clone https://github.com/Kitware/CMake --recursive -b ${CMAKE_VERSION}
-RUN cd CMake && ./bootstrap && make -j$(nproc) && make install && hash -r && rm -rf /git/CMake
+COPY external/vcpkg/scripts/vcpkg-tools.json /git/vcpkg-tools.json
+RUN CMAKE_VERSION=$(jq -er '.tools[] | select(.name == "cmake" and .os == "linux" and .arch == "amd64") | .version' /git/vcpkg-tools.json) && \
+    git clone https://github.com/Kitware/CMake --recursive -b "v${CMAKE_VERSION}" && \
+    cd CMake && ./bootstrap && make -j$(nproc) && make install && hash -r && \
+    cmake --version | grep -Fx "cmake version ${CMAKE_VERSION}" && \
+    rm -rf /git/CMake && rm /git/vcpkg-tools.json
 
 COPY .  /src
 WORKDIR /src

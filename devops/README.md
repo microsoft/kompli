@@ -17,6 +17,20 @@ This folder contains the artifacts and scripts used by our engineering systems (
 - `rpm` - RPM packaging scripts
 
 ## Updating Build contaienrs used for CI builds
+All build containers read the Linux amd64 CMake version from
+[`external/vcpkg/scripts/vcpkg-tools.json`](../external/vcpkg/scripts/vcpkg-tools.json)
+and build that version from source. The build verifies that `cmake` on `PATH`
+reports the selected version before installing vcpkg dependencies. No manual
+`CMAKE_VERSION` build argument is needed. Build images from the repository root
+with the vcpkg submodule initialized, for example:
+
+```bash
+git submodule update --init --recursive
+docker build -f devops/docker/ubuntu-24.04-amd64/Dockerfile .
+```
+
+Updating the vcpkg submodule also triggers the build-container workflow.
+
 The `docker/<os>-<arch>` - Build containers are used by ci [ci.yml](.github/workflows/ci.yml)
 Their version(digest's) are stored inside [test-matrix.json](.github/test-matrix.json)
 The [build-containers.yml](.github/workflows/build-contains.yml) is ran whenever any Build Containers dockerfile is changed.

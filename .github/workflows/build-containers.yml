@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - devops/docker/**/Dockerfile
+      - external/vcpkg
       - .github/workflows/build-containers.yml
   push:
     branches:
@@ -11,6 +12,7 @@ on:
       - main
     paths:
       - devops/docker/**/Dockerfile
+      - external/vcpkg
       - .github/workflows/build-containers.yml
   workflow_dispatch:
     inputs:
