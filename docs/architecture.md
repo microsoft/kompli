@@ -302,6 +302,12 @@ Desired objects (`MmiSet`). The value is a human-readable, space-separated key-v
 
 Desired objects (`MmiSet`). Same key-value format as init entries. Triggers execution of the remediation procedure for the rule with the supplied parameter values.
 
+A rule without a `remediate` object is audit-only: the request evaluates its
+`audit` tree in audit mode and reports the result without changing the system.
+Inside a `remediate` tree, procedures without a remediation handler and anything
+under `not` are audited. `SCE` has an explicit remediation stub that always
+reports non-compliance without executing a script.
+
 `SysctlValue` remediation accepts a literal value, optionally surrounded by
 `^` and `$`. With `runtimeOnly: true` it updates only the selected `/proc/sys`
 entry. Otherwise it also atomically maintains

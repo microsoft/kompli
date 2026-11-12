@@ -291,6 +291,20 @@ TEST_F(EngineTest, MmiSet_executeRemediation_AuditFallback)
     ASSERT_TRUE(result && result.Value() == Status::Compliant);
 }
 
+TEST_F(EngineTest, MmiSet_executeRemediation_WithoutRemediateIsAuditOnly)
+{
+    // The audit tree is evaluated in audit mode, so a remediation-only handler is never invoked.
+    ASSERT_TRUE(mEngine.MmiSet("procedureX", R"({"audit":{"RemediationSuccess":{}}})"));
+    auto result = mEngine.MmiSet("remediateX", "");
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.Error().message, std::string("Function not found"));
+
+    ASSERT_TRUE(mEngine.MmiSet("procedureY", R"({"audit":{"AuditFailure":{}}})"));
+    result = mEngine.MmiSet("remediateY", "");
+    ASSERT_TRUE(result);
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
 TEST_F(EngineTest, MmiSet_executeRemediation_InvalidArgument_4)
 {
     std::string payload = "eyJhdWRpdCI6e30sInJlbWVkaWF0ZSI6e319"; // '{"audit":{},"remediate":{}}' in base64
