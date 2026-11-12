@@ -7,7 +7,7 @@ if (DEFINED ENV{VCPKG_ROOT})
 endif()
 
 set(VCPKG_SOURCE_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../external/vcpkg")
-set(VCPKG_ROOT_DIR "${CMAKE_CURRENT_BINARY_DIR}/vcpkg_root")
+set(VCPKG_ROOT_DIR "${CMAKE_CURRENT_BINARY_DIR}/vcpkg_root" CACHE PATH "Directory for the bootstrapped vcpkg copy")
 if(DEFINED ENV{KOMPLI_VCPKG_ROOT})
     set(VCPKG_ROOT_DIR "$ENV{KOMPLI_VCPKG_ROOT}")
     if(NOT EXISTS "${VCPKG_ROOT_DIR}/vcpkg" OR NOT EXISTS "${VCPKG_ROOT_DIR}/scripts/buildsystems/vcpkg.cmake")
@@ -16,16 +16,15 @@ if(DEFINED ENV{KOMPLI_VCPKG_ROOT})
     if(NOT EXISTS "${VCPKG_ROOT_DIR}/vcpkg-lock.json")
         message(FATAL_ERROR "Missing cached vcpkg registry lock; rebuild the build container")
     endif()
-    if(NOT EXISTS "${CMAKE_BINARY_DIR}/vcpkg_installed/vcpkg/vcpkg-lock.json")
-        configure_file(
-            "${VCPKG_ROOT_DIR}/vcpkg-lock.json"
-            "${CMAKE_BINARY_DIR}/vcpkg_installed/vcpkg/vcpkg-lock.json"
-            COPYONLY
-        )
-    endif()
 endif()
 set(VCPKG_TOOLCHAIN_FILE_PATH "${VCPKG_ROOT_DIR}/scripts/buildsystems/vcpkg.cmake")
 set(VCPKG_EXECUTABLE_PATH "${VCPKG_ROOT_DIR}/vcpkg")
+
+if(DEFINED VCPKG_ROOT AND DEFINED CMAKE_TOOLCHAIN_FILE
+    AND "${CMAKE_TOOLCHAIN_FILE}" STREQUAL "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+    AND NOT "${VCPKG_ROOT}" STREQUAL "${VCPKG_ROOT_DIR}")
+    message(FATAL_ERROR "VCPKG_ROOT_DIR changed from '${VCPKG_ROOT}' to '${VCPKG_ROOT_DIR}', but CMAKE_TOOLCHAIN_FILE still uses the previous root. Configure in a fresh build directory.")
+endif()
 
 function(initialize_vcpkg_submodule)
     if(NOT EXISTS "${VCPKG_SOURCE_ROOT_DIR}/bootstrap-vcpkg.sh")
@@ -60,7 +59,7 @@ endfunction()
 function(initialize_vcpkg_submodule_and_bootstrap)
     initialize_vcpkg_submodule()
 
-    if(NOT EXISTS "${VCPKG_ROOT_DIR}")
+    if(NOT EXISTS "${VCPKG_ROOT_DIR}/bootstrap-vcpkg.sh")
         message(STATUS "Copying external/vcpkg to ${VCPKG_ROOT_DIR}")
         execute_process(
             COMMAND ${CMAKE_COMMAND} -E copy_directory "${VCPKG_SOURCE_ROOT_DIR}" "${VCPKG_ROOT_DIR}"
@@ -84,14 +83,14 @@ function(initialize_vcpkg_submodule_and_bootstrap)
     endif()
 endfunction()
 
-set(VCPKG_ROOT "${VCPKG_ROOT_DIR}" CACHE PATH "Build-local vcpkg root")
+set(VCPKG_ROOT "${VCPKG_ROOT_DIR}" CACHE PATH "Selected vcpkg root")
 
 if (NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     if (EXISTS ${VCPKG_TOOLCHAIN_FILE_PATH})
         set (CMAKE_TOOLCHAIN_FILE ${VCPKG_TOOLCHAIN_FILE_PATH} CACHE STRING "Vcpkg toolchain file")
-        message (STATUS "Using build-local vcpkg toolchain file: ${CMAKE_TOOLCHAIN_FILE}")
+        message (STATUS "Using vcpkg toolchain file: ${CMAKE_TOOLCHAIN_FILE}")
     else()
-        message (STATUS "Initializing external/vcpkg, creating build-local vcpkg_root, and bootstrapping vcpkg")
+        message (STATUS "Initializing external/vcpkg and bootstrapping vcpkg in ${VCPKG_ROOT_DIR}")
         initialize_vcpkg_submodule_and_bootstrap()
 
         if (EXISTS ${VCPKG_TOOLCHAIN_FILE_PATH})
@@ -104,23 +103,33 @@ if (NOT DEFINED CMAKE_TOOLCHAIN_FILE)
 endif()
 
 # Run vcpkg install only when needed.
-set(VCPKG_STATUS_FILE "${CMAKE_BINARY_DIR}/vcpkg_installed/vcpkg/status")
+if (NOT DEFINED VCPKG_INSTALLED_DIR)
+    set(VCPKG_INSTALLED_DIR "${VCPKG_ROOT_DIR}/vcpkg_installed" CACHE PATH "vcpkg installed directory")
+endif()
+if(DEFINED ENV{KOMPLI_VCPKG_ROOT} AND NOT EXISTS "${VCPKG_INSTALLED_DIR}/vcpkg/vcpkg-lock.json")
+    configure_file(
+        "${VCPKG_ROOT_DIR}/vcpkg-lock.json"
+        "${VCPKG_INSTALLED_DIR}/vcpkg/vcpkg-lock.json"
+        COPYONLY
+    )
+endif()
+set(VCPKG_STATUS_FILE "${VCPKG_INSTALLED_DIR}/vcpkg/status")
 set(VCPKG_MANIFEST_FILE "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json")
 set(VCPKG_CONFIGURATION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg-configuration.json")
 set(RUN_VCPKG_INSTALL OFF)
 
-if (NOT EXISTS ${VCPKG_STATUS_FILE})
+if (NOT EXISTS "${VCPKG_STATUS_FILE}")
     set(RUN_VCPKG_INSTALL ON)
-elseif (EXISTS ${VCPKG_MANIFEST_FILE} AND ${VCPKG_MANIFEST_FILE} IS_NEWER_THAN ${VCPKG_STATUS_FILE})
+elseif (EXISTS "${VCPKG_MANIFEST_FILE}" AND "${VCPKG_MANIFEST_FILE}" IS_NEWER_THAN "${VCPKG_STATUS_FILE}")
     set(RUN_VCPKG_INSTALL ON)
-elseif (EXISTS ${VCPKG_CONFIGURATION_FILE} AND ${VCPKG_CONFIGURATION_FILE} IS_NEWER_THAN ${VCPKG_STATUS_FILE})
+elseif (EXISTS "${VCPKG_CONFIGURATION_FILE}" AND "${VCPKG_CONFIGURATION_FILE}" IS_NEWER_THAN "${VCPKG_STATUS_FILE}")
     set(RUN_VCPKG_INSTALL ON)
 endif()
 
 if (RUN_VCPKG_INSTALL)
     message(STATUS "Running vcpkg install (first run or manifest changed).")
     execute_process(
-        COMMAND ${VCPKG_EXECUTABLE_PATH} install "--x-install-root=${CMAKE_BINARY_DIR}/vcpkg_installed"
+        COMMAND ${VCPKG_EXECUTABLE_PATH} install "--x-install-root=${VCPKG_INSTALLED_DIR}"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         RESULT_VARIABLE VCPKG_INSTALL_RESULT
     )
