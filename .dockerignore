@@ -11,9 +11,12 @@
 **/*.a
 **/*.so
 **/*.log
+/build*/
+/src/vcpkg_installed
 
 # vcpkg artifacts
 external/vcpkg/buildtrees
 external/vcpkg/packages
 external/vcpkg/downloads
 external/vcpkg/installed
+external/vcpkg/vcpkg

@@ -4,6 +4,14 @@ on:
   pull_request:
     paths:
       - devops/docker/**/Dockerfile
+      - devops/scripts/install-container-cmake.sh
+      - devops/scripts/prepare-container-dependencies.sh
+      - devops/scripts/download-vcpkg-asset.sh
+      - external/vcpkg
+      - src/vcpkg*.json
+      - src/CMakeLists.txt
+      - src/ports-overlay/**
+      - src/triplets/**
       - .github/workflows/build-containers.yml
   push:
     branches:
@@ -11,6 +19,14 @@ on:
       - main
     paths:
       - devops/docker/**/Dockerfile
+      - devops/scripts/install-container-cmake.sh
+      - devops/scripts/prepare-container-dependencies.sh
+      - devops/scripts/download-vcpkg-asset.sh
+      - external/vcpkg
+      - src/vcpkg*.json
+      - src/CMakeLists.txt
+      - src/ports-overlay/**
+      - src/triplets/**
       - .github/workflows/build-containers.yml
   workflow_dispatch:
     inputs:

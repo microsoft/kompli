@@ -8,6 +8,22 @@ endif()
 
 set(VCPKG_SOURCE_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../external/vcpkg")
 set(VCPKG_ROOT_DIR "${CMAKE_CURRENT_BINARY_DIR}/vcpkg_root")
+if(DEFINED ENV{KOMPLI_VCPKG_ROOT})
+    set(VCPKG_ROOT_DIR "$ENV{KOMPLI_VCPKG_ROOT}")
+    if(NOT EXISTS "${VCPKG_ROOT_DIR}/vcpkg" OR NOT EXISTS "${VCPKG_ROOT_DIR}/scripts/buildsystems/vcpkg.cmake")
+        message(FATAL_ERROR "KOMPLI_VCPKG_ROOT must point to a bootstrapped vcpkg tree; rebuild the build container")
+    endif()
+    if(NOT EXISTS "${VCPKG_ROOT_DIR}/vcpkg-lock.json")
+        message(FATAL_ERROR "Missing cached vcpkg registry lock; rebuild the build container")
+    endif()
+    if(NOT EXISTS "${CMAKE_BINARY_DIR}/vcpkg_installed/vcpkg/vcpkg-lock.json")
+        configure_file(
+            "${VCPKG_ROOT_DIR}/vcpkg-lock.json"
+            "${CMAKE_BINARY_DIR}/vcpkg_installed/vcpkg/vcpkg-lock.json"
+            COPYONLY
+        )
+    endif()
+endif()
 set(VCPKG_TOOLCHAIN_FILE_PATH "${VCPKG_ROOT_DIR}/scripts/buildsystems/vcpkg.cmake")
 set(VCPKG_EXECUTABLE_PATH "${VCPKG_ROOT_DIR}/vcpkg")
 
@@ -104,7 +120,7 @@ endif()
 if (RUN_VCPKG_INSTALL)
     message(STATUS "Running vcpkg install (first run or manifest changed).")
     execute_process(
-        COMMAND ${VCPKG_EXECUTABLE_PATH} install
+        COMMAND ${VCPKG_EXECUTABLE_PATH} install "--x-install-root=${CMAKE_BINARY_DIR}/vcpkg_installed"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         RESULT_VARIABLE VCPKG_INSTALL_RESULT
     )
@@ -116,7 +132,7 @@ else()
     message(STATUS "Skipping initial vcpkg install (dependencies already up to date).")
 endif()
 
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 4.4.2)
 project(kompli)
 
 set (CMAKE_C_STANDARD 11)
