@@ -542,6 +542,16 @@ Result<ReadableFile> Path::Component::OpenReadOnly(ReadableFile::Policy policy) 
     return mAcquisition->OpenReadOnly(policy);
 }
 
+namespace
+{
+// Resolver work units charged against limits.shared.work; shared by every
+// snapshot of one Path so copying the stack can't reset the count.
+struct WorkAllowance
+{
+    std::size_t spent = 0;
+};
+} // namespace
+
 // The cumulative work allowance alone is shared and mutable across immutable stack snapshots.
 struct Path::State
 {

@@ -5,12 +5,8 @@
 #define COMPLIANCEENGINE_FILESYSTEM_DESCRIPTOR_HPP
 
 #include "ContextInterface.h"
-#include "Result.h"
 
-#include <cstddef>
-#include <cstdint>
 #include <functional>
-#include <utility>
 
 struct stat;
 

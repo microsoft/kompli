@@ -4,19 +4,16 @@
 #ifndef COMPLIANCEENGINE_FILESYSTEM_PATH_HPP
 #define COMPLIANCEENGINE_FILESYSTEM_PATH_HPP
 
-#include "FilesystemPolicy.hpp"
 #include "Handle.hpp"
 #include "PathLinkAccess.hpp"
 #include "PrefixLimits.hpp"
 #include "Variant.hpp"
 
 #include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <vector>
 
 namespace ComplianceEngine
 {
@@ -183,10 +180,6 @@ public:
 
 private:
     struct State;
-    struct WorkAllowance
-    {
-        std::size_t spent = 0;
-    };
     enum class InputRole
     {
         Prefix,
