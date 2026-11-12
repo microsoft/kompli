@@ -40,14 +40,11 @@ enum class Type
 };
 // Non-const data members: provenance is sealed by the private constructor and
 // friendship below, not by const members (which would delete assignment and
-// force throwing copies on every move). Moves stay noexcept.
+// force throwing copies on every move). Rule of zero: copies and moves stay
+// implicit and noexcept; the static_asserts below guard it.
 class LookupMountId
 {
 public:
-    LookupMountId(const LookupMountId&) noexcept = default;
-    LookupMountId& operator=(const LookupMountId&) noexcept = default;
-    LookupMountId(LookupMountId&&) noexcept = default;
-    LookupMountId& operator=(LookupMountId&&) noexcept = default;
     std::uint64_t Value() const noexcept
     {
         return mValue;
@@ -65,10 +62,6 @@ private:
 class TargetMountId
 {
 public:
-    TargetMountId(const TargetMountId&) noexcept = default;
-    TargetMountId& operator=(const TargetMountId&) noexcept = default;
-    TargetMountId(TargetMountId&&) noexcept = default;
-    TargetMountId& operator=(TargetMountId&&) noexcept = default;
     std::uint64_t Value() const noexcept
     {
         return mValue;
@@ -90,10 +83,6 @@ public:
         : mValue(id)
     {
     }
-    UserId(const UserId&) noexcept = default;
-    UserId& operator=(const UserId&) noexcept = default;
-    UserId(UserId&&) noexcept = default;
-    UserId& operator=(UserId&&) noexcept = default;
     uid_t Value() const noexcept
     {
         return mValue;
@@ -109,10 +98,6 @@ public:
         : mValue(id)
     {
     }
-    GroupId(const GroupId&) noexcept = default;
-    GroupId& operator=(const GroupId&) noexcept = default;
-    GroupId(GroupId&&) noexcept = default;
-    GroupId& operator=(GroupId&&) noexcept = default;
     gid_t Value() const noexcept
     {
         return mValue;
@@ -126,10 +111,6 @@ namespace Detail
 class LookupSpelling
 {
 public:
-    LookupSpelling(const LookupSpelling&) = default;
-    LookupSpelling& operator=(const LookupSpelling&) = default;
-    LookupSpelling(LookupSpelling&&) noexcept = default;
-    LookupSpelling& operator=(LookupSpelling&&) noexcept = default;
     // Allocates: returns a fresh copy so a temporary Metadata/Handle result
     // can be destroyed without dangling a bound const reference.
     std::string Value() const
@@ -149,10 +130,6 @@ private:
 class EffectiveSpelling
 {
 public:
-    EffectiveSpelling(const EffectiveSpelling&) = default;
-    EffectiveSpelling& operator=(const EffectiveSpelling&) = default;
-    EffectiveSpelling(EffectiveSpelling&&) noexcept = default;
-    EffectiveSpelling& operator=(EffectiveSpelling&&) noexcept = default;
     std::string Value() const
     {
         return mValue;
@@ -171,10 +148,6 @@ private:
 class Metadata
 {
 public:
-    Metadata(const Metadata&) = default;
-    Metadata& operator=(const Metadata&) = default;
-    Metadata(Metadata&&) noexcept = default;
-    Metadata& operator=(Metadata&&) noexcept = default;
     // "Type()" would clash with the enum class Type above once declared as a
     // member name in this class; GCC rejects the resulting self-reference.
     Type FileType() const noexcept
@@ -225,6 +198,28 @@ private:
 static_assert(std::is_nothrow_move_constructible<Metadata>::value,
     "Metadata must be nothrow move constructible (shared Handle allocation relies on it)");
 static_assert(std::is_nothrow_move_assignable<Metadata>::value, "Metadata must be nothrow move assignable");
+// Rule of zero for the strong value types above: these guard that the
+// implicit special members stay noexcept the way the hand-written ones used to.
+static_assert(std::is_nothrow_move_constructible<LookupMountId>::value, "LookupMountId must be nothrow move constructible");
+static_assert(std::is_nothrow_move_assignable<LookupMountId>::value, "LookupMountId must be nothrow move assignable");
+static_assert(std::is_nothrow_copy_constructible<LookupMountId>::value, "LookupMountId must be nothrow copy constructible");
+static_assert(std::is_nothrow_copy_assignable<LookupMountId>::value, "LookupMountId must be nothrow copy assignable");
+static_assert(std::is_nothrow_move_constructible<TargetMountId>::value, "TargetMountId must be nothrow move constructible");
+static_assert(std::is_nothrow_move_assignable<TargetMountId>::value, "TargetMountId must be nothrow move assignable");
+static_assert(std::is_nothrow_copy_constructible<TargetMountId>::value, "TargetMountId must be nothrow copy constructible");
+static_assert(std::is_nothrow_copy_assignable<TargetMountId>::value, "TargetMountId must be nothrow copy assignable");
+static_assert(std::is_nothrow_move_constructible<UserId>::value, "UserId must be nothrow move constructible");
+static_assert(std::is_nothrow_move_assignable<UserId>::value, "UserId must be nothrow move assignable");
+static_assert(std::is_nothrow_copy_constructible<UserId>::value, "UserId must be nothrow copy constructible");
+static_assert(std::is_nothrow_copy_assignable<UserId>::value, "UserId must be nothrow copy assignable");
+static_assert(std::is_nothrow_move_constructible<GroupId>::value, "GroupId must be nothrow move constructible");
+static_assert(std::is_nothrow_move_assignable<GroupId>::value, "GroupId must be nothrow move assignable");
+static_assert(std::is_nothrow_copy_constructible<GroupId>::value, "GroupId must be nothrow copy constructible");
+static_assert(std::is_nothrow_copy_assignable<GroupId>::value, "GroupId must be nothrow copy assignable");
+static_assert(std::is_nothrow_move_constructible<Detail::LookupSpelling>::value, "LookupSpelling must be nothrow move constructible");
+static_assert(std::is_nothrow_move_assignable<Detail::LookupSpelling>::value, "LookupSpelling must be nothrow move assignable");
+static_assert(std::is_nothrow_move_constructible<Detail::EffectiveSpelling>::value, "EffectiveSpelling must be nothrow move constructible");
+static_assert(std::is_nothrow_move_assignable<Detail::EffectiveSpelling>::value, "EffectiveSpelling must be nothrow move assignable");
 namespace Detail
 {
 class Handle

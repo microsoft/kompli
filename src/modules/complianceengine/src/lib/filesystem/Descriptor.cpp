@@ -101,6 +101,12 @@ public:
     // A temporary context would dangle within this RAII object's own scope:
     // it retains the context reference for mContext's lifetime below.
     explicit Reservation(const ContextInterface&&) = delete;
+    // Only ever a local `Reservation charge(*this);`; an implicit copy would
+    // double-release the reservation on destruction.
+    Reservation(const Reservation&) = delete;
+    Reservation& operator=(const Reservation&) = delete;
+    Reservation(Reservation&&) = delete;
+    Reservation& operator=(Reservation&&) = delete;
     ~Reservation() noexcept
     {
         if (mReserved)
@@ -311,7 +317,7 @@ Result<Descriptor> ContextInterface::Duplicate(const Descriptor& source) const&
 }
 
 #define CHECK_OWNER(owner, failure)                                                                                                                    \
-    static_cast<void>(Filesystem::Detail::RequireOwned(owner.mDescriptor));                                                                            \
+    static_cast<void>(Filesystem::Detail::RequireOwned((owner).mDescriptor));                                                                          \
     if (&(owner).mContext.get() != this)                                                                                                               \
     {                                                                                                                                                  \
         errno = EINVAL;                                                                                                                                \
