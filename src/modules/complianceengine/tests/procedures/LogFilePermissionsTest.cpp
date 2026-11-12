@@ -13,9 +13,11 @@
 #include <iterator>
 #include <linux/limits.h>
 #include <pwd.h>
+#include <set>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 using ComplianceEngine::AuditLogFilePermissions;
@@ -318,8 +320,11 @@ protected:
         testDir = mContext.GetTempdirPath() + "/log-file-permissions";
         ASSERT_EQ(0, mkdir(testDir.c_str(), 0700));
         indicators.Push("EnsureLogfileAccess");
-        // No test in this fixture sets its own EXPECT_CALL on any native
-        // seam.
+        // Every test in this fixture that reaches the mutation seams
+        // (ChownPinnedFileDescriptor/ChmodPinnedAlias) constrains them
+        // itself via ExpectPinnedRemediation() below with its own exact
+        // EXPECT_CALL; AllowIncidentalNativeAccess() deliberately excludes
+        // those two seams (see MockContext.h).
         mContext.AllowIncidentalNativeAccess();
     }
 
@@ -361,6 +366,80 @@ protected:
         EXPECT_EQ(statInfo.st_gid, expectedGroup);
         EXPECT_EQ(statInfo.st_mode & 0777, expectedPerms);
     }
+
+    // Declare exact mutation-seam expectations for a remediation that must
+    // chmod (and, when ownership isn't already compliant, chown) exactly
+    // the given files, identified by inode rather than call order/argument
+    // so a mistargeted or duplicate mutation is caught even though the
+    // calls are otherwise indistinguishable (same owner/group/mode).
+    void ExpectPinnedRemediation(const std::vector<std::string>& files)
+    {
+        for (const auto& file : files)
+        {
+            struct stat target = {};
+            ASSERT_EQ(0, ::stat((testDir + "/" + file).c_str(), &target));
+            // Precondition: the fixture creates this file non-compliant, so
+            // remediation must chmod it exactly once.
+            ASSERT_NE(0640u, static_cast<unsigned>(target.st_mode & 07777));
+            mExpectedChmodTargets.insert({target.st_dev, target.st_ino});
+            // CreateLogFile falls back to root:root when the host lacks the
+            // 'bin' account; ownership is then already compliant (root
+            // matches the owner/group patterns' first item) and no chown is
+            // expected for this file. This makes the expectation
+            // host-independent.
+            if (target.st_uid != 0 || target.st_gid != 0)
+            {
+                mExpectedChownTargets.insert({target.st_dev, target.st_ino});
+            }
+        }
+
+        // Owner/group fall back to the first ("root") item of the pattern
+        // lists (FilePermissions.h: the first one is used for remediation),
+        // hence the exact (0, 0) chown argument match. Production passes
+        // the full observed st_mode (type bits included; mask 0137 already
+        // applied to these fixture modes) to ChmodPinnedAlias, so the
+        // expected mode is S_IFREG | 0640, not a bare 0640. Each
+        // WillRepeatedly invocation resolves the *call's own*
+        // descriptor/alias argument to an inode via fstat/fstatat (never
+        // trusting call order) and records it; the post-hoc set comparison
+        // in CheckPinnedRemediationTargets() then proves every call
+        // targeted a distinct expected file. Delegating to Real* lets the
+        // existing post-state assertions observe the actual mutation.
+        const int chownCount = static_cast<int>(mExpectedChownTargets.size());
+        if (chownCount > 0)
+        {
+            EXPECT_CALL(mContext, ChownPinnedFileDescriptor(::testing::_, 0, 0)).Times(chownCount).WillRepeatedly([this](int descriptor, uid_t owner, gid_t group) {
+                struct stat pinned = {};
+                EXPECT_EQ(0, ::fstat(descriptor, &pinned));
+                mObservedChownTargets.insert({pinned.st_dev, pinned.st_ino});
+                return mContext.RealChownPinnedFileDescriptor(descriptor, owner, group);
+            });
+        }
+        else
+        {
+            EXPECT_CALL(mContext, ChownPinnedFileDescriptor(::testing::_, 0, 0)).Times(0);
+        }
+
+        EXPECT_CALL(mContext, ChmodPinnedAlias(::testing::_, ::testing::_, static_cast<mode_t>(S_IFREG | 0640)))
+            .Times(static_cast<int>(files.size()))
+            .WillRepeatedly([this](int procfsDirectory, const char* decimalAlias, mode_t mode) {
+                struct stat pinned = {};
+                EXPECT_EQ(0, ::fstatat(procfsDirectory, decimalAlias, &pinned, 0));
+                mObservedChmodTargets.insert({pinned.st_dev, pinned.st_ino});
+                return mContext.RealChmodPinnedAlias(procfsDirectory, decimalAlias, mode);
+            });
+    }
+
+    void CheckPinnedRemediationTargets()
+    {
+        EXPECT_EQ(mExpectedChownTargets, mObservedChownTargets);
+        EXPECT_EQ(mExpectedChmodTargets, mObservedChmodTargets);
+    }
+
+    std::multiset<std::pair<dev_t, ino_t>> mExpectedChownTargets;
+    std::multiset<std::pair<dev_t, ino_t>> mObservedChownTargets;
+    std::multiset<std::pair<dev_t, ino_t>> mExpectedChmodTargets;
+    std::multiset<std::pair<dev_t, ino_t>> mObservedChmodTargets;
 };
 
 // Test audit with missing directory
@@ -527,10 +606,13 @@ TEST_F(EnsureLogfileAccessTest, NestedViolationIsAuditedAndRemediated)
     ASSERT_TRUE(audit.HasValue());
     EXPECT_EQ(Status::NonCompliant, audit.Value());
 
+    ExpectPinnedRemediation({"nested/auth.log"});
+
     const auto remediation = RemediateLogFilePermissions(params, indicators, mContext);
 
     ASSERT_TRUE(remediation.HasValue());
     EXPECT_EQ(Status::Compliant, remediation.Value());
+    CheckPinnedRemediationTargets();
     struct stat status;
     ASSERT_EQ(0, ::stat((testDir + "/nested/auth.log").c_str(), &status));
     EXPECT_EQ(static_cast<mode_t>(0640), status.st_mode & 0777);
@@ -549,9 +631,12 @@ TEST_F(EnsureLogfileAccessTest, RemediateIncorrectPermissions)
     LogFilePermissionsParams params;
     params.path = testDir;
 
+    ExpectPinnedRemediation({"auth.log"});
+
     auto result = RemediateLogFilePermissions(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
+    CheckPinnedRemediationTargets();
 
     // Verify the file now has correct mask (auth.log should be root|syslog:root|adm:640)
     std::string filePath = testDir + "/auth.log";
@@ -609,12 +694,15 @@ TEST_F(EnsureLogfileAccessTest, RemediateMultipleFiles)
     LogFilePermissionsParams params;
     params.path = testDir;
 
+    std::vector<std::string> files = {"auth.log", "secure", "syslog", "test.log"};
+    ExpectPinnedRemediation(files);
+
     auto result = RemediateLogFilePermissions(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
+    CheckPinnedRemediationTargets();
 
     // Verify all files now have appropriate mask
-    std::vector<std::string> files = {"auth.log", "secure", "syslog", "test.log"};
     for (const auto& file : files)
     {
         std::string filePath = testDir + "/" + file;
@@ -634,9 +722,12 @@ TEST_F(EnsureLogfileAccessTest, RemediateIgnoresSpecialFiles)
     LogFilePermissionsParams params;
     params.path = testDir;
 
+    ExpectPinnedRemediation({"regular.log"});
+
     auto result = RemediateLogFilePermissions(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
+    CheckPinnedRemediationTargets();
 
     // Verify regular.log was fixed to valid owner/group combination
     std::string filePath = testDir + "/regular.log";

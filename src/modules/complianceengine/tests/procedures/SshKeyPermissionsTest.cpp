@@ -176,13 +176,37 @@ TEST(SshKeyRangeTest, ReplacementAfterPinCannotRedirectClassificationOrRemediati
     ASSERT_EQ(0, ::rename(key.c_str(), replacement.c_str()));
     ASSERT_EQ(0, ::rename(held.c_str(), key.c_str()));
     swapped = false;
-    EXPECT_CALL(context, ChownPinnedFileDescriptor(::testing::_, ::testing::_, ::testing::_)).Times(::testing::AtMost(1)).WillOnce([&](int descriptor, uid_t, gid_t) {
+    // Owner/group fall back to root:root (SshKeyPermissions.cpp: owner is
+    // {"root"}, group is {"root", "ssh_keys"}); a non-root run's file is
+    // owned by the invoking user, so exactly one chown is expected. Under
+    // fakeroot/real root the file is already root:root, so none is.
+    const int chownCount = (original.st_uid != 0 || original.st_gid != 0) ? 1 : 0;
+    if (chownCount == 1)
+    {
+        EXPECT_CALL(context, ChownPinnedFileDescriptor(::testing::_, 0, 0)).Times(1).WillOnce([&](int descriptor, uid_t, gid_t) {
+            struct stat pinned = {};
+            EXPECT_EQ(0, ::fstat(descriptor, &pinned));
+            EXPECT_EQ(original.st_dev, pinned.st_dev);
+            EXPECT_EQ(original.st_ino, pinned.st_ino);
+            // Returns 0 without delegating to the real chown: an
+            // unprivileged process attempting chown to root would fail
+            // with EPERM.
+            return 0;
+        });
+    }
+    else
+    {
+        EXPECT_CALL(context, ChownPinnedFileDescriptor(::testing::_, 0, 0)).Times(0);
+    }
+    // Public key mask 0133 applied to 0666 -> 0644; the post-state
+    // assertions below already expect 0644.
+    EXPECT_CALL(context, ChmodPinnedAlias(::testing::_, ::testing::_, static_cast<mode_t>(S_IFREG | 0644))).Times(1).WillOnce([&](int procfsDirectory, const char* decimalAlias, mode_t mode) {
         struct stat pinned = {};
-        EXPECT_EQ(0, ::fstat(descriptor, &pinned));
+        EXPECT_EQ(0, ::fstatat(procfsDirectory, decimalAlias, &pinned, 0));
+        EXPECT_EQ(original.st_dev, pinned.st_dev);
         EXPECT_EQ(original.st_ino, pinned.st_ino);
-        return 0;
+        return context.RealChmodPinnedAlias(procfsDirectory, decimalAlias, mode);
     });
-    EXPECT_CALL(context, ChmodPinnedAlias(::testing::_, ::testing::_, ::testing::_)).Times(1);
     auto remediate = RemediateSshKeyPermissions(params, indicators, context);
     ASSERT_TRUE(remediate.HasValue()) << remediate.Error().message;
     EXPECT_TRUE(swapped);
@@ -515,6 +539,24 @@ TEST_F(EnsureSshKeyPermsTest, PrivateKeyRemediation)
     }
     ExpectPinnedKeyReads(keyPath, 4);
     ASSERT_EQ(0, ::chmod(keyPath.c_str(), 0777)); // bad perms
+    struct stat keyIdentity = {};
+    ASSERT_EQ(0, ::stat(keyPath.c_str(), &keyIdentity));
+    // Precondition: the key was created by root in this private fixture
+    // directory, so ownership is already compliant and only the mode is
+    // remediated below.
+    ASSERT_EQ(0u, keyIdentity.st_uid) << "test precondition: key must already be root-owned";
+    ASSERT_EQ(0u, keyIdentity.st_gid) << "test precondition: key must already be root-group-owned";
+    EXPECT_CALL(mContext, ChownPinnedFileDescriptor(::testing::_, ::testing::_, ::testing::_)).Times(0);
+    // 0777 & ~0137 = 0640.
+    EXPECT_CALL(mContext, ChmodPinnedAlias(::testing::_, ::testing::_, static_cast<mode_t>(S_IFREG | 0640)))
+        .Times(1)
+        .WillOnce([this, keyIdentity](int procfsDirectory, const char* decimalAlias, mode_t mode) {
+            struct stat pinned = {};
+            EXPECT_EQ(0, ::fstatat(procfsDirectory, decimalAlias, &pinned, 0));
+            EXPECT_EQ(keyIdentity.st_dev, pinned.st_dev);
+            EXPECT_EQ(keyIdentity.st_ino, pinned.st_ino);
+            return mContext.RealChmodPinnedAlias(procfsDirectory, decimalAlias, mode);
+        });
     SshKeyPermissionsParams params;
     params.type = SshKeyType::Private;
     auto remediate = RemediateSshKeyPermissions(params, mIndicators, mContext);

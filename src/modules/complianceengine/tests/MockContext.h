@@ -56,6 +56,14 @@ struct MockContext : public ComplianceEngine::ContextInterface
     {
         return ContextInterface::DuplicateDescriptor(fd);
     }
+    int RealChownPinnedFileDescriptor(int descriptor, uid_t owner, gid_t group) const
+    {
+        return ContextInterface::ChownPinnedFileDescriptor(descriptor, owner, group);
+    }
+    int RealChmodPinnedAlias(int procfsDirectory, const char* decimalAlias, mode_t mode) const
+    {
+        return ContextInterface::ChmodPinnedAlias(procfsDirectory, decimalAlias, mode);
+    }
     pid_t RealNativeProcessId() const
     {
         return ContextInterface::NativeProcessId();
@@ -204,6 +212,17 @@ struct MockContext : public ComplianceEngine::ContextInterface
     // failure into a pass. Group by what the call represents, not just by
     // mocked signature, so a caller can allow identity/bootstrap noise while
     // still holding e.g. close-once behavior to an exact expectation.
+    //
+    // ChownPinnedFileDescriptor/ChmodPinnedAlias deliberately have no allow-
+    // helper here: they perform the ownership/mode mutation that remediation
+    // tests exist to verify (count, uid/gid/mode, and -- via fstat/fstatat
+    // on the call arguments -- the exact target file). A fixture that
+    // reaches these seams must declare its own EXPECT_CALL (exact count or
+    // Times(0)) rather than get a catch-all that would hide an
+    // argument-mismatched or mistargeted mutation. Use RealChownPinnedFileDescriptor/
+    // RealChmodPinnedAlias (declared at the top of this struct with the
+    // other Real* pass-throughs) to delegate a verified call to the real
+    // syscall from inside that EXPECT_CALL's side effect.
 
     // getpid()/gettid() calls used only to resolve the verified /proc/self
     // procfs pin; never the property under test.
