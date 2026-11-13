@@ -11,6 +11,7 @@
 using ComplianceEngine::Kompli::Command;
 using ComplianceEngine::Kompli::Format;
 using ComplianceEngine::Kompli::ParseCommandLine;
+using ComplianceEngine::Kompli::PlanPin;
 using ComplianceEngine::Kompli::PrintHelp;
 using ComplianceEngine::Kompli::ToggleMode;
 
@@ -124,6 +125,7 @@ TEST(CliOptionsSmokeTest, PrintHelpListsSubcommands)
     EXPECT_NE(out.find("Commands:"), std::string::npos);
     EXPECT_NE(out.find("render"), std::string::npos);
     EXPECT_NE(out.find("plan"), std::string::npos);
+    EXPECT_NE(out.find("--pin=<caret|tilde|exact>"), std::string::npos);
     EXPECT_NE(out.find("run"), std::string::npos);
     EXPECT_NE(out.find("list"), std::string::npos);
 }
@@ -376,4 +378,56 @@ TEST(CliOptionsSmokeTest, FormatOnListIsRejected)
 {
     ArgvHelper a{"prog", "-f", "junit", "list", "bench.json"};
     EXPECT_FALSE(ParseCommandLine(a.Argc(), a.Argv()).HasValue());
+}
+
+TEST(CliOptionsSmokeTest, PlanPinDefaultsToCaretAndParsesEachValue)
+{
+    ArgvHelper defaultArgs{"prog", "plan", "bench.json"};
+    auto defaultResult = ParseCommandLine(defaultArgs.Argc(), defaultArgs.Argv());
+    ASSERT_TRUE(defaultResult.HasValue());
+    EXPECT_EQ(defaultResult.Value().pin, PlanPin::Caret);
+
+    for (const auto& pair : std::vector<std::pair<std::string, PlanPin>>{{"caret", PlanPin::Caret}, {"tilde", PlanPin::Tilde}, {"exact", PlanPin::Exact}})
+    {
+        ArgvHelper args{"prog", "--pin=" + pair.first, "plan", "bench.json"};
+        auto result = ParseCommandLine(args.Argc(), args.Argv());
+        ASSERT_TRUE(result.HasValue()) << pair.first;
+        EXPECT_EQ(result.Value().pin, pair.second) << pair.first;
+    }
+}
+
+TEST(CliOptionsSmokeTest, PlanPinRejectsInvalidValuesWithoutEchoingInput)
+{
+    const std::vector<std::string> invalidValues = {"", "Caret", "TILDE", "loose", "exact:bench.json", std::string(4096, 'x')};
+    for (const auto& value : invalidValues)
+    {
+        ArgvHelper args{"prog", "--pin=" + std::string(value), "plan", "bench.json"};
+        auto result = ParseCommandLine(args.Argc(), args.Argv());
+        ASSERT_FALSE(result.HasValue()) << value;
+        EXPECT_EQ(result.Error().message, "Invalid --pin value. Allowed values: {caret, tilde, exact}.");
+    }
+}
+
+TEST(CliOptionsSmokeTest, PlanPinLastValidValueWins)
+{
+    ArgvHelper args{"prog", "--pin=tilde", "--pin=exact", "plan", "bench.json"};
+    auto result = ParseCommandLine(args.Argc(), args.Argv());
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value().pin, PlanPin::Exact);
+
+    ArgvHelper invalidLast{"prog", "--pin=caret", "--pin=invalid", "plan", "bench.json"};
+    auto invalidResult = ParseCommandLine(invalidLast.Argc(), invalidLast.Argv());
+    ASSERT_FALSE(invalidResult.HasValue());
+    EXPECT_EQ(invalidResult.Error().message, "Invalid --pin value. Allowed values: {caret, tilde, exact}.");
+}
+
+TEST(CliOptionsSmokeTest, PlanPinIsRejectedOutsidePlan)
+{
+    for (const auto& command : {"run", "render", "list"})
+    {
+        ArgvHelper args{"prog", "--pin=caret", command, "input.json"};
+        auto result = ParseCommandLine(args.Argc(), args.Argv());
+        ASSERT_FALSE(result.HasValue()) << command;
+        EXPECT_EQ(result.Error().message, "--pin is only valid for 'plan'.") << command;
+    }
 }
