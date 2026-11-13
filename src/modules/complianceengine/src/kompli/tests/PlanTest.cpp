@@ -27,6 +27,7 @@ using ComplianceEngine::Kompli::CheckUniqueBenchmarkFiles;
 using ComplianceEngine::Kompli::GeneratePlan;
 using ComplianceEngine::Kompli::ParamOverride;
 using ComplianceEngine::Kompli::ParsePlanFile;
+using ComplianceEngine::Kompli::PlanPin;
 using ComplianceEngine::Kompli::Toggle;
 using ComplianceEngine::Kompli::ToggleMode;
 using ComplianceEngine::Kompli::ValidatePlanForRun;
@@ -189,6 +190,40 @@ TEST_F(GeneratePlanTest, SeedsEveryRuleAtAudit)
     ASSERT_EQ(benchmark.rules.size(), 2u);
     EXPECT_EQ(benchmark.rules.at("1.1.1.1").mode, ToggleMode::Audit);
     EXPECT_EQ(benchmark.rules.at("1.1.1.2").mode, ToggleMode::Audit);
+}
+
+TEST_F(GeneratePlanTest, PinAppliesToEveryBenchmarkAndRoundTrips)
+{
+    if (::geteuid() != 0)
+    {
+        GTEST_SKIP() << "chown requires root";
+    }
+    const std::string firstPath = MakeVerifiedFile("pin_first_dir", "first.benchmark.json", kBenchmarkJson);
+    std::string secondJson = kBenchmarkJson;
+    const auto benchmarkVersion = secondJson.find("\"v1.0.0\"");
+    ASSERT_NE(benchmarkVersion, std::string::npos);
+    secondJson.replace(benchmarkVersion, std::string("\"v1.0.0\"").size(), "\"v2.0.0\"");
+    const std::string secondPath = MakeVerifiedFile("pin_second_dir", "second.benchmark.json", secondJson);
+
+    for (const auto& pin : {PlanPin::Caret, PlanPin::Tilde, PlanPin::Exact})
+    {
+        const std::string constraint = (PlanPin::Caret == pin) ? "^1.0.0" : (PlanPin::Tilde == pin) ? "~1.0.0" : "1.0.0";
+        auto generated = GeneratePlan({firstPath, secondPath}, {}, {}, nullptr, pin);
+        ASSERT_TRUE(generated.HasValue()) << generated.Error().message;
+        const std::string planPath = MakeVerifiedFile("pin_out_" + constraint, "plan.json", generated.Value());
+        auto parsed = ParsePlanFile(planPath, nullptr);
+        ASSERT_TRUE(parsed.HasValue()) << parsed.Error().message;
+        ASSERT_EQ(parsed.Value().benchmarks.size(), 2u);
+        EXPECT_EQ(parsed.Value().benchmarks[0].file, firstPath);
+        EXPECT_EQ(parsed.Value().benchmarks[1].file, secondPath);
+        for (const auto& benchmark : parsed.Value().benchmarks)
+        {
+            EXPECT_EQ(benchmark.version.major, "1");
+            EXPECT_EQ(benchmark.version.minor, "0");
+            EXPECT_EQ(benchmark.version.patch, "0");
+            EXPECT_EQ(benchmark.versionConstraint, constraint);
+        }
+    }
 }
 
 TEST_F(GeneratePlanTest, RejectsDefinitionWithoutContentVersion)

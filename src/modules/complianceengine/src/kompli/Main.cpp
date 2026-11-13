@@ -170,7 +170,7 @@ int RunRender(const Options& options)
 // reads the benchmark file and hashes it, it evaluates nothing.
 int RunPlan(const Options& options)
 {
-    auto planResult = GeneratePlan(options.inputs, options.toggles, options.paramOverrides, nullptr);
+    auto planResult = GeneratePlan(options.inputs, options.toggles, options.paramOverrides, nullptr, options.pin);
     if (!planResult.HasValue())
     {
         std::cerr << "Error: " << planResult.Error().message << std::endl;

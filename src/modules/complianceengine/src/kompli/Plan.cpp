@@ -242,7 +242,8 @@ string BaseName(const string& path)
 // success the caller owns the returned value and must free it if it isn't
 // subsequently handed to a parent JSON container (matching parson's
 // ownership-transfer convention, e.g. json_array_append_value).
-Result<JSON_Value*> BuildBenchmarkEntry(const string& benchmarkFile, const string& name, const ContentVersion& version, const std::map<string, PlanRuleMode>& rules)
+Result<JSON_Value*> BuildBenchmarkEntry(const string& benchmarkFile, const string& name, const ContentVersion& version,
+    const std::map<string, PlanRuleMode>& rules, PlanPin pin)
 {
     JsonWrapperPointerType benchmarkValue(json_value_init_object(), &json_value_free);
     if (nullptr == benchmarkValue)
@@ -251,10 +252,19 @@ Result<JSON_Value*> BuildBenchmarkEntry(const string& benchmarkFile, const strin
     }
     auto* benchmarkObject = json_value_get_object(benchmarkValue.get());
     const string versionText = ContentVersionToString(version);
+    string constraint = versionText;
+    if (PlanPin::Caret == pin)
+    {
+        constraint.insert(0, "^");
+    }
+    else if (PlanPin::Tilde == pin)
+    {
+        constraint.insert(0, "~");
+    }
     if (nullptr == benchmarkObject || JSONSuccess != json_object_set_string(benchmarkObject, "file", benchmarkFile.c_str()) ||
         JSONSuccess != json_object_set_string(benchmarkObject, "name", name.c_str()) ||
         JSONSuccess != json_object_set_string(benchmarkObject, "version", versionText.c_str()) ||
-        JSONSuccess != json_object_set_string(benchmarkObject, "versionConstraint", ("^" + versionText).c_str()))
+        JSONSuccess != json_object_set_string(benchmarkObject, "versionConstraint", constraint.c_str()))
     {
         return Error("Failed to set plan benchmark fields", ENOMEM);
     }
@@ -403,7 +413,7 @@ Result<ResolvedRuleRef> ResolveRuleRef(std::vector<ParsedBenchmarkFile>& parsedF
 } // anonymous namespace
 
 Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std::vector<Toggle>& toggles,
-    const std::vector<ParamOverride>& paramOverrides, OsConfigLogHandle logHandle)
+    const std::vector<ParamOverride>& paramOverrides, OsConfigLogHandle logHandle, PlanPin pin)
 {
     if (benchmarkFiles.empty())
     {
@@ -538,7 +548,7 @@ Result<string> GeneratePlan(const std::vector<string>& benchmarkFiles, const std
 
     for (const auto& parsed : parsedFiles)
     {
-        auto entryResult = BuildBenchmarkEntry(parsed.file, parsed.name, parsed.version, parsed.rules);
+        auto entryResult = BuildBenchmarkEntry(parsed.file, parsed.name, parsed.version, parsed.rules, pin);
         if (!entryResult.HasValue())
         {
             json_value_free(benchmarksValue);
