@@ -87,7 +87,6 @@ protected:
     {
         ResolverLimits limits;
         limits.shared.components = 100;
-        limits.shared.retainedBytes = 262144;
         limits.shared.fdinfoBytes = fdinfoCap;
         limits.linkExpansions = 8;
         Path::Policy policy;
@@ -908,7 +907,6 @@ TEST_F(ReadableFileTest, ResolvedTargetSurvivesPathAndStepDestruction)
     {
         ResolverLimits limits;
         limits.shared.components = 100;
-        limits.shared.retainedBytes = 262144;
         Path::Policy policy = CrossMountExtension();
         auto opened = Path::Make(context, context.GetTempdirPath(), policy, limits);
         ASSERT_TRUE(opened.HasValue());
@@ -945,7 +943,6 @@ TEST_F(ReadableFileTest, RejectsDirectoryInvalidCapAndPinInspectionFailureWithou
     {
         ResolverLimits limits;
         limits.shared.components = 100;
-        limits.shared.retainedBytes = 262144;
         limits.shared.fdinfoBytes = fdinfoCap;
         limits.linkExpansions = 8;
         Path::Policy policy;
@@ -1414,7 +1411,6 @@ TEST_F(ReadableFileTest, FailedChildNativeOpenNeverFallsBackToTargetName)
     {
         ResolverLimits limits;
         limits.shared.components = 100;
-        limits.shared.retainedBytes = 262144;
         auto opened = Path::Make(context, context.GetTempdirPath(), CrossMountExtension(), limits);
         ASSERT_TRUE(opened.HasValue());
         ASSERT_TRUE(opened.Value().Is<Path>());
@@ -1446,7 +1442,6 @@ TEST_F(ReadableFileTest, ChildStatFailureOutranksDiagnosticPinRelease)
     const std::string name = Component(source);
     ResolverLimits limits;
     limits.shared.components = 100;
-    limits.shared.retainedBytes = 262144;
     auto opened = Path::Make(context, context.GetTempdirPath(), CrossMountExtension(), limits);
     ASSERT_TRUE(opened.HasValue());
     ASSERT_TRUE(opened.Value().Is<Path>());
@@ -1497,14 +1492,12 @@ TEST_F(ReadableFileTest, InverseStepReleasesSelectedBudgetButRetainedTargetSurvi
     {
         ResolverLimits limits;
         limits.shared.components = 100;
-        limits.shared.retainedBytes = 262144;
         auto opened = Path::Make(context, context.GetTempdirPath(), CrossMountExtension(), limits);
         ASSERT_TRUE(opened.HasValue());
         ASSERT_TRUE(opened.Value().Is<Path>());
         Path path = ComplianceEngine::As<Path>(std::move(opened.Value()));
         ASSERT_TRUE(path.Freeze().HasValue());
         const auto initialPins = path.RetainedDescriptors();
-        const auto initialBytes = path.RetainedBytes();
         auto selected = path.Resolve(Component(source), CrossMountExtension());
         ASSERT_TRUE(selected.HasValue());
         ASSERT_TRUE(selected.Value().Is<Path::Step>());
@@ -1514,11 +1507,9 @@ TEST_F(ReadableFileTest, InverseStepReleasesSelectedBudgetButRetainedTargetSurvi
         auto inverse = path.Apply(std::move(step));
         ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;
         EXPECT_GT(path.RetainedDescriptors(), initialPins);
-        EXPECT_GT(path.RetainedBytes(), initialBytes);
         auto restored = path.Apply(std::move(inverse.Value()));
         ASSERT_TRUE(restored.HasValue()) << restored.Error().message;
         EXPECT_EQ(initialPins, path.RetainedDescriptors());
-        EXPECT_EQ(initialBytes, path.RetainedBytes());
         EXPECT_EQ(inode, retained->Metadata().Stat().st_ino);
         // A detached copy is outside the stack charge; a fresh child still fits.
         auto second = path.Resolve(Component(source), CrossMountExtension());
@@ -1529,7 +1520,6 @@ TEST_F(ReadableFileTest, InverseStepReleasesSelectedBudgetButRetainedTargetSurvi
         auto secondBack = path.Apply(std::move(secondInverse.Value()));
         ASSERT_TRUE(secondBack.HasValue()) << secondBack.Error().message;
         EXPECT_EQ(initialPins, path.RetainedDescriptors());
-        EXPECT_EQ(initialBytes, path.RetainedBytes());
     }
     ASSERT_TRUE(retained->Stat().HasValue());
     EXPECT_EQ(source, retained->Metadata().LookupName());
@@ -1614,7 +1604,6 @@ TEST_F(ReadableFileTest, DetachedOwnershipAndDirectoryModeNeverMutateReplacement
     {
         ResolverLimits limits;
         limits.shared.components = 100;
-        limits.shared.retainedBytes = 262144;
         auto opened = Path::Make(context, directory, CrossMountExtension(), limits);
         ASSERT_TRUE(opened.HasValue());
         ASSERT_TRUE(opened.Value().Is<Path>());
@@ -1766,7 +1755,6 @@ TEST_F(ReadableFileTest, InverseStepKeepsPhysicalDirectoryAfterNameReplacement)
     ASSERT_EQ(0, ::symlink("physical", (root + "/shortcut").c_str()));
     ResolverLimits limits;
     limits.shared.components = 100;
-    limits.shared.retainedBytes = 262144;
     Path::Policy policy = CrossMountExtension();
     policy.directoryLinks = ComplianceEngine::Filesystem::DirectoryLinkPolicy::Follow;
     auto opened = Path::Make(context, root, policy, limits);
@@ -1816,7 +1804,6 @@ TEST_F(ReadableFileTest, PathOwnersLogEachFailedDisposalOnceAndDoNotRetryReusedN
     {
         ResolverLimits limits;
         limits.shared.components = 100;
-        limits.shared.retainedBytes = 262144;
         auto opened = Path::Make(context, source, CrossMountExtension(), limits);
         ASSERT_TRUE(opened.HasValue());
         ASSERT_TRUE(opened.Value().Is<Path>());
@@ -1890,7 +1877,6 @@ TEST_F(ReadableFileTest, PathMoveAssignmentReleasesReplacedPinThroughOriginalCon
     const std::size_t before = OpenDescriptors();
     ResolverLimits limits;
     limits.shared.components = 100;
-    limits.shared.retainedBytes = 262144;
     auto first = Path::Make(context, context.GetTempdirPath(), CrossMountExtension(), limits);
     auto second = Path::Make(incomingContext, incomingContext.GetTempdirPath(), CrossMountExtension(), limits);
     ASSERT_TRUE(first.HasValue());
@@ -1936,7 +1922,6 @@ TEST_F(ReadableFileTest, FailedPinDisposalAndLoggerDoNotSkipRemainingOwners)
     const auto before = OpenDescriptors();
     ResolverLimits limits;
     limits.shared.components = 100;
-    limits.shared.retainedBytes = 262144;
     auto opened = Path::Make(selected, source, CrossMountExtension(), limits);
     ASSERT_TRUE(opened.HasValue());
     ASSERT_TRUE(opened.Value().Is<Path>());
@@ -1974,7 +1959,6 @@ TEST_F(ReadableFileTest, DiagnosticTransitionReleasePreservesUndoAndHeldTarget)
     const auto before = OpenDescriptors();
     ResolverLimits limits;
     limits.shared.components = 100;
-    limits.shared.retainedBytes = 262144;
     std::size_t attempts = 0;
     auto opened = Path::Make(context, context.GetTempdirPath(), CrossMountExtension(), limits);
     ASSERT_TRUE(opened.HasValue());
@@ -1983,7 +1967,6 @@ TEST_F(ReadableFileTest, DiagnosticTransitionReleasePreservesUndoAndHeldTarget)
     opened = ComplianceEngine::Error("Release factory wrapper", EINVAL);
     ASSERT_TRUE(path.Freeze().HasValue());
     const std::size_t rootPins = path.RetainedDescriptors();
-    const std::size_t rootBytes = path.RetainedBytes();
     auto selected = path.Resolve(Component(source), CrossMountExtension());
     ASSERT_TRUE(selected.HasValue());
     ASSERT_TRUE(selected.Value().Is<Path::Step>());
@@ -1994,7 +1977,6 @@ TEST_F(ReadableFileTest, DiagnosticTransitionReleasePreservesUndoAndHeldTarget)
     auto restore = path.Apply(std::move(undo.Value()));
     ASSERT_TRUE(restore.HasValue()) << restore.Error().message;
     EXPECT_EQ(rootPins, path.RetainedDescriptors());
-    EXPECT_EQ(rootBytes, path.RetainedBytes());
     ASSERT_TRUE(held.Stat().HasValue());
     EXPECT_EQ(inode, held.Stat().Value().st_ino);
     selected = ComplianceEngine::Error("Release selected Step", EINVAL);
@@ -2034,7 +2016,6 @@ TEST_F(ReadableFileTest, ChildAcquisitionSurvivesFailedProcfsHelperDisposal)
     const auto before = OpenDescriptors();
     ResolverLimits limits;
     limits.shared.components = 100;
-    limits.shared.retainedBytes = 262144;
     auto opened = Path::Make(context, context.GetTempdirPath(), CrossMountExtension(), limits);
     ASSERT_TRUE(opened.HasValue());
     ASSERT_TRUE(opened.Value().Is<Path>());
@@ -2084,7 +2065,6 @@ TEST_F(ReadableFileTest, RetiringResolvedPathVisitsRootPhysicalAncestorAndLeafPi
     const auto before = OpenDescriptors();
     ResolverLimits limits;
     limits.shared.components = 100;
-    limits.shared.retainedBytes = 262144;
     Path::Policy policy = CrossMountExtension();
     policy.fileLinks = ComplianceEngine::Filesystem::FileLinkPolicy::Follow;
     auto opened = Path::Make(context, root, policy, limits);

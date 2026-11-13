@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <climits>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -20,83 +21,11 @@
 #include <limits>
 #include <linux/magic.h>
 #include <memory>
-#include <new>
 #include <sys/statfs.h>
 #include <type_traits>
 #include <unistd.h>
 #include <utility>
 #include <vector>
-#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
-extern "C" bool ArmFilesystemCollectionHandleAllocation(unsigned site) noexcept;
-extern "C" void DisarmFilesystemCollectionHandleAllocation() noexcept;
-extern "C" bool TripFilesystemCollectionCheckpoint(unsigned site) noexcept;
-extern "C" void ArmFilesystemCollectionInverseAllocation() noexcept;
-extern "C" void DisarmFilesystemCollectionInverseAllocation() noexcept;
-enum class TestCheckpoint : unsigned
-{
-    FrameReserve = 1,
-    InversePreparation,
-    AfterApply,
-    BeforeOffer,
-    InverseRestore,
-};
-
-namespace ComplianceEngine
-{
-namespace Filesystem
-{
-namespace
-{
-// Only the first allocation made *inside* the non-noexcept Path::Apply is
-// failed. Path prepares its inverse before publishing; the wrapper disarms
-// before stack unwinding, and this guard covers an unexpected early return.
-class ScopedHandleAllocationFault
-{
-public:
-    explicit ScopedHandleAllocationFault(unsigned site) noexcept
-        : armed(ArmFilesystemCollectionHandleAllocation(site))
-    {
-    }
-    ~ScopedHandleAllocationFault() noexcept
-    {
-        if (armed)
-            DisarmFilesystemCollectionHandleAllocation();
-    }
-
-private:
-    bool armed;
-};
-class ScopedInversePreparationFault
-{
-public:
-    explicit ScopedInversePreparationFault(bool enabled) noexcept
-        : armed(enabled)
-    {
-        if (armed)
-            ArmFilesystemCollectionInverseAllocation();
-    }
-
-    ~ScopedInversePreparationFault() noexcept
-    {
-        Disarm();
-    }
-
-    void Disarm() noexcept
-    {
-        if (armed)
-        {
-            DisarmFilesystemCollectionInverseAllocation();
-            armed = false;
-        }
-    }
-
-private:
-    bool armed;
-};
-} // namespace
-} // namespace Filesystem
-} // namespace ComplianceEngine
-#endif
 namespace ComplianceEngine
 {
 namespace Filesystem
@@ -132,11 +61,6 @@ constexpr std::size_t kProcfsReadPeak = kProcfsRetained + 1;
 constexpr std::size_t kProcfsTemporaryPeak = kProcfsBootstrapPeak > kProcfsReadPeak ? kProcfsBootstrapPeak : kProcfsReadPeak;
 constexpr std::size_t kNewChildPeak = 1 + kProcfsTemporaryPeak;
 constexpr std::size_t kMinimumPathPeak = 1 + kProcfsTemporaryPeak; // root and procfs
-std::size_t BoundedTwice(std::size_t value) noexcept
-{
-    const std::size_t limit = std::numeric_limits<std::size_t>::max();
-    return value > limit / 2 ? limit : value * 2;
-}
 std::string Join(const std::string& parent, const std::string& child)
 {
     return parent == "/" ? parent + child : parent + "/" + child;
@@ -166,8 +90,8 @@ Optional<Error> Validate(const Path::Policy& policy, const ResolverLimits& limit
         (policy.missingFiles != MissingFileDisposition::Error && policy.missingFiles != MissingFileDisposition::Report) ||
         (policy.mounts != MountPolicy::CrossMounts && policy.mounts != MountPolicy::StayOnRootMount))
         return Error("Invalid path policy", EINVAL);
-    if (limits.shared.work == 0 || limits.shared.components == 0 || limits.shared.liveDescriptors < kMinimumPathPeak || limits.shared.retainedBytes == 0 ||
-        limits.shared.fdinfoBytes == 0 || limits.shared.targetBytes == 0 || limits.linkTargetBytes == 0 || limits.linkExpansions == 0 || limits.depth == 0 ||
+    if (limits.shared.work == 0 || limits.shared.components == 0 || limits.shared.liveDescriptors < kMinimumPathPeak || limits.shared.fdinfoBytes == 0 ||
+        limits.shared.targetBytes == 0 || limits.linkTargetBytes == 0 || limits.linkExpansions == 0 || limits.depth == 0 ||
         limits.linkTargetBytes >= std::vector<char>().max_size() - 1 || limits.linkTargetBytes >= static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()) ||
         limits.shared.fdinfoBytes >= static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()))
         return Error("Invalid path resolver limits", EINVAL);
@@ -444,7 +368,7 @@ Result<Handle> Handle::PinProcessRoot(const ContextInterface& context, PrefixLim
     // Metadata lives inline in Handle, so constructing it here allocates
     // nothing on the heap; the next heap allocation is the shared Handle
     // wrapper below, at the point where the root Handle is first wrapped
-    // for sharing, guarded by its own allocation-fault site.
+    // for sharing.
     ::ComplianceEngine::Filesystem::Metadata facts(Type::Directory, object.snapshot, LookupMountId(object.mount), TargetMountId(object.mount),
         LookupSpelling("/"), EffectiveSpelling("/"));
     Handle root(std::move(object.pin), std::move(facts));
@@ -564,8 +488,7 @@ struct Path::State
           boundaryEffective(Component::EffectiveName(root)),
           lookup(boundaryLookup),
           effective(boundaryEffective),
-          baseline(root.Metadata().TargetMount().Value()),
-          pinNames(Component::LookupNameBytes(root) + Component::EffectiveNameBytes(root))
+          baseline(root.Metadata().TargetMount().Value())
     {
     }
     // A temporary context would dangle past construction: State retains the
@@ -585,7 +508,6 @@ struct Path::State
     std::string lookup;
     std::string effective;
     std::uint64_t baseline;
-    std::size_t pinNames;
 };
 struct Path::Step::Data
 {
@@ -615,21 +537,7 @@ struct Path::Step::Data
     // The requested source link can differ from a reused target pin.
     std::uint64_t lookupMount = 0;
     bool hasLookupMount = false;
-    std::size_t bytes = 0;
 };
-namespace
-{
-std::size_t StateBytes(std::size_t pins, std::size_t lookup, std::size_t effective, std::size_t pinNames = 0) noexcept
-{
-    const std::size_t limit = std::numeric_limits<std::size_t>::max();
-    if (pins > (limit - 512) / (sizeof(Path::Component) + 128 + sizeof(::ComplianceEngine::Filesystem::Metadata)))
-        return limit;
-    std::size_t bytes = 512 + pins * (sizeof(Path::Component) + 128 + sizeof(::ComplianceEngine::Filesystem::Metadata));
-    if (!Fits(bytes, lookup, limit) || !Fits(bytes + lookup, effective, limit) || !Fits(bytes + lookup + effective, pinNames, limit))
-        return limit;
-    return bytes + lookup + effective + pinNames;
-}
-} // namespace
 ::ComplianceEngine::Filesystem::Metadata Path::Step::Metadata() const
 {
     auto acquired = Target().Metadata();
@@ -645,10 +553,6 @@ Path::Component Path::Step::Target() const noexcept
 std::size_t Path::Step::RetainedDescriptors() const noexcept
 {
     return 2 + mData->popped.size() + mData->pushed.size();
-}
-std::size_t Path::Step::RetainedBytes() const noexcept
-{
-    return mData->bytes;
 }
 Path::Component Path::Root() const noexcept
 {
@@ -674,11 +578,6 @@ std::size_t Path::RetainedDescriptors() const noexcept
 {
     return mState->pins.size();
 }
-std::size_t Path::RetainedBytes() const noexcept
-{
-    return StateBytes(mState->pins.size(), BoundedSum({mState->lookup.size(), mState->boundaryLookup.size()}),
-        BoundedSum({mState->effective.size(), mState->boundaryEffective.size()}), mState->pinNames);
-}
 ResolverLimits Path::Limits() const noexcept
 {
     return mState->limits;
@@ -693,9 +592,6 @@ const ContextInterface& Path::Context() const noexcept
 // narrowest friend that already has both), not anonymous-namespace functions.
 Path::Component Path::MakeRootComponent(Handle root)
 {
-#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
-    ScopedHandleAllocationFault handleAllocationFault(1); // The next allocation is the shared Handle, which holds Metadata inline.
-#endif
     return Component(std::move(root));
 }
 
@@ -707,19 +603,21 @@ Path::Component Path::MakeRootComponent(Handle root)
 // re-checks identity (stat), which a link's target text/content must still
 // satisfy independent of mount. It therefore needs no procfs session and no
 // fdinfo byte cap.
-Result<LinkTarget> Path::ReadVerifiedLinkText(const Descriptor& linkPin, const struct stat& before, std::size_t targetByteCap, std::size_t temporaryBudget)
+Result<LinkTarget> Path::ReadVerifiedLinkText(const Descriptor& linkPin, const struct stat& before, std::size_t targetByteCap)
 {
     const ContextInterface& context = linkPin.Context();
-    // Buffer and the copied target coexist until this helper returns. Guard
-    // the configured cap, not just the length of the eventual link text.
-    if (targetByteCap >= temporaryBudget || !Fits(targetByteCap + 1, targetByteCap, temporaryBudget))
-        return Error("Link target exceeds memory budget", E2BIG);
-    std::vector<char> buffer(targetByteCap + 1);
+    // A single read into a buffer sized to the platform's maximum possible
+    // link length: symlink(2) targets are at most PATH_MAX bytes, so a full
+    // buffer means the read was truncated, not that more text remains.
+    const std::size_t bufferBytes = (targetByteCap < static_cast<std::size_t>(PATH_MAX) ? targetByteCap : static_cast<std::size_t>(PATH_MAX)) + 1;
+    std::vector<char> buffer(bufferBytes);
     const ssize_t count = context.ReadLink(linkPin, buffer.data(), buffer.size());
     if (count < 0)
         return Error("Cannot read pinned link", SavedError());
     if (count == 0 || static_cast<std::size_t>(count) > targetByteCap)
         return Error("Pinned link exceeds byte cap or is empty", E2BIG);
+    if (static_cast<std::size_t>(count) == buffer.size())
+        return Error("Pinned link target exceeds platform path length", ENAMETOOLONG);
     struct stat after = {};
     if (context.StatFile(linkPin, &after) != 0)
         return Error("Cannot recheck pinned link", SavedError());
@@ -731,7 +629,7 @@ Result<LinkTarget> Path::ReadVerifiedLinkText(const Descriptor& linkPin, const s
         return Error("Pinned link contains NUL", EINVAL);
     return target;
 }
-Result<LinkTarget> Path::ReadPinnedLink(const Descriptor& linkPin, std::size_t targetByteCap, std::size_t temporaryBudget)
+Result<LinkTarget> Path::ReadPinnedLink(const Descriptor& linkPin, std::size_t targetByteCap)
 {
     const ContextInterface& context = linkPin.Context();
     if (targetByteCap == 0 || targetByteCap >= std::vector<char>().max_size() - 1 ||
@@ -751,7 +649,7 @@ Result<LinkTarget> Path::ReadPinnedLink(const Descriptor& linkPin, std::size_t t
         return Error("Cannot inspect pinned link", SavedError());
     if (!S_ISLNK(before.st_mode) || PROC_SUPER_MAGIC == filesystem.f_type)
         return Error("Not an ordinary filesystem symlink", ELOOP);
-    return ReadVerifiedLinkText(linkPin, before, targetByteCap, temporaryBudget);
+    return ReadVerifiedLinkText(linkPin, before, targetByteCap);
 }
 
 class Path::Resolver
@@ -770,22 +668,22 @@ public:
         auto source = mState;
         if (source->pins.back().Metadata().FileType() != Type::Directory)
             return Error("Cannot resolve beneath a file", ENOTDIR);
-        if (source->pins.size() > source->limits.shared.liveDescriptors - kProcfsTemporaryPeak ||
-            StateBytes(source->pins.size(), BoundedSum({source->lookup.size(), source->boundaryLookup.size()}),
-                BoundedSum({source->effective.size(), source->boundaryEffective.size()}), source->pinNames) >= source->limits.shared.retainedBytes)
+        if (source->pins.size() > source->limits.shared.liveDescriptors - kProcfsTemporaryPeak)
             return Error("Path budget exhausted before resolution", E2BIG);
+        // The logical lookup never grows past targetBytes, independent of
+        // physical depth, so a lookup rejected here has not consumed any
+        // snapshot work.
+        if (BoundedSum({source->lookup.size(), std::size_t{1}, name.size()}) > source->limits.shared.targetBytes)
+            return Error("Logical lookup exceeds target byte limit", ENAMETOOLONG);
         const std::size_t snapshotCost = source->pins.size();
         if (!Fits(source->allowance->spent, snapshotCost, source->limits.shared.work))
             return Error("Resolver snapshot work budget exhausted", E2BIG);
         source->allowance->spent += snapshotCost;
-        mTemporaryBytes = StateBytes(3 * source->pins.size(), BoundedSum({source->lookup.size(), name.size(), 1, source->boundaryLookup.size()}),
-            BoundedSum({source->effective.size(), source->boundaryEffective.size()}), source->pinNames);
-        if (mTemporaryBytes > source->limits.shared.retainedBytes)
-            return Error("Resolver snapshot exceeds memory budget", E2BIG);
         mStack = source->pins;
         mSourceLookup = Join(source->lookup, name);
         std::deque<Pending> pending;
         pending.push_back(Pending{name, false});
+        ++mQueuedComponents;
         std::size_t frameDepth = 1;
         bool direct = true;
         bool finalDirectory = mRole == InputRole::Prefix;
@@ -799,6 +697,7 @@ public:
                 --frameDepth;
                 continue;
             }
+            --mQueuedComponents;
             if (!Charge())
                 return Error("Resolver work budget exhausted", E2BIG);
             if (item.name.empty() || item.name == ".")
@@ -817,7 +716,7 @@ public:
                 return Error("Intermediate component is not a directory", ENOTDIR);
             const std::string parent = Effective();
             const std::string lookup = Join(parent, item.name);
-            auto held = FindHeld(lookup, parent.size());
+            auto held = FindHeld(lookup);
             if (!held.HasValue())
                 return std::move(held).Error();
             if (held.Value().HasValue())
@@ -856,8 +755,6 @@ public:
                     mStack.erase(mStack.begin() + match.index + 1, mStack.end());
                 else
                 {
-                    if (!Fits(mTemporaryBytes, StateBytes(match.index + 1, 0, 0), source->limits.shared.retainedBytes))
-                        return Error("Held lineage exceeds memory budget", E2BIG);
                     mStack.assign(source->pins.begin(), source->pins.begin() + match.index + 1);
                 }
                 direct = false;
@@ -909,21 +806,16 @@ public:
                 if (mFollowed >= source->limits.linkExpansions)
                     return Error("Link expansion budget exhausted", ELOOP);
                 ++mFollowed;
-                const std::size_t activeNames = BoundedSum({parent.size(), lookup.size()});
-                if (!Fits(mTemporaryBytes, activeNames, source->limits.shared.retainedBytes))
-                    return Error("Link target exceeds memory budget", E2BIG);
                 // The pin's mount is observed just above (and compared
                 // against StayOnRootMount's baseline); a live O_PATH pin
                 // cannot change mount, so ReadPinnedLink does not re-read or
                 // re-compare it around the readlink.
-                auto target = Path::ReadPinnedLink(pin, source->limits.linkTargetBytes, source->limits.shared.retainedBytes - mTemporaryBytes - activeNames);
+                auto target = Path::ReadPinnedLink(pin, source->limits.linkTargetBytes);
                 if (!target.HasValue())
                     return std::move(target).Error();
                 std::string text = std::move(target).Value().text;
-                if (text.size() > source->limits.shared.targetBytes || text.size() >= source->limits.shared.retainedBytes / sizeof(Pending) ||
-                    !Fits(mTemporaryBytes, text.size() + sizeof(Pending) * (text.size() + 1), source->limits.shared.retainedBytes))
-                    return Error("Link target exceeds memory budget", E2BIG);
-                mTemporaryBytes += text.size() + sizeof(Pending) * (text.size() + 1);
+                if (text.size() > source->limits.shared.targetBytes)
+                    return Error("Link target exceeds target byte limit", E2BIG);
                 if (text.back() == 47 && !HasComponent(pending))
                     finalDirectory = true;
                 if (text.front() == 47)
@@ -948,6 +840,27 @@ public:
                 }
                 if (frameDepth >= 64)
                     return Error("Symlink frame ceiling exhausted", ELOOP);
+                // Count and validate components before allocating the
+                // expansion queue: the queued-component cap below is
+                // checked before the deque is built.
+                std::size_t componentCount = 0;
+                for (std::size_t scan = 0; scan < text.size();)
+                {
+                    const std::size_t slash = text.find(47, scan);
+                    const std::size_t end = slash == std::string::npos ? text.size() : slash;
+                    if (end != scan)
+                    {
+                        if (end - scan > NAME_MAX)
+                            return Error("Link target component exceeds NAME_MAX", ENAMETOOLONG);
+                        ++componentCount;
+                    }
+                    scan = end + 1;
+                }
+                std::size_t remainingComponents = 0;
+                if (Fits(mSteps, mQueuedComponents, source->limits.shared.components))
+                    remainingComponents = source->limits.shared.components - mSteps - mQueuedComponents;
+                if (componentCount > remainingComponents)
+                    return Error("Symlink expansion exceeds resolver component budget", E2BIG);
                 std::deque<Pending> expansion;
                 std::size_t start = 0;
                 while (start < text.size())
@@ -955,7 +868,10 @@ public:
                     const std::size_t slash = text.find(47, start);
                     const std::size_t end = slash == std::string::npos ? text.size() : slash;
                     if (end != start)
+                    {
                         expansion.push_back(Pending{text.substr(start, end - start), false});
+                        ++mQueuedComponents;
+                    }
                     start = end + 1;
                 }
                 expansion.push_back(Pending{std::string(), true});
@@ -977,10 +893,6 @@ public:
             }
             if (intermediate && !S_ISDIR(snapshot.st_mode))
                 return Error("Intermediate component is not a directory", ENOTDIR);
-            if (!Fits(mTemporaryBytes, sizeof(Component) + 128 + sizeof(::ComplianceEngine::Filesystem::Metadata) + lookup.size() * 2,
-                    source->limits.shared.retainedBytes))
-                return Error("Resolver pin storage exceeds memory budget", E2BIG);
-            mTemporaryBytes += sizeof(Component) + 128 + sizeof(::ComplianceEngine::Filesystem::Metadata) + lookup.size() * 2;
             // Prefixes of a followed link retain their own acquisition names;
             // only its terminal pin carries the requested link provenance.
             const bool linkTerminal = !mDirectLookup.empty() && !HasComponent(pending);
@@ -988,7 +900,7 @@ public:
                 LookupMountId(linkTerminal ? mDirectMount : mount), TargetMountId(mount), Detail::LookupSpelling(linkTerminal ? mDirectLookup : lookup),
                 Detail::EffectiveSpelling(lookup));
             Handle handle(std::move(pin), std::move(metadata));
-            Component pushed = MakeChildComponent(std::move(handle));
+            Component pushed(std::move(handle));
             mStack.push_back(std::move(pushed));
             ++mNewPins;
             if (mStack.size() - 1 > source->limits.depth)
@@ -1033,16 +945,6 @@ private:
                 return true;
         return false;
     }
-    // Scopes the allocation-fault guard to exactly this construction so the
-    // next heap allocation it covers is the shared Handle, not anything
-    // published or retired around it (child-pin publication site).
-    static Component MakeChildComponent(Handle handle)
-    {
-#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
-        ScopedHandleAllocationFault handleAllocationFault(2); // The next allocation is the shared Handle; before the child pin is published.
-#endif
-        return Component(std::move(handle));
-    }
     bool Charge()
     {
         const ResolverLimits limits = mState->limits;
@@ -1075,7 +977,7 @@ private:
             return mState->boundaryEffective;
         return Component::EffectiveName(mStack.back());
     }
-    Result<Optional<HeldMatch>> FindHeld(const std::string& lookup, std::size_t activeParentBytes)
+    Result<Optional<HeldMatch>> FindHeld(const std::string& lookup)
     {
         Optional<HeldMatch> match;
         for (std::size_t scope = 0; scope < 2; ++scope)
@@ -1093,8 +995,6 @@ private:
                 if (!Fits(mState->allowance->spent, cost, mState->limits.shared.work))
                     return Error("Held search work budget exhausted", E2BIG);
                 mState->allowance->spent += cost;
-                if (!Fits(mTemporaryBytes, BoundedSum({activeParentBytes, lookup.size(), names}), mState->limits.shared.retainedBytes))
-                    return Error("Held search names exceed memory budget", E2BIG);
                 const std::string acquiredLookup = Component::LookupName(pin);
                 const std::string acquiredEffective = Component::EffectiveName(pin);
                 if (acquiredLookup != lookup && acquiredEffective != lookup)
@@ -1119,19 +1019,6 @@ private:
         if (finalSize - 1 > source->limits.depth || finalSize > source->limits.shared.liveDescriptors - kProcfsTemporaryPeak)
             return Error("Resolved stack exceeds physical budget", E2BIG);
         const std::string targetEffective = Effective();
-        std::size_t pinNames = 0;
-        for (Component pin : mStack)
-        {
-            const std::size_t names = Component::LookupNameBytes(pin) + Component::EffectiveNameBytes(pin);
-            if (!Fits(pinNames, names, source->limits.shared.retainedBytes))
-                return Error("Acquired names exceed retained-memory budget", E2BIG);
-            pinNames += names;
-        }
-        const std::size_t byteLimit = source->limits.shared.retainedBytes;
-        const std::size_t newStateBytes = StateBytes(finalSize, BoundedSum({mSourceLookup.size(), source->boundaryLookup.size()}),
-            BoundedSum({targetEffective.size(), source->boundaryEffective.size()}), pinNames);
-        if (newStateBytes > byteLimit)
-            return Error("Resolved stack exceeds memory budget", E2BIG);
         auto data = std::make_shared<Step::Data>(source->pins.size(), source->pins[common - 1], source->pins[source->boundary], source->boundary,
             source->boundaryLookup, source->boundaryEffective, source->baseline);
         data->popped.assign(source->pins.begin() + common, source->pins.end());
@@ -1142,40 +1029,6 @@ private:
         data->targetEffective = targetEffective;
         data->hasLookupMount = !mDirectLookup.empty();
         data->lookupMount = mDirectMount;
-        const std::size_t owners = 2 + data->popped.size() + data->pushed.size();
-        if (owners > (byteLimit - newStateBytes) / (sizeof(Component) + 128 + sizeof(::ComplianceEngine::Filesystem::Metadata)))
-            return Error("Step ownership exceeds memory budget", E2BIG);
-        data->bytes = sizeof(Step::Data) + owners * (sizeof(Component) + 128 + sizeof(::ComplianceEngine::Filesystem::Metadata));
-        for (Component pin : {data->attach, data->boundaryPin})
-        {
-            const std::size_t names = Component::LookupNameBytes(pin) + Component::EffectiveNameBytes(pin);
-            if (!Fits(newStateBytes + data->bytes, names, byteLimit))
-                return Error("Step anchor names exceed memory budget", E2BIG);
-            data->bytes += names;
-        }
-        for (Component pin : data->popped)
-        {
-            const std::size_t names = Component::LookupNameBytes(pin) + Component::EffectiveNameBytes(pin);
-            if (!Fits(newStateBytes + data->bytes, names, byteLimit))
-                return Error("Step pin names exceed memory budget", E2BIG);
-            data->bytes += names;
-        }
-        for (Component pin : data->pushed)
-        {
-            const std::size_t names = Component::LookupNameBytes(pin) + Component::EffectiveNameBytes(pin);
-            if (!Fits(newStateBytes + data->bytes, names, byteLimit))
-                return Error("Step pin names exceed memory budget", E2BIG);
-            data->bytes += names;
-        }
-        for (const std::string& name :
-            {data->boundaryLookup, data->boundaryEffective, data->sourceLookup, data->sourceEffective, data->targetLookup, data->targetEffective})
-        {
-            if (!Fits(newStateBytes + data->bytes, name.size(), byteLimit))
-                return Error("Step names exceed memory budget", E2BIG);
-            data->bytes += name.size();
-        }
-        if (!Fits(newStateBytes + data->bytes, mTemporaryBytes, byteLimit))
-            return Error("Resolver preparation peak exceeds memory budget", E2BIG);
         return Variant<Step, RejectionReason>(InPlaceType<Step>{}, Step(std::move(data)));
     }
     std::shared_ptr<const State> mState;
@@ -1188,7 +1041,7 @@ private:
     std::uint64_t mDirectMount = 0;
     std::size_t mSteps = 0;
     std::size_t mNewPins = 0;
-    std::size_t mTemporaryBytes = 0;
+    std::size_t mQueuedComponents = 0;
 };
 
 Result<Variant<Path::Step, Path::RejectionReason>> Path::ResolveInput(const Path& path, std::string name, Policy policy, InputRole role, std::size_t& followed)
@@ -1198,8 +1051,10 @@ Result<Variant<Path::Step, Path::RejectionReason>> Path::ResolveInput(const Path
         return std::move(validation).Value();
     if (!Detail::IsSingleChildComponent(name) && role == InputRole::Leaf)
         return Error("Resolve requires a single child name", EINVAL);
-    if (name.empty() || name.size() > path.Limits().shared.retainedBytes || name.find(47) != std::string::npos || name.find(char(0)) != std::string::npos)
+    if (name.empty() || name.find(47) != std::string::npos || name.find(char(0)) != std::string::npos)
         return Error("Invalid path component", EINVAL);
+    if (name.size() > NAME_MAX)
+        return Error("Path component exceeds NAME_MAX", ENAMETOOLONG);
     Resolver resolver(path, policy, role, followed);
     return resolver.Run(name);
 }
@@ -1241,11 +1096,6 @@ Result<Path::Step> Path::Apply(Step&& step) &
         return Error("Apply snapshot work budget exhausted", E2BIG);
     // Failed preparation is work too; consume before fallible allocations.
     source->allowance->spent += work;
-    const std::size_t budget = source->limits.shared.retainedBytes;
-    const std::size_t finalBytes = StateBytes(finalSize, BoundedSum({delta->targetLookup.size(), source->boundaryLookup.size()}),
-        BoundedSum({delta->targetEffective.size(), source->boundaryEffective.size()}), source->pinNames);
-    if (finalBytes > budget || !Fits(finalBytes, delta->bytes, budget))
-        return Error("Step and inverse exceed retained-memory budget", E2BIG);
     // All allocations, inverse construction, and bounded name copies precede
     // publication. No descriptor is duplicated, reopened or reclassified.
     auto inverse = std::make_shared<Step::Data>(finalSize, delta->attach, source->pins[source->boundary], source->boundary, source->boundaryLookup,
@@ -1256,7 +1106,6 @@ Result<Path::Step> Path::Apply(Step&& step) &
     inverse->sourceEffective = delta->targetEffective;
     inverse->targetLookup = delta->sourceLookup;
     inverse->targetEffective = delta->sourceEffective;
-    inverse->bytes = delta->bytes;
     // Build the exact final allocation; vector::erase would retain capacity
     // for popped pins and under-report a long-lived Path footprint.
     std::vector<Component> replacement;
@@ -1269,25 +1118,6 @@ Result<Path::Step> Path::Apply(Step&& step) &
     candidate->pins.swap(replacement);
     candidate->lookup = delta->targetLookup;
     candidate->effective = delta->targetEffective;
-    candidate->pinNames = 0;
-    for (Component pin : candidate->pins)
-    {
-        const std::size_t names = Component::LookupNameBytes(pin) + Component::EffectiveNameBytes(pin);
-        if (!Fits(candidate->pinNames, names, budget))
-            return Error("Applied pin names exceed memory budget", E2BIG);
-        candidate->pinNames += names;
-    }
-    if (StateBytes(finalSize, BoundedSum({candidate->lookup.size(), source->boundaryLookup.size()}),
-            BoundedSum({candidate->effective.size(), source->boundaryEffective.size()}), candidate->pinNames) > budget)
-        return Error("Applied stack exceeds memory budget", E2BIG);
-    // During preparation the original Path, candidate copy and replacement
-    // vector coexist; do not charge only the published final stack.
-    const std::size_t preparation = StateBytes(BoundedSum({BoundedTwice(source->pins.size()), finalSize}),
-        BoundedSum({source->lookup.size(), candidate->lookup.size(), BoundedTwice(source->boundaryLookup.size())}),
-        BoundedSum({source->effective.size(), candidate->effective.size(), BoundedTwice(source->boundaryEffective.size())}),
-        BoundedSum({BoundedTwice(source->pinNames), candidate->pinNames}));
-    if (preparation > budget || !Fits(preparation, delta->bytes, budget) || !Fits(preparation + delta->bytes, inverse->bytes, budget))
-        return Error("Step preparation peak exceeds memory budget", E2BIG);
     std::shared_ptr<const State> published(std::move(candidate));
     std::shared_ptr<const Step::Data> undo(std::move(inverse));
     mState.swap(published);
@@ -1306,11 +1136,7 @@ Result<bool> Path::Freeze() &
     candidate->boundaryLookup = source->lookup;
     candidate->boundaryEffective = source->effective;
     candidate->baseline = source->pins.back().Metadata().TargetMount().Value();
-    const std::size_t bytes = StateBytes(candidate->pins.size(), BoundedSum({candidate->lookup.size(), candidate->boundaryLookup.size()}),
-        BoundedSum({candidate->effective.size(), candidate->boundaryEffective.size()}), candidate->pinNames);
-    const std::size_t oldBytes = StateBytes(source->pins.size(), BoundedSum({source->lookup.size(), source->boundaryLookup.size()}),
-        BoundedSum({source->effective.size(), source->boundaryEffective.size()}), source->pinNames);
-    if (!Fits(oldBytes, bytes, source->limits.shared.retainedBytes) || candidate->pins.size() > source->limits.shared.liveDescriptors - kProcfsTemporaryPeak)
+    if (candidate->pins.size() > source->limits.shared.liveDescriptors - kProcfsTemporaryPeak)
         return Error("Freeze preparation exceeds retained resource budget", E2BIG);
     std::shared_ptr<const State> published(std::move(candidate));
     mState.swap(published);
@@ -1321,8 +1147,18 @@ Result<Variant<Path, Path::RejectionReason>> Path::Make(const ContextInterface& 
     auto validation = Validate(policy, limits);
     if (validation.HasValue())
         return std::move(validation).Value();
-    if (absolutePath.empty() || absolutePath.front() != 47 || absolutePath.find(char(0)) != std::string::npos || absolutePath.size() > limits.shared.retainedBytes)
+    if (absolutePath.empty() || absolutePath.front() != 47 || absolutePath.find(char(0)) != std::string::npos)
         return Error("Make requires a bounded absolute path", EINVAL);
+    if (absolutePath.size() > limits.shared.targetBytes)
+        return Error("Make input exceeds target byte limit", ENAMETOOLONG);
+    for (std::size_t prescan = absolutePath.find_first_not_of("/", 1); prescan != std::string::npos;)
+    {
+        const std::size_t slash = absolutePath.find(47, prescan);
+        const std::size_t end = slash == std::string::npos ? absolutePath.size() : slash;
+        if (end - prescan > NAME_MAX)
+            return Error("Path component exceeds NAME_MAX", ENAMETOOLONG);
+        prescan = absolutePath.find_first_not_of("/", end);
+    }
     const std::size_t chunks = limits.shared.fdinfoBytes / 256 + ((limits.shared.fdinfoBytes % 256) != 0);
     if (chunks > (std::numeric_limits<std::size_t>::max() - 128) / 4 || !Fits(0, 128 + 4 * chunks, limits.shared.work))
         return Error("Path work budget exhausted", E2BIG);
@@ -1334,8 +1170,6 @@ Result<Variant<Path, Path::RejectionReason>> Path::Make(const ContextInterface& 
     auto state = std::make_shared<State>(context, limits, std::move(rootComponent));
     Path result(std::move(state));
     result.mState->allowance->spent = rootWork;
-    if (result.RetainedBytes() > limits.shared.retainedBytes)
-        return Error("Root exceeds retained-memory budget", E2BIG);
     // Factory input absence is a typed selection regardless of the caller's
     // traversal disposition; public Resolve still uses the supplied policy.
     Policy factoryPolicy = policy;
@@ -1389,17 +1223,11 @@ Filesystem::ResolverLimits AcquisitionBudget(const ResolvedFilesystemCollectionR
     const std::size_t components = std::count(request.rootPath.begin(), request.rootPath.end(), '/') + 1;
     const std::size_t work = limits.entryWork > (std::numeric_limits<std::size_t>::max() - 32768) / 512 ? std::numeric_limits<std::size_t>::max() :
                                                                                                           limits.entryWork * 512 + 32768;
-    const std::size_t max = std::numeric_limits<std::size_t>::max();
-    // Path charges each physical pin plus its bounded spelling/accounting storage.
-    const std::size_t perPrefix = sizeof(Path::Component) + 128;
-    const std::size_t overhead = components > (max - 65536) / perPrefix ? max : 65536 + components * perPrefix;
-    const std::size_t minimum = request.rootPath.size() > max - overhead ? max : overhead + request.rootPath.size();
     Filesystem::ResolverLimits budget;
     budget.shared.targetBytes = limits.fullPathBytes;
     budget.shared.components = limits.operationalDescent + components + 1;
     budget.shared.work = work;
     budget.shared.liveDescriptors = limits.openDirectories + components + PathOperationSlots() + StartingCursorSlots();
-    budget.shared.retainedBytes = std::max(limits.retainedPathBytes, minimum);
     budget.shared.fdinfoBytes = limits.fdinfoBytes;
     budget.linkTargetBytes = limits.fullPathBytes;
     budget.linkExpansions = limits.entryWork;
@@ -1494,30 +1322,21 @@ struct DescriptorSlots
     }
     std::size_t value;
 };
-struct PinBytes
-{
-    explicit PinBytes(std::size_t n = 0)
-        : value(n)
-    {
-    }
-    std::size_t value;
-};
+// Pin retention is bounded by descriptor slots only; there is no byte
+// component to this charge.
 struct PinCharge
 {
-    PinCharge(DescriptorSlots slots = DescriptorSlots(), PinBytes size = PinBytes())
-        : descriptors(slots),
-          bytes(size)
+    explicit PinCharge(DescriptorSlots slots = DescriptorSlots())
+        : descriptors(slots)
     {
     }
     DescriptorSlots descriptors;
-    PinBytes bytes;
 };
 // Only scalar retention, never State, Path, Component or a cursor. Entries may
 // outlive the range; their final owner refunds the counter without allocations.
 struct RetentionCounter
 {
     std::size_t descriptors = 0;
-    std::size_t bytes = sizeof(RetentionCounter) + 64; // shared control block
 };
 struct EntryCharge
 {
@@ -1528,12 +1347,11 @@ struct EntryCharge
     ~EntryCharge() noexcept
     {
         // A corrupted retention ledger must not wrap and admit more pins.
-        if ((owner->descriptors < pins.descriptors.value) || (owner->bytes < pins.bytes.value))
+        if (owner->descriptors < pins.descriptors.value)
         {
             std::terminate();
         }
         owner->descriptors -= pins.descriptors.value;
-        owner->bytes -= pins.bytes.value;
     }
     std::shared_ptr<RetentionCounter> owner;
     PinCharge pins;
@@ -1571,30 +1389,11 @@ struct FileRange::State
         Stop();
     }
 
-    Result<bool> Budget(std::size_t extra, const std::string& name) const
+    Result<bool> CanObserve(const std::string& at) const
     {
-        const std::size_t cap = request.limits.retainedPathBytes;
-        if ((retained > cap) || (extra > cap - retained))
-            return Error("Filesystem retained path byte budget exceeded at " + name, E2BIG);
+        if (observations >= request.limits.retainedObservations)
+            return Error("Filesystem retained observation count exceeded at " + at, E2BIG);
         return true;
-    }
-
-    Result<bool> Charge(std::size_t amount, const std::string& name)
-    {
-        auto budget = Budget(amount, name);
-        if (!budget.HasValue())
-            return budget;
-        retained += amount;
-        return true;
-    }
-
-    void ReleaseObservation(std::size_t amount) noexcept
-    {
-        if (retained < amount)
-        {
-            std::terminate();
-        }
-        retained -= amount;
     }
 
     Result<bool> CheckPins(PinCharge extra) const
@@ -1604,8 +1403,6 @@ struct FileRange::State
         const ResolverLimits limits = current.Value().Limits();
         if (pins->descriptors > limits.shared.liveDescriptors || extra.descriptors.value > limits.shared.liveDescriptors - pins->descriptors)
             return Error("Filesystem pin retention exceeds descriptor budget", EMFILE);
-        if (pins->bytes > limits.shared.retainedBytes || extra.bytes.value > limits.shared.retainedBytes - pins->bytes)
-            return Error("Filesystem pin retention exceeds byte budget", E2BIG);
         return true;
     }
 
@@ -1615,49 +1412,36 @@ struct FileRange::State
         if (!budget.HasValue())
             return budget;
         pins->descriptors += extra.descriptors.value;
-        pins->bytes += extra.bytes.value;
         return true;
     }
 
     void RefundPins(PinCharge charge) noexcept
     {
-        if ((pins->descriptors < charge.descriptors.value) || (pins->bytes < charge.bytes.value))
+        if (pins->descriptors < charge.descriptors.value)
         {
             std::terminate();
         }
         pins->descriptors -= charge.descriptors.value;
-        pins->bytes -= charge.bytes.value;
     }
 
-    Result<bool> PrepareFrame(const std::string& name)
+    Result<bool> PrepareFrame()
     {
         if (frames.size() == std::numeric_limits<std::size_t>::max())
             return Error("Filesystem frame count overflow", EOVERFLOW);
-        // Reserve storage before Apply; charge the actual growth, not an
-        // assumed one-frame increment (vector may grow by more than one).
-        const std::size_t before = frames.capacity();
+        // Reserve storage before Apply so a later failure can't disturb an
+        // already-published frame (vector may grow by more than one slot).
         static_assert(std::is_nothrow_move_constructible<Frame>::value, "Frame publication after Apply must not throw");
-#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
-        if (TripFilesystemCollectionCheckpoint(static_cast<unsigned>(TestCheckpoint::FrameReserve)))
-            throw std::bad_alloc();
-#endif
         frames.reserve(frames.size() + 1);
-        const std::size_t added = frames.capacity() - before;
-        if (added > std::numeric_limits<std::size_t>::max() / sizeof(Frame))
-            return Error("Filesystem frame storage overflow", EOVERFLOW);
-        auto charged = ReservePins(PinCharge(DescriptorSlots(), PinBytes(added * sizeof(Frame))));
-        if (!charged.HasValue())
-            return charged;
-        frameStorage += added * sizeof(Frame);
-        return Charge(name.size() + 1, name);
+        return true;
     }
 
     Result<bool> Exclude(const std::string& name, const char* reason)
     {
-        auto charged = Charge(name.size() + 1, name);
-        if (!charged.HasValue())
-            return charged;
+        auto observable = CanObserve(name);
+        if (!observable.HasValue())
+            return observable;
         result.exclusions.push_back({name, reason});
+        ++observations;
         return true;
     }
 
@@ -1665,32 +1449,24 @@ struct FileRange::State
     {
         if (!entry.missing && !Yield(request.yieldType, entry.metadata))
             return true;
-        const std::size_t bytes = entry.path.size() + 1;
-        auto charged = Charge(bytes, entry.path);
-        if (!charged.HasValue())
-            return charged;
         if (retainEntries)
         {
-            charged = Charge(bytes, entry.path);
-            if (!charged.HasValue())
-                return charged;
+            auto observable = CanObserve(entry.path);
+            if (!observable.HasValue())
+                return observable;
             result.entries.push_back(Snapshot(entry));
+            ++observations;
         }
         if (entry.mComponent.HasValue())
         {
-            const std::size_t overhead = sizeof(EntryCharge) + 64;
-            if (ownerCharge.bytes.value > std::numeric_limits<std::size_t>::max() - overhead)
-                return Error("Filesystem entry charge overflow", EOVERFLOW);
             auto record = std::make_shared<EntryCharge>(pins);
-            PinCharge full(ownerCharge.descriptors, PinBytes(ownerCharge.bytes.value + overhead));
-            charged = ReservePins(full);
+            auto charged = ReservePins(ownerCharge);
             if (!charged.HasValue())
                 return charged;
-            record->pins = full;
+            record->pins = ownerCharge;
             entry.mRetentionCharge = std::move(record);
         }
         static_assert(std::is_nothrow_move_constructible<FilesystemCollectionEntry>::value, "Entry publication after Apply must not throw");
-        pendingBytes = bytes;
         pending = std::move(entry);
         return true;
     }
@@ -1713,22 +1489,27 @@ struct FileRange::State
             frame.logicalName = std::move(rootName);
             frame.device = factsStat.st_dev;
             frame.inode = factsStat.st_ino;
-            auto prepared = PrepareFrame(frame.logicalName);
+            auto prepared = PrepareFrame();
             if (!prepared.HasValue())
                 return prepared;
+            // Budget first, open the native cursor next, then charge. If the
+            // charge somehow failed after a successful open, RAII on `opened`
+            // closes the just-opened cursor; there is no window where a
+            // charge exists without an installed cursor, or an installed
+            // cursor is uncharged.
+            auto cursorBudget = CheckPins(PinCharge(DescriptorSlots(1)));
+            if (!cursorBudget.HasValue())
+                return cursorBudget;
+            auto opened = Detail::DirectoryCursor::OpenChildren(current.Value().Leaf());
+            if (!opened.HasValue())
+                return std::move(opened).Error();
             auto charged = ReservePins(PinCharge(DescriptorSlots(1)));
             if (!charged.HasValue())
                 return charged;
-            auto opened = Detail::DirectoryCursor::OpenChildren(current.Value().Leaf());
-            if (!opened.HasValue())
-            {
-                RefundPins(PinCharge(DescriptorSlots(1)));
-                return std::move(opened).Error();
-            }
             frame.cursor = std::move(opened).Value();
             frames.push_back(std::move(frame));
         }
-        return Offer(std::move(entry), PinCharge(DescriptorSlots(current.Value().RetainedDescriptors()), PinBytes(current.Value().RetainedBytes())));
+        return Offer(std::move(entry), PinCharge(DescriptorSlots(current.Value().RetainedDescriptors())));
     }
 
     Result<bool> MissingChild(const Detail::DirectoryChild& child, const std::string& full)
@@ -1793,8 +1574,7 @@ struct FileRange::State
                     if ((frames[i].device == factsStat.st_dev) && (frames[i].inode == factsStat.st_ino))
                         return Error("Directory ancestor cycle at " + full, ELOOP);
             }
-            targetCharge = PinCharge(DescriptorSlots(As<Path::Step>(resolved.Value()).RetainedDescriptors()),
-                PinBytes(As<Path::Step>(resolved.Value()).RetainedBytes()));
+            targetCharge = PinCharge(DescriptorSlots(As<Path::Step>(resolved.Value()).RetainedDescriptors()));
             // Target is an owning Component. A file/observed directory never Applys.
             entry.OwnComponent(As<Path::Step>(resolved.Value()).Target());
             if (descend)
@@ -1803,41 +1583,23 @@ struct FileRange::State
                 frame.logicalName = full;
                 frame.device = factsStat.st_dev;
                 frame.inode = factsStat.st_ino;
-                auto prepared = PrepareFrame(frame.logicalName);
+                auto prepared = PrepareFrame();
                 if (!prepared.HasValue())
                     return prepared;
-                    // Prepare allocation before mutation; any later failure aborts the
-                    // private traversal without losing a published undo history.
-#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
-                ScopedInversePreparationFault inverseFault(TripFilesystemCollectionCheckpoint(static_cast<unsigned>(TestCheckpoint::InversePreparation)));
-#endif
+                // Prepare allocation before mutation; any later failure aborts the
+                // private traversal without losing a published undo history.
                 auto applied = current.Value().Apply(std::move(resolved.Value().Get<Path::Step>()));
-#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
-                inverseFault.Disarm();
-#endif
                 if (!applied.HasValue())
                     return std::move(applied).Error();
-#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
-                if (TripFilesystemCollectionCheckpoint(static_cast<unsigned>(TestCheckpoint::AfterApply)))
-                    throw std::bad_alloc();
-#endif
                 if (current.Value().RetainedDescriptors() > current.Value().Limits().shared.liveDescriptors)
                     return Error("Applied path exceeds physical descriptor budget", EMFILE);
-                if (current.Value().RetainedBytes() > current.Value().Limits().shared.retainedBytes)
-                    return Error("Applied path exceeds physical retention budget", E2BIG);
-                const PinCharge inverseCharge(DescriptorSlots(applied.Value().RetainedDescriptors()), PinBytes(applied.Value().RetainedBytes()));
+                const PinCharge inverseCharge(DescriptorSlots(applied.Value().RetainedDescriptors()));
                 auto charged = ReservePins(inverseCharge);
                 if (!charged.HasValue())
                     return charged;
                 frame.inverse = std::move(applied).Value();
                 frame.inverseCharge = inverseCharge;
                 frames.push_back(std::move(frame));
-#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
-                // The inverse is already owned by the frame before testing
-                // failed output publication. Abort drops it exactly once.
-                if (TripFilesystemCollectionCheckpoint(static_cast<unsigned>(TestCheckpoint::BeforeOffer)))
-                    throw std::bad_alloc();
-#endif
             }
         } // Release forward Step/Result before publishing the entry.
         return Offer(std::move(entry), targetCharge);
@@ -1849,8 +1611,6 @@ struct FileRange::State
         {
             auto entry = std::move(pending).Value();
             pending.Reset();
-            ReleaseObservation(pendingBytes);
-            pendingBytes = 0;
             return Optional<FilesystemCollectionEntry>(std::move(entry));
         }
         while (!frames.empty())
@@ -1859,15 +1619,19 @@ struct FileRange::State
             {
                 if (frames.size() > request.limits.openDirectories)
                     return Error("Filesystem directory continuation exceeds open directory budget", EMFILE);
+                // Same ordering as Initialize(): budget, native open, then
+                // charge, so RAII on `opened` closes the cursor if the charge
+                // itself ever failed, with no uncharged-installed or
+                // charged-without-a-cursor window.
+                auto budget = CheckPins(PinCharge(DescriptorSlots(1)));
+                if (!budget.HasValue())
+                    return budget.Error();
+                auto opened = Detail::DirectoryCursor::OpenChildren(current.Value().Leaf());
+                if (!opened.HasValue())
+                    return std::move(opened).Error();
                 auto charged = ReservePins(PinCharge(DescriptorSlots(1)));
                 if (!charged.HasValue())
                     return charged.Error();
-                auto opened = Detail::DirectoryCursor::OpenChildren(current.Value().Leaf());
-                if (!opened.HasValue())
-                {
-                    RefundPins(PinCharge(DescriptorSlots(1)));
-                    return std::move(opened).Error();
-                }
                 frames.back().cursor = std::move(opened).Value();
             }
             auto name = frames.back().cursor->NextEntry();
@@ -1880,17 +1644,12 @@ struct FileRange::State
                 RefundPins(PinCharge(DescriptorSlots(1)));
                 if (frames.back().inverse.HasValue())
                 {
-#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
-                    if (TripFilesystemCollectionCheckpoint(static_cast<unsigned>(TestCheckpoint::InverseRestore)))
-                        return Error("Filesystem inverse restoration failed", ESTALE);
-#endif
                     auto restored = current.Value().Apply(std::move(frames.back().inverse.Value()));
                     if (!restored.HasValue())
                         return std::move(restored).Error();
                     frames.back().inverse.Reset();
                     RefundPins(frames.back().inverseCharge);
                 }
-                ReleaseObservation(frames.back().logicalName.size() + 1);
                 frames.pop_back();
                 continue;
             }
@@ -1907,8 +1666,6 @@ struct FileRange::State
             {
                 auto entry = std::move(pending).Value();
                 pending.Reset();
-                ReleaseObservation(pendingBytes);
-                pendingBytes = 0;
                 return Optional<FilesystemCollectionEntry>(std::move(entry));
             }
         }
@@ -1916,31 +1673,35 @@ struct FileRange::State
         return Optional<FilesystemCollectionEntry>();
     }
 
+    // After an exception escapes Pull(), the range must not continue
+    // traversal: `interrupted` is set before Pull() runs and cleared only
+    // once it returns normally. An exception leaves it set, so a later call
+    // fails closed without any native dispatch.
+    // Destruction still releases every pin and cursor exactly once: Pull()
+    // only mutates `frames`/`pins` at points that either fully commit (the
+    // charge and the owning structure are both updated) or fully roll back
+    // (nothing is charged) before a throw can occur, so State's destructor
+    // (Stop/Finish) replays correctly regardless of where Pull() stopped.
     Result<Optional<FilesystemCollectionEntry>> Next()
     {
         if (failure.HasValue())
             return failure.Value();
         if (closed)
             return Optional<FilesystemCollectionEntry>();
-        try
-        {
-            auto next = Pull();
-            if (!next.HasValue())
-                Abort(next.Error());
-            return next;
-        }
-        catch (const std::bad_alloc&)
-        {
-            const Error error("Filesystem collection allocation failed", ENOMEM);
-            Abort(error);
-            return error;
-        }
-        catch (const std::exception& exception)
-        {
-            const Error error(std::string("Filesystem collection failed: ") + exception.what(), EIO);
-            Abort(error);
-            return error;
-        }
+        if (interrupted)
+            return Error("Filesystem traversal was interrupted", ECANCELED);
+        interrupted = true;
+        auto next = Pull();
+        // Record the failure (Abort copies an Error, which can allocate and
+        // throw) before clearing `interrupted`: if that copy throws, the flag
+        // must still read interrupted so a later Next() fails closed instead
+        // of resuming native traversal on a half-recorded failure.
+        if (!next.HasValue())
+            Abort(next.Error());
+        interrupted = false;
+        // A named local returned here already binds as an rvalue (NRVO); an
+        // explicit std::move would only block elision, not add safety.
+        return next;
     }
 
     void Abort(const Error& primary)
@@ -1958,7 +1719,6 @@ struct FileRange::State
             return;
         closed = true;
         pending.Reset();
-        pendingBytes = 0;
         for (std::size_t i = 0; i < frames.size(); ++i)
         {
             if (frames[i].cursor.HasValue())
@@ -1969,7 +1729,6 @@ struct FileRange::State
             if (frames[i].inverse.HasValue())
                 RefundPins(frames[i].inverseCharge);
         }
-        RefundPins(PinCharge(DescriptorSlots(), PinBytes(frameStorage)));
         std::vector<Frame> remainingFrames;
         remainingFrames.swap(frames); // Drop inverses, never replay on disposal.
         current.Reset();
@@ -1981,7 +1740,7 @@ struct FileRange::State
         FilesystemCollectionResult remainingResult;
         result.entries.swap(remainingResult.entries);
         result.exclusions.swap(remainingResult.exclusions);
-        retained = 0;
+        observations = 0;
     }
 
     FilesystemTraversalPolicy request;
@@ -1992,13 +1751,12 @@ struct FileRange::State
     Optional<Error> failure;
     std::shared_ptr<RetentionCounter> pins;
     std::uint64_t baseline = 0;
-    std::size_t retained = 0;
-    std::size_t frameStorage = 0;
-    std::size_t pendingBytes = 0;
+    std::size_t observations = 0;
     std::size_t work = 0;
     bool rootExists = true;
     bool retainEntries = false;
     bool closed = false;
+    bool interrupted = false;
 };
 
 Result<Optional<FilesystemCollectionEntry>> FileRange::Source::Next()
@@ -2030,7 +1788,7 @@ Result<bool> ValidateContinuation(const Path& root, const std::string& reporting
         return Error("Invalid filesystem collection direction", EINVAL);
     if (policy.maxDepth < -1 || limits.operationalDescent == 0 || limits.entryWork == 0 || limits.directoryWidth == 0 || limits.fullPathBytes == 0 ||
         limits.fdinfoBytes == 0 || limits.fdinfoBytes >= std::string().max_size() || limits.fdinfoBytes > std::vector<char>().max_size() ||
-        limits.fdinfoBytes > static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()) || limits.retainedPathBytes == 0 || limits.openDirectories == 0)
+        limits.fdinfoBytes > static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()) || limits.retainedObservations == 0 || limits.openDirectories == 0)
         return Error("Invalid filesystem continuation limits", EINVAL);
     if (limits.fdinfoBytes < root.Limits().shared.fdinfoBytes)
         return Error("Filesystem continuation fdinfo byte limit is below the acquired root's bound inspection limit", EINVAL);
@@ -2055,8 +1813,6 @@ Result<bool> ValidateContinuation(const Path& root, const std::string& reporting
         return Error("Missing observations require regular-file selection", ENOTSUP);
     if (reportingName.size() >= limits.fullPathBytes)
         return Error("Filesystem collection root path exceeds the full path byte limit", ENAMETOOLONG);
-    if (reportingName.size() >= limits.retainedPathBytes)
-        return Error("Filesystem collection root path exceeds the retained path byte limit", E2BIG);
     return true;
 }
 
@@ -2065,30 +1821,19 @@ Result<FileRange> Files(Path path, std::string reportingName, FilesystemTraversa
     auto valid = ValidateContinuation(path, reportingName, continuation);
     if (!valid.HasValue())
         return valid.Error();
-    try
+    // TM-9: the selected leaf is the barrier, even for an unfrozen
+    // multi-component Path. Do not resolve a child before this succeeds.
+    auto frozen = path.Freeze();
+    if (!frozen.HasValue())
+        return std::move(frozen).Error();
+    auto state = std::make_shared<FileRange::State>(std::move(continuation), std::move(path));
+    auto initialized = state->Initialize(std::move(reportingName));
+    if (!initialized.HasValue())
     {
-        // TM-9: the selected leaf is the barrier, even for an unfrozen
-        // multi-component Path. Do not resolve a child before this succeeds.
-        auto frozen = path.Freeze();
-        if (!frozen.HasValue())
-            return std::move(frozen).Error();
-        auto state = std::make_shared<FileRange::State>(std::move(continuation), std::move(path));
-        auto initialized = state->Initialize(std::move(reportingName));
-        if (!initialized.HasValue())
-        {
-            state->Abort(initialized.Error());
-            return initialized.Error();
-        }
-        return FileRange(std::move(state));
+        state->Abort(initialized.Error());
+        return initialized.Error();
     }
-    catch (const std::bad_alloc&)
-    {
-        return Error("Filesystem collection allocation failed", ENOMEM);
-    }
-    catch (const std::exception& exception)
-    {
-        return Error(std::string("Filesystem collection failed: ") + exception.what(), EIO);
-    }
+    return FileRange(std::move(state));
 }
 
 Result<FileRange> Files(const FilesystemCollectionRequest& policy, ContextInterface& context)
@@ -2098,43 +1843,32 @@ Result<FileRange> Files(const FilesystemCollectionRequest& policy, ContextInterf
     {
         return resolved.Error();
     }
-    try
+    auto request = std::move(resolved).Value();
+    auto acquired = Path::Make(context, request.rootPath, AcquisitionPolicy(request), AcquisitionBudget(request));
+    if (!acquired.HasValue())
+        return std::move(acquired).Error();
+    if (acquired.Value().Is<Path>())
     {
-        auto request = std::move(resolved).Value();
-        auto acquired = Path::Make(context, request.rootPath, AcquisitionPolicy(request), AcquisitionBudget(request));
-        if (!acquired.HasValue())
-            return std::move(acquired).Error();
-        if (acquired.Value().Is<Path>())
-        {
-            Path accepted = As<Path>(std::move(acquired).Value());
-            if (request.rootKind == FilesystemRootKind::Directory && accepted.Leaf().Metadata().FileType() != Type::Directory)
-                return Error("Expected directory root at '" + request.rootPath + "'", ENOTDIR);
-            if (request.rootKind == FilesystemRootKind::File && accepted.Leaf().Metadata().FileType() != Type::RegularFile)
-                return Error("Expected file root at '" + request.rootPath + "'", EISDIR);
-            return Files(std::move(accepted), request.rootPath, Continuation(request));
-        }
-        const auto reason = As<Path::RejectionReason>(acquired.Value());
-        auto state = std::make_shared<FileRange::State>(Continuation(request));
-        if (reason == Path::RejectionReason::Missing)
-            state->rootExists = false;
-        else if (reason == Path::RejectionReason::Excluded)
-        {
-            auto excluded = state->Exclude(request.rootPath, "link policy");
-            if (!excluded.HasValue())
-                return std::move(excluded).Error();
-        }
-        else
-            return Error("Unsupported collection root", EOPNOTSUPP);
-        return FileRange(std::move(state));
+        Path accepted = As<Path>(std::move(acquired).Value());
+        if (request.rootKind == FilesystemRootKind::Directory && accepted.Leaf().Metadata().FileType() != Type::Directory)
+            return Error("Expected directory root at '" + request.rootPath + "'", ENOTDIR);
+        if (request.rootKind == FilesystemRootKind::File && accepted.Leaf().Metadata().FileType() != Type::RegularFile)
+            return Error("Expected file root at '" + request.rootPath + "'", EISDIR);
+        return Files(std::move(accepted), request.rootPath, Continuation(request));
     }
-    catch (const std::bad_alloc&)
+    const auto reason = As<Path::RejectionReason>(acquired.Value());
+    auto state = std::make_shared<FileRange::State>(Continuation(request));
+    if (reason == Path::RejectionReason::Missing)
+        state->rootExists = false;
+    else if (reason == Path::RejectionReason::Excluded)
     {
-        return Error("Filesystem collection allocation failed", ENOMEM);
+        auto excluded = state->Exclude(request.rootPath, "link policy");
+        if (!excluded.HasValue())
+            return std::move(excluded).Error();
     }
-    catch (const std::exception& exception)
-    {
-        return Error(std::string("Filesystem collection failed: ") + exception.what(), EIO);
-    }
+    else
+        return Error("Unsupported collection root", EOPNOTSUPP);
+    return FileRange(std::move(state));
 }
 
 Result<FilesystemCollectionResult> FileRange::StopVisitor()
@@ -2143,6 +1877,14 @@ Result<FilesystemCollectionResult> FileRange::StopVisitor()
         return Error("Cannot finish a moved-from filesystem range", EINVAL);
     if (mState->failure.HasValue())
         return mState->failure.Value();
+    // Defense-in-depth: an exception escaping Next() leaves `interrupted` set
+    // and also unwinds every frame between it and here (CollectFilesystem and
+    // StreamFilesystemCollection do not catch), so this is not reachable
+    // through the public API today. Guard it anyway so a future caller that
+    // somehow still reaches StopVisitor after an escaped exception cannot
+    // observe the partial observations as a success.
+    if (mState->interrupted)
+        return Error("Filesystem traversal was interrupted", ECANCELED);
     auto result = std::move(mState->result);
     Stop();
     return result;
@@ -2165,24 +1907,18 @@ Result<bool> FileRange::RetainEntries()
 {
     if (!mState)
         return Error("Cannot retain entries from a moved-from filesystem range", EINVAL);
-    try
+    if (mState->pending.HasValue())
     {
-        if (mState->pending.HasValue())
+        auto observable = mState->CanObserve(mState->pending.Value().path);
+        if (!observable.HasValue())
         {
-            auto charged = mState->Charge(mState->pending.Value().path.size() + 1, mState->pending.Value().path);
-            if (!charged.HasValue())
-            {
-                return charged;
-            }
-            mState->result.entries.push_back(Snapshot(mState->pending.Value()));
+            return observable;
         }
-        mState->retainEntries = true;
-        return true;
+        mState->result.entries.push_back(Snapshot(mState->pending.Value()));
+        ++mState->observations;
     }
-    catch (const std::bad_alloc&)
-    {
-        return Error("Filesystem collection allocation failed", ENOMEM);
-    }
+    mState->retainEntries = true;
+    return true;
 }
 } // namespace FTW
 

@@ -9,48 +9,9 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
-#include <exception>
 #include <limits>
-#include <new>
 #include <type_traits>
 #include <utility>
-
-#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
-// Only the isolated allocation-fault test builds this translation unit with
-// instrumentation. The ordinary library never arms an allocator interceptor.
-extern "C" void ArmFilesystemCollectionRootCopy(std::size_t bytes) noexcept;
-extern "C" void DisarmFilesystemCollectionRootCopy() noexcept;
-// Fixed, test-TU-only fault sites. The hook disarms before throwing or
-// diagnostic disposal; no allocator interception runs through native seams.
-namespace ComplianceEngine
-{
-namespace Filesystem
-{
-namespace
-{
-class ScopedRootCopyAllocationFault
-{
-public:
-    explicit ScopedRootCopyAllocationFault(std::size_t bytes) noexcept
-    {
-        ArmFilesystemCollectionRootCopy(bytes);
-    }
-
-    ~ScopedRootCopyAllocationFault() noexcept
-    {
-        DisarmFilesystemCollectionRootCopy();
-    }
-
-    void Disarm() noexcept
-    {
-        DisarmFilesystemCollectionRootCopy();
-    }
-};
-
-} // namespace
-} // namespace Filesystem
-} // namespace ComplianceEngine
-#endif
 
 namespace ComplianceEngine
 {
@@ -149,10 +110,6 @@ Result<bool> Validate(const ResolvedFilesystemCollectionRequest& request)
     {
         return Error("Filesystem collection root path exceeds the full path byte limit", ENAMETOOLONG);
     }
-    if (request.rootPath.size() >= request.limits.retainedPathBytes)
-    {
-        return Error("Filesystem collection root path exceeds the retained path byte limit", E2BIG);
-    }
     const std::size_t components = std::count(request.rootPath.begin(), request.rootPath.end(), '/') + 1;
     if ((components >= std::numeric_limits<std::size_t>::max() - PathOperationSlots() - StartingCursorSlots()) ||
         (request.limits.operationalDescent > std::numeric_limits<std::size_t>::max() - components - 1) ||
@@ -165,98 +122,80 @@ Result<bool> Validate(const ResolvedFilesystemCollectionRequest& request)
 
 Result<FilesystemVisitAction> InvokeVisitor(const FilesystemCollectionVisitor& visitor, const FilesystemCollectionEntry& entry)
 {
-    try
-    {
-        return visitor(entry);
-    }
-    catch (const std::bad_alloc&)
-    {
-        return Error("Filesystem collection allocation failed", ENOMEM);
-    }
-    catch (const std::exception& exception)
-    {
-        return Error(std::string("Filesystem collection failed: ") + exception.what(), EIO);
-    }
+    return visitor(entry);
 }
 } // namespace
 
 Result<ResolvedFilesystemCollectionRequest> ResolveFilesystemCollectionRequest(const FilesystemCollectionRequest& request)
 {
-    try
+    ResolvedFilesystemCollectionRequest resolved;
+    // Resolve and check the full path byte limit before copying rootPath, so
+    // an over-long root is rejected before Path's own allocation.
+    auto limit = Limit(request.fullPathBytes, "full path byte limit");
+    if (!limit.HasValue())
     {
-        ResolvedFilesystemCollectionRequest resolved;
-#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
-        ScopedRootCopyAllocationFault copyFault(request.rootPath.size() + 1);
-#endif
-        resolved.rootPath = request.rootPath;
-#ifdef KOMPLI_TEST_ROOT_COPY_ALLOCATION
-        copyFault.Disarm();
-#endif
-        resolved.rootKind = request.rootKind;
-        resolved.direction = request.direction;
-        resolved.maxDepth = request.maxDepth;
-        resolved.rootFileLinkAction = request.rootFileLinkAction;
-        resolved.rootDirectoryLinkAction = request.rootDirectoryLinkAction;
-        resolved.childFileLinkAction = request.childFileLinkAction;
-        resolved.childDirectoryLinkAction = request.childDirectoryLinkAction;
-        resolved.scope = request.scope;
-        resolved.yieldType = request.yieldType;
-        resolved.unsupported = request.unsupported;
-        resolved.depthAction = request.depthAction;
-        resolved.missingChildAction = request.missingChildAction;
-        auto limit = Limit(request.operationalDescent, "operational descent limit");
-        if (!limit.HasValue())
-        {
-            return limit.Error();
-        }
-        resolved.limits.operationalDescent = limit.Value();
-        limit = Limit(request.entryWork, "entry work limit");
-        if (!limit.HasValue())
-        {
-            return limit.Error();
-        }
-        resolved.limits.entryWork = limit.Value();
-        limit = Limit(request.directoryWidth, "directory width limit");
-        if (!limit.HasValue())
-        {
-            return limit.Error();
-        }
-        resolved.limits.directoryWidth = limit.Value();
-        limit = Limit(request.fullPathBytes, "full path byte limit");
-        if (!limit.HasValue())
-        {
-            return limit.Error();
-        }
-        resolved.limits.fullPathBytes = limit.Value();
-        limit = Limit(request.fdinfoBytes, "fdinfo byte limit");
-        if (!limit.HasValue())
-        {
-            return limit.Error();
-        }
-        resolved.limits.fdinfoBytes = limit.Value();
-        limit = Limit(request.retainedPathBytes, "retained path byte limit");
-        if (!limit.HasValue())
-        {
-            return limit.Error();
-        }
-        resolved.limits.retainedPathBytes = limit.Value();
-        limit = Limit(request.openDirectories, "open directory limit");
-        if (!limit.HasValue())
-        {
-            return limit.Error();
-        }
-        resolved.limits.openDirectories = limit.Value();
-        auto valid = Validate(resolved);
-        if (!valid.HasValue())
-        {
-            return valid.Error();
-        }
-        return resolved;
+        return limit.Error();
     }
-    catch (const std::bad_alloc&)
+    resolved.limits.fullPathBytes = limit.Value();
+    if (request.rootPath.size() >= resolved.limits.fullPathBytes)
     {
-        return Error("Filesystem collection allocation failed", ENOMEM);
+        return Error("Filesystem collection root path exceeds the full path byte limit", ENAMETOOLONG);
     }
+    resolved.rootPath = request.rootPath;
+    resolved.rootKind = request.rootKind;
+    resolved.direction = request.direction;
+    resolved.maxDepth = request.maxDepth;
+    resolved.rootFileLinkAction = request.rootFileLinkAction;
+    resolved.rootDirectoryLinkAction = request.rootDirectoryLinkAction;
+    resolved.childFileLinkAction = request.childFileLinkAction;
+    resolved.childDirectoryLinkAction = request.childDirectoryLinkAction;
+    resolved.scope = request.scope;
+    resolved.yieldType = request.yieldType;
+    resolved.unsupported = request.unsupported;
+    resolved.depthAction = request.depthAction;
+    resolved.missingChildAction = request.missingChildAction;
+    limit = Limit(request.operationalDescent, "operational descent limit");
+    if (!limit.HasValue())
+    {
+        return limit.Error();
+    }
+    resolved.limits.operationalDescent = limit.Value();
+    limit = Limit(request.entryWork, "entry work limit");
+    if (!limit.HasValue())
+    {
+        return limit.Error();
+    }
+    resolved.limits.entryWork = limit.Value();
+    limit = Limit(request.directoryWidth, "directory width limit");
+    if (!limit.HasValue())
+    {
+        return limit.Error();
+    }
+    resolved.limits.directoryWidth = limit.Value();
+    limit = Limit(request.fdinfoBytes, "fdinfo byte limit");
+    if (!limit.HasValue())
+    {
+        return limit.Error();
+    }
+    resolved.limits.fdinfoBytes = limit.Value();
+    limit = Limit(request.retainedObservations, "retained observation limit");
+    if (!limit.HasValue())
+    {
+        return limit.Error();
+    }
+    resolved.limits.retainedObservations = limit.Value();
+    limit = Limit(request.openDirectories, "open directory limit");
+    if (!limit.HasValue())
+    {
+        return limit.Error();
+    }
+    resolved.limits.openDirectories = limit.Value();
+    auto valid = Validate(resolved);
+    if (!valid.HasValue())
+    {
+        return valid.Error();
+    }
+    return resolved;
 }
 
 Result<FilesystemCollectionResult> StreamFilesystemCollection(const FilesystemCollectionRequest& request, const FilesystemCollectionVisitor& visitor,

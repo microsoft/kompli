@@ -136,7 +136,6 @@ public:
         ::ComplianceEngine::Filesystem::Metadata Metadata() const;
         Component Target() const noexcept;
         std::size_t RetainedDescriptors() const noexcept;
-        std::size_t RetainedBytes() const noexcept;
 
     private:
         struct Data;
@@ -174,7 +173,6 @@ public:
     std::string ToString() const;
     std::size_t Size() const noexcept;
     std::size_t RetainedDescriptors() const noexcept;
-    std::size_t RetainedBytes() const noexcept;
     ResolverLimits Limits() const noexcept;
     const ContextInterface& Context() const noexcept;
 
@@ -194,18 +192,16 @@ private:
         : mState(std::move(state))
     {
     }
-    // Scopes the allocation-fault guard to exactly this construction so the
-    // next heap allocation it covers is the shared root Handle, before it is
-    // published into the initial State.
+    // Checked root-component factory: dispatches through Component's
+    // private constructor, so it stays a private member of Path, the
+    // narrowest existing friend -- not an anonymous-namespace function.
     static Component MakeRootComponent(Detail::Handle root);
     // Checked pinned-link readers: dispatch through ContextInterface's
     // friend-gated native surface (ReadLink/StatFile/StatusFlags/...), so
     // they stay private members of Path, the narrowest existing friend that
     // needs no Handle/Component state -- not anonymous-namespace functions.
-    static Result<Detail::LinkTarget> ReadPinnedLink(const Detail::Descriptor& linkPin, std::size_t targetByteCap,
-        std::size_t temporaryBudget = PrefixLimits{}.retainedBytes);
-    static Result<Detail::LinkTarget> ReadVerifiedLinkText(const Detail::Descriptor& linkPin, const struct stat& before, std::size_t targetByteCap,
-        std::size_t temporaryBudget);
+    static Result<Detail::LinkTarget> ReadPinnedLink(const Detail::Descriptor& linkPin, std::size_t targetByteCap);
+    static Result<Detail::LinkTarget> ReadVerifiedLinkText(const Detail::Descriptor& linkPin, const struct stat& before, std::size_t targetByteCap);
     std::shared_ptr<const State> mState;
 };
 } // namespace Filesystem

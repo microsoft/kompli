@@ -1130,7 +1130,7 @@ TEST(FilesystemCollectionTest, InitializesNativeDefaultsAndMatchesExplicitDefaul
     EXPECT_EQ(100000, request.entryWork);
     EXPECT_EQ(4096, request.directoryWidth);
     EXPECT_EQ(4096, request.fullPathBytes);
-    EXPECT_EQ(32 * 1024 * 1024, request.retainedPathBytes);
+    EXPECT_EQ(8192, request.retainedObservations);
     EXPECT_EQ(16, request.openDirectories);
 
     FilesystemCollectionRequest explicitDefaults = Request();
@@ -1149,7 +1149,7 @@ TEST(FilesystemCollectionTest, InitializesNativeDefaultsAndMatchesExplicitDefaul
     explicitDefaults.directoryWidth = defaultLimits.directoryWidth;
     explicitDefaults.fullPathBytes = defaultLimits.fullPathBytes;
     explicitDefaults.fdinfoBytes = defaultLimits.fdinfoBytes;
-    explicitDefaults.retainedPathBytes = defaultLimits.retainedPathBytes;
+    explicitDefaults.retainedObservations = defaultLimits.retainedObservations;
     explicitDefaults.openDirectories = defaultLimits.openDirectories;
 
     const Result<ResolvedFilesystemCollectionRequest> result = ResolveFilesystemCollectionRequest(request);
@@ -1172,7 +1172,7 @@ TEST(FilesystemCollectionTest, InitializesNativeDefaultsAndMatchesExplicitDefaul
     EXPECT_EQ(4096u, resolved.limits.directoryWidth);
     EXPECT_EQ(4096u, resolved.limits.fullPathBytes);
     EXPECT_EQ(4096u, resolved.limits.fdinfoBytes);
-    EXPECT_EQ(32u * 1024u * 1024u, resolved.limits.retainedPathBytes);
+    EXPECT_EQ(8192u, resolved.limits.retainedObservations);
     EXPECT_EQ(16u, resolved.limits.openDirectories);
     EXPECT_EQ(resolved.direction, explicitResolved.direction);
     EXPECT_EQ(resolved.maxDepth, explicitResolved.maxDepth);
@@ -1188,7 +1188,7 @@ TEST(FilesystemCollectionTest, InitializesNativeDefaultsAndMatchesExplicitDefaul
     EXPECT_EQ(resolved.limits.directoryWidth, explicitResolved.limits.directoryWidth);
     EXPECT_EQ(resolved.limits.fullPathBytes, explicitResolved.limits.fullPathBytes);
     EXPECT_EQ(resolved.limits.fdinfoBytes, explicitResolved.limits.fdinfoBytes);
-    EXPECT_EQ(resolved.limits.retainedPathBytes, explicitResolved.limits.retainedPathBytes);
+    EXPECT_EQ(resolved.limits.retainedObservations, explicitResolved.limits.retainedObservations);
     EXPECT_EQ(resolved.limits.openDirectories, explicitResolved.limits.openDirectories);
 }
 
@@ -1236,7 +1236,7 @@ TEST(FilesystemCollectionTest, AcceptsLargerPositiveResourceOverridesWithoutClam
     request.directoryWidth = 8192;
     request.fullPathBytes = 8192;
     request.fdinfoBytes = 8192;
-    request.retainedPathBytes = 64u * 1024u * 1024u;
+    request.retainedObservations = 16384;
     request.openDirectories = 32;
 
     const Result<ResolvedFilesystemCollectionRequest> result = ResolveFilesystemCollectionRequest(request);
@@ -1247,7 +1247,7 @@ TEST(FilesystemCollectionTest, AcceptsLargerPositiveResourceOverridesWithoutClam
     EXPECT_EQ(8192u, result->limits.directoryWidth);
     EXPECT_EQ(8192u, result->limits.fullPathBytes);
     EXPECT_EQ(8192u, result->limits.fdinfoBytes);
-    EXPECT_EQ(64u * 1024u * 1024u, result->limits.retainedPathBytes);
+    EXPECT_EQ(16384u, result->limits.retainedObservations);
     EXPECT_EQ(32u, result->limits.openDirectories);
 }
 
@@ -1330,7 +1330,7 @@ TEST(FilesystemCollectionTest, RejectsZeroResourceLimits)
     ExpectInvalid(request, EINVAL);
 
     request = Request();
-    request.retainedPathBytes = 0;
+    request.retainedObservations = 0;
     ExpectInvalid(request, EINVAL);
 
     request = Request();
@@ -1361,7 +1361,7 @@ TEST(FilesystemCollectionTest, RejectsNegativeResourceLimits)
     ExpectInvalid(request, EINVAL);
 
     request = Request();
-    request.retainedPathBytes = -1;
+    request.retainedObservations = -1;
     ExpectInvalid(request, EINVAL);
 
     request = Request();
@@ -1455,16 +1455,11 @@ TEST(FilesystemCollectionTest, AppliesExactRootPathBudgetIncludingTerminator)
     FilesystemCollectionRequest exact = Request();
     exact.rootPath = "/ab";
     exact.fullPathBytes = 4;
-    exact.retainedPathBytes = 4;
     EXPECT_TRUE(ResolveFilesystemCollectionRequest(exact).HasValue());
 
     FilesystemCollectionRequest fullPathExceeded = exact;
     fullPathExceeded.fullPathBytes = 3;
     ExpectInvalid(fullPathExceeded, ENAMETOOLONG);
-
-    FilesystemCollectionRequest retainedPathExceeded = exact;
-    retainedPathExceeded.retainedPathBytes = 3;
-    ExpectInvalid(retainedPathExceeded, E2BIG);
 }
 
 TEST(FilesystemCollectionTest, DistinguishesAbsentRootFromEmptyDirectoryAndFileRoot)
@@ -2013,62 +2008,6 @@ TEST(FilesystemCollectionTest, RetentionExhaustionIsExplicitRatherThanReplayingN
     EXPECT_EQ(EMFILE, oneBeyond.Error().code);
 }
 
-TEST(FilesystemCollectionTest, InverseHistoryHasAnExactRetainedByteBoundary)
-{
-    ::testing::StrictMock<MockContext> context;
-    // No EXPECT_CALL in this test constrains any native seam.
-    context.AllowIncidentalNativeAccess();
-    TestTree tree;
-    tree.Directory("root");
-    std::string branch = "root";
-    for (int i = 0; i < 8; ++i)
-    {
-        branch += "/d";
-        tree.Directory(branch);
-    }
-    tree.File(branch + "/leaf");
-    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
-    request.direction = FilesystemDirection::Down;
-    request.yieldType = FilesystemYieldType::RegularFiles;
-    request.scope = FilesystemScope::All;
-    // With the audited TMPDIR root (8 physical pins), the default cap is 16 + 8 + 3 + 1 = 28.
-    // Seven inverse steps charge 21 slots; opening the eighth cursor needs 8 more (29).
-    // Isolate retained bytes from this independent FTW descriptor limit.
-    request.openDirectories = 256;
-    auto resolved = ResolveFilesystemCollectionRequest(request);
-    ASSERT_TRUE(resolved.HasValue()) << resolved.Error().message;
-    const auto traverse = [&](std::size_t cap) -> int {
-        auto limits = CollectionRootLimits(resolved.Value());
-        limits.shared.retainedBytes = cap;
-        auto root = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), limits);
-        if (!root.HasValue())
-            return root.Error().code;
-        if (!root.Value().Is<Path>())
-            return ENOENT;
-        auto range = Files(As<Path>(std::move(root).Value()), request.rootPath, CollectionContinuation(resolved.Value()));
-        if (!range.HasValue())
-            return range.Error().code;
-        for (const auto& entry : range.Value())
-            if (!entry.HasValue())
-                return entry.Error().code;
-        range->Stop();
-        return 0;
-    };
-    std::size_t low = 1;
-    std::size_t high = 262144;
-    ASSERT_EQ(0, traverse(high));
-    while (low + 1 < high)
-    {
-        const auto middle = low + (high - low) / 2;
-        if (traverse(middle) == 0)
-            high = middle;
-        else
-            low = middle;
-    }
-    EXPECT_EQ(0, traverse(high));
-    EXPECT_EQ(E2BIG, traverse(high - 1));
-}
-
 TEST(FilesystemCollectionTest, InverseHistoryHasAnExactDescriptorBoundary)
 {
     ::testing::StrictMock<MockContext> context;
@@ -2173,54 +2112,48 @@ TEST(FilesystemCollectionTest, PoppedInverseChargeMatchesIndependentStepDifferen
     childPolicy.directoryLinks = ComplianceEngine::Filesystem::DirectoryLinkPolicy::Follow;
     childPolicy.mounts = ComplianceEngine::Filesystem::MountPolicy::CrossMounts;
     // Observe the two inverse owners through Path, not FTW or an inferred cap.
-    const auto inverse = [&](const char* link, std::size_t cap, bool bytes) -> std::pair<std::size_t, std::size_t> {
+    const auto inverse = [&](const char* link, std::size_t cap) -> std::size_t {
         auto limits = CollectionRootLimits(resolved.Value());
         if (cap)
-        {
-            if (bytes)
-                limits.shared.retainedBytes = cap;
-            else
-                limits.shared.liveDescriptors = cap;
-        }
+            limits.shared.liveDescriptors = cap;
         auto acquired = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), limits);
         EXPECT_TRUE(acquired.HasValue()) << acquired.Error().message;
         if (!acquired.HasValue() || !acquired.Value().Is<Path>())
-            return {0, 0};
+            return 0;
         Path physical = As<Path>(std::move(acquired).Value());
         auto frozen = physical.Freeze();
         EXPECT_TRUE(frozen.HasValue());
         if (!frozen.HasValue())
-            return {0, 0};
+            return 0;
         for (const char* name : ancestors)
         {
             auto forward = physical.Resolve(name, childPolicy);
             EXPECT_TRUE(forward.HasValue()) << forward.Error().message;
             if (!forward.HasValue() || !forward.Value().Is<Path::Step>())
-                return {0, 0};
+                return 0;
             auto undo = physical.Apply(As<Path::Step>(std::move(forward).Value()));
             EXPECT_TRUE(undo.HasValue());
             if (!undo.HasValue())
-                return {0, 0};
+                return 0;
         }
         auto forward = physical.Resolve(link, childPolicy);
         EXPECT_TRUE(forward.HasValue()) << forward.Error().message;
         if (!forward.HasValue() || !forward.Value().Is<Path::Step>())
-            return {0, 0};
+            return 0;
         const std::size_t before = physical.Size();
         auto undo = physical.Apply(As<Path::Step>(std::move(forward).Value()));
         EXPECT_TRUE(undo.HasValue());
         if (!undo.HasValue())
-            return {0, 0};
+            return 0;
         if (0 == std::strcmp(link, "one"))
         {
             EXPECT_LT(physical.Size(), before);
         }
-        return {undo.Value().RetainedDescriptors(), undo.Value().RetainedBytes()};
+        return undo.Value().RetainedDescriptors();
     };
-    const auto deeper = inverse("one", 0, false);
-    const auto shallower = inverse("two", 0, false);
-    ASSERT_GT(deeper.first, shallower.first);
-    ASSERT_GT(deeper.second, shallower.second);
+    const auto deeper = inverse("one", 0);
+    const auto shallower = inverse("two", 0);
+    ASSERT_GT(deeper, shallower);
 
     struct Cursor
     {
@@ -2275,16 +2208,13 @@ TEST(FilesystemCollectionTest, PoppedInverseChargeMatchesIndependentStepDifferen
                     cursor.position = 0;
         return ::closedir(stream) == 0 ? ComplianceEngine::Result<void>::Success() : ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
-    const auto scan = [&](std::size_t cap, bool bytes, bool useDeep) -> int {
+    const auto scan = [&](std::size_t cap, bool useDeep) -> int {
         for (auto& cursor : cursors)
             cursor.position = 0;
         linkVisits = 0;
         deep = useDeep;
         auto limits = CollectionRootLimits(resolved.Value());
-        if (bytes)
-            limits.shared.retainedBytes = cap;
-        else
-            limits.shared.liveDescriptors = cap;
+        limits.shared.liveDescriptors = cap;
         auto acquired = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), limits);
         if (!acquired.HasValue())
             return acquired.Error().code;
@@ -2299,46 +2229,44 @@ TEST(FilesystemCollectionTest, PoppedInverseChargeMatchesIndependentStepDifferen
         range->Stop();
         return 0;
     };
-    for (const bool bytes : {false, true})
     {
-        SCOPED_TRACE(bytes ? "retained bytes" : "descriptors");
-        const std::size_t upper = bytes ? 262144 : 256;
+        const std::size_t upper = 256;
         const auto minimum = [&](bool useDeep) {
             std::size_t low = 1, high = upper;
             while (low + 1 < high)
             {
                 const std::size_t middle = low + (high - low) / 2;
-                if (0 == scan(middle, bytes, useDeep))
+                if (0 == scan(middle, useDeep))
                     high = middle;
                 else
                     low = middle;
             }
             return high;
         };
-        ASSERT_EQ(0, scan(upper, bytes, false));
+        ASSERT_EQ(0, scan(upper, false));
         EXPECT_EQ(1u, linkVisits);
-        ASSERT_EQ(0, scan(upper, bytes, true));
+        ASSERT_EQ(0, scan(upper, true));
         EXPECT_EQ(1u, linkVisits);
         const std::size_t shallowCap = minimum(false);
         const std::size_t deepCap = minimum(true);
-        const std::size_t delta = bytes ? deeper.second - shallower.second : deeper.first - shallower.first;
+        const std::size_t delta = deeper - shallower;
         // Confirm the physical resolver and Apply fit at the stricter cap.
         // Thus neither branch's acquisition peak can explain the FTW cap gap.
-        EXPECT_EQ(shallower, inverse("two", shallowCap - 1, bytes));
-        EXPECT_EQ(deeper, inverse("one", shallowCap, bytes));
+        EXPECT_EQ(shallower, inverse("two", shallowCap - 1));
+        EXPECT_EQ(deeper, inverse("one", shallowCap));
         // Both scripted branches have identical logical frame lengths, cursor
         // counts and frame-storage growth; neither yields a pin. Their only
         // retained-owner difference at the link is the measured inverse Step.
         // Dropping inverse ReservePins collapses this difference, even though
         // a binary search for each branch alone would still find some cap.
         EXPECT_EQ(shallowCap + delta, deepCap);
-        EXPECT_EQ(0, scan(shallowCap, bytes, false));
+        EXPECT_EQ(0, scan(shallowCap, false));
         EXPECT_EQ(1u, linkVisits);
-        EXPECT_EQ(bytes ? E2BIG : EMFILE, scan(shallowCap - 1, bytes, false));
+        EXPECT_EQ(EMFILE, scan(shallowCap - 1, false));
         EXPECT_EQ(1u, linkVisits); // Exhaustion follows selection of the link, not an earlier frame.
-        EXPECT_EQ(0, scan(deepCap, bytes, true));
+        EXPECT_EQ(0, scan(deepCap, true));
         EXPECT_EQ(1u, linkVisits);
-        EXPECT_EQ(bytes ? E2BIG : EMFILE, scan(deepCap - 1, bytes, true));
+        EXPECT_EQ(EMFILE, scan(deepCap - 1, true));
         EXPECT_EQ(1u, linkVisits);
     }
 }
@@ -2399,7 +2327,6 @@ TEST(FilesystemCollectionTest, PoppedInversePinsHaveExactBoundariesAndRefundBefo
         ASSERT_TRUE(undoLink.HasValue()) << undoLink.Error().message;
         EXPECT_LT(physical.Size(), before);
         EXPECT_GE(undoLink.Value().RetainedDescriptors(), 5u); // attach, barrier, b, a, deep
-        EXPECT_GT(undoLink.Value().RetainedBytes(), 0u);
         EXPECT_GT(undoA.Value().RetainedDescriptors() + undoDeep.Value().RetainedDescriptors(), 0u);
     }
 
@@ -2474,16 +2401,13 @@ TEST(FilesystemCollectionTest, PoppedInversePinsHaveExactBoundariesAndRefundBefo
                     cursor.position = 0;
         return ::closedir(stream) == 0 ? ComplianceEngine::Result<void>::Success() : ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
     });
-    const auto scan = [&](std::size_t cap, bool bytes, bool both) -> int {
+    const auto scan = [&](std::size_t cap, bool both) -> int {
         for (auto& cursor : cursors)
             cursor.position = 0;
         firstVisits = secondVisits = laterVisits = 0;
         includeSecond = both;
         auto limits = CollectionRootLimits(resolved.Value());
-        if (bytes)
-            limits.shared.retainedBytes = cap;
-        else
-            limits.shared.liveDescriptors = cap;
+        limits.shared.liveDescriptors = cap;
         auto acquired = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), limits);
         if (!acquired.HasValue())
             return acquired.Error().code;
@@ -2498,32 +2422,33 @@ TEST(FilesystemCollectionTest, PoppedInversePinsHaveExactBoundariesAndRefundBefo
         range->Stop();
         return 0;
     };
-    for (const bool bytes : {false, true})
     {
-        SCOPED_TRACE(bytes ? "retained bytes" : "descriptors");
         std::size_t low = 1;
-        std::size_t high = bytes ? 262144 : 256;
-        ASSERT_EQ(0, scan(high, bytes, false));
+        std::size_t high = 256;
+        ASSERT_EQ(0, scan(high, false));
         while (low + 1 < high)
         {
             const std::size_t middle = low + (high - low) / 2;
-            if (0 == scan(middle, bytes, false))
+            if (0 == scan(middle, false))
                 high = middle;
             else
                 low = middle;
         }
-        EXPECT_EQ(0, scan(high, bytes, false));
-        EXPECT_EQ(bytes ? E2BIG : EMFILE, scan(high - 1, bytes, false));
+        EXPECT_EQ(0, scan(high, false));
+        EXPECT_EQ(EMFILE, scan(high - 1, false));
         // Both equal-length sibling links must fit at the exact one-link
         // limit: the first inverse is refunded before the second is charged.
-        EXPECT_EQ(0, scan(high, bytes, true));
+        EXPECT_EQ(0, scan(high, true));
         EXPECT_EQ(1u, firstVisits);
         EXPECT_EQ(1u, secondVisits);
         EXPECT_EQ(1u, laterVisits);
-        EXPECT_EQ(bytes ? E2BIG : EMFILE, scan(high - 1, bytes, true));
+        EXPECT_EQ(EMFILE, scan(high - 1, true));
     }
 }
 
+// Retained-byte accounting is gone; FTW's retained output pins are bounded
+// by descriptor slots alone (the shared liveDescriptors budget), so this
+// overlap property is verified against that axis.
 TEST(FilesystemCollectionTest, IteratorOverlapRetainsBothOutputPinCharges)
 {
     ::testing::StrictMock<MockContext> context;
@@ -2541,7 +2466,7 @@ TEST(FilesystemCollectionTest, IteratorOverlapRetainsBothOutputPinCharges)
     auto resolved = ResolveFilesystemCollectionRequest(request);
     ASSERT_TRUE(resolved.HasValue()) << resolved.Error().message;
 
-    std::size_t stepBytes = 0;
+    std::size_t stepDescriptors = 0;
     {
         auto observed = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), CollectionRootLimits(resolved.Value()));
         ASSERT_TRUE(observed.HasValue()) << observed.Error().message;
@@ -2555,16 +2480,15 @@ TEST(FilesystemCollectionTest, IteratorOverlapRetainsBothOutputPinCharges)
         auto target = physical.Resolve("100", childPolicy);
         ASSERT_TRUE(target.HasValue()) << target.Error().message;
         ASSERT_TRUE(target.Value().Is<Path::Step>());
-        stepBytes = As<Path::Step>(target.Value()).RetainedBytes();
-        ASSERT_GT(stepBytes, 0u);
+        stepDescriptors = As<Path::Step>(target.Value()).RetainedDescriptors();
+        ASSERT_GT(stepDescriptors, 0u);
     } // Release independent Step and Path pins before measuring traversal.
 
     // Separate iterator values retain live entries while further begin() pulls
     // from the same single-pass range. Stop cannot refund those external pins.
     const auto scan = [&](std::size_t cap, std::size_t count, bool releaseBeforeLast) -> int {
         auto limits = CollectionRootLimits(resolved.Value());
-        limits.shared.retainedBytes = cap;
-        limits.shared.liveDescriptors = 512; // Isolate retained bytes from the descriptor axis.
+        limits.shared.liveDescriptors = cap;
         auto root = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), limits);
         if (!root.HasValue())
             return root.Error().code;
@@ -2594,8 +2518,7 @@ TEST(FilesystemCollectionTest, IteratorOverlapRetainsBothOutputPinCharges)
     // an extra measured output charge proves the same at the larger cap.
     const auto advanceHeld = [&](std::size_t cap, bool releaseOther) -> int {
         auto limits = CollectionRootLimits(resolved.Value());
-        limits.shared.retainedBytes = cap;
-        limits.shared.liveDescriptors = 512;
+        limits.shared.liveDescriptors = cap;
         auto root = Path::Make(context, request.rootPath, CollectionRootPolicy(resolved.Value()), limits);
         if (!root.HasValue())
             return root.Error().code;
@@ -2628,8 +2551,14 @@ TEST(FilesystemCollectionTest, IteratorOverlapRetainsBothOutputPinCharges)
         range->Stop();
         return 0;
     };
+    // Below the root-opening floor (one held output's minimum still pays for
+    // opening the directory itself), the exact cap is dominated by that
+    // fixed cost and is measured, not derived. At 63/64 held outputs the
+    // per-output EntryCharge dominates instead (guarded below), so those two
+    // use a literal oracle: one cursor charge for the root directory plus
+    // stepDescriptors per held output.
     const auto minimum = [&](std::size_t count) -> std::size_t {
-        std::size_t low = 1, high = 262144;
+        std::size_t low = 1, high = 256; // Mirrors the mock's real descriptor allowance ceiling (MockContext.h).
         EXPECT_EQ(0, scan(high, count, false));
         while (low + 1 < high)
         {
@@ -2640,22 +2569,32 @@ TEST(FilesystemCollectionTest, IteratorOverlapRetainsBothOutputPinCharges)
                 low = middle;
         }
         EXPECT_EQ(0, scan(high, count, false));
-        EXPECT_EQ(E2BIG, scan(high - 1, count, false));
+        EXPECT_EQ(EMFILE, scan(high - 1, count, false));
         return high;
     };
     const std::size_t oneOutputPeak = minimum(1);
-    const std::size_t single = minimum(63);
-    const std::size_t overlap = minimum(64);
     // At 63 retained outputs the one-entry Path acquisition peak cannot
-    // dominate: the Step owners alone exceed it. The 64th output must
-    // add its measured pin charge, and releasing one owner permits its reuse.
-    ASSERT_GT(63 * stepBytes, oneOutputPeak);
+    // dominate: the Step owners alone exceed it. This also guards the
+    // literal oracle below: it proves the root-opening floor measured by
+    // oneOutputPeak cannot bind once 63 or more outputs are held, so
+    // "1 + count * stepDescriptors" is the exact minimum there.
+    ASSERT_GT(63 * stepDescriptors, oneOutputPeak);
+    const auto literalMinimum = [&](std::size_t count) -> std::size_t {
+        const std::size_t required = 1 + count * stepDescriptors;
+        EXPECT_EQ(0, scan(required, count, false));
+        EXPECT_EQ(EMFILE, scan(required - 1, count, false));
+        return required;
+    };
+    const std::size_t single = literalMinimum(63);
+    const std::size_t overlap = literalMinimum(64);
+    // The 64th output must add its measured pin charge, and releasing one
+    // owner permits its reuse.
     ASSERT_GT(single, oneOutputPeak);
     ASSERT_GT(overlap, single);
-    EXPECT_GE(overlap - single, stepBytes);
-    EXPECT_EQ(E2BIG, scan(single, 64, false));
+    EXPECT_GE(overlap - single, stepDescriptors);
+    EXPECT_EQ(EMFILE, scan(single, 64, false));
     EXPECT_EQ(0, scan(single, 64, true));
-    EXPECT_EQ(E2BIG, advanceHeld(single, false));
+    EXPECT_EQ(EMFILE, advanceHeld(single, false));
     EXPECT_EQ(0, advanceHeld(single, true));
     EXPECT_EQ(0, advanceHeld(overlap, false));
 }
@@ -2870,7 +2809,7 @@ TEST(FilesystemCollectionTest, FollowingDanglingLinkFailsRatherThanReturningAbse
     EXPECT_EQ(ENOENT, result.Error().code);
 }
 
-TEST(FilesystemCollectionTest, FullPathAndRetainedPathBudgetsRejectRequiredEntries)
+TEST(FilesystemCollectionTest, FullPathBudgetRejectsRequiredEntries)
 {
     TestTree tree;
     tree.Directory("root");
@@ -2880,45 +2819,78 @@ TEST(FilesystemCollectionTest, FullPathAndRetainedPathBudgetsRejectRequiredEntri
     const auto fullPathExceeded = CollectFilesystem(request);
     ASSERT_FALSE(fullPathExceeded.HasValue());
     EXPECT_EQ(ENAMETOOLONG, fullPathExceeded.Error().code);
-
-    request.fullPathBytes = static_cast<long long>(tree.Path("root/item").size() + 1);
-    request.retainedPathBytes = static_cast<long long>(tree.Path("root").size() + 1);
-    const auto retainedExceeded = CollectFilesystem(request);
-    ASSERT_FALSE(retainedExceeded.HasValue());
-    EXPECT_EQ(E2BIG, retainedExceeded.Error().code);
 }
 
-TEST(FilesystemCollectionTest, FileRootPinAndSnapshotHaveAnExactRetainedBudgetBoundary)
+// retainedObservations counts retained snapshots. A file root retains
+// exactly 1 (the root itself); a directory with one file retains 2 (the
+// root directory plus the file).
+TEST(FilesystemCollectionTest, FileRootAndDirectorySnapshotCountsHaveExactRetainedObservationBoundary)
 {
     TestTree tree;
     tree.File("file");
-    FilesystemCollectionRequest request(tree.Path("file"), FilesystemRootKind::File);
-    // The separate resolver retained-byte ceiling can reject earlier than
-    // collection path storage. Find the effective boundary for this fixture.
-    long long low = static_cast<long long>(request.rootPath.size());
-    long long high = 32768;
-    request.retainedPathBytes = high;
-    ASSERT_TRUE(CollectFilesystem(request).HasValue());
-    while (low + 1 < high)
-    {
-        const long long middle = low + (high - low) / 2;
-        request.retainedPathBytes = middle;
-        if (CollectFilesystem(request).HasValue())
-        {
-            high = middle;
-        }
+    FilesystemCollectionRequest fileRequest(tree.Path("file"), FilesystemRootKind::File);
+    fileRequest.retainedObservations = 1;
+    EXPECT_TRUE(CollectFilesystem(fileRequest).HasValue());
 
-        else
-        {
-            low = middle;
-        }
-    }
-    request.retainedPathBytes = high;
-    EXPECT_TRUE(CollectFilesystem(request).HasValue());
-    request.retainedPathBytes = high - 1;
+    TestTree directoryTree;
+    directoryTree.Directory("root");
+    directoryTree.File("root/item");
+    FilesystemCollectionRequest directoryRequest(directoryTree.Path("root"), FilesystemRootKind::Directory);
+    directoryRequest.retainedObservations = 2;
+    EXPECT_TRUE(CollectFilesystem(directoryRequest).HasValue());
+
+    directoryRequest.retainedObservations = 1;
+    const auto exceeded = CollectFilesystem(directoryRequest);
+    ASSERT_FALSE(exceeded.HasValue());
+    EXPECT_EQ(E2BIG, exceeded.Error().code);
+    EXPECT_THAT(exceeded.Error().message, testing::HasSubstr(directoryTree.Path("root/item")));
+}
+
+// CollectFilesystem on directory D holding file f and a not-followed link
+// l: root + f + exclusion(l) = 3 observations, so a limit of 3 succeeds;
+// one short fails with the count message.
+TEST(FilesystemCollectionTest, FTWObservationCountIncludesRootFileAndExclusion)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.File("root/f");
+    tree.Link("missing", "root/l"); // dangling; not followed by default -> charged as an exclusion
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    request.retainedObservations = 3;
+    const auto exact = CollectFilesystem(request);
+    ASSERT_TRUE(exact.HasValue()) << exact.Error().message;
+    EXPECT_EQ(2u, exact->entries.size());    // root + f
+    EXPECT_EQ(1u, exact->exclusions.size()); // l
+
+    request.retainedObservations = 2;
     const auto exceeded = CollectFilesystem(request);
     ASSERT_FALSE(exceeded.HasValue());
     EXPECT_EQ(E2BIG, exceeded.Error().code);
+    EXPECT_THAT(exceeded.Error().message, testing::HasSubstr("retained observation count exceeded at"));
+}
+
+// Streaming (no RetainEntries) over D with 3 files and retainedObservations
+// = 1 succeeds and yields 4 entries (root + 3 files), proving pulled-but-not-
+// retained entries are never counted.
+TEST(FilesystemCollectionTest, FTWStreamingEntriesAreNotCountedAgainstRetainedObservations)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.File("root/a");
+    tree.File("root/b");
+    tree.File("root/c");
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    request.retainedObservations = 1;
+    std::size_t visited = 0;
+    auto counting = [&visited](const FilesystemCollectionEntry&) -> Result<FilesystemVisitAction> {
+        ++visited;
+        return FilesystemVisitAction::Continue;
+    };
+    const auto streamed = StreamFilesystemCollection(request, counting);
+    ASSERT_TRUE(streamed.HasValue()) << streamed.Error().message;
+    EXPECT_EQ(4u, visited); // root + a + b + c
+    EXPECT_TRUE(streamed->entries.empty());
+    EXPECT_TRUE(streamed->exclusions.empty());
 }
 
 TEST(FilesystemCollectionTest, ReplacingPinnedChildLinkKeepsAcceptedTargetIdentity)
@@ -3041,14 +3013,33 @@ TEST(FilesystemCollectionTest, SkippedRootLinkStillChargesItsExclusion)
     tree.File("target");
     tree.Link(tree.Path("target"), "alias");
     FilesystemCollectionRequest request(tree.Path("alias"), FilesystemRootKind::File);
-    const long long exclusionBytes = static_cast<long long>(request.rootPath.size() + 1);
-    request.retainedPathBytes = exclusionBytes;
+    request.retainedObservations = 1;
     const auto exact = CollectFilesystem(request);
-    ASSERT_TRUE(exact.HasValue());
+    ASSERT_TRUE(exact.HasValue()) << exact.Error().message;
     EXPECT_TRUE(exact->entries.empty());
     ASSERT_EQ(1u, exact->exclusions.size());
-    request.retainedPathBytes = exclusionBytes - 1;
-    const auto exceeded = CollectFilesystem(request);
+}
+
+// A not-followed child link is excluded and charged against
+// retainedObservations even while streaming (never retaining an entry),
+// proving exclusions are counted independently of entry retention.
+TEST(FilesystemCollectionTest, StreamingChildLinkExclusionsAreCountedWithoutRetention)
+{
+    TestTree tree;
+    tree.Directory("root");
+    tree.File("root/target");
+    tree.Link(tree.Path("root/target"), "root/first-link");
+    tree.Link(tree.Path("root/target"), "root/second-link");
+    FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
+    auto noop = [](const FilesystemCollectionEntry&) -> Result<FilesystemVisitAction> { return FilesystemVisitAction::Continue; };
+    request.retainedObservations = 2;
+    const auto exact = StreamFilesystemCollection(request, noop);
+    ASSERT_TRUE(exact.HasValue()) << exact.Error().message;
+    EXPECT_TRUE(exact->entries.empty()); // streaming never retains an entry
+    EXPECT_EQ(2u, exact->exclusions.size());
+
+    request.retainedObservations = 1;
+    const auto exceeded = StreamFilesystemCollection(request, noop);
     ASSERT_FALSE(exceeded.HasValue());
     EXPECT_EQ(E2BIG, exceeded.Error().code);
 }

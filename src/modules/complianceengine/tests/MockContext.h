@@ -48,6 +48,12 @@ struct MockContext : public ComplianceEngine::ContextInterface
     {
         return ContextInterface::ReadFileDescriptor(fd, buffer, size);
     }
+    // Needed by the readlink buffer-size tests, which must assert the size
+    // Path requests while still performing the real read.
+    ssize_t RealReadLinkDescriptor(int fd, char* buffer, std::size_t size) const
+    {
+        return ContextInterface::ReadLinkDescriptor(fd, buffer, size);
+    }
     ComplianceEngine::Result<void> RealCloseFileDescriptor(int fd) const
     {
         return ContextInterface::CloseFileDescriptor(fd);

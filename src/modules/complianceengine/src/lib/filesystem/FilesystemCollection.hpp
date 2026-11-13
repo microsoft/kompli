@@ -66,14 +66,14 @@ struct FilesystemCollectionLimits
     std::size_t directoryWidth = 4096;
     std::size_t fullPathBytes = 4096;
     std::size_t fdinfoBytes = 4096; // independent bound for procfs descriptor information
-    // Collection-owned observation path strings retained in pending/result
-    // entries, traversal frames and exclusions (including their NUL bytes).
-    // Not a total-memory limit: the resolver separately reserves bounded
-    // internal acquisition pins; live pin-owning entries are charged for
-    // their lifetime separately from observation strings. Detached Component
-    // copies, objects, metadata and allocator capacity are not charged to the
-    // observation-path counter.
-    std::size_t retainedPathBytes = 32 * 1024 * 1024;
+    // Counts retained snapshots (the CollectFilesystem/RetainEntries path)
+    // plus exclusions, each charged before publication and kept until the
+    // range finishes. Pin-owning entries are charged by descriptor slots
+    // only, independently of this count. Not a total-memory limit: streamed
+    // entries that are pulled and never retained do not count, and detached
+    // Component copies, objects, metadata and allocator capacity are not
+    // charged here either.
+    std::size_t retainedObservations = 8192;
     // Must retain every active ancestor pin and cursor without pathname replay.
     std::size_t openDirectories = 16;
 };
@@ -115,7 +115,7 @@ struct FilesystemCollectionRequest
     long long directoryWidth = FilesystemCollectionLimits{}.directoryWidth;
     long long fullPathBytes = FilesystemCollectionLimits{}.fullPathBytes;
     long long fdinfoBytes = FilesystemCollectionLimits{}.fdinfoBytes;
-    long long retainedPathBytes = FilesystemCollectionLimits{}.retainedPathBytes;
+    long long retainedObservations = FilesystemCollectionLimits{}.retainedObservations;
     long long openDirectories = FilesystemCollectionLimits{}.openDirectories;
 };
 

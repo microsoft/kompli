@@ -13,7 +13,6 @@ struct PrefixLimits
     std::size_t components = 128;
     std::size_t work = 100000;
     std::size_t liveDescriptors = 256;
-    std::size_t retainedBytes = std::size_t{1024} * 1024;
     std::size_t fdinfoBytes = 4096;
 };
 namespace Detail

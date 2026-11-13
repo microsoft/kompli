@@ -5,6 +5,7 @@
 #include <MockContext.h>
 #include <algorithm>
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -145,7 +146,6 @@ protected:
     {
         ResolverLimits limits;
         limits.shared.components = 100;
-        limits.shared.retainedBytes = 262144;
         limits.linkExpansions = 8;
         return limits;
     }
@@ -801,37 +801,12 @@ TEST(PathTest, ProcfsMountIdRejectsMissingAmbiguousAndMalformedInformation)
     }
 }
 
-TEST_F(PathAliasTest, InitialRootRetainedHeadroomHasExactBoundary)
-{
-    ResolverLimits limits = AmpleLimits();
-    auto baseline = Path::Make(context, "/", CrossMountPathPolicy(), limits);
-    ASSERT_TRUE(baseline.HasValue()) << baseline.Error().message;
-    ASSERT_TRUE(baseline.Value().Is<Path>());
-    // The acquisition ledger includes the root spelling and the full
-    // process-root entry footprint; bootstrap must reserve that entire total.
-    const std::size_t exactBudget = As<Path>(baseline.Value()).RetainedBytes();
-    ASSERT_LE(exactBudget, limits.shared.retainedBytes);
-    limits.shared.retainedBytes = exactBudget - 1;
-    auto insufficient = Path::Make(context, "/", CrossMountPathPolicy(), limits);
-    ASSERT_FALSE(insufficient.HasValue());
-    EXPECT_EQ(E2BIG, insufficient.Error().code);
-    EXPECT_EQ("Root exceeds retained-memory budget", insufficient.Error().message);
-
-    limits.shared.retainedBytes = exactBudget;
-    auto exact = Path::Make(context, "/", CrossMountPathPolicy(), limits);
-    ASSERT_TRUE(exact.HasValue()) << exact.Error().message;
-    ASSERT_TRUE(exact.Value().Is<Path>());
-    EXPECT_EQ(exactBudget, As<Path>(exact.Value()).RetainedBytes());
-    EXPECT_LE(As<Path>(exact.Value()).RetainedBytes(), limits.shared.retainedBytes);
-}
-
-TEST_F(PathAliasTest, InitialRootWorkChargePrecedesRetainedHeadroomAndFreezeHasNoCharge)
+TEST_F(PathAliasTest, InitialRootWorkChargePrecedesNativeAcquisitionAndFreezeHasNoCharge)
 {
     ResolverLimits limits = AmpleLimits();
     // Default fdinfoBytes=4096: 128 + 4 * ceil(4096 / 256) = 192.
     ASSERT_EQ(4096u, limits.shared.fdinfoBytes);
     limits.shared.work = 191;
-    limits.shared.retainedBytes = 1; // both checks fail; work must win before native acquisition
     EXPECT_CALL(context, OpenNativePath(_, _)).Times(0);
     auto shortWork = Path::Make(context, "/", CrossMountPathPolicy(), limits);
     ASSERT_FALSE(shortWork.HasValue());
@@ -839,7 +814,6 @@ TEST_F(PathAliasTest, InitialRootWorkChargePrecedesRetainedHeadroomAndFreezeHasN
     EXPECT_EQ("Path work budget exhausted", shortWork.Error().message);
     testing::Mock::VerifyAndClearExpectations(&context);
     limits.shared.work = 192;
-    limits.shared.retainedBytes = AmpleLimits().shared.retainedBytes;
     auto exact = Path::Make(context, "/", CrossMountPathPolicy(), limits);
     ASSERT_TRUE(exact.HasValue()) << exact.Error().message;
     ASSERT_TRUE(exact.Value().Is<Path>());
@@ -893,7 +867,6 @@ TEST_F(PathAliasTest, ActivationErrorRemainsPrimaryWhenDiagnosticCleanupFails)
     limits.shared.components = 128;
     limits.shared.work = 200000;
     limits.shared.liveDescriptors = 128;
-    limits.shared.retainedBytes = 262144;
     limits.shared.fdinfoBytes = 4096;
     limits.linkTargetBytes = 128;
     limits.linkExpansions = 2;
@@ -1735,7 +1708,6 @@ TEST_F(PathAliasTest, SingleChildInputRejectsTraversalAndDoesNotMutate)
     Path path = std::move(opened).Value();
     const auto name = path.LookupName();
     const auto depth = path.Size();
-    const auto bytes = path.RetainedBytes();
     const auto pins = path.RetainedDescriptors();
     const auto held = CountOpenDescriptors();
     for (const std::string& child : std::vector<std::string>{"", ".", "..", "/", "../bob", "a/b", std::string("a\0b", 3)})
@@ -1746,7 +1718,6 @@ TEST_F(PathAliasTest, SingleChildInputRejectsTraversalAndDoesNotMutate)
         EXPECT_EQ(EINVAL, result.Error().code);
         EXPECT_EQ(name, path.LookupName());
         EXPECT_EQ(depth, path.Size());
-        EXPECT_EQ(bytes, path.RetainedBytes());
         EXPECT_EQ(pins, path.RetainedDescriptors());
         EXPECT_EQ(held, CountOpenDescriptors());
     }
@@ -2508,7 +2479,10 @@ TEST_F(PathAliasTest, FollowedSelfPrefixStillAppliesFinalLinkRejectOrSkip)
     EXPECT_EQ(Path::RejectionReason::Excluded, As<Path::RejectionReason>(skipped.Value()));
 }
 
-TEST_F(PathAliasTest, DeepLongNameHeldSearchChargesPeakMemoryAndRepeatedWork)
+// The byte half of this test (a compact retained-byte ceiling rejecting the
+// same deep path) no longer applies, since Path has no byte ceiling; the
+// repeated-work exhaustion property stays.
+TEST_F(PathAliasTest, DeepLongNameHeldSearchChargesRepeatedWorkUntilExhausted)
 {
     const std::string base = context.GetTempdirPath();
     std::string deep = base;
@@ -2521,12 +2495,6 @@ TEST_F(PathAliasTest, DeepLongNameHeldSearchChargesPeakMemoryAndRepeatedWork)
     ample.shared.work = 4000000;
     auto deepPath = SelectAcceptedPath(context, deep, CrossMountPathPolicy(), ample);
     ASSERT_TRUE(deepPath.HasValue()) << deepPath.Error().message;
-    EXPECT_GT(deepPath.Value().RetainedBytes(), 3000u);
-    auto compact = ample;
-    compact.shared.retainedBytes = 8192;
-    auto bounded = Path::Make(context, deep, CrossMountPathPolicy(), compact);
-    ASSERT_FALSE(bounded.HasValue());
-    EXPECT_EQ(E2BIG, bounded.Error().code);
 
     ResolverLimits tight = ample;
     tight.shared.work = 400000;
@@ -2551,23 +2519,310 @@ TEST_F(PathAliasTest, DeepLongNameHeldSearchChargesPeakMemoryAndRepeatedWork)
     EXPECT_TRUE(deepPath.Value().Resolve("unpublished", missing).HasValue());
 }
 
-TEST_F(PathAliasTest, ConfiguredLinkBufferOverRetainedBudgetFailsBeforeNativeRead)
+// With linkTargetBytes raised far above PATH_MAX, the single ReadLink call
+// still receives a buffer size capped at PATH_MAX (4096) + 1, and a short
+// link still resolves normally through that one bounded read.
+TEST_F(PathAliasTest, ConfiguredLinkBufferCapsAtPlatformPathLengthAndShortLinkResolves)
 {
     const std::string base = context.GetTempdirPath();
     const std::string file = context.MakeTempfile("pinned");
     ASSERT_EQ(0, ::symlink(file.c_str(), (base + "/short-link").c_str()));
     ResolverLimits limits = AmpleLimits();
     limits.linkTargetBytes = 100u * 1024u * 1024u;
-    limits.shared.retainedBytes = 1024u * 1024u;
     auto opened = SelectAcceptedPath(context, base, CrossMountPathPolicy(), limits);
     ASSERT_TRUE(opened.HasValue());
     auto follow = CrossMountPathPolicy(true);
-    EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).Times(0);
-    auto refused = opened.Value().Resolve("short-link", follow);
-    ASSERT_FALSE(refused.HasValue());
-    EXPECT_EQ(E2BIG, refused.Error().code);
-    EXPECT_EQ("Link target exceeds memory budget", refused.Error().message);
+    std::size_t observedBufferSize = 0;
+    EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).Times(1).WillOnce([&](int descriptor, char* buffer, std::size_t size) {
+        observedBufferSize = size;
+        return context.RealReadLinkDescriptor(descriptor, buffer, size);
+    });
+    auto accepted = opened.Value().Resolve("short-link", follow);
+    ASSERT_TRUE(accepted.HasValue()) << accepted.Error().message;
+    ASSERT_TRUE(accepted.Value().Is<Path::Step>());
+    EXPECT_EQ(Type::RegularFile, As<Path::Step>(accepted.Value()).Metadata().FileType());
+    // Hand-computed oracle: min(linkTargetBytes, PATH_MAX) + 1 = min(100 MiB, 4096) + 1 = 4097.
+    EXPECT_EQ(4097u, observedBufferSize);
     EXPECT_EQ(base, opened.Value().ToString());
+}
+
+// N/N+1 on the mocked read count itself (not the real content): with
+// linkTargetBytes = 8192, the buffer is min(8192, PATH_MAX) + 1 = 4097. A
+// read of exactly 4096 (the NFSv3 maximum for a readlink target) is
+// accepted; a read of 4097 (== buffer size) means the read was truncated and
+// fails closed with ENAMETOOLONG, after exactly one read. The faked target
+// text for the first case is the frozen boundary's own absolute spelling,
+// padded with trailing '/' to exactly 4096 bytes; it collapses to the
+// boundary itself, so the first case resolves as a no-op without reaching
+// any NAME_MAX or pending-cap check this test is not exercising.
+TEST_F(PathAliasTest, LinkBufferExactReadIsAcceptedOneOverIsTruncated)
+{
+    const std::string base = context.GetTempdirPath();
+    ASSERT_EQ(0, ::symlink("x", (base + "/l").c_str())); // on-disk content is irrelevant; the read is faked below
+    ResolverLimits limits = AmpleLimits();
+    limits.linkTargetBytes = 8192;
+    auto opened = SelectAcceptedPath(context, base, CrossMountPathPolicy(), limits);
+    ASSERT_TRUE(opened.HasValue());
+    auto follow = CrossMountPathPolicy(true);
+    {
+        std::size_t observedBufferSize = 0;
+        EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).Times(1).WillOnce([&observedBufferSize, &base](int, char* buffer, std::size_t size) -> ssize_t {
+            observedBufferSize = size;
+            // An absolute target matching the frozen boundary (base) is a
+            // no-op: pad the spelling with trailing '/' so the faked read
+            // is exactly 4096 bytes without adding any named component.
+            std::memcpy(buffer, base.data(), base.size());
+            std::fill_n(buffer + base.size(), 4096 - base.size(), '/');
+            return 4096;
+        });
+        auto accepted = opened.Value().Resolve("l", follow);
+        ASSERT_TRUE(accepted.HasValue()) << accepted.Error().message;
+        ASSERT_TRUE(accepted.Value().Is<Path::Step>());
+        EXPECT_EQ(4097u, observedBufferSize);
+        testing::Mock::VerifyAndClearExpectations(&context);
+    }
+    {
+        EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).Times(1).WillOnce([](int, char* buffer, std::size_t size) -> ssize_t {
+            std::fill_n(buffer, size, '/');
+            return static_cast<ssize_t>(size); // == buffer size: the read was truncated
+        });
+        auto rejected = opened.Value().Resolve("l", follow);
+        ASSERT_FALSE(rejected.HasValue());
+        EXPECT_EQ(ENAMETOOLONG, rejected.Error().code);
+        EXPECT_THAT(rejected.Error().message, testing::HasSubstr("exceeds platform path length"));
+        testing::Mock::VerifyAndClearExpectations(&context);
+    }
+    EXPECT_EQ(base, opened.Value().ToString());
+}
+
+// Make's non-allocating length pre-scan runs after the EINVAL shape checks
+// and before any native call, including PinProcessRoot.
+TEST_F(PathAliasTest, MakeTotalLengthExactlyAtTargetBytesSucceedsOneOverFailsBeforeNativeCall)
+{
+    const std::string base = context.GetTempdirPath();
+    ResolverLimits limits = AmpleLimits();
+    limits.shared.targetBytes = base.size();
+    auto exact = Path::Make(context, base, CrossMountPathPolicy(), limits);
+    ASSERT_TRUE(exact.HasValue()) << exact.Error().message;
+    ASSERT_TRUE(exact.Value().Is<Path>());
+
+    limits.shared.targetBytes = base.size() - 1;
+    EXPECT_CALL(context, OpenNativePath(_, _)).Times(0);
+    auto over = Path::Make(context, base, CrossMountPathPolicy(), limits);
+    ASSERT_FALSE(over.HasValue());
+    EXPECT_EQ(ENAMETOOLONG, over.Error().code);
+    EXPECT_THAT(over.Error().message, testing::HasSubstr("exceeds target byte limit"));
+    testing::Mock::VerifyAndClearExpectations(&context);
+}
+
+// A component exactly at NAME_MAX (255) reaches the lookup; one byte over
+// fails with ENAMETOOLONG before any native call. Make's single-component
+// resolution always forces Report internally (factoryPolicy.missingFiles),
+// independent of the caller's policy, so the accepted case below surfaces
+// RejectionReason::Missing rather than ENOENT.
+TEST_F(PathAliasTest, MakeComponentAtNameMaxReachesLookupOneOverFailsBeforeNativeCall)
+{
+    auto policy = CrossMountPathPolicy();
+    const std::string atLimit = "/" + std::string(255, 'a');
+    ASSERT_EQ(255, NAME_MAX);
+    auto accepted = Path::Make(context, atLimit, policy, AmpleLimits());
+    ASSERT_TRUE(accepted.HasValue()) << accepted.Error().message;
+    ASSERT_TRUE(accepted.Value().Is<Path::RejectionReason>());
+    EXPECT_EQ(Path::RejectionReason::Missing, As<Path::RejectionReason>(accepted.Value()));
+
+    const std::string overLimit = "/" + std::string(256, 'a');
+    EXPECT_CALL(context, OpenNativePath(_, _)).Times(0);
+    auto rejected = Path::Make(context, overLimit, policy, AmpleLimits());
+    ASSERT_FALSE(rejected.HasValue());
+    EXPECT_EQ(ENAMETOOLONG, rejected.Error().code);
+    EXPECT_THAT(rejected.Error().message, testing::HasSubstr("exceeds NAME_MAX"));
+    testing::Mock::VerifyAndClearExpectations(&context);
+}
+
+// Resolve's length check runs after the EINVAL shape checks; a name exactly
+// at NAME_MAX reaches the lookup, one byte over fails with ENAMETOOLONG
+// before any OpenAt.
+TEST_F(PathAliasTest, ResolveNameAtNameMaxReachesLookupOneOverFailsBeforeOpenAt)
+{
+    auto opened = SelectAcceptedPath(context, context.GetTempdirPath(), CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue());
+    Path path = std::move(opened).Value();
+    const std::string atLimit(255, 'a');
+    auto accepted = path.Resolve(atLimit, CrossMountPathPolicy());
+    ASSERT_FALSE(accepted.HasValue());
+    EXPECT_EQ(ENOENT, accepted.Error().code); // default missingFiles=Error surfaces the native lookup failure
+    EXPECT_EQ(context.GetTempdirPath(), path.ToString());
+
+    const std::string overLimit(256, 'a');
+    EXPECT_CALL(context, OpenNativeAt(_, _, _)).Times(0);
+    auto rejected = path.Resolve(overLimit, CrossMountPathPolicy());
+    ASSERT_FALSE(rejected.HasValue());
+    EXPECT_EQ(ENAMETOOLONG, rejected.Error().code);
+    EXPECT_THAT(rejected.Error().message, testing::HasSubstr("exceeds NAME_MAX"));
+    EXPECT_EQ(context.GetTempdirPath(), path.ToString());
+    testing::Mock::VerifyAndClearExpectations(&context);
+}
+
+// A followed link-target component over NAME_MAX fails with ENAMETOOLONG
+// after the readlink that revealed it and before any OpenAt of the
+// over-long component itself.
+TEST_F(PathAliasTest, LinkComponentAtNameMaxReachesLookupOneOverFailsAfterOneReadlink)
+{
+    const std::string base = context.GetTempdirPath();
+    const std::string atLimitTarget(255, 'a');
+    const std::string overLimitTarget(256, 'a');
+    ASSERT_EQ(0, ::symlink(atLimitTarget.c_str(), (base + "/at-limit").c_str()));
+    ASSERT_EQ(0, ::symlink(overLimitTarget.c_str(), (base + "/over-limit").c_str()));
+    auto opened = SelectAcceptedPath(context, base, CrossMountPathPolicy(), AmpleLimits());
+    ASSERT_TRUE(opened.HasValue());
+    auto follow = CrossMountPathPolicy(true);
+
+    auto accepted = opened.Value().Resolve("at-limit", follow);
+    ASSERT_FALSE(accepted.HasValue());
+    EXPECT_EQ(ENOENT, accepted.Error().code);
+    EXPECT_EQ(base, opened.Value().ToString());
+
+    EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).Times(1);
+    // Following "over-limit" first opens the symlink entry itself (that
+    // name is short); AllowNativeOpen() permits that and the subsequent
+    // procfs identity-check opens, while the narrower expectation below
+    // overrides it to forbid only an open of the over-long revealed target.
+    context.AllowNativeOpen();
+    EXPECT_CALL(context, OpenNativeAt(_, testing::StrEq(overLimitTarget), _)).Times(0);
+    auto rejected = opened.Value().Resolve("over-limit", follow);
+    ASSERT_FALSE(rejected.HasValue());
+    EXPECT_EQ(ENAMETOOLONG, rejected.Error().code);
+    EXPECT_THAT(rejected.Error().message, testing::HasSubstr("Link target component exceeds NAME_MAX"));
+    EXPECT_EQ(base, opened.Value().ToString());
+    testing::Mock::VerifyAndClearExpectations(&context);
+}
+
+// A link text guard: a link target longer than targetBytes fails with
+// E2BIG, independent of the much larger linkTargetBytes/readlink-count cap. The on-disk symlink content is
+// irrelevant; the single ReadLink call is faked to return one byte more
+// than the literal targetBytes bound (N+1), writing deterministic bytes
+// into the real buffer so the assign() below never reads uninitialized
+// memory. A real on-disk target this long is infeasible at the default
+// targetBytes (4096 == PATH_MAX, and symlink(2) targets are capped at
+// PATH_MAX - 1), so the bound is lowered here to a small literal instead.
+TEST_F(PathAliasTest, LinkTextLongerThanTargetBytesFailsWithE2BIG)
+{
+    const std::string base = context.GetTempdirPath();
+    ASSERT_EQ(0, ::symlink("x", (base + "/l").c_str()));
+    ResolverLimits limits = AmpleLimits();
+    limits.shared.targetBytes = base.size() + 5; // literal bound: large enough for the root, small enough to craft N+1
+    auto opened = SelectAcceptedPath(context, base, CrossMountPathPolicy(), limits);
+    ASSERT_TRUE(opened.HasValue());
+    auto follow = CrossMountPathPolicy(true);
+    const std::size_t fakeLength = limits.shared.targetBytes + 1; // N+1 oracle: one byte over the literal bound
+    EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).Times(1).WillOnce([fakeLength](int, char* buffer, std::size_t size) -> ssize_t {
+        EXPECT_LT(fakeLength, size); // must still fit the real buffer, not be mistaken for a truncated read
+        std::fill_n(buffer, fakeLength, 'a');
+        return static_cast<ssize_t>(fakeLength);
+    });
+    auto rejected = opened.Value().Resolve("l", follow);
+    ASSERT_FALSE(rejected.HasValue());
+    EXPECT_EQ(E2BIG, rejected.Error().code);
+    EXPECT_THAT(rejected.Error().message, testing::HasSubstr("exceeds target byte limit"));
+    EXPECT_EQ(base, opened.Value().ToString());
+    testing::Mock::VerifyAndClearExpectations(&context);
+}
+
+// Pending-component cap: resolving link "l" charges 1 (the link itself);
+// its target "x/./././." expands into 5 further components (x, ., ., ., .),
+// so 1 + 5 = 6 total charges are needed. A one-short components budget must
+// fail before opening "x" at all -- a late charge failure would open "x"
+// first.
+TEST_F(PathAliasTest, PendingCapExactComponentsSucceedsOneUnderFailsBeforeOpeningExpansion)
+{
+    const std::string base = context.GetTempdirPath();
+    ASSERT_EQ(0, ::mkdir((base + "/x").c_str(), 0700));
+    ASSERT_EQ(0, ::symlink("x/./././.", (base + "/l").c_str()));
+    auto follow = CrossMountPathPolicy(true);
+
+    auto ample = AmpleLimits();
+    ample.shared.components = 6;
+    auto exact = SelectAcceptedPath(context, base, CrossMountPathPolicy(), ample);
+    ASSERT_TRUE(exact.HasValue());
+    auto accepted = exact.Value().Resolve("l", follow);
+    ASSERT_TRUE(accepted.HasValue()) << accepted.Error().message;
+    ASSERT_TRUE(accepted.Value().Is<Path::Step>());
+
+    auto tight = AmpleLimits();
+    tight.shared.components = 5;
+    auto under = SelectAcceptedPath(context, base, CrossMountPathPolicy(), tight);
+    ASSERT_TRUE(under.HasValue());
+    // Following "l" first opens the link entry itself (name "l", not "x");
+    // AllowNativeOpen() permits that and the subsequent procfs
+    // identity-check opens, while the narrower expectation below overrides
+    // it to forbid only an open of "x", the first expansion component.
+    context.AllowNativeOpen();
+    EXPECT_CALL(context, OpenNativeAt(_, testing::StrEq("x"), _)).Times(0);
+    auto rejected = under.Value().Resolve("l", follow);
+    ASSERT_FALSE(rejected.HasValue());
+    EXPECT_EQ(E2BIG, rejected.Error().code);
+    EXPECT_THAT(rejected.Error().message, testing::HasSubstr("Symlink expansion exceeds resolver component budget"));
+    testing::Mock::VerifyAndClearExpectations(&context);
+}
+
+// A self-link whose target is "s" followed by 2000 "/." components (4001
+// bytes, well under the default 4096-byte linkTargetBytes/targetBytes and
+// the 4097-byte read buffer) must be rejected by the pending-component-count
+// cap after exactly 1 readlink, not by looping until the 64-frame ELOOP
+// ceiling.
+TEST_F(PathAliasTest, PendingCapRejectsLargeSelfLinkExpansionBeforeFrameCeiling)
+{
+    const std::string base = context.GetTempdirPath();
+    std::string target = "s";
+    for (int i = 0; i < 2000; ++i)
+        target += "/.";
+    ASSERT_EQ(4001u, target.size());
+    ASSERT_EQ(0, ::symlink(target.c_str(), (base + "/s").c_str()));
+    auto opened = SelectAcceptedPath(context, base, CrossMountPathPolicy(), ResolverLimits{}); // production defaults
+    ASSERT_TRUE(opened.HasValue());
+    auto follow = CrossMountPathPolicy(true);
+    EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).Times(1);
+    auto rejected = opened.Value().Resolve("s", follow);
+    ASSERT_FALSE(rejected.HasValue());
+    EXPECT_EQ(E2BIG, rejected.Error().code);
+    EXPECT_THAT(rejected.Error().message, testing::HasSubstr("Symlink expansion exceeds resolver component budget"));
+    testing::Mock::VerifyAndClearExpectations(&context);
+}
+
+// The logical lookup bound (bound = targetBytes). Each Resolve/Apply of
+// link "l" -> "." grows the logical lookup by 2 bytes ("/l") even though
+// the physical directory never changes (ToString() stays `base`); the
+// bound fires on the logical LookupName(), not the physical ToString().
+TEST_F(PathAliasTest, LookupBoundRejectsBeyondTargetBytesWithoutChangingPath)
+{
+    const std::string base = context.GetTempdirPath();
+    ASSERT_EQ(0, ::symlink(".", (base + "/l").c_str()));
+    ResolverLimits limits = AmpleLimits();
+    limits.shared.targetBytes = base.size() + 10; // literal bound B = base.size() + 10
+    auto opened = SelectAcceptedPath(context, base, CrossMountPathPolicy(), limits);
+    ASSERT_TRUE(opened.HasValue());
+    Path path = std::move(opened).Value();
+    auto follow = CrossMountPathPolicy(true);
+    // k-th Resolve/Apply succeeds while base.size() + 2k <= B (= base.size() + 10); k = 1..5.
+    for (int k = 1; k <= 5; ++k)
+    {
+        SCOPED_TRACE(k);
+        auto step = path.Resolve("l", follow);
+        ASSERT_TRUE(step.HasValue()) << step.Error().message;
+        ASSERT_TRUE(step.Value().Is<Path::Step>());
+        auto applied = path.Apply(std::move(As<Path::Step>(step.Value())));
+        ASSERT_TRUE(applied.HasValue()) << applied.Error().message;
+    }
+    EXPECT_EQ(base.size() + 10, path.LookupName().size());
+    const auto lookupBeforeFailure = path.LookupName();
+    EXPECT_CALL(context, OpenNativeAt(_, _, _)).Times(0);
+    auto rejected = path.Resolve("l", follow);
+    ASSERT_FALSE(rejected.HasValue());
+    EXPECT_EQ(ENAMETOOLONG, rejected.Error().code);
+    EXPECT_THAT(rejected.Error().message, testing::HasSubstr("Logical lookup exceeds target byte limit"));
+    EXPECT_EQ(base, path.ToString());
+    EXPECT_EQ(lookupBeforeFailure, path.LookupName());
+    testing::Mock::VerifyAndClearExpectations(&context);
 }
 
 TEST_F(PathAliasTest, SameDepthDetachedIdentityRejectsInverseWithStale)
@@ -2833,7 +3088,6 @@ TEST_F(PathAliasTest, PathPolicyAndResolverDefaultsAreIndependentAndBounded)
     EXPECT_EQ(128u, limits.shared.components);
     EXPECT_EQ(100000u, limits.shared.work);
     EXPECT_EQ(256u, limits.shared.liveDescriptors);
-    EXPECT_EQ(std::size_t{1024} * 1024, limits.shared.retainedBytes);
     EXPECT_EQ(4096u, limits.shared.fdinfoBytes);
     EXPECT_EQ(4096u, limits.linkTargetBytes);
     EXPECT_EQ(128u, limits.linkExpansions);
@@ -3135,7 +3389,6 @@ TEST_F(PathAliasTest, DeepGrowthKeepsOwningAncestorsAcrossFailedResolveAndInvers
     limits.shared.components = 4096;
     limits.shared.work = 20000000;
     limits.shared.liveDescriptors = 4096;
-    limits.shared.retainedBytes = 16u * 1024u * 1024u;
     limits.depth = 4096;
     auto selected = SelectAcceptedPath(context, base, CrossMountPathPolicy(), limits);
     ASSERT_TRUE(selected.HasValue()) << selected.Error().message;

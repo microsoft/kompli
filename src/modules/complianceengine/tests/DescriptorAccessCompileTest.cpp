@@ -117,7 +117,7 @@ DENY_HELPER_CALL(OpenAndVerifyAlias, Detail::Handle,
 DENY_HELPER_CALL(AcquirePinnedObject, Detail::Handle,
     (std::declval<const ContextInterface&>(), std::declval<Descriptor>(), std::size_t{}, std::declval<const char*>()))
 DENY_HELPER_CALL(ReadPinnedLink, Path, (std::declval<const Descriptor&>(), std::size_t{}))
-DENY_HELPER_CALL(ReadVerifiedLinkText, Path, (std::declval<const Descriptor&>(), std::declval<const struct stat&>(), std::size_t{}, std::size_t{}))
+DENY_HELPER_CALL(ReadVerifiedLinkText, Path, (std::declval<const Descriptor&>(), std::declval<const struct stat&>(), std::size_t{}))
 // Handle::Impl/Path::Impl/ProcfsDescriptorAccess::Impl do not exist as
 // wrapper types (no CanNameImpl target exists for any of these classes;
 // see below); each helper below is a direct private static member of its
