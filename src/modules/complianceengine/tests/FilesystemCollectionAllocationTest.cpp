@@ -5,6 +5,7 @@
 
 #include <cerrno>
 #include <cstddef>
+#include <cstdlib>
 #include <dirent.h>
 #include <filesystem/FilesystemCollection.hpp>
 #include <filesystem/Path.hpp>
@@ -20,9 +21,10 @@
 
 namespace
 {
-// The linker wraps operator new only in this dedicated test executable.
-// No allocator fault is active during discovery, fixture construction or
-// error creation; the real assignment must request the expected bytes.
+// The global operator new/delete below are replaced only in this dedicated
+// test executable. No allocator fault is active during discovery, fixture
+// construction or error creation; the real assignment must request the
+// expected bytes.
 thread_local bool faultNextCopy = false;
 thread_local std::size_t copyBytes = 0;
 thread_local std::size_t armedCopies = 0;
@@ -105,8 +107,39 @@ extern "C" void DisarmFilesystemCollectionInverseAllocation() noexcept
     faultInverseAllocation = false;
 }
 
-extern "C" void* __real__Znwm(std::size_t bytes);
-extern "C" void* __wrap__Znwm(std::size_t bytes)
+namespace
+{
+// `-Wl,--wrap=_Znwm` only rewrites undefined references resolved among this
+// executable's own linked objects. At -O2/-O3 (unsanitized GCC Release),
+// `_GLIBCXX_ASSERTIONS` is off (only auto-enabled when `__OPTIMIZE__` is
+// undefined), so libstdc++'s `_GLIBCXX_EXTERN_TEMPLATE` stays positive and
+// `std::string`'s copy path (the root-copy allocation under test) resolves
+// to the explicit instantiation already built into libstdc++.so; that
+// internal `operator new` call is never rewritten, so the injected fault
+// never fires. Replacing the global allocation functions is honored
+// everywhere, including inside libstdc++.so, because the main executable's
+// definitions take priority over a shared library's in the dynamic symbol
+// scope. Forwarding to `std::malloc`/`std::free` keeps this ASan-compatible
+// in the sanitized Debug trees: ASan intercepts `malloc`/`free` themselves
+// (ahead of libc, by load order), so heap tracking still applies even
+// though this replacement also takes priority over ASan's own `operator new`.
+void* AllocateBytes(std::size_t bytes)
+{
+    if (bytes == 0)
+        bytes = 1;
+    for (;;)
+    {
+        if (void* ptr = std::malloc(bytes))
+            return ptr;
+        std::new_handler handler = std::get_new_handler();
+        if (!handler)
+            throw std::bad_alloc();
+        handler();
+    }
+}
+} // namespace
+
+void* operator new(std::size_t bytes)
 {
     if (faultHandleAllocation)
     {
@@ -144,7 +177,29 @@ extern "C" void* __wrap__Znwm(std::size_t bytes)
             throw std::bad_alloc();
         }
     }
-    return __real__Znwm(bytes);
+    return AllocateBytes(bytes);
+}
+
+void operator delete(void* ptr) noexcept
+{
+    std::free(ptr);
+}
+
+void operator delete(void* ptr, std::size_t) noexcept
+{
+    std::free(ptr);
+}
+
+// Not subject to fault injection: no test here arms an array-new path, and
+// `__wrap__Znwm` never covered `_Znam` either.
+void* operator new[](std::size_t bytes)
+{
+    return AllocateBytes(bytes);
+}
+
+void operator delete[](void* ptr) noexcept
+{
+    std::free(ptr);
 }
 
 // The allocation-sensitive close path must not enter GMock: its dispatch can

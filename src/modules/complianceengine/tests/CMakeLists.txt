@@ -270,14 +270,14 @@ target_link_libraries(complianceenginetests
 )
 
 # A separate process links a test-instrumented copy of the real resolver.
-# The linker-wrapped allocator cannot affect the normal test executable.
+# The replaced global operator new/delete cannot affect the normal test
+# executable (each executable gets its own, program-wide definitions).
 add_executable(filesystem-collection-allocation-test
     FilesystemCollectionAllocationTest.cpp
     ../src/lib/filesystem/FilesystemCollection.cpp
     ../src/lib/filesystem/Path.cpp
 )
 target_compile_definitions(filesystem-collection-allocation-test PRIVATE KOMPLI_TEST_ROOT_COPY_ALLOCATION=1)
-target_link_options(filesystem-collection-allocation-test PRIVATE "LINKER:--wrap=_Znwm")
 target_link_libraries(filesystem-collection-allocation-test PRIVATE
     OpenSSL::Crypto
     GTest::gtest_main
@@ -291,7 +291,6 @@ gtest_discover_tests(filesystem-collection-allocation-test XML_OUTPUT_DIR ${GTES
 
 # Keep intentional allocation faults out of the shared test executable.
 add_executable(result-allocation-test ResultAllocationTest.cpp)
-target_link_options(result-allocation-test PRIVATE "LINKER:--wrap=_Znwm")
 target_link_libraries(result-allocation-test PRIVATE GTest::gtest_main)
 gtest_discover_tests(result-allocation-test XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR})
 
