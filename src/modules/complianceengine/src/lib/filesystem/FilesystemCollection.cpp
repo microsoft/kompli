@@ -154,9 +154,9 @@ Result<bool> Validate(const ResolvedFilesystemCollectionRequest& request)
         return Error("Filesystem collection root path exceeds the retained path byte limit", E2BIG);
     }
     const std::size_t components = std::count(request.rootPath.begin(), request.rootPath.end(), '/') + 1;
-    if ((components >= std::numeric_limits<std::size_t>::max() - PathOperationSlots - StartingCursorSlots) ||
+    if ((components >= std::numeric_limits<std::size_t>::max() - PathOperationSlots() - StartingCursorSlots()) ||
         (request.limits.operationalDescent > std::numeric_limits<std::size_t>::max() - components - 1) ||
-        (request.limits.openDirectories > std::numeric_limits<std::size_t>::max() - components - PathOperationSlots - StartingCursorSlots))
+        (request.limits.openDirectories > std::numeric_limits<std::size_t>::max() - components - PathOperationSlots() - StartingCursorSlots()))
     {
         return Error("Filesystem resolver budget is not representable", EOVERFLOW);
     }

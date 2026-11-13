@@ -24,8 +24,14 @@ namespace Detail
 // slot. Path.cpp and FilesystemCollection.cpp both charge the same
 // acquisition budget against request.limits.openDirectories using this
 // shared definition.
-constexpr std::size_t PathOperationSlots = 3;
-constexpr std::size_t StartingCursorSlots = 1;
+constexpr std::size_t PathOperationSlots() noexcept
+{
+    return 3;
+}
+constexpr std::size_t StartingCursorSlots() noexcept
+{
+    return 1;
+}
 } // namespace Detail
 } // namespace Filesystem
 } // namespace ComplianceEngine

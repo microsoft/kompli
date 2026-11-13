@@ -962,7 +962,9 @@ TEST(FileObjectCollectorTest, ReportsCleanupFailuresOnEveryAcquiredFailureExit)
         EXPECT_EQ(1, pinCloses);
         EXPECT_EQ(failure == FailurePoint::PinStat || failure == FailurePoint::Nonregular || failure == FailurePoint::DataOpen ? 0 : 1, dataCloses);
         if (failure == FailurePoint::DataOpen)
+        {
             EXPECT_EQ(1, aliasOpens);
+        }
         EXPECT_EQ(failure == FailurePoint::Identity   ? "Activated object does not match live pin" :
                   failure == FailurePoint::Nonregular ? "File target is not regular" :
                   failure == FailurePoint::PinStat    ? "Cannot inspect confined component" :

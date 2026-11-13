@@ -282,8 +282,10 @@ TEST(ResolvConfTest, Glibc239LexerPreservesIgnoredTextAndExactOperands)
                 EXPECT_TRUE(option.Is<rc::UnknownOption>());
         }
         if (entry.Value().directive.Is<rc::Sortlist>() && !fixture.operands.empty())
+        {
             EXPECT_EQ(fixture.operands.front().find_first_of("&/") != std::string::npos,
                 entry.Value().directive.Get<rc::Sortlist>().entries.front().Get<rc::Ipv4Sort>().mask.HasValue());
+        }
         EXPECT_TRUE(parser.Finish(rc::Acquisition::Eof).HasValue());
     }
 }
@@ -587,7 +589,9 @@ TEST(ResolvConfTest, EveryDefaultBudgetAtMinusOneExactAndPlusOne)
                 ASSERT_TRUE(next.HasValue()) << i;
         }
         if (delta != 1)
+        {
             EXPECT_TRUE(entries.Finish(rc::Acquisition::Eof).HasValue());
+        }
     }
     // Eight 4096-token entries, then the last token at N+1. No line is
     // longer than 8193 bytes, so this isolates the cumulative token budget.

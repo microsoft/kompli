@@ -393,9 +393,13 @@ TEST(FileRegexMatchErrorsTest, StreamExceptionMasksCompleteAtEofIncludingEmptyAn
                 ASSERT_TRUE(result.HasValue()) << "mode=" << wholeFile << " mask=" << mask << " text=" << text;
                 EXPECT_EQ(empty ? 1U : (std::string(text) == "key=1\nkey=2" ? 2U : 1U), sink.occurrences.size());
                 if (!empty && !sink.occurrences.empty())
+                {
                     EXPECT_EQ("1", sink.occurrences[0].capturedValue);
+                }
                 if (std::string(text) == "key=1\nkey=2" && sink.occurrences.size() == 2)
+                {
                     EXPECT_EQ("2", sink.occurrences[1].capturedValue);
+                }
             }
         }
     }
@@ -518,7 +522,9 @@ TEST(FileRegexMatchErrorsTest, NonIoStreambufExceptionsBecomeResultsAndAlwaysFin
                 ASSERT_FALSE(result.HasValue()) << "mode=" << wholeFile << " mask=" << mask;
                 EXPECT_EQ(failure == ThrowingContentBuffer::Failure::Allocation ? ENOMEM : EIO, result.Error().code);
                 if (failure != ThrowingContentBuffer::Failure::Allocation)
+                {
                     EXPECT_EQ("Failed to read file: stream:original-exception", result.Error().message);
+                }
                 EXPECT_EQ(1U, closes);
             }
         }
@@ -571,7 +577,9 @@ TEST(FileRegexMatchErrorsTest, FinalizerExceptionsAreResultsWithFirstContentErro
                     result.Error().message);
                 EXPECT_EQ(failure == 4 ? 0U : 1U, closes);
                 if (!contentError)
+                {
                     EXPECT_EQ(2U, sink.occurrences.size());
+                }
             }
         }
     }

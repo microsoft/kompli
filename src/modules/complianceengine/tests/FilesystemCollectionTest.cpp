@@ -2212,7 +2212,9 @@ TEST(FilesystemCollectionTest, PoppedInverseChargeMatchesIndependentStepDifferen
         if (!undo.HasValue())
             return {0, 0};
         if (0 == std::strcmp(link, "one"))
+        {
             EXPECT_LT(physical.Size(), before);
+        }
         return {undo.Value().RetainedDescriptors(), undo.Value().RetainedBytes()};
     };
     const auto deeper = inverse("one", 0, false);

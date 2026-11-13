@@ -59,7 +59,7 @@ Result<Descriptor> ProcfsDescriptorAccess::OpenVerifiedSelf(const ContextInterfa
     if (!IsProcfsDirectory(context, self) || !IsProcfsDirectory(context, pidDirectory) || (context.StatFile(self, &selfStat) != 0) ||
         (context.StatFile(pidDirectory, &pidStat) != 0) || !SameIdentity(selfStat, pidStat))
         return Error("Procfs self directory cannot be verified", EPROTO);
-    return std::move(self);
+    return self;
 }
 
 // self and the task directory retire when this function returns; only the
@@ -82,7 +82,7 @@ Result<Descriptor> ProcfsDescriptorAccess::OpenVerifiedTid(const ContextInterfac
     Descriptor tidDirectory = std::move(opened).Value();
     if (!IsProcfsDirectory(context, tidDirectory))
         return Error("Procfs current task cannot be verified", EPROTO);
-    return std::move(tidDirectory);
+    return tidDirectory;
 }
 
 Result<ProcfsDescriptorAccess::RetainedRoles> ProcfsDescriptorAccess::OpenVerifiedRoles(const ContextInterface& context,

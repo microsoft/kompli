@@ -162,9 +162,9 @@ Result<bool> EvaluateFileRegexContent(std::istream& input, const std::string& fi
                         flags = (begin == contents.cbegin()) ? std::regex_constants::match_default : std::regex_constants::match_prev_avail;
                         if (regex_search(begin, contents.cend(), match, matchRegex, flags | std::regex_constants::match_not_null | std::regex_constants::match_continuous))
                         {
-                            const auto consumed = evaluateMatch(match, static_cast<size_t>(begin - contents.cbegin()));
-                            if (!consumed.HasValue())
-                                return consumed.Error();
+                            const auto emptyMatchConsumed = evaluateMatch(match, static_cast<size_t>(begin - contents.cbegin()));
+                            if (!emptyMatchConsumed.HasValue())
+                                return emptyMatchConsumed.Error();
                             begin += match.length(0);
                         }
                         else

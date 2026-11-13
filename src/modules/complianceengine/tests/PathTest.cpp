@@ -428,7 +428,9 @@ TEST_F(PathAliasTest, TypedOpenAndDuplicateSetCloseOnExecAtomically)
         const int duplicated = context.RealDuplicateDescriptor(fd);
         EXPECT_NE(-1, duplicated);
         if (duplicated >= 0)
+        {
             EXPECT_NE(0, ::fcntl(duplicated, F_GETFD) & FD_CLOEXEC);
+        }
         return duplicated;
     });
     auto duplicate = DescriptorTestAccess::Duplicate(context, owner);

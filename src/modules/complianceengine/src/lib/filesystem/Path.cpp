@@ -206,7 +206,7 @@ Result<Descriptor> Handle::OpenAndVerifyAlias(const ContextInterface& context, c
     {
         return Error("Activated object does not match live pin", EAGAIN);
     }
-    return std::move(aliasOwner);
+    return aliasOwner;
 }
 
 Result<Descriptor> Handle::ActivateReadOnly(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, Type directory)
@@ -448,7 +448,7 @@ Result<Handle> Handle::PinProcessRoot(const ContextInterface& context, PrefixLim
     ::ComplianceEngine::Filesystem::Metadata facts(Type::Directory, object.snapshot, LookupMountId(object.mount), TargetMountId(object.mount),
         LookupSpelling("/"), EffectiveSpelling("/"));
     Handle root(std::move(object.pin), std::move(facts));
-    return std::move(root);
+    return root;
 }
 
 } // namespace Detail
@@ -1398,7 +1398,7 @@ Filesystem::ResolverLimits AcquisitionBudget(const ResolvedFilesystemCollectionR
     budget.shared.targetBytes = limits.fullPathBytes;
     budget.shared.components = limits.operationalDescent + components + 1;
     budget.shared.work = work;
-    budget.shared.liveDescriptors = limits.openDirectories + components + PathOperationSlots + StartingCursorSlots;
+    budget.shared.liveDescriptors = limits.openDirectories + components + PathOperationSlots() + StartingCursorSlots();
     budget.shared.retainedBytes = std::max(limits.retainedPathBytes, minimum);
     budget.shared.fdinfoBytes = limits.fdinfoBytes;
     budget.linkTargetBytes = limits.fullPathBytes;

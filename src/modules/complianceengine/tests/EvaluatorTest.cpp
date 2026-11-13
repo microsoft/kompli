@@ -1123,7 +1123,7 @@ TEST_F(UserDotFileRangeTest, MalformedPasswdHomesAreErrorsForAudit)
 {
     // The username deliberately differs from the process owner: malformed
     // homes must not be hidden by an owner-only account filter.
-    for (const std::string& home : {"", ".", "..", "relative/home"})
+    for (const std::string home : {"", ".", "..", "relative/home"})
     {
         SCOPED_TRACE(home);
         const auto result = Run(User("fixture", home));
