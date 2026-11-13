@@ -203,6 +203,10 @@ TEST_F(GeneratePlanTest, PinAppliesToEveryBenchmarkAndRoundTrips)
     const auto benchmarkVersion = secondJson.find("\"v1.0.0\"");
     ASSERT_NE(benchmarkVersion, std::string::npos);
     secondJson.replace(benchmarkVersion, std::string("\"v1.0.0\"").size(), "\"v2.0.0\"");
+    const std::string originalVersion = "\"version\": \"1.0.0\"";
+    const auto contentVersion = secondJson.find(originalVersion);
+    ASSERT_NE(contentVersion, std::string::npos);
+    secondJson.replace(contentVersion, originalVersion.size(), "\"version\": \"2.3.4\"");
     const std::string secondPath = MakeVerifiedFile("pin_second_dir", "second.benchmark.json", secondJson);
 
     for (const auto& pin : {PlanPin::Caret, PlanPin::Tilde, PlanPin::Exact})
@@ -214,15 +218,19 @@ TEST_F(GeneratePlanTest, PinAppliesToEveryBenchmarkAndRoundTrips)
         auto parsed = ParsePlanFile(planPath, nullptr);
         ASSERT_TRUE(parsed.HasValue()) << parsed.Error().message;
         ASSERT_EQ(parsed.Value().benchmarks.size(), 2u);
-        EXPECT_EQ(parsed.Value().benchmarks[0].file, firstPath);
-        EXPECT_EQ(parsed.Value().benchmarks[1].file, secondPath);
-        for (const auto& benchmark : parsed.Value().benchmarks)
-        {
-            EXPECT_EQ(benchmark.version.major, "1");
-            EXPECT_EQ(benchmark.version.minor, "0");
-            EXPECT_EQ(benchmark.version.patch, "0");
-            EXPECT_EQ(benchmark.versionConstraint, constraint);
-        }
+        const auto& first = parsed.Value().benchmarks[0];
+        const auto& second = parsed.Value().benchmarks[1];
+        EXPECT_EQ(first.file, firstPath);
+        EXPECT_EQ(second.file, secondPath);
+        EXPECT_EQ(first.version.major, "1");
+        EXPECT_EQ(first.version.minor, "0");
+        EXPECT_EQ(first.version.patch, "0");
+        EXPECT_EQ(first.versionConstraint, constraint);
+        const std::string prefix = constraint.substr(0, constraint.size() - std::string("1.0.0").size());
+        EXPECT_EQ(second.version.major, "2");
+        EXPECT_EQ(second.version.minor, "3");
+        EXPECT_EQ(second.version.patch, "4");
+        EXPECT_EQ(second.versionConstraint, prefix + "2.3.4");
     }
 }
 
