@@ -673,3 +673,66 @@ TEST_F(EnsureGsettings, GdmBooleanErrorsAreNotInvertedIntoCompliance)
         EXPECT_EQ(result.Error().code, EINVAL);
     }
 }
+
+TEST_F(EnsureGsettings, GdmDisableUserListRequiresTrueAndLocked)
+{
+    const std::string payload = R"json({"allOf":[
+        {"GsettingsValue":{"schema":"org.gnome.login-screen","key":"disable-user-list","keyType":"string","operation":"pattern match","value":"true"}},
+        {"GsettingsValue":{"schema":"org.gnome.login-screen","key":"disable-user-list","keyType":"string","operation":"is-unlocked","value":"false"}}
+    ]})json";
+    for (const auto& value : {"true", "false"})
+    {
+        for (const auto& writable : {"true", "false"})
+        {
+            EXPECT_CALL(mContext, ExecuteCommand("gsettings range \"org.gnome.login-screen\" \"disable-user-list\""))
+                .WillRepeatedly(::testing::Return(Result<std::string>("type b\n")));
+            EXPECT_CALL(mContext, ExecuteCommand("gsettings get \"org.gnome.login-screen\" \"disable-user-list\""))
+                .WillRepeatedly(::testing::Return(Result<std::string>(std::string(value) + "\n")));
+            EXPECT_CALL(mContext, ExecuteCommand("gsettings writable \"org.gnome.login-screen\" \"disable-user-list\""))
+                .WillRepeatedly(::testing::Return(Result<std::string>(std::string(writable) + "\n")));
+            auto result = EvaluatePayload(payload);
+            ASSERT_TRUE(result.HasValue());
+            EXPECT_EQ(result.Value().status, std::string(value) == "true" && std::string(writable) == "false" ? Status::Compliant : Status::NonCompliant);
+            ::testing::Mock::VerifyAndClearExpectations(&mContext);
+        }
+    }
+}
+
+TEST_F(EnsureGsettings, GdmDisableUserListRejectsInvalidWritableOutputAndPreservesCommandError)
+{
+    mParams.schema = "org.gnome.login-screen";
+    mParams.key = "disable-user-list";
+    mParams.keyType = GsettingsKeyType::String;
+    mParams.operation = GsettingsOperationType::IsUnlocked;
+    mParams.value = "false";
+    EXPECT_CALL(mContext, ExecuteCommand(GsettingsRangeCmd())).WillRepeatedly(::testing::Return(Result<std::string>("type b\n")));
+    for (const auto& output : {"\n", "'false'\n", "FALSE\n", "permission denied\n"})
+    {
+        EXPECT_CALL(mContext, ExecuteCommand(GsettingsWritableCmd())).WillOnce(::testing::Return(Result<std::string>(output)));
+        auto result = AuditGsettingsValue(mParams, mIndicators, mContext);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(result.Error().code, EINVAL);
+    }
+    EXPECT_CALL(mContext, ExecuteCommand(GsettingsWritableCmd())).WillOnce(::testing::Return(Result<std::string>(Error("denied", EACCES))));
+    auto result = AuditGsettingsValue(mParams, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EACCES);
+}
+
+TEST_F(EnsureGsettings, GdmDisableUserListBooleanEqualityRemediationRechecks)
+{
+    mParams.schema = "org.gnome.login-screen";
+    mParams.key = "disable-user-list";
+    mParams.keyType = GsettingsKeyType::String;
+    mParams.value = "true";
+    ::testing::InSequence sequence;
+    EXPECT_CALL(mContext, ExecuteCommand(GsettingsRangeCmd())).WillOnce(::testing::Return(Result<std::string>("type b\n")));
+    EXPECT_CALL(mContext, ExecuteCommand(GsettingsGetCmd())).WillOnce(::testing::Return(Result<std::string>("false\n")));
+    EXPECT_CALL(mContext, ExecuteCommand("gsettings set \"org.gnome.login-screen\" \"disable-user-list\" \"true\""))
+        .WillOnce(::testing::Return(Result<std::string>("")));
+    EXPECT_CALL(mContext, ExecuteCommand(GsettingsRangeCmd())).WillOnce(::testing::Return(Result<std::string>("type b\n")));
+    EXPECT_CALL(mContext, ExecuteCommand(GsettingsGetCmd())).WillOnce(::testing::Return(Result<std::string>("true\n")));
+    auto result = RemediateGsettingsValue(mParams, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
