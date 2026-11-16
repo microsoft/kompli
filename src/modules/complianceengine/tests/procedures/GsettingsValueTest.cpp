@@ -825,3 +825,53 @@ TEST_F(EnsureGsettings, GdmScreenLockRejectsMalformedNumericCollection)
         EXPECT_EQ(result.Error().code, EINVAL);
     }
 }
+
+TEST_F(EnsureGsettings, GdmAutomountRequiresBothDisabledValuesAndBothLocks)
+{
+    const std::string payload = R"json({"allOf":[
+        {"GsettingsValue":{"schema":"org.gnome.desktop.media-handling","key":"automount","keyType":"string","operation":"pattern match","value":"false"}},
+        {"GsettingsValue":{"schema":"org.gnome.desktop.media-handling","key":"automount-open","keyType":"string","operation":"pattern match","value":"false"}},
+        {"GsettingsValue":{"schema":"org.gnome.desktop.media-handling","key":"automount","keyType":"string","operation":"is-unlocked","value":"false"}},
+        {"GsettingsValue":{"schema":"org.gnome.desktop.media-handling","key":"automount-open","keyType":"string","operation":"is-unlocked","value":"false"}}
+    ]})json";
+    for (unsigned flags = 0; flags < 16; ++flags)
+    {
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings range \"org.gnome.desktop.media-handling\" \"automount\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>("type b\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings range \"org.gnome.desktop.media-handling\" \"automount-open\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>("type b\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings get \"org.gnome.desktop.media-handling\" \"automount\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>(flags & 1 ? "true\n" : "false\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings get \"org.gnome.desktop.media-handling\" \"automount-open\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>(flags & 2 ? "true\n" : "false\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings writable \"org.gnome.desktop.media-handling\" \"automount\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>(flags & 4 ? "true\n" : "false\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings writable \"org.gnome.desktop.media-handling\" \"automount-open\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>(flags & 8 ? "true\n" : "false\n")));
+        auto result = EvaluatePayload(payload);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value().status, flags == 0 ? Status::Compliant : Status::NonCompliant) << flags;
+        ::testing::Mock::VerifyAndClearExpectations(&mContext);
+    }
+}
+
+TEST_F(EnsureGsettings, GdmAutomountLiteralFalseIsNotStrippedOrTreatedAsRegex)
+{
+    mParams.schema = "org.gnome.desktop.media-handling";
+    mParams.key = "automount";
+    mParams.keyType = GsettingsKeyType::String;
+    mParams.value = "false";
+    EXPECT_CALL(mContext, ExecuteCommand(GsettingsRangeCmd())).WillRepeatedly(::testing::Return(Result<std::string>("type b\n")));
+    for (const auto& value : {"false\n", "true\n"})
+    {
+        EXPECT_CALL(mContext, ExecuteCommand(GsettingsGetCmd())).WillOnce(::testing::Return(Result<std::string>(value)));
+        auto result = AuditGsettingsValue(mParams, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), std::string(value) == "false\n" ? Status::Compliant : Status::NonCompliant);
+    }
+    mParams.value = "false|true";
+    EXPECT_CALL(mContext, ExecuteCommand(GsettingsGetCmd())).WillOnce(::testing::Return(Result<std::string>("false\n")));
+    auto result = AuditGsettingsValue(mParams, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+}
