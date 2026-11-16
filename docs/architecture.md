@@ -323,6 +323,8 @@ regular expression against the printed GVariant, including quotes or numeric
 type prefixes. Producers must translate unsupported regex shorthands such as
 `\h` before emitting this operation. Commands use the caller's GSettings/dconf
 environment; this procedure does not select a different user's profile.
+`is-unlocked` compares Boolean writable output even when the underlying key is
+numeric; it never expects a `uint32` prefix or parses writable output as an integer.
 
 ## 5.3. kompli CLI Mode
 

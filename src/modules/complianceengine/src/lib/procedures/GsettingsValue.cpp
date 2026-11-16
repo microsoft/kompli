@@ -127,7 +127,7 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
     }
 
     bool valuePrefixedByUint32 = false;
-    if (gsettingKeyType == "type u")
+    if (gsettingKeyType == "type u" && params.operation != GsettingsOperationType::IsUnlocked)
     {
         valuePrefixedByUint32 = true;
     }
@@ -185,7 +185,7 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
         gsettingsValue.erase(pos, prefix.length() + 1);
     }
     std::int64_t gsettingsNumberValue = 0;
-    if (gsettingKeyType == "type u" || gsettingKeyType == "type i")
+    if ((gsettingKeyType == "type u" || gsettingKeyType == "type i") && params.operation != GsettingsOperationType::IsUnlocked)
     {
         endptr = nullptr;
         gsettingsNumberValue = strtol(gsettingsValue.c_str(), &endptr, 10);

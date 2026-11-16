@@ -736,3 +736,92 @@ TEST_F(EnsureGsettings, GdmDisableUserListBooleanEqualityRemediationRechecks)
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(result.Value(), Status::Compliant);
 }
+
+TEST_F(EnsureGsettings, GdmScreenLockEnforcesInclusiveLimitsAndLocksOnUnsignedKeys)
+{
+    const std::string payload = R"json({"allOf":[
+        {"GsettingsValue":{"schema":"org.gnome.desktop.screensaver","key":"lock-delay","keyType":"string","operation":"pattern match","value":"uint32[ \\t]+[0-5]\\b"}},
+        {"GsettingsValue":{"schema":"org.gnome.desktop.session","key":"idle-delay","keyType":"string","operation":"pattern match","value":"uint32[ \\t]+(900|[\\[1-8][0-9]{2}|[1-9][0-9]|[1-9])\\b"}},
+        {"GsettingsValue":{"schema":"org.gnome.desktop.screensaver","key":"lock-delay","keyType":"string","operation":"is-unlocked","value":"false"}},
+        {"GsettingsValue":{"schema":"org.gnome.desktop.session","key":"idle-delay","keyType":"string","operation":"is-unlocked","value":"false"}}
+    ]})json";
+    struct Case
+    {
+        int lockDelay;
+        int idleDelay;
+        std::string lockWritable;
+        std::string idleWritable;
+        Status expected;
+    };
+    const Case cases[] = {
+        {0, 1, "false", "false", Status::Compliant},
+        {5, 900, "false", "false", Status::Compliant},
+        {5, 9, "false", "false", Status::Compliant},
+        {5, 10, "false", "false", Status::Compliant},
+        {5, 99, "false", "false", Status::Compliant},
+        {5, 100, "false", "false", Status::Compliant},
+        {5, 899, "false", "false", Status::Compliant},
+        {6, 900, "false", "false", Status::NonCompliant},
+        {5, 0, "false", "false", Status::NonCompliant},
+        {5, 901, "false", "false", Status::NonCompliant},
+        {5, 1000, "false", "false", Status::NonCompliant},
+        {5, 900, "true", "false", Status::NonCompliant},
+        {5, 900, "false", "true", Status::NonCompliant},
+    };
+    for (const auto& test : cases)
+    {
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings range \"org.gnome.desktop.screensaver\" \"lock-delay\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>("type u\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings range \"org.gnome.desktop.session\" \"idle-delay\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>("type u\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings get \"org.gnome.desktop.screensaver\" \"lock-delay\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>("uint32 " + std::to_string(test.lockDelay) + "\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings get \"org.gnome.desktop.session\" \"idle-delay\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>("uint32 " + std::to_string(test.idleDelay) + "\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings writable \"org.gnome.desktop.screensaver\" \"lock-delay\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>(test.lockWritable + "\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings writable \"org.gnome.desktop.session\" \"idle-delay\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>(test.idleWritable + "\n")));
+        auto result = EvaluatePayload(payload);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value().status, test.expected) << test.lockDelay << " " << test.idleDelay;
+        ::testing::Mock::VerifyAndClearExpectations(&mContext);
+    }
+}
+
+TEST_F(EnsureGsettings, WritableIsBooleanRegardlessOfUnderlyingNumericKeyType)
+{
+    mParams.schema = "org.gnome.desktop.session";
+    mParams.key = "idle-delay";
+    mParams.keyType = GsettingsKeyType::String;
+    mParams.operation = GsettingsOperationType::IsUnlocked;
+    mParams.value = "false";
+    for (const auto& type : {"type u\n", "type i\n"})
+    {
+        for (const auto& output : {"false\n", "true\n"})
+        {
+            EXPECT_CALL(mContext, ExecuteCommand(GsettingsRangeCmd())).WillOnce(::testing::Return(Result<std::string>(type)));
+            EXPECT_CALL(mContext, ExecuteCommand(GsettingsWritableCmd())).WillOnce(::testing::Return(Result<std::string>(output)));
+            auto result = AuditGsettingsValue(mParams, mIndicators, mContext);
+            ASSERT_TRUE(result.HasValue());
+            EXPECT_EQ(result.Value(), std::string(output) == "false\n" ? Status::Compliant : Status::NonCompliant);
+        }
+    }
+}
+
+TEST_F(EnsureGsettings, GdmScreenLockRejectsMalformedNumericCollection)
+{
+    mParams.schema = "org.gnome.desktop.screensaver";
+    mParams.key = "lock-delay";
+    mParams.keyType = GsettingsKeyType::String;
+    mParams.operation = GsettingsOperationType::PatternMatch;
+    mParams.value = "uint32[ \\t]+[0-5]\\b";
+    for (const auto& output : {"5\n", "uint32 invalid\n", "\n"})
+    {
+        EXPECT_CALL(mContext, ExecuteCommand(GsettingsRangeCmd())).WillOnce(::testing::Return(Result<std::string>("type u\n")));
+        EXPECT_CALL(mContext, ExecuteCommand(GsettingsGetCmd())).WillOnce(::testing::Return(Result<std::string>(output)));
+        auto result = AuditGsettingsValue(mParams, mIndicators, mContext);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(result.Error().code, EINVAL);
+    }
+}
