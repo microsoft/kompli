@@ -434,9 +434,9 @@ template <>
 struct Bindings<GsettingsValueParams>
 {
     using T = GsettingsValueParams;
-    static constexpr size_t size = 5;
+    static constexpr size_t size = 6;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::schema, &T::key, &T::keyType, &T::operation, &T::value);
+    static constexpr auto members = std::make_tuple(&T::schema, &T::key, &T::keyType, &T::operation, &T::value, &T::profile);
 };
 
 // Defines the bindings for the KernelModuleUnavailableParams structure.

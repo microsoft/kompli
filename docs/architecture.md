@@ -321,8 +321,12 @@ Boolean and writable output is an evaluation error. String `eq`/`ne` remain
 literal comparisons. The audit-only `pattern match` operation uses an ECMAScript
 regular expression against the printed GVariant, including quotes or numeric
 type prefixes. Producers must translate unsupported regex shorthands such as
-`\h` before emitting this operation. Commands use the caller's GSettings/dconf
-environment; this procedure does not select a different user's profile.
+`\h` before emitting this operation. The optional `profile` parameter selects a
+dconf profile name or absolute profile path using a shell-escaped, command-local
+`DCONF_PROFILE` assignment for range, get, writable, and set. Omitted or empty
+`profile` preserves the caller's environment and existing behavior; it does not
+switch Unix users. Select `gdm` for login-screen settings and `user` for desktop
+session settings when those are the system's configured profiles.
 `is-unlocked` compares Boolean writable output even when the underlying key is
 numeric; it never expects a `uint32` prefix or parses writable output as an integer.
 

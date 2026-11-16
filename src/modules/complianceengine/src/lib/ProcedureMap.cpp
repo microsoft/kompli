@@ -44,8 +44,8 @@ const char* Bindings<FileSymlinkTargetParams>::names[] = {"filename", "targetPat
 // FilesystemMountOption.h:28
 const char* Bindings<FilesystemMountOptionParams>::names[] = {"mountpoint", "mountpointIsPattern", "requireMountpoint", "optionsSet", "optionsNotSet"};
 
-// GsettingsValue.h:59
-const char* Bindings<GsettingsValueParams>::names[] = {"schema", "key", "keyType", "operation", "value"};
+// GsettingsValue.h:62
+const char* Bindings<GsettingsValueParams>::names[] = {"schema", "key", "keyType", "operation", "value", "profile"};
 
 // KernelModule.h:15
 const char* Bindings<KernelModuleUnavailableParams>::names[] = {"moduleName"};

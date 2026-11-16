@@ -938,3 +938,65 @@ TEST_F(EnsureGsettings, LiteralStringEqualityDoesNotInterpretPatterns)
         EXPECT_EQ(result.Value(), operation == GsettingsOperationType::Equal ? Status::NonCompliant : Status::Compliant);
     }
 }
+
+TEST_F(EnsureGsettings, CallerCanSelectDconfProfileThroughPayload)
+{
+    const std::string payload = R"json({"allOf":[
+        {"GsettingsValue":{"schema":"org.gnome.login-screen","key":"disable-user-list","keyType":"string","operation":"eq","value":"true","profile":"gdm"}},
+        {"GsettingsValue":{"schema":"org.gnome.login-screen","key":"disable-user-list","keyType":"string","operation":"is-unlocked","value":"false","profile":"gdm"}}
+    ]})json";
+    EXPECT_CALL(mContext, ExecuteCommand("DCONF_PROFILE=\"gdm\" gsettings range \"org.gnome.login-screen\" \"disable-user-list\""))
+        .Times(2)
+        .WillRepeatedly(::testing::Return(Result<std::string>("type b\n")));
+    EXPECT_CALL(mContext, ExecuteCommand("DCONF_PROFILE=\"gdm\" gsettings get \"org.gnome.login-screen\" \"disable-user-list\""))
+        .WillOnce(::testing::Return(Result<std::string>("true\n")));
+    EXPECT_CALL(mContext, ExecuteCommand("DCONF_PROFILE=\"gdm\" gsettings writable \"org.gnome.login-screen\" \"disable-user-list\""))
+        .WillOnce(::testing::Return(Result<std::string>("false\n")));
+    auto result = EvaluatePayload(payload);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value().status, Status::Compliant);
+}
+
+TEST_F(EnsureGsettings, SelectedProfileIsUsedForRemediationAndRecheck)
+{
+    mParams.schema = "org.gnome.login-screen";
+    mParams.key = "disable-user-list";
+    mParams.keyType = GsettingsKeyType::String;
+    mParams.value = "true";
+    mParams.profile = "gdm";
+    ::testing::InSequence sequence;
+    EXPECT_CALL(mContext, ExecuteCommand("DCONF_PROFILE=\"gdm\" " + GsettingsRangeCmd())).WillOnce(::testing::Return(Result<std::string>("type b\n")));
+    EXPECT_CALL(mContext, ExecuteCommand("DCONF_PROFILE=\"gdm\" " + GsettingsGetCmd())).WillOnce(::testing::Return(Result<std::string>("false\n")));
+    EXPECT_CALL(mContext, ExecuteCommand("DCONF_PROFILE=\"gdm\" gsettings set \"org.gnome.login-screen\" \"disable-user-list\" \"true\""))
+        .WillOnce(::testing::Return(Result<std::string>("")));
+    EXPECT_CALL(mContext, ExecuteCommand("DCONF_PROFILE=\"gdm\" " + GsettingsRangeCmd())).WillOnce(::testing::Return(Result<std::string>("type b\n")));
+    EXPECT_CALL(mContext, ExecuteCommand("DCONF_PROFILE=\"gdm\" " + GsettingsGetCmd())).WillOnce(::testing::Return(Result<std::string>("true\n")));
+    auto result = RemediateGsettingsValue(mParams, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureGsettings, ProfilePathIsShellEscapedAndWritableStaysBoolean)
+{
+    mParams.schema = "org.gnome.desktop.session";
+    mParams.key = "idle-delay";
+    mParams.keyType = GsettingsKeyType::String;
+    mParams.operation = GsettingsOperationType::IsUnlocked;
+    mParams.value = "false";
+    mParams.profile = "/tmp/custom \"profile\"";
+    const std::string prefix = "DCONF_PROFILE=\"/tmp/custom \\\"profile\\\"\" ";
+    EXPECT_CALL(mContext, ExecuteCommand(prefix + GsettingsRangeCmd())).WillOnce(::testing::Return(Result<std::string>("type u\n")));
+    EXPECT_CALL(mContext, ExecuteCommand(prefix + GsettingsWritableCmd())).WillOnce(::testing::Return(Result<std::string>("false\n")));
+    auto result = AuditGsettingsValue(mParams, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(EnsureGsettings, ProfileWithEmbeddedNulIsRejected)
+{
+    mParams.profile = std::string("gdm\0other", 9);
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::_)).Times(0);
+    auto result = AuditGsettingsValue(mParams, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+}

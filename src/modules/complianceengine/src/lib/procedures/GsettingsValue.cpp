@@ -34,14 +34,22 @@ Result<TypedComparisonOperation> MapComparison(GsettingsOperationType operation)
     }
     return Error("Unsupported operation " + std::to_string(static_cast<int>(operation)), EINVAL);
 }
+
+std::string GsettingsCommand(const GsettingsValueParams& params, const std::string& operation)
+{
+    const auto command = "gsettings " + operation + " \"" + EscapeForShell(params.schema) + "\" \"" + EscapeForShell(params.key) + "\"";
+    return !params.profile || params.profile->empty() ? command : "DCONF_PROFILE=\"" + EscapeForShell(params.profile.Value()) + "\" " + command;
+}
 } // namespace
 
 Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
     auto log = context.GetLogHandle();
 
-    const auto escapedSchema = EscapeForShell(params.schema);
-    const auto escapedKey = EscapeForShell(params.key);
+    if (params.profile && params.profile->find('\0') != std::string::npos)
+    {
+        return Error("Gsettings profile must not contain NUL", EINVAL);
+    }
 
     const bool patternMatch = params.operation == GsettingsOperationType::PatternMatch;
     Pattern pattern;
@@ -90,7 +98,7 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
         }
     }
 
-    Result<std::string> gsettingsType = context.ExecuteCommand("gsettings range \"" + escapedSchema + "\" \"" + escapedKey + "\"");
+    Result<std::string> gsettingsType = context.ExecuteCommand(GsettingsCommand(params, "range"));
     if (!gsettingsType.HasValue())
     {
         return Error("Failed to execute gsettings range command " + params.key + " error: " + gsettingsType.Error().message, gsettingsType.Error().code);
@@ -131,11 +139,7 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
     {
         valuePrefixedByUint32 = true;
     }
-    auto gsettingsCmd = std::string("gsettings get \"") + escapedSchema + "\" \"" + escapedKey + "\"";
-    if (params.operation == GsettingsOperationType::IsUnlocked)
-    {
-        gsettingsCmd = std::string("gsettings writable \"" + escapedSchema + "\" \"" + escapedKey + "\"");
-    }
+    const auto gsettingsCmd = GsettingsCommand(params, params.operation == GsettingsOperationType::IsUnlocked ? "writable" : "get");
 
     Result<std::string> gsettingsOutput = context.ExecuteCommand(gsettingsCmd);
     if (!gsettingsOutput.HasValue())
@@ -264,10 +268,8 @@ Result<Status> RemediateGsettingsValue(const GsettingsValueParams& params, Indic
         return audit;
     }
 
-    const auto schema = EscapeForShell(params.schema);
-    const auto key = EscapeForShell(params.key);
     const auto value = EscapeForShell(params.value);
-    auto write = context.ExecuteCommand("gsettings set \"" + schema + "\" \"" + key + "\" \"" + value + "\"");
+    auto write = context.ExecuteCommand(GsettingsCommand(params, "set") + " \"" + value + "\"");
     if (!write.HasValue())
     {
         return Error("Failed to execute gsettings set " + params.schema + " " + params.key + ": " + write.Error().message, write.Error().code);

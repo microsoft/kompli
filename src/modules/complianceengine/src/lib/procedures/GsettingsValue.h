@@ -56,6 +56,9 @@ struct GsettingsValueParams
 
     /// Value of operation to check according to the operation
     std::string value;
+
+    /// Optional dconf profile name or absolute path; empty preserves the caller's environment
+    Optional<std::string> profile;
 };
 
 Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, IndicatorsTree& indicators, ContextInterface& context);

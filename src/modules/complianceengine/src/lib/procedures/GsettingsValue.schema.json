@@ -42,6 +42,10 @@
                 "value": {
                   "type": "string",
                   "description": "Value of operation to check according to the operation"
+                },
+                "profile": {
+                  "type": "string",
+                  "description": "Optional dconf profile name or absolute path; empty preserves the caller's environment"
                 }
               }
             }
@@ -90,6 +94,10 @@
                 "value": {
                   "type": "string",
                   "description": "Value of operation to check according to the operation"
+                },
+                "profile": {
+                  "type": "string",
+                  "description": "Optional dconf profile name or absolute path; empty preserves the caller's environment"
                 }
               }
             }
