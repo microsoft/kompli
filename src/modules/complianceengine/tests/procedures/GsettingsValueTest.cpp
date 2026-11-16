@@ -875,3 +875,66 @@ TEST_F(EnsureGsettings, GdmAutomountLiteralFalseIsNotStrippedOrTreatedAsRegex)
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, EINVAL);
 }
+
+TEST_F(EnsureGsettings, GdmAutorunNeverRequiresEnabledAndLocked)
+{
+    const std::string payload = R"json({"allOf":[
+        {"GsettingsValue":{"schema":"org.gnome.desktop.media-handling","key":"autorun-never","keyType":"string","operation":"pattern match","value":"true"}},
+        {"GsettingsValue":{"schema":"org.gnome.desktop.media-handling","key":"autorun-never","keyType":"string","operation":"is-unlocked","value":"false"}}
+    ]})json";
+    for (const auto& value : {"true", "false"})
+    {
+        for (const auto& writable : {"true", "false"})
+        {
+            EXPECT_CALL(mContext, ExecuteCommand("gsettings range \"org.gnome.desktop.media-handling\" \"autorun-never\""))
+                .WillRepeatedly(::testing::Return(Result<std::string>("type b\n")));
+            EXPECT_CALL(mContext, ExecuteCommand("gsettings get \"org.gnome.desktop.media-handling\" \"autorun-never\""))
+                .WillRepeatedly(::testing::Return(Result<std::string>(std::string(value) + "\n")));
+            EXPECT_CALL(mContext, ExecuteCommand("gsettings writable \"org.gnome.desktop.media-handling\" \"autorun-never\""))
+                .WillRepeatedly(::testing::Return(Result<std::string>(std::string(writable) + "\n")));
+            auto result = EvaluatePayload(payload);
+            ASSERT_TRUE(result.HasValue());
+            EXPECT_EQ(result.Value().status, std::string(value) == "true" && std::string(writable) == "false" ? Status::Compliant : Status::NonCompliant);
+            ::testing::Mock::VerifyAndClearExpectations(&mContext);
+        }
+    }
+}
+
+TEST_F(EnsureGsettings, GdmAutorunNeverNegatedWritablePreservesErrorsAndValidMismatch)
+{
+    const std::string payload = R"json({"not":{"GsettingsValue":{
+        "schema":"org.gnome.desktop.media-handling","key":"autorun-never","keyType":"string","operation":"is-unlocked","value":"true"
+    }}})json";
+    EXPECT_CALL(mContext, ExecuteCommand("gsettings range \"org.gnome.desktop.media-handling\" \"autorun-never\""))
+        .WillRepeatedly(::testing::Return(Result<std::string>("type b\n")));
+    for (const auto& value : {"false\n", "true\n"})
+    {
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings writable \"org.gnome.desktop.media-handling\" \"autorun-never\""))
+            .WillOnce(::testing::Return(Result<std::string>(value)));
+        auto result = EvaluatePayload(payload);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value().status, std::string(value) == "false\n" ? Status::Compliant : Status::NonCompliant);
+    }
+    EXPECT_CALL(mContext, ExecuteCommand("gsettings writable \"org.gnome.desktop.media-handling\" \"autorun-never\""))
+        .WillOnce(::testing::Return(Result<std::string>(Error("unavailable", EIO))));
+    auto result = EvaluatePayload(payload);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EIO);
+}
+
+TEST_F(EnsureGsettings, LiteralStringEqualityDoesNotInterpretPatterns)
+{
+    mParams.schema = "org.gnome.login-screen";
+    mParams.key = "banner-message-text";
+    mParams.keyType = GsettingsKeyType::String;
+    mParams.value = "Authorized.*";
+    for (const auto operation : {GsettingsOperationType::Equal, GsettingsOperationType::PatternMatch})
+    {
+        mParams.operation = operation;
+        EXPECT_CALL(mContext, ExecuteCommand(GsettingsRangeCmd())).WillOnce(::testing::Return(Result<std::string>("type s\n")));
+        EXPECT_CALL(mContext, ExecuteCommand(GsettingsGetCmd())).WillOnce(::testing::Return(Result<std::string>("'Authorized users'\n")));
+        auto result = AuditGsettingsValue(mParams, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), operation == GsettingsOperationType::Equal ? Status::NonCompliant : Status::Compliant);
+    }
+}
