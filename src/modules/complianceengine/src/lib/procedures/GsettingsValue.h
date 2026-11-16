@@ -33,6 +33,9 @@ enum class GsettingsOperationType
 
     /// label: is-unlocked
     IsUnlocked,
+
+    /// label: pattern match
+    PatternMatch,
 };
 
 struct GsettingsValueParams
@@ -47,8 +50,8 @@ struct GsettingsValueParams
     /// pattern: ^(number|string)$
     GsettingsKeyType keyType = GsettingsKeyType::Number;
 
-    /// Type of operation to perform on variable one of eq, ne, lt, gt,is-unlocked
-    /// pattern: ^(eq|ne|lt|gt|is-unlocked)$
+    /// Type of comparison; pattern match searches the printed GVariant using ECMAScript regex
+    /// pattern: ^(eq|ne|lt|gt|is-unlocked|pattern match)$
     GsettingsOperationType operation = GsettingsOperationType::Equal;
 
     /// Value of operation to check according to the operation

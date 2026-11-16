@@ -36,8 +36,8 @@
                 },
                 "operation": {
                   "type": "string",
-                  "description": "Type of operation to perform on variable one of eq, ne, lt, gt,is-unlocked",
-                  "pattern": "(^\\$[a-zA-Z0-9_]+:((eq|ne|lt|gt|is-unlocked))$|(^(eq|ne|lt|gt|is-unlocked)$))"
+                  "description": "Type of comparison; pattern match searches the printed GVariant using ECMAScript regex",
+                  "pattern": "(^\\$[a-zA-Z0-9_]+:((eq|ne|lt|gt|is-unlocked|pattern match))$|(^(eq|ne|lt|gt|is-unlocked|pattern match)$))"
                 },
                 "value": {
                   "type": "string",
@@ -84,8 +84,8 @@
                 },
                 "operation": {
                   "type": "string",
-                  "description": "Type of operation to perform on variable one of eq, ne, lt, gt,is-unlocked",
-                  "pattern": "(^\\$[a-zA-Z0-9_]+:((eq|ne|lt|gt|is-unlocked))$|(^(eq|ne|lt|gt|is-unlocked)$))"
+                  "description": "Type of comparison; pattern match searches the printed GVariant using ECMAScript regex",
+                  "pattern": "(^\\$[a-zA-Z0-9_]+:((eq|ne|lt|gt|is-unlocked|pattern match))$|(^(eq|ne|lt|gt|is-unlocked|pattern match)$))"
                 },
                 "value": {
                   "type": "string",

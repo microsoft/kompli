@@ -167,6 +167,7 @@ inline const std::map<std::string, GsettingsOperationType>& MapEnum<GsettingsOpe
         {"lt", GsettingsOperationType::LessThan},
         {"gt", GsettingsOperationType::GreaterThan},
         {"is-unlocked", GsettingsOperationType::IsUnlocked},
+        {"pattern match", GsettingsOperationType::PatternMatch},
     };
     return map;
 }

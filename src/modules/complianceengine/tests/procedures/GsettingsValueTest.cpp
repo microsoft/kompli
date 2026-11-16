@@ -5,6 +5,7 @@
 #include "MockContext.h"
 
 #include <GsettingsValue.h>
+#include <JsonWrapper.h>
 #include <ProcedureMap.h>
 #include <cerrno>
 #include <dirent.h>
@@ -56,6 +57,19 @@ protected:
     void SetUp() override
     {
         mIndicators.Push("EnsureGsettings");
+    }
+
+    Result<ComplianceEngine::AuditResult> EvaluatePayload(const std::string& payload)
+    {
+        auto json = ComplianceEngine::JsonWrapper::FromString(payload);
+        if (!json.HasValue())
+        {
+            return json.Error();
+        }
+        std::map<std::string, std::string> parameters;
+        ComplianceEngine::DebugFormatter formatter;
+        ComplianceEngine::Evaluator evaluator("GDM", json_value_get_object(json->get()), parameters, mContext);
+        return evaluator.ExecuteAudit(formatter);
     }
 };
 
@@ -559,4 +573,103 @@ TEST_F(EnsureGsettings, CommandFailurePropagatesWithoutComparisonIndicator)
     EXPECT_EQ(result.Error().code, EIO);
     EXPECT_NE(result.Error().message.find("get unavailable"), std::string::npos);
     EXPECT_TRUE(mIndicators.Back().indicators.empty());
+}
+
+TEST_F(EnsureGsettings, GdmLoginBannerRequiresEnabledNonemptyLockedBanner)
+{
+    const std::string payload = R"json({"allOf":[
+        {"GsettingsValue":{"schema":"org.gnome.login-screen","key":"banner-message-enable","keyType":"string","operation":"pattern match","value":"true"}},
+        {"GsettingsValue":{"schema":"org.gnome.login-screen","key":"banner-message-text","keyType":"string","operation":"pattern match","value":"^[ \\t]*\\'?[^']+\\b"}},
+        {"GsettingsValue":{"schema":"org.gnome.login-screen","key":"banner-message-enable","keyType":"string","operation":"is-unlocked","value":"false"}},
+        {"GsettingsValue":{"schema":"org.gnome.login-screen","key":"banner-message-text","keyType":"string","operation":"is-unlocked","value":"false"}}
+    ]})json";
+    struct Case
+    {
+        std::string enabled;
+        std::string banner;
+        std::string enableWritable;
+        std::string textWritable;
+        Status expected;
+    };
+    const Case cases[] = {
+        {"true", "'Authorized users only'", "false", "false", Status::Compliant},
+        {"false", "'Authorized users only'", "false", "false", Status::NonCompliant},
+        {"true", "''", "false", "false", Status::NonCompliant},
+        {"true", "'   '", "false", "false", Status::NonCompliant},
+        {"true", "'Authorized users only'", "true", "false", Status::NonCompliant},
+        {"true", "'Authorized users only'", "false", "true", Status::NonCompliant},
+    };
+    for (const auto& test : cases)
+    {
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings range \"org.gnome.login-screen\" \"banner-message-enable\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>("type b\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings range \"org.gnome.login-screen\" \"banner-message-text\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>("type s\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings get \"org.gnome.login-screen\" \"banner-message-enable\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>(test.enabled + "\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings get \"org.gnome.login-screen\" \"banner-message-text\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>(test.banner + "\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings writable \"org.gnome.login-screen\" \"banner-message-enable\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>(test.enableWritable + "\n")));
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings writable \"org.gnome.login-screen\" \"banner-message-text\""))
+            .WillRepeatedly(::testing::Return(Result<std::string>(test.textWritable + "\n")));
+        auto result = EvaluatePayload(payload);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value().status, test.expected) << test.enabled << " " << test.banner;
+        ::testing::Mock::VerifyAndClearExpectations(&mContext);
+    }
+}
+
+TEST_F(EnsureGsettings, BooleanGetRetainsLiteralEqualityAndInequality)
+{
+    mParams.schema = "org.gnome.login-screen";
+    mParams.key = "banner-message-enable";
+    mParams.keyType = GsettingsKeyType::String;
+    mParams.value = "true";
+    for (const auto operation : {GsettingsOperationType::Equal, GsettingsOperationType::NotEqual})
+    {
+        mParams.operation = operation;
+        EXPECT_CALL(mContext, ExecuteCommand(GsettingsRangeCmd())).WillOnce(::testing::Return(Result<std::string>("type b\n")));
+        EXPECT_CALL(mContext, ExecuteCommand(GsettingsGetCmd())).WillOnce(::testing::Return(Result<std::string>("true\n")));
+        auto result = AuditGsettingsValue(mParams, mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), operation == GsettingsOperationType::Equal ? Status::Compliant : Status::NonCompliant);
+    }
+}
+
+TEST_F(EnsureGsettings, PatternMatchingRejectsInvalidPatternAndNumericKeyType)
+{
+    mParams.schema = "org.gnome.login-screen";
+    mParams.key = "banner-message-text";
+    mParams.keyType = GsettingsKeyType::String;
+    mParams.operation = GsettingsOperationType::PatternMatch;
+    mParams.value = "[";
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::_)).Times(0);
+    auto result = AuditGsettingsValue(mParams, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    mParams.value = ".*";
+    mParams.keyType = GsettingsKeyType::Number;
+    result = AuditGsettingsValue(mParams, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+    result = RemediateGsettingsValue(mParams, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, ENOTSUP);
+}
+
+TEST_F(EnsureGsettings, GdmBooleanErrorsAreNotInvertedIntoCompliance)
+{
+    const std::string payload = R"json({"not":{"GsettingsValue":{
+        "schema":"org.gnome.login-screen","key":"banner-message-enable","keyType":"string","operation":"eq","value":"false"
+    }}})json";
+    EXPECT_CALL(mContext, ExecuteCommand("gsettings range \"org.gnome.login-screen\" \"banner-message-enable\""))
+        .WillRepeatedly(::testing::Return(Result<std::string>("type b\n")));
+    for (const auto& output : {"\n", "TRUE\n", "'true'\n", "diagnostic\n"})
+    {
+        EXPECT_CALL(mContext, ExecuteCommand("gsettings get \"org.gnome.login-screen\" \"banner-message-enable\"")).WillOnce(::testing::Return(Result<std::string>(output)));
+        auto result = EvaluatePayload(payload);
+        ASSERT_FALSE(result.HasValue()) << output;
+        EXPECT_EQ(result.Error().code, EINVAL);
+    }
 }

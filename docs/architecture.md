@@ -315,6 +315,15 @@ is staged in a private temporary directory and removed automatically; stderr
 is kept out of the text being matched. The existing Perl/extended regex modes,
 inverted line matching, command allowlist, and `awk -S` sandbox are unchanged.
 
+`GsettingsValue` accepts Boolean GVariant keys (`type b`) through the existing
+`string` key type, comparing the unquoted `true` or `false` output. Malformed
+Boolean and writable output is an evaluation error. String `eq`/`ne` remain
+literal comparisons. The audit-only `pattern match` operation uses an ECMAScript
+regular expression against the printed GVariant, including quotes or numeric
+type prefixes. Producers must translate unsupported regex shorthands such as
+`\h` before emitting this operation. Commands use the caller's GSettings/dconf
+environment; this procedure does not select a different user's profile.
+
 ## 5.3. kompli CLI Mode
 
 The kompli CLI (`src/modules/complianceengine/src/kompli/`) is a standalone CLI

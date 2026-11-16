@@ -4,6 +4,7 @@
 #include <CommonUtils.h>
 #include <Evaluator.h>
 #include <GsettingsValue.h>
+#include <Pattern.h>
 #include <ProcedureMap.h>
 #include <StringTools.h>
 #include <TypedComparison.h>
@@ -28,6 +29,8 @@ Result<TypedComparisonOperation> MapComparison(GsettingsOperationType operation)
             return TypedComparisonOperation::Equal;
         case GsettingsOperationType::NotEqual:
             return TypedComparisonOperation::NotEqual;
+        case GsettingsOperationType::PatternMatch:
+            break;
     }
     return Error("Unsupported operation " + std::to_string(static_cast<int>(operation)), EINVAL);
 }
@@ -40,8 +43,23 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
     const auto escapedSchema = EscapeForShell(params.schema);
     const auto escapedKey = EscapeForShell(params.key);
 
+    const bool patternMatch = params.operation == GsettingsOperationType::PatternMatch;
+    Pattern pattern;
+    if (patternMatch)
+    {
+        if (params.keyType != GsettingsKeyType::String)
+        {
+            return Error("Pattern matching requires string keyType", EINVAL);
+        }
+        auto compiled = Pattern::Make(params.value);
+        if (!compiled.HasValue())
+        {
+            return compiled.Error();
+        }
+        pattern = std::move(compiled.Value());
+    }
     auto comparison = MapComparison(params.operation);
-    if (!comparison.HasValue())
+    if (!patternMatch && !comparison.HasValue())
     {
         return comparison.Error();
     }
@@ -88,7 +106,7 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
     {
         gsettingKeyType.erase(gsettingKeyType.size() - 1);
     }
-    auto supportedKeyTypes = {std::string("type u"), std::string("type i"), std::string("type s")};
+    auto supportedKeyTypes = {std::string("type u"), std::string("type i"), std::string("type s"), std::string("type b")};
     bool isKeyTypeSuported = false;
     for (auto kt : supportedKeyTypes)
     {
@@ -102,6 +120,10 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
     if (!isKeyTypeSuported)
     {
         return Error("Unsuported  gsettings key type for schema " + params.schema + " params.key  " + params.key + " keyType: " + gsettingKeyType, EINVAL);
+    }
+    if (gsettingKeyType == "type b" && params.keyType != GsettingsKeyType::String)
+    {
+        return Error("Boolean gsettings keys require string keyType", EINVAL);
     }
 
     bool valuePrefixedByUint32 = false;
@@ -132,6 +154,23 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
     {
         gsettingsValue.erase(gsettingsValue.size() - 1);
     }
+    if (gsettingsValue.empty())
+    {
+        return Error("gsettings returned an empty value for " + params.schema + " " + params.key, EINVAL);
+    }
+    const auto printedValue = gsettingsValue;
+    if (gsettingKeyType == "type b" || params.operation == GsettingsOperationType::IsUnlocked)
+    {
+        if (gsettingsValue != "true" && gsettingsValue != "false")
+        {
+            return Error("Invalid Boolean gsettings output for " + params.schema + " " + params.key + ": " + gsettingsValue, EINVAL);
+        }
+        if (!patternMatch && gsettingKeyType == "type b" && params.operation != GsettingsOperationType::IsUnlocked && params.value != "true" &&
+            params.value != "false")
+        {
+            return Error("Invalid Boolean gsettings comparison value: " + params.value, EINVAL);
+        }
+    }
 
     if (valuePrefixedByUint32)
     {
@@ -157,7 +196,16 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
         }
     }
     bool isCompliant = false;
-    if (params.keyType == GsettingsKeyType::Number)
+    if (patternMatch)
+    {
+        if (gsettingKeyType == "type s" && (gsettingsValue.size() < 2 || (gsettingsValue.front() != '\'' && gsettingsValue.front() != '"') ||
+                                               gsettingsValue.front() != gsettingsValue.back()))
+        {
+            return Error("Invalid string gsettings output for " + params.schema + " " + params.key, EINVAL);
+        }
+        isCompliant = std::regex_search(printedValue, pattern.GetRegex());
+    }
+    else if (params.keyType == GsettingsKeyType::Number)
     {
         // Preserve the previous numeric comparator's int operand width.
         auto result = CompareTyped(static_cast<int>(gsettingsNumberValue), static_cast<int>(numberValue), comparison.Value());
@@ -169,7 +217,7 @@ Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, Indicator
     }
     else
     {
-        if (params.keyType == GsettingsKeyType::String && params.operation != GsettingsOperationType::IsUnlocked)
+        if (gsettingKeyType == "type s" && params.operation != GsettingsOperationType::IsUnlocked)
         {
             auto quote = *gsettingsValue.begin();
             auto endQuote = *gsettingsValue.rbegin();
