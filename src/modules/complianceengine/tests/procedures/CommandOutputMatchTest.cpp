@@ -1,9 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#include "CommonContext.h"
+#include "JsonWrapper.h"
 #include "MockContext.h"
 
 #include <CommandOutputMatch.h>
+#include <cerrno>
 #include <gtest/gtest.h>
 #include <string>
 #include <vector>
@@ -15,17 +18,53 @@ using ComplianceEngine::IndicatorsTree;
 using ComplianceEngine::RegexType;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
+using ::testing::_;
+using ::testing::AllOf;
+using ::testing::EndsWith;
+using ::testing::HasSubstr;
+using ::testing::InSequence;
 using ::testing::Return;
+using ::testing::StartsWith;
 
 class ExecuteCommandGrepTest : public ::testing::Test
 {
 protected:
-    MockContext mContext;
+    ::testing::StrictMock<MockContext> mContext;
     IndicatorsTree indicators;
+    ComplianceEngine::ParameterMap mParameters;
 
     void SetUp() override
     {
         indicators.Push("ExecuteCommandGrep");
+    }
+
+    void ExpectCollection(const std::string& command)
+    {
+        EXPECT_CALL(mContext, ExecuteCommand(AllOf(StartsWith(command + " > \""), EndsWith("/output\"")))).WillOnce(Return(Result<std::string>(std::string())));
+    }
+
+    void ExpectMatch(const std::string& arguments, bool match = true, const std::string& filename = "output")
+    {
+        EXPECT_CALL(mContext, ExecuteCommand(AllOf(StartsWith("grep " + arguments + " \""), EndsWith("/" + filename + "\""))))
+            .WillOnce([match](const std::string&) -> Result<std::string> {
+                if (!match)
+                {
+                    return Error("", 1);
+                }
+                return std::string("matched output\n");
+            });
+    }
+
+    void UseRealShell(const std::string& outputCommand)
+    {
+        ON_CALL(mContext, ExecuteCommand(_)).WillByDefault([this, outputCommand](const std::string& command) {
+            ComplianceEngine::CommonContext context(nullptr, mContext.GetStatePath());
+            if (0 == command.find("getenforce > "))
+            {
+                return context.ExecuteCommand("(" + outputCommand + ")" + command.substr(std::string("getenforce").size()));
+            }
+            return context.ExecuteCommand(command);
+        });
     }
 };
 
@@ -35,86 +74,120 @@ TEST_F(ExecuteCommandGrepTest, AuditInvalidCommand)
     params.command = "invalid command";
     params.pattern = "test";
 
-    auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
     ASSERT_FALSE(result.HasValue());
-    ASSERT_EQ(result.Error().message, "Command invalid command is not allowed");
+    EXPECT_EQ(result.Error().message, "Command invalid command is not allowed");
 }
 
-TEST_F(ExecuteCommandGrepTest, AuditCommandFails)
+TEST_F(ExecuteCommandGrepTest, AuditCommandFailuresRemainErrors)
 {
-    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr("iptables -L -n"))).WillOnce(Return(Result<std::string>(Error("Command execution failed", -1))));
+    for (const int code : {1, 2, 126, 127})
+    {
+        SCOPED_TRACE(code);
+        EXPECT_CALL(mContext, ExecuteCommand(StartsWith("getenforce > \""))).WillOnce(Return(Result<std::string>(Error("collection failed", code))));
 
-    CommandOutputMatchParams params;
-    params.command = "iptables -L -n";
-    params.pattern = "test";
+        CommandOutputMatchParams params;
+        params.command = "getenforce";
+        params.pattern = "Enforcing";
 
-    auto result = AuditCommandOutputMatch(params, indicators, mContext);
-    ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), Status::NonCompliant);
+        const auto result = AuditCommandOutputMatch(params, indicators, mContext);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(result.Error().code, code);
+        EXPECT_EQ(result.Error().message, "Failed to execute command 'getenforce': collection failed");
+    }
 }
 
-TEST_F(ExecuteCommandGrepTest, AuditCommandMatches)
+TEST_F(ExecuteCommandGrepTest, AuditGetenforceMatches)
 {
-    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr("iptables -L -n"))).WillOnce(Return(Result<std::string>("test output")));
+    InSequence sequence;
+    ExpectCollection("getenforce");
+    ExpectMatch("-P -- \"Enforcing\"");
 
     CommandOutputMatchParams params;
-    params.command = "iptables -L -n";
-    params.pattern = "test";
+    params.command = "getenforce";
+    params.pattern = "Enforcing";
 
-    auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), Status::Compliant);
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(ExecuteCommandGrepTest, AuditGetenforceDoesNotMatch)
+{
+    InSequence sequence;
+    ExpectCollection("getenforce");
+    ExpectMatch("-P -- \"Enforcing\"", false);
+
+    CommandOutputMatchParams params;
+    params.command = "getenforce";
+    params.pattern = "Enforcing";
+
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
 }
 
 TEST_F(ExecuteCommandGrepTest, AuditDmsetupTableCommand)
 {
-    EXPECT_CALL(mContext, ExecuteCommand("dmsetup table | grep -P -- \"crypt\" || (echo -n 'No match found'; exit 1)"))
-        .WillOnce(Return(Result<std::string>("crypt output")));
+    InSequence sequence;
+    ExpectCollection("dmsetup table");
+    ExpectMatch("-P -- \"crypt\"");
 
     CommandOutputMatchParams params;
     params.command = "dmsetup table";
     params.pattern = "crypt";
 
-    auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), Status::Compliant);
+    EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
-TEST_F(ExecuteCommandGrepTest, AuditExtendedRegex)
+TEST_F(ExecuteCommandGrepTest, AuditRegexModesPreserveGrepArguments)
 {
-    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr("iptables -L -n"))).WillOnce(Return(Result<std::string>("test output")));
+    const std::vector<std::pair<RegexType, std::string>> modes = {
+        {RegexType::Perl, "P"}, {RegexType::Extended, "E"}, {RegexType::PerlInverted, "Pv"}, {RegexType::ExtendedInverted, "Ev"}};
+    for (const auto& mode : modes)
+    {
+        SCOPED_TRACE(mode.second);
+        InSequence sequence;
+        ExpectCollection("iptables -L -n");
+        ExpectMatch("-" + mode.second + " -- \"test\"");
 
-    CommandOutputMatchParams params;
-    params.command = "iptables -L -n";
-    params.pattern = "test";
-    params.type = RegexType::Extended;
+        CommandOutputMatchParams params;
+        params.command = "iptables -L -n";
+        params.pattern = "test";
+        params.type = mode.first;
 
-    auto result = AuditCommandOutputMatch(params, indicators, mContext);
-    ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), Status::Compliant);
+        const auto result = AuditCommandOutputMatch(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), Status::Compliant);
+    }
 }
 
 TEST_F(ExecuteCommandGrepTest, AuditWithAwkTransformation)
 {
-    EXPECT_CALL(mContext,
-        ExecuteCommand(::testing::HasSubstr("iptables -L -n | awk -S \"{print \\$1}\"  | grep -P -- \"test\" || (echo -n 'No match found'; exit 1)")))
-        .WillOnce(Return(Result<std::string>("test output")));
+    InSequence sequence;
+    ExpectCollection("iptables -L -n");
+    EXPECT_CALL(mContext, ExecuteCommand(AllOf(StartsWith("awk -S \"{print \\$1}\" \""), HasSubstr("/output\" > \""), EndsWith("/transformed\""))))
+        .WillOnce(Return(Result<std::string>(std::string())));
+    ExpectMatch("-P -- \"test\"", true, "transformed");
 
     CommandOutputMatchParams params;
     params.command = "iptables -L -n";
     params.awk = "{print $1}";
     params.pattern = "test";
 
-    auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), Status::Compliant);
+    EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
 TEST_F(ExecuteCommandGrepTest, AuditWithAwkAndExtendedRegex)
 {
-    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr(
-                              "iptables -L -n | awk -S \"{print \\$2}\"  | grep -E -- \"test.*pattern\" || (echo -n 'No match found'; exit 1)")))
-        .WillOnce(Return(Result<std::string>("test matched pattern")));
+    InSequence sequence;
+    ExpectCollection("iptables -L -n");
+    EXPECT_CALL(mContext, ExecuteCommand(AllOf(StartsWith("awk -S \"{print \\$2}\" \""), EndsWith("/transformed\"")))).WillOnce(Return(Result<std::string>(std::string())));
+    ExpectMatch("-E -- \"test.*pattern\"", true, "transformed");
 
     CommandOutputMatchParams params;
     params.command = "iptables -L -n";
@@ -122,74 +195,224 @@ TEST_F(ExecuteCommandGrepTest, AuditWithAwkAndExtendedRegex)
     params.pattern = "test.*pattern";
     params.type = RegexType::Extended;
 
-    auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), Status::Compliant);
+    EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
-TEST_F(ExecuteCommandGrepTest, AuditWithAwkSpecialCharactersEscaping)
+TEST_F(ExecuteCommandGrepTest, AuditWithAwkComplexTransformationEscaping)
 {
-    // Test that special characters in awk command are properly escaped
-    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr(
-                              "iptables -L -n | awk -S \"/^Chain/ {print \\$2}\"  | grep -P -- \"INPUT\" || (echo -n 'No match found'; exit 1)")))
-        .WillOnce(Return(Result<std::string>("INPUT")));
-
-    CommandOutputMatchParams params;
-    params.command = "iptables -L -n";
-    params.awk = "/^Chain/ {print $2}";
-    params.pattern = "INPUT";
-
-    auto result = AuditCommandOutputMatch(params, indicators, mContext);
-    ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), Status::Compliant);
-}
-
-TEST_F(ExecuteCommandGrepTest, AuditWithAwkComplexTransformation)
-{
-    EXPECT_CALL(mContext,
-        ExecuteCommand(::testing::HasSubstr("uname | awk -S \"BEGIN{FS=\\\"\\\\n\\\"} {gsub(/\\\\s+/, \\\"\\\", \\$1); print \\$1}\"  | "
-                                            "grep -P -- \"Linux\" || (echo -n 'No match found'; exit 1)")))
-        .WillOnce(Return(Result<std::string>("Linux")));
+    InSequence sequence;
+    ExpectCollection("uname");
+    EXPECT_CALL(mContext, ExecuteCommand(AllOf(StartsWith("awk -S \"BEGIN{FS=\\\"\\\\n\\\"} {gsub(/\\\\s+/, \\\"\\\", \\$1); print \\$1}\" \""),
+                              EndsWith("/transformed\""))))
+        .WillOnce(Return(Result<std::string>(std::string())));
+    ExpectMatch("-P -- \"Linux\"", true, "transformed");
 
     CommandOutputMatchParams params;
     params.command = "uname";
     params.awk = "BEGIN{FS=\"\\n\"} {gsub(/\\s+/, \"\", $1); print $1}";
     params.pattern = "Linux";
 
-    auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), Status::Compliant);
+    EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
 TEST_F(ExecuteCommandGrepTest, AuditWithEmptyAwkParameter)
 {
-    // Test that empty awk parameter is handled correctly (should not add awk to pipeline)
-    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr("iptables -L -n | grep -P -- \"test\" || (echo -n 'No match found'; exit 1)")))
-        .WillOnce(Return(Result<std::string>("test output")));
+    InSequence sequence;
+    ExpectCollection("iptables -L -n");
+    ExpectMatch("-P -- \"test\"");
 
     CommandOutputMatchParams params;
     params.command = "iptables -L -n";
     params.awk = "";
     params.pattern = "test";
 
-    auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), Status::Compliant);
+    EXPECT_EQ(result.Value(), Status::Compliant);
 }
 
-TEST_F(ExecuteCommandGrepTest, AuditWithAwkFailsAtGrep)
+TEST_F(ExecuteCommandGrepTest, AuditAwkFailureIsNotANoMatch)
 {
-    // Test that when awk transforms output and grep doesn't match, it returns NonCompliant
-    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr(
-                              "iptables -L -n | awk -S \"{print \\$3}\"  | grep -P -- \"nonexistent\" || (echo -n 'No match found'; exit 1)")))
-        .WillOnce(Return(Result<std::string>(Error("Command execution failed", 1))));
+    for (const int code : {1, 2, 127})
+    {
+        SCOPED_TRACE(code);
+        InSequence sequence;
+        ExpectCollection("grubby --info=ALL");
+        EXPECT_CALL(mContext, ExecuteCommand(StartsWith("awk -S "))).WillOnce(Return(Result<std::string>(Error("awk failed", code))));
+
+        CommandOutputMatchParams params;
+        params.command = "grubby --info=ALL";
+        params.awk = "/^args=/";
+        params.pattern = "audit=1";
+
+        const auto result = AuditCommandOutputMatch(params, indicators, mContext);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(result.Error().code, code);
+        EXPECT_EQ(result.Error().message, "Failed to transform output of command 'grubby --info=ALL': awk failed");
+    }
+}
+
+TEST_F(ExecuteCommandGrepTest, AuditWithAwkNoMatchIsNonCompliant)
+{
+    InSequence sequence;
+    ExpectCollection("grubby --info=ALL");
+    EXPECT_CALL(mContext, ExecuteCommand(StartsWith("awk -S "))).WillOnce(Return(Result<std::string>(std::string())));
+    ExpectMatch("-P -- \"audit=1\"", false, "transformed");
 
     CommandOutputMatchParams params;
-    params.command = "iptables -L -n";
-    params.awk = "{print $3}";
-    params.pattern = "nonexistent";
+    params.command = "grubby --info=ALL";
+    params.awk = "/^args=/";
+    params.pattern = "audit=1";
 
-    auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
     ASSERT_TRUE(result.HasValue());
-    ASSERT_EQ(result.Value(), Status::NonCompliant);
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(ExecuteCommandGrepTest, AuditGrepErrorsRemainErrors)
+{
+    for (const int code : {2, 126, 127})
+    {
+        SCOPED_TRACE(code);
+        InSequence sequence;
+        ExpectCollection("getenforce");
+        EXPECT_CALL(mContext, ExecuteCommand(StartsWith("grep -P "))).WillOnce(Return(Result<std::string>(Error("grep failed", code))));
+
+        CommandOutputMatchParams params;
+        params.command = "getenforce";
+        params.pattern = "[";
+
+        const auto result = AuditCommandOutputMatch(params, indicators, mContext);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(result.Error().code, code);
+        EXPECT_EQ(result.Error().message, "Failed to match output of command 'getenforce': grep failed");
+    }
+}
+
+TEST_F(ExecuteCommandGrepTest, NegatedCollectionFailureRemainsAnError)
+{
+    EXPECT_CALL(mContext, ExecuteCommand(StartsWith("getenforce > \""))).WillOnce(Return(Result<std::string>(Error("missing getenforce", 127))));
+    auto json = ComplianceEngine::JsonWrapper::FromString(R"({"not":{"CommandOutputMatch":{"command":"getenforce","pattern":"Disabled"}}})");
+    ASSERT_TRUE(json.HasValue());
+    ComplianceEngine::Evaluator evaluator("test", json_value_get_object(json->get()), mParameters, mContext);
+    ComplianceEngine::DebugFormatter formatter;
+
+    const auto result = evaluator.ExecuteAudit(formatter);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, 127);
+}
+
+TEST_F(ExecuteCommandGrepTest, NegatedValidNoMatchIsCompliant)
+{
+    InSequence sequence;
+    ExpectCollection("getenforce");
+    ExpectMatch("-P -- \"Disabled\"", false);
+    auto json = ComplianceEngine::JsonWrapper::FromString(R"({"not":{"CommandOutputMatch":{"command":"getenforce","pattern":"Disabled"}}})");
+    ASSERT_TRUE(json.HasValue());
+    ComplianceEngine::Evaluator evaluator("test", json_value_get_object(json->get()), mParameters, mContext);
+    ComplianceEngine::DebugFormatter formatter;
+
+    const auto result = evaluator.ExecuteAudit(formatter);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value().status, Status::Compliant);
+}
+
+TEST_F(ExecuteCommandGrepTest, RealShellPreservesMatchingAndLineInversion)
+{
+    UseRealShell("printf '%s\\n' Enforcing Permissive");
+    EXPECT_CALL(mContext, ExecuteCommand(_)).Times(::testing::AnyNumber());
+    for (const auto type : {RegexType::Perl, RegexType::Extended, RegexType::PerlInverted, RegexType::ExtendedInverted})
+    {
+        CommandOutputMatchParams params;
+        params.command = "getenforce";
+        params.pattern = "^Enforcing$";
+        params.type = type;
+        const auto result = AuditCommandOutputMatch(params, indicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), Status::Compliant);
+    }
+}
+
+TEST_F(ExecuteCommandGrepTest, RealShellNoMatchIsNonCompliant)
+{
+    UseRealShell("printf '%s\\n' Permissive");
+    EXPECT_CALL(mContext, ExecuteCommand(_)).Times(2);
+    CommandOutputMatchParams params;
+    params.command = "getenforce";
+    params.pattern = "^Enforcing$";
+
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(ExecuteCommandGrepTest, RealShellEmptyOutputIsNotAnInvertedMatch)
+{
+    UseRealShell("true");
+    EXPECT_CALL(mContext, ExecuteCommand(_)).Times(2);
+    CommandOutputMatchParams params;
+    params.command = "getenforce";
+    params.pattern = "Enforcing";
+    params.type = RegexType::PerlInverted;
+
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(ExecuteCommandGrepTest, RealShellFailureCannotBeHiddenByMatchingOutput)
+{
+    UseRealShell("printf '%s\\n' Enforcing; exit 1");
+    EXPECT_CALL(mContext, ExecuteCommand(_)).Times(1);
+    CommandOutputMatchParams params;
+    params.command = "getenforce";
+    params.pattern = "Enforcing";
+
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, 1);
+}
+
+TEST_F(ExecuteCommandGrepTest, RealShellStderrCannotSatisfyPattern)
+{
+    UseRealShell("printf '%s\\n' Enforcing >&2; printf '%s\\n' Permissive");
+    EXPECT_CALL(mContext, ExecuteCommand(_)).Times(2);
+    CommandOutputMatchParams params;
+    params.command = "getenforce";
+    params.pattern = "^Enforcing$";
+
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(ExecuteCommandGrepTest, RealShellInvalidRegexIsAnError)
+{
+    UseRealShell("printf '%s\\n' Enforcing");
+    EXPECT_CALL(mContext, ExecuteCommand(_)).Times(2);
+    CommandOutputMatchParams params;
+    params.command = "getenforce";
+    params.pattern = "[";
+
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, 2);
+}
+
+TEST_F(ExecuteCommandGrepTest, RealShellQuotesPatternWithoutExecutingIt)
+{
+    UseRealShell("printf '%s\\n' '$(false)'");
+    EXPECT_CALL(mContext, ExecuteCommand(_)).Times(2);
+    CommandOutputMatchParams params;
+    params.command = "getenforce";
+    params.pattern = R"(^\$\(false\)$)";
+    params.type = RegexType::Extended;
+
+    const auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
 }

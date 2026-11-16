@@ -4,6 +4,7 @@
 #include <CommandOutputMatch.h>
 #include <ProcedureMap.h> // Used for to_string(enum)
 #include <StringTools.h>
+#include <TemporaryDirectory.h>
 #include <set>
 #include <string>
 
@@ -22,28 +23,44 @@ Result<Status> AuditCommandOutputMatch(const CommandOutputMatchParams& params, I
         return Error("Command " + params.command + " is not allowed");
     }
 
-    std::string awkStr;
-    if (params.awk.HasValue())
+    auto temporary = TemporaryDirectory::Make("CommandOutputMatch");
+    if (!temporary.HasValue())
     {
-        awkStr = EscapeForShell(params.awk.Value());
+        return temporary.Error();
     }
 
-    std::string fullCommand = params.command;
-    if (!awkStr.empty())
-    {
-        fullCommand += " | awk -S \"" + awkStr + "\" ";
-    }
-    fullCommand +=
-        " | grep -" + std::to_string(params.type.Value()) + " -- \"" + EscapeForShell(params.pattern) + "\" || (echo -n 'No match found'; exit 1)";
-    Result<std::string> commandOutput = context.ExecuteCommand(fullCommand);
+    const std::string outputPath = temporary.Value().Path() + "/output";
+    // Keep producer and filter exit codes separate from grep's ordinary no-match exit code.
+    auto commandOutput = context.ExecuteCommand(params.command + " > \"" + EscapeForShell(outputPath) + "\"");
     if (!commandOutput.HasValue())
     {
-        return indicators.NonCompliant(commandOutput.Error().message);
+        return Error("Failed to execute command '" + params.command + "': " + commandOutput.Error().message, commandOutput.Error().code);
     }
-    else
+
+    std::string matchPath = outputPath;
+    if (params.awk.HasValue() && !params.awk.Value().empty())
     {
-        return indicators.Compliant("Output of command '" + params.command + "' matches regex '" + params.pattern + "'");
+        matchPath = temporary.Value().Path() + "/transformed";
+        const auto transformed = context.ExecuteCommand("awk -S \"" + EscapeForShell(params.awk.Value()) + "\" \"" + EscapeForShell(outputPath) +
+                                                        "\" > \"" + EscapeForShell(matchPath) + "\"");
+        if (!transformed.HasValue())
+        {
+            return Error("Failed to transform output of command '" + params.command + "': " + transformed.Error().message, transformed.Error().code);
+        }
     }
+
+    const auto matched = context.ExecuteCommand("grep -" + std::to_string(params.type.Value()) + " -- \"" + EscapeForShell(params.pattern) + "\" \"" +
+                                                EscapeForShell(matchPath) + "\"");
+    if (!matched.HasValue())
+    {
+        if (1 != matched.Error().code)
+        {
+            return Error("Failed to match output of command '" + params.command + "': " + matched.Error().message, matched.Error().code);
+        }
+        return indicators.NonCompliant("Output of command '" + params.command + "' does not match regex '" + params.pattern + "'");
+    }
+
+    return indicators.Compliant("Output of command '" + params.command + "' matches regex '" + params.pattern + "'");
 }
 
 } // namespace ComplianceEngine

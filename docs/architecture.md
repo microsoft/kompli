@@ -306,6 +306,15 @@ Desired objects (`MmiSet`). Same key-value format as init entries. Triggers exec
 
 Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns a string that begins with `PASS` on success or contains a descriptive log on failure.
 
+`CommandOutputMatch` checks the allowlisted command, optional sandboxed `awk`
+transformation, and `grep` match as separate execution stages. Command or
+transformation failures and `grep` errors are engine errors, not noncompliant
+results that `not` could invert into compliance. Only a successful collection
+followed by `grep` exit status 1 is a normal noncompliant match result. Output
+is staged in a private temporary directory and removed automatically; stderr
+is kept out of the text being matched. The existing Perl/extended regex modes,
+inverted line matching, command allowlist, and `awk -S` sandbox are unchanged.
+
 ## 5.3. kompli CLI Mode
 
 The kompli CLI (`src/modules/complianceengine/src/kompli/`) is a standalone CLI
