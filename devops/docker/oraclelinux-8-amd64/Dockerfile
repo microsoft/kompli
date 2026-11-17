@@ -1,5 +1,5 @@
 # TODO: Add mcr.io retagged images
-FROM oraclelinux:8@sha256:1f74281d8cc37c6e4adef0559f4c583022193dcfa8562d2e4a87161b6cd54df8
+FROM oraclelinux:8@sha256:9225108d00fb6611ebc4a5eced166f27d9dcfeaa539fb127be79425f0da5e745
 
 RUN yum install -y \
     autoconf \
