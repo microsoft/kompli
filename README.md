@@ -54,6 +54,16 @@ cmake -S src -B build \
 cmake --build build
 ```
 
+By default, CMake copies and bootstraps `external/vcpkg` in
+`build/vcpkg_root`. To use a shared copy instead, configure a fresh build directory:
+
+```bash
+cmake -S src -B build-shared \
+    -DVCPKG_ROOT_DIR="$PWD/shared-vcpkg" \
+    -DBUILD_TELEMETRY=OFF \
+    -DBUILD_TESTS=ON
+```
+
 To build the release artifact only:
 
 ```bash
