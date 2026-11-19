@@ -212,6 +212,11 @@ class MovableVariant
         typename VariantDetail::Storage<Alternatives>::Type)...)) char mStorage[TypeTraits::Max(sizeof(typename VariantDetail::Storage<Alternatives>::Type)...)];
     std::size_t mIndex;
 
+    // An index outside the alternative list means moved-from: no payload is
+    // live, and the destructor, the move operations and every checked
+    // accessor treat it specially.
+    static constexpr std::size_t MovedFrom = sizeof...(Alternatives);
+
 public:
     template <typename T, typename U,
         typename std::enable_if<(1 == TypeTraits::Count<T, Alternatives...>::value) &&
@@ -228,7 +233,10 @@ public:
 
     ~MovableVariant() noexcept
     {
-        VariantDetail::Dispatch<0, Alternatives...>::Destroy(mIndex, mStorage);
+        if (MovedFrom != mIndex)
+        {
+            VariantDetail::Dispatch<0, Alternatives...>::Destroy(mIndex, mStorage);
+        }
     }
 
     MovableVariant(const MovableVariant&) = delete;
@@ -237,7 +245,13 @@ public:
     MovableVariant(MovableVariant&& other) noexcept
         : mIndex(other.mIndex)
     {
+        if (MovedFrom == mIndex)
+        {
+            return;
+        }
         VariantDetail::Dispatch<0, Alternatives...>::MoveConstruct(mIndex, mStorage, other.mStorage);
+        VariantDetail::Dispatch<0, Alternatives...>::Destroy(other.mIndex, other.mStorage);
+        other.mIndex = MovedFrom;
     }
 
     MovableVariant& operator=(MovableVariant&& other) noexcept
@@ -246,15 +260,30 @@ public:
         {
             return *this;
         }
-        if (mIndex == other.mIndex)
+        if (MovedFrom == other.mIndex)
+        {
+            if (MovedFrom != mIndex)
+            {
+                VariantDetail::Dispatch<0, Alternatives...>::Destroy(mIndex, mStorage);
+            }
+            mIndex = MovedFrom;
+        }
+        else if (mIndex == other.mIndex)
         {
             VariantDetail::Dispatch<0, Alternatives...>::MoveAssign(mIndex, mStorage, other.mStorage);
+            VariantDetail::Dispatch<0, Alternatives...>::Destroy(other.mIndex, other.mStorage);
+            other.mIndex = MovedFrom;
         }
         else
         {
-            VariantDetail::Dispatch<0, Alternatives...>::Destroy(mIndex, mStorage);
+            if (MovedFrom != mIndex)
+            {
+                VariantDetail::Dispatch<0, Alternatives...>::Destroy(mIndex, mStorage);
+            }
             VariantDetail::Dispatch<0, Alternatives...>::MoveConstruct(other.mIndex, mStorage, other.mStorage);
             mIndex = other.mIndex;
+            VariantDetail::Dispatch<0, Alternatives...>::Destroy(other.mIndex, other.mStorage);
+            other.mIndex = MovedFrom;
         }
         return *this;
     }
@@ -293,6 +322,10 @@ public:
     {
         static_assert(TypeTraits::All<VariantDetail::VisitorReturns<R, Visitor, decltype(VariantDetail::Storage<Alternatives>::Get(std::declval<void*>()))>::value...>::value,
             "Variant visitor must handle every alternative with the declared return type");
+        if (MovedFrom == mIndex)
+        {
+            throw std::logic_error("Variant: use after move");
+        }
         return VariantDetail::VisitDispatch<R, Visitor, void*, 0, Alternatives...>::Apply(mIndex, mStorage, visitor);
     }
 
@@ -301,6 +334,10 @@ public:
     {
         static_assert(TypeTraits::All<VariantDetail::VisitorReturns<R, Visitor, decltype(VariantDetail::Storage<Alternatives>::Get(std::declval<const void*>()))>::value...>::value,
             "Variant visitor must handle every alternative with the declared return type");
+        if (MovedFrom == mIndex)
+        {
+            throw std::logic_error("Variant: use after move");
+        }
         return VariantDetail::VisitDispatch<R, Visitor, const void*, 0, Alternatives...>::Apply(mIndex, mStorage, visitor);
     }
 
@@ -324,12 +361,19 @@ private:
     void Check() const
     {
         AssertAlternativeType<T>();
+        if (MovedFrom == mIndex)
+        {
+            throw std::logic_error("Variant: use after move");
+        }
         if (TypeTraits::Find<T, Alternatives...>::Index != mIndex)
         {
             throw std::logic_error("Variant: inactive alternative");
         }
     }
 };
+
+template <typename... Alternatives>
+constexpr std::size_t MovableVariant<Alternatives...>::MovedFrom;
 
 template <typename... Alternatives>
 using Variant = MovableVariant<Alternatives...>;

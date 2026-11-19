@@ -329,6 +329,138 @@ TEST_F(ResultTest, MoveOnlyValueAndErrorTransitions)
     EXPECT_EQ(destination.Error().message, "new error");
 }
 
+TEST_F(ResultTest, MovedFromValueSourceThrowsOnAccessAndReturnsFallback)
+{
+    Result<int> source(42);
+    Result<int> destination(std::move(source));
+    ASSERT_FALSE(source.HasValue());
+    const Result<int>& constSource = source;
+
+    EXPECT_THROW(source.Value(), std::logic_error);
+    EXPECT_THROW(constSource.Value(), std::logic_error);
+    EXPECT_THROW(std::move(source).Value(), std::logic_error);
+    EXPECT_THROW(source.Error(), std::logic_error);
+    EXPECT_THROW(constSource.Error(), std::logic_error);
+    EXPECT_THROW(std::move(source).Error(), std::logic_error);
+    EXPECT_THROW(source.operator->(), std::logic_error);
+    EXPECT_THROW(constSource.operator->(), std::logic_error);
+
+    EXPECT_EQ(7, source.ValueOr(7));
+    EXPECT_EQ(7, std::move(source).ValueOr(7));
+}
+
+TEST_F(ResultTest, MovedFromErrorSourceThrowsOnAccessAndReturnsFallback)
+{
+    Result<int> source(Error("boom"));
+    Result<int> destination(std::move(source));
+    ASSERT_FALSE(source.HasValue());
+    const Result<int>& constSource = source;
+
+    EXPECT_THROW(source.Value(), std::logic_error);
+    EXPECT_THROW(constSource.Value(), std::logic_error);
+    EXPECT_THROW(std::move(source).Value(), std::logic_error);
+    EXPECT_THROW(source.Error(), std::logic_error);
+    EXPECT_THROW(constSource.Error(), std::logic_error);
+    EXPECT_THROW(std::move(source).Error(), std::logic_error);
+    EXPECT_THROW(source.operator->(), std::logic_error);
+    EXPECT_THROW(constSource.operator->(), std::logic_error);
+
+    EXPECT_EQ(7, source.ValueOr(7));
+    EXPECT_EQ(7, std::move(source).ValueOr(7));
+}
+
+TEST_F(ResultTest, CopyingOrMovingMovedFromSourceGivesMovedFromDestination)
+{
+    Result<int> source(42);
+    Result<int> firstMove(std::move(source));
+    ASSERT_FALSE(source.HasValue());
+
+    Result<int> copyOfMovedFrom(source);
+    EXPECT_FALSE(copyOfMovedFrom.HasValue());
+    EXPECT_THROW(copyOfMovedFrom.Value(), std::logic_error);
+    EXPECT_THROW(copyOfMovedFrom.Error(), std::logic_error);
+
+    Result<int> moveOfMovedFrom(std::move(source));
+    EXPECT_FALSE(moveOfMovedFrom.HasValue());
+    EXPECT_THROW(moveOfMovedFrom.Value(), std::logic_error);
+    EXPECT_THROW(moveOfMovedFrom.Error(), std::logic_error);
+}
+
+TEST_F(ResultTest, AssigningToMovedFromSourceReinitializesIt)
+{
+    Result<int> source(42);
+    Result<int> moved(std::move(source));
+    ASSERT_FALSE(source.HasValue());
+
+    source = 99;
+    ASSERT_TRUE(source.HasValue());
+    EXPECT_EQ(99, source.Value());
+
+    Result<int> another(42);
+    Result<int> movedAgain(std::move(another));
+    ASSERT_FALSE(another.HasValue());
+
+    another = Error("reinitialized");
+    ASSERT_FALSE(another.HasValue());
+    EXPECT_EQ("reinitialized", another.Error().message);
+}
+
+TEST_F(ResultTest, MovedFromValueSourceAssignmentPropagatesMovedFromState)
+{
+    Result<int> source(42);
+    Result<int> moved(std::move(source));
+    ASSERT_FALSE(source.HasValue());
+
+    Result<int> copyDestinationValue(7);
+    copyDestinationValue = source;
+    EXPECT_FALSE(copyDestinationValue.HasValue());
+    EXPECT_THROW(copyDestinationValue.Value(), std::logic_error);
+    EXPECT_THROW(copyDestinationValue.Error(), std::logic_error);
+
+    Result<int> copyDestinationError(Error("existing"));
+    copyDestinationError = source;
+    EXPECT_FALSE(copyDestinationError.HasValue());
+    EXPECT_THROW(copyDestinationError.Value(), std::logic_error);
+    EXPECT_THROW(copyDestinationError.Error(), std::logic_error);
+
+    Result<int> moveDestination(7);
+    moveDestination = std::move(source);
+    EXPECT_FALSE(moveDestination.HasValue());
+    EXPECT_THROW(moveDestination.Value(), std::logic_error);
+    EXPECT_THROW(moveDestination.Error(), std::logic_error);
+
+    EXPECT_FALSE(source.HasValue());
+    EXPECT_THROW(source.Error(), std::logic_error);
+}
+
+TEST_F(ResultTest, MovedFromErrorSourceAssignmentPropagatesMovedFromState)
+{
+    Result<int> source(Error("boom"));
+    Result<int> moved(std::move(source));
+    ASSERT_FALSE(source.HasValue());
+
+    Result<int> copyDestinationValue(7);
+    copyDestinationValue = source;
+    EXPECT_FALSE(copyDestinationValue.HasValue());
+    EXPECT_THROW(copyDestinationValue.Value(), std::logic_error);
+    EXPECT_THROW(copyDestinationValue.Error(), std::logic_error);
+
+    Result<int> copyDestinationError(Error("existing"));
+    copyDestinationError = source;
+    EXPECT_FALSE(copyDestinationError.HasValue());
+    EXPECT_THROW(copyDestinationError.Value(), std::logic_error);
+    EXPECT_THROW(copyDestinationError.Error(), std::logic_error);
+
+    Result<int> moveDestination(7);
+    moveDestination = std::move(source);
+    EXPECT_FALSE(moveDestination.HasValue());
+    EXPECT_THROW(moveDestination.Value(), std::logic_error);
+    EXPECT_THROW(moveDestination.Error(), std::logic_error);
+
+    EXPECT_FALSE(source.HasValue());
+    EXPECT_THROW(source.Error(), std::logic_error);
+}
+
 TEST_F(ResultTest, CodeOnlyErrorRetainsEmptyMessageAndIntIsValue)
 {
     Error error(2);
@@ -372,6 +504,8 @@ TEST_F(ResultTest, VoidCopyAndMoveConstruction)
     Result<void> success = Result<void>::Success();
     Result<void> successCopy(success);
     Result<void> successMove(std::move(success));
+    EXPECT_FALSE(success.HasValue());
+    EXPECT_THROW(success.Error(), std::logic_error);
     EXPECT_TRUE(successCopy.HasValue());
     EXPECT_TRUE(successMove.HasValue());
 
@@ -379,6 +513,7 @@ TEST_F(ResultTest, VoidCopyAndMoveConstruction)
     Result<void> failureCopy(failure);
     Result<void> failureMove(std::move(failure));
     EXPECT_FALSE(failure.HasValue());
+    EXPECT_THROW(failure.Error(), std::logic_error);
     EXPECT_FALSE(failureCopy.HasValue());
     EXPECT_EQ("source", failureCopy.Error().message);
     EXPECT_FALSE(failureMove.HasValue());
@@ -401,12 +536,14 @@ TEST_F(ResultTest, VoidCopyAndMoveAssignment)
     failure = Error("next", 29);
     success = std::move(failure);
     EXPECT_FALSE(failure.HasValue());
+    EXPECT_THROW(failure.Error(), std::logic_error);
     EXPECT_FALSE(success.HasValue());
     EXPECT_EQ(29, success.Error().code);
     EXPECT_EQ("next", success.Error().message);
     Result<void> replacement = Error("old");
     replacement = std::move(success);
     EXPECT_FALSE(success.HasValue());
+    EXPECT_THROW(success.Error(), std::logic_error);
     EXPECT_EQ(29, replacement.Error().code);
     EXPECT_EQ("next", replacement.Error().message);
     success = Result<void>::Success();
@@ -421,6 +558,104 @@ TEST_F(ResultTest, VoidCopyAndMoveAssignment)
     success = std::move(alias);
     EXPECT_FALSE(success.HasValue());
     EXPECT_EQ("self", success.Error().message);
+}
+
+TEST_F(ResultTest, VoidSelfMoveOnMovedFromSourceStaysMovedFrom)
+{
+    Result<void> success = Result<void>::Success();
+    Result<void> destination(std::move(success));
+    ASSERT_FALSE(success.HasValue());
+
+    Result<void>& alias = success;
+    success = std::move(alias);
+    EXPECT_FALSE(success.HasValue());
+    EXPECT_THROW(success.Error(), std::logic_error);
+}
+
+TEST_F(ResultTest, VoidMovedFromSourcePropagatesAndReinitializes)
+{
+    Result<void> success = Result<void>::Success();
+    Result<void> moved(std::move(success));
+    ASSERT_FALSE(success.HasValue());
+    EXPECT_THROW(success.Error(), std::logic_error);
+
+    Result<void> copyOfMovedFrom(success);
+    EXPECT_FALSE(copyOfMovedFrom.HasValue());
+    EXPECT_THROW(copyOfMovedFrom.Error(), std::logic_error);
+
+    Result<void> moveOfMovedFrom(std::move(success));
+    EXPECT_FALSE(moveOfMovedFrom.HasValue());
+    EXPECT_THROW(moveOfMovedFrom.Error(), std::logic_error);
+
+    success = Error("reinitialized", 5);
+    EXPECT_FALSE(success.HasValue());
+    EXPECT_EQ(5, success.Error().code);
+
+    Result<void> anotherFailure = Error("gone", 9);
+    Result<void> anotherMoved(std::move(anotherFailure));
+    ASSERT_FALSE(anotherFailure.HasValue());
+    anotherFailure = Result<void>::Success();
+    EXPECT_TRUE(anotherFailure.HasValue());
+}
+
+TEST_F(ResultTest, VoidMovedFromSuccessSourceAssignmentPropagatesMovedFromState)
+{
+    Result<void> source = Result<void>::Success();
+    Result<void> moved(std::move(source));
+    ASSERT_FALSE(source.HasValue());
+
+    Result<void> copyDestinationSuccess = Result<void>::Success();
+    copyDestinationSuccess = source;
+    EXPECT_FALSE(copyDestinationSuccess.HasValue());
+    EXPECT_THROW(copyDestinationSuccess.Error(), std::logic_error);
+
+    Result<void> copyDestinationFailure = Error("existing", 11);
+    copyDestinationFailure = source;
+    EXPECT_FALSE(copyDestinationFailure.HasValue());
+    EXPECT_THROW(copyDestinationFailure.Error(), std::logic_error);
+
+    Result<void> moveDestinationSuccess = Result<void>::Success();
+    moveDestinationSuccess = std::move(source);
+    EXPECT_FALSE(moveDestinationSuccess.HasValue());
+    EXPECT_THROW(moveDestinationSuccess.Error(), std::logic_error);
+
+    Result<void> moveDestinationFailure = Error("existing", 12);
+    moveDestinationFailure = std::move(source);
+    EXPECT_FALSE(moveDestinationFailure.HasValue());
+    EXPECT_THROW(moveDestinationFailure.Error(), std::logic_error);
+
+    EXPECT_FALSE(source.HasValue());
+    EXPECT_THROW(source.Error(), std::logic_error);
+}
+
+TEST_F(ResultTest, VoidMovedFromFailureSourceAssignmentPropagatesMovedFromState)
+{
+    Result<void> source = Error("boom", 7);
+    Result<void> moved(std::move(source));
+    ASSERT_FALSE(source.HasValue());
+
+    Result<void> copyDestinationSuccess = Result<void>::Success();
+    copyDestinationSuccess = source;
+    EXPECT_FALSE(copyDestinationSuccess.HasValue());
+    EXPECT_THROW(copyDestinationSuccess.Error(), std::logic_error);
+
+    Result<void> copyDestinationFailure = Error("existing", 11);
+    copyDestinationFailure = source;
+    EXPECT_FALSE(copyDestinationFailure.HasValue());
+    EXPECT_THROW(copyDestinationFailure.Error(), std::logic_error);
+
+    Result<void> moveDestinationSuccess = Result<void>::Success();
+    moveDestinationSuccess = std::move(source);
+    EXPECT_FALSE(moveDestinationSuccess.HasValue());
+    EXPECT_THROW(moveDestinationSuccess.Error(), std::logic_error);
+
+    Result<void> moveDestinationFailure = Error("existing", 12);
+    moveDestinationFailure = std::move(source);
+    EXPECT_FALSE(moveDestinationFailure.HasValue());
+    EXPECT_THROW(moveDestinationFailure.Error(), std::logic_error);
+
+    EXPECT_FALSE(source.HasValue());
+    EXPECT_THROW(source.Error(), std::logic_error);
 }
 
 TEST_F(ResultTest, VoidCopyAssignmentReplacesStatesAndPreservesSelfAssignment)

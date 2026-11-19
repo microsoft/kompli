@@ -343,17 +343,19 @@ TEST(VariantTest, GlobalPlacementConstructionBypassesClassOverload)
         EXPECT_EQ(0, AdversarialPlacement::PlacementCalls());
         EXPECT_EQ(3, state.constructed);
         EXPECT_EQ(2, state.moves);
-        EXPECT_EQ(1, state.destroyed);
-        EXPECT_EQ(2, state.alive);
+        EXPECT_EQ(2, state.destroyed);
+        EXPECT_EQ(1, state.alive);
+        EXPECT_FALSE(source.Is<AdversarialPlacement>());
 
         Adversarial replacement(InPlaceType<int>{}, 9);
         replacement = std::move(moved);
         EXPECT_EQ(0, AdversarialPlacement::PlacementCalls());
         EXPECT_EQ(4, state.constructed);
         EXPECT_EQ(3, state.moves);
-        EXPECT_EQ(1, state.destroyed);
-        EXPECT_EQ(3, state.alive);
+        EXPECT_EQ(3, state.destroyed);
+        EXPECT_EQ(1, state.alive);
         EXPECT_TRUE(replacement.Is<AdversarialPlacement>());
+        EXPECT_FALSE(moved.Is<AdversarialPlacement>());
     }
     EXPECT_EQ(0, AdversarialPlacement::PlacementCalls());
     EXPECT_EQ(0, state.alive);
@@ -464,11 +466,11 @@ TEST(VariantTest, OwnedAndBorrowedTransitionsDestroyOnlyOwnedStorage)
         Mixed newOwned(InPlaceType<Tracked>{}, seed);
         ref = std::move(newOwned);
         EXPECT_EQ(1, state.moves);
-        EXPECT_EQ(4, state.alive);
-        EXPECT_EQ(1, state.destroyed);
-        ref = std::move(owned);
-        EXPECT_EQ(2, state.destroyed);
         EXPECT_EQ(3, state.alive);
+        EXPECT_EQ(2, state.destroyed);
+        ref = std::move(owned);
+        EXPECT_EQ(3, state.destroyed);
+        EXPECT_EQ(2, state.alive);
         EXPECT_TRUE(ref.Is<Tracked&>());
         EXPECT_FALSE(ref.Is<Tracked>());
         owned = Mixed(InPlaceType<const Tracked&>{}, referent);
@@ -618,19 +620,25 @@ TEST(VariantTest, TaggedLvalueCopyFailureDoesNotCreateVariant)
     EXPECT_EQ(state.constructed, state.destroyed);
 }
 
-TEST(VariantTest, MoveConstructionRetainsSourceLifetime)
+TEST(VariantTest, MoveConstructionConsumesSource)
 {
     Counters state;
     {
         Tracked seed(state, 23);
         Observable source(InPlaceType<Tracked>{}, seed);
+        const int beforeMove = state.destroyed;
         Observable moved(std::move(source));
         EXPECT_EQ(23, moved.Get<Tracked>().value);
         EXPECT_EQ(1, state.moves);
-        EXPECT_EQ(3, state.alive);
+        // Just after the move there are two live Tracked objects (seed and
+        // moved's payload), not three: the move destroyed source's payload.
+        EXPECT_EQ(2, state.alive);
+        EXPECT_EQ(beforeMove + 1, state.destroyed);
+        EXPECT_FALSE(source.Is<Tracked>());
+        EXPECT_THROW(source.Get<Tracked>(), std::logic_error);
         const int beforeReassignment = state.destroyed;
         source = Observable(InPlaceType<int>{}, 0);
-        EXPECT_EQ(beforeReassignment + 1, state.destroyed);
+        EXPECT_EQ(beforeReassignment, state.destroyed);
         EXPECT_EQ(0, source.Get<int>());
     }
     EXPECT_EQ(0, state.alive);
@@ -647,7 +655,10 @@ TEST(VariantTest, SameAlternativeMoveAssignsAndSelfMoveDoesNothing)
         destination = std::move(source);
         EXPECT_EQ(9, destination.Get<Tracked>().value);
         EXPECT_EQ(1, state.moveAssignments);
-        EXPECT_EQ(0, state.destroyed);
+        // The source's own payload is destroyed once it is replaced.
+        EXPECT_EQ(1, state.destroyed);
+        EXPECT_FALSE(source.Is<Tracked>());
+        EXPECT_THROW(source.Get<Tracked>(), std::logic_error);
         Observable& alias = destination;
         destination = std::move(alias);
         EXPECT_EQ(9, destination.Get<Tracked>().value);
@@ -670,14 +681,144 @@ TEST(VariantTest, CrossAlternativeMoveReplacesExactlyOnce)
         EXPECT_EQ(6, destination.Get<Tracked>().value);
         EXPECT_EQ(1, state.moves);
         EXPECT_EQ(0, state.moveAssignments);
+        EXPECT_FALSE(source.Is<Tracked>());
         destination = Observable(InPlaceType<int>{}, 7);
         EXPECT_EQ(7, destination.Get<int>());
-        EXPECT_EQ(1, state.destroyed);
+        EXPECT_EQ(2, state.destroyed);
         source = Observable(InPlaceType<int>{}, 8);
         EXPECT_EQ(8, source.Get<int>());
     }
     EXPECT_EQ(0, state.alive);
     EXPECT_EQ(state.constructed, state.destroyed);
+}
+
+TEST(VariantTest, MovedFromVariantDiagnosesAccessWithoutInvokingVisitor)
+{
+    struct NeverCalledVisit
+    {
+        int operator()(int&) const
+        {
+            ADD_FAILURE() << "visitor invoked on a moved-from Variant";
+            return 0;
+        }
+        int operator()(char&) const
+        {
+            ADD_FAILURE() << "visitor invoked on a moved-from Variant";
+            return 0;
+        }
+    };
+    struct NeverCalledConstVisit
+    {
+        int operator()(const int&) const
+        {
+            ADD_FAILURE() << "visitor invoked on a moved-from Variant";
+            return 0;
+        }
+        int operator()(const char&) const
+        {
+            ADD_FAILURE() << "visitor invoked on a moved-from Variant";
+            return 0;
+        }
+    };
+
+    Scalar source(InPlaceType<int>{}, 7);
+    Scalar moved(std::move(source));
+    const Scalar& constSource = source;
+    EXPECT_FALSE(source.Is<int>());
+    EXPECT_FALSE(source.Is<char>());
+
+    EXPECT_THROW(source.Get<int>(), std::logic_error);
+    EXPECT_THROW(constSource.Get<int>(), std::logic_error);
+    EXPECT_THROW(std::move(source).Get<int>(), std::logic_error);
+    EXPECT_THROW(std::move(constSource).Get<int>(), std::logic_error);
+
+    EXPECT_THROW(As<int>(source), std::logic_error);
+    EXPECT_THROW(As<int>(constSource), std::logic_error);
+    EXPECT_THROW(As<int>(std::move(source)), std::logic_error);
+    EXPECT_THROW(As<int>(std::move(constSource)), std::logic_error);
+
+    EXPECT_THROW(source.Visit<int>(NeverCalledVisit{}), std::logic_error);
+    EXPECT_THROW(constSource.Visit<int>(NeverCalledConstVisit{}), std::logic_error);
+}
+
+TEST(VariantTest, MovedFromSourceAssignedIntoLiveDestinationSameAlternativeDestroysOnce)
+{
+    Counters state;
+    {
+        Tracked seed(state, 1);
+        Tracked other(state, 2);
+        Observable source(InPlaceType<Tracked>{}, seed);
+        Observable moved(std::move(source));
+        ASSERT_FALSE(source.Is<Tracked>());
+
+        Observable destination(InPlaceType<Tracked>{}, other);
+        const int beforeAssignment = state.destroyed;
+        destination = std::move(source);
+        EXPECT_EQ(beforeAssignment + 1, state.destroyed);
+        EXPECT_FALSE(destination.Is<Tracked>());
+        EXPECT_THROW(destination.Get<Tracked>(), std::logic_error);
+    }
+    EXPECT_EQ(0, state.alive);
+    EXPECT_EQ(state.constructed, state.destroyed);
+}
+
+TEST(VariantTest, MovedFromSourceAssignedIntoLiveDestinationDifferentAlternativeDestroysOnce)
+{
+    Counters state;
+    {
+        Observable source(InPlaceType<int>{}, 11);
+        Observable moved(std::move(source));
+        ASSERT_FALSE(source.Is<int>());
+
+        Tracked seed(state, 3);
+        Observable destination(InPlaceType<Tracked>{}, seed);
+        const int beforeAssignment = state.destroyed;
+        destination = std::move(source);
+        EXPECT_EQ(beforeAssignment + 1, state.destroyed);
+        EXPECT_FALSE(destination.Is<Tracked>());
+        EXPECT_FALSE(destination.Is<int>());
+        EXPECT_THROW(destination.Get<Tracked>(), std::logic_error);
+    }
+    EXPECT_EQ(0, state.alive);
+    EXPECT_EQ(state.constructed, state.destroyed);
+}
+
+TEST(VariantTest, LiveSourceAssignedIntoMovedFromDestinationReinitializes)
+{
+    Counters state;
+    {
+        Tracked seed(state, 5);
+        Observable destinationSource(InPlaceType<Tracked>{}, seed);
+        Observable destination(std::move(destinationSource));
+        Observable movedFromDestination(std::move(destination));
+        ASSERT_FALSE(destination.Is<Tracked>());
+
+        Observable live(InPlaceType<int>{}, 21);
+        destination = std::move(live);
+        EXPECT_TRUE(destination.Is<int>());
+        EXPECT_EQ(21, destination.Get<int>());
+        EXPECT_FALSE(live.Is<int>());
+    }
+    EXPECT_EQ(0, state.alive);
+    EXPECT_EQ(state.constructed, state.destroyed);
+}
+
+TEST(VariantTest, MovingAMovedFromVariantPropagatesState)
+{
+    Scalar source(InPlaceType<int>{}, 4);
+    Scalar firstMove(std::move(source));
+    ASSERT_FALSE(source.Is<int>());
+    ASSERT_FALSE(source.Is<char>());
+
+    Scalar secondMove(std::move(source));
+    EXPECT_FALSE(secondMove.Is<int>());
+    EXPECT_FALSE(secondMove.Is<char>());
+    EXPECT_THROW(secondMove.Get<int>(), std::logic_error);
+
+    Scalar destination(InPlaceType<char>{}, 'q');
+    destination = std::move(source);
+    EXPECT_FALSE(destination.Is<char>());
+    EXPECT_FALSE(destination.Is<int>());
 }
 
 TEST(VariantTest, MoveOnlyResourceOwnership)

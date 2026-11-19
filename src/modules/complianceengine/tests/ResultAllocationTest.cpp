@@ -296,6 +296,20 @@ TEST(ResultAllocationTest, CodeOnlyErrorAndResultSuccessAndMovesNeverAllocate)
     EXPECT_TRUE(allStatesCorrect);
 }
 
+TEST(ResultAllocationTest, VoidCopyAssignmentFromMovedFromSourceNeverAllocatesOrThrows)
+{
+    Result<void> success = Result<void>::Success();
+    Result<void> movedFromSuccess(std::move(success));
+    ASSERT_FALSE(success.HasValue());
+
+    Result<void> destination = Error(std::string(256, char(100)), 27);
+    FaultOutcome outcome = RunUnderFault([&]() { destination = success; });
+    EXPECT_FALSE(outcome.caught);
+    EXPECT_EQ(0u, outcome.attempts);
+    EXPECT_FALSE(destination.HasValue());
+    EXPECT_THROW(destination.Error(), std::logic_error);
+}
+
 // Construct-then-commit for Result<std::string> and Optional<std::string>.
 
 TEST(ResultAllocationTest, StringCopyAssignmentKeepsValueDestinationWhenValueSourceCopyFails)

@@ -98,11 +98,12 @@ protected:
     enum class Tag
     {
         Value,
-        Error
+        Error,
+        MovedFrom
     };
 
     alignas(Max(alignof(T), alignof(ComplianceEngine::Error))) char mBuffer[Max(sizeof(T), sizeof(ComplianceEngine::Error))];
-    Tag mTag = Tag::Error;
+    Tag mTag = Tag::MovedFrom;
     Pointer mPointer = {nullptr};
 
     Storage() = default;
@@ -111,36 +112,39 @@ protected:
         Reset();
     }
 
-    // Precondition: this storage is empty, and other holds a constructed
-    // payload (not a moved-from Result). Construct first, so mTag publishes
-    // only once the placement-new succeeds.
+    // Precondition: this storage is empty. Construct first, so mTag
+    // publishes only once the placement-new succeeds. A moved-from other
+    // leaves this storage moved-from too.
     void CopyFrom(const Storage& other)
     {
         if (other.mTag == Tag::Value)
         {
             mPointer.value = ::new (static_cast<void*>(mBuffer)) T(*other.mPointer.value);
+            mTag = Tag::Value;
         }
-        else
+        else if (other.mTag == Tag::Error)
         {
             mPointer.error = ::new (static_cast<void*>(mBuffer)) ComplianceEngine::Error(*other.mPointer.error);
+            mTag = Tag::Error;
         }
-        mTag = other.mTag;
     }
 
-    // Precondition: this storage is empty, and other holds a constructed
-    // payload (not a moved-from Result). Nonthrowing because Result<T>
-    // asserts T's move constructor and destructor are nonthrowing.
+    // Precondition: this storage is empty. Nonthrowing because Result<T>
+    // asserts T's move constructor and destructor are nonthrowing. A
+    // moved-from other leaves this storage moved-from too; other ends up
+    // moved-from either way, since Reset() now settles on that tag.
     void MoveFrom(Storage& other) noexcept
     {
         if (other.mTag == Tag::Value)
         {
             mPointer.value = ::new (static_cast<void*>(mBuffer)) T(std::move(*other.mPointer.value));
+            mTag = Tag::Value;
         }
-        else
+        else if (other.mTag == Tag::Error)
         {
             mPointer.error = ::new (static_cast<void*>(mBuffer)) ComplianceEngine::Error(std::move(*other.mPointer.error));
+            mTag = Tag::Error;
         }
-        mTag = other.mTag;
         other.Reset();
     }
 
@@ -148,21 +152,15 @@ protected:
     {
         if (mTag == Tag::Value)
         {
-            if (nullptr != mPointer.value)
-            {
-                mPointer.value->~T();
-            }
+            mPointer.value->~T();
         }
-        else
+        else if (mTag == Tag::Error)
         {
-            if (nullptr != mPointer.error)
-            {
-                using Type = ComplianceEngine::Error;
-                mPointer.error->~Type();
-            }
+            using Type = ComplianceEngine::Error;
+            mPointer.error->~Type();
         }
         mPointer.value = nullptr;
-        mTag = Tag::Error;
+        mTag = Tag::MovedFrom;
     }
 };
 
@@ -224,6 +222,7 @@ public:
     Result(ComplianceEngine::Error error)
     {
         this->mPointer.error = ::new (static_cast<void*>(this->mBuffer)) ComplianceEngine::Error(std::move(error));
+        this->mTag = Tag::Error;
     }
 
     Result(const Result&) = default;
@@ -268,7 +267,7 @@ public:
 
     T ValueOr(T default_value) const& noexcept(NoexceptCopyable<T>())
     {
-        if (this->mTag == Tag::Error)
+        if (this->mTag != Tag::Value)
         {
             return std::move(default_value);
         }
@@ -278,7 +277,7 @@ public:
 
     T ValueOr(T default_value) && noexcept
     {
-        if (this->mTag == Tag::Error)
+        if (this->mTag != Tag::Value)
         {
             return std::move(default_value);
         }
@@ -337,6 +336,10 @@ public:
 private:
     void CheckError() const
     {
+        if (this->mTag == Tag::MovedFrom)
+        {
+            throw std::logic_error("Result: use after move");
+        }
         if (this->mTag != Tag::Error)
         {
             throw std::logic_error("Result: unchecked access to Error");
@@ -344,6 +347,10 @@ private:
     }
     void CheckValue() const
     {
+        if (this->mTag == Tag::MovedFrom)
+        {
+            throw std::logic_error("Result: use after move");
+        }
         if (this->mTag != Tag::Value)
         {
             throw std::logic_error("Result: unchecked access to Value");
@@ -371,46 +378,29 @@ public:
     }
 
     Result(const Result&) = default;
-    Result& operator=(const Result& other)
-    {
-        if (this != &other)
-        {
-            Result copy(other);      // Keep our state intact if copying Error throws.
-            *this = std::move(copy); // Error move is nonthrowing.
-        }
-        return *this;
-    }
+    Result& operator=(const Result&) = default;
 
     Result(Result&& other) noexcept
+        : mError(std::move(other.mError)),
+          mMovedFrom(other.mMovedFrom)
     {
-        // Leave a moved-from failure in the failure state, as Result<T> does.
-        if (other.mError.HasValue())
-        {
-            mError = std::move(other.mError.Value());
-        }
+        other.mMovedFrom = true;
     }
 
     Result& operator=(Result&& other) noexcept
     {
-        if (this == &other)
+        if (this != &other)
         {
-            return *this;
-        }
-
-        if (other.mError.HasValue())
-        {
-            mError = std::move(other.mError.Value());
-        }
-        else
-        {
-            mError.Reset();
+            mError = std::move(other.mError);
+            mMovedFrom = other.mMovedFrom;
+            other.mMovedFrom = true;
         }
         return *this;
     }
 
     bool HasValue() const noexcept
     {
-        return !mError.HasValue();
+        return !mMovedFrom && !mError.HasValue();
     }
 
     explicit operator bool() const noexcept
@@ -441,6 +431,10 @@ private:
 
     void CheckError() const
     {
+        if (mMovedFrom)
+        {
+            throw std::logic_error("Result: use after move");
+        }
         if (HasValue())
         {
             throw std::logic_error("Result: unchecked access to Error");
@@ -448,6 +442,7 @@ private:
     }
 
     Optional<ComplianceEngine::Error> mError;
+    bool mMovedFrom = false;
 };
 } // namespace ComplianceEngine
 

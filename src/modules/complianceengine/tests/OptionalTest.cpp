@@ -216,6 +216,24 @@ TEST_F(OptionalTest, EmptyRvalueValueThrows)
     EXPECT_THROW(std::move(empty).Value(), std::logic_error);
 }
 
+TEST_F(OptionalTest, EmptyArrowOperatorThrows)
+{
+    Optional<std::string> empty;
+    const Optional<std::string>& constEmpty = empty;
+    EXPECT_THROW(empty.operator->(), std::logic_error);
+    EXPECT_THROW(constEmpty.operator->(), std::logic_error);
+}
+
+TEST_F(OptionalTest, MovedFromArrowOperatorThrowsAndStaysEmpty)
+{
+    Optional<std::string> source("foo");
+    Optional<std::string> destination(std::move(source));
+    ASSERT_FALSE(source.HasValue());
+    const Optional<std::string>& constSource = source;
+    EXPECT_THROW(source.operator->(), std::logic_error);
+    EXPECT_THROW(constSource.operator->(), std::logic_error);
+}
+
 TEST_F(OptionalTest, CopyAssignmentReconstructsNonassignableValue)
 {
     Optional<CopyConstructibleNotAssignable> source(CopyConstructibleNotAssignable(42));

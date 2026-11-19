@@ -3049,8 +3049,9 @@ TEST_F(PathAliasTest, PathOutcomeAlternativeReplacementAndSelfMoveRetainExactPin
         EXPECT_TRUE(marker.Is<Path>());
         marker = Outcome(InPlaceType<Path::RejectionReason>{}, Path::RejectionReason::Excluded);
         EXPECT_EQ(Path::RejectionReason::Excluded, As<Path::RejectionReason>(marker));
-        // Moved-from Path snapshots retain ownership until their variants die.
-        EXPECT_EQ(before + newPins, CountOpenDescriptors());
+        // The replaced Path's snapshot is released at the move, once no
+        // variant still holds it -- not retained until a later destructor.
+        EXPECT_EQ(before, CountOpenDescriptors());
     }
     EXPECT_EQ(before, CountOpenDescriptors());
     {
@@ -3064,7 +3065,9 @@ TEST_F(PathAliasTest, PathOutcomeAlternativeReplacementAndSelfMoveRetainExactPin
         EXPECT_EQ(finalPins, As<Path>(marker).RetainedDescriptors());
         EXPECT_EQ(heldThird, CountOpenDescriptors());
         marker = Outcome(InPlaceType<Path::RejectionReason>{}, Path::RejectionReason::Missing);
-        EXPECT_EQ(heldThird, CountOpenDescriptors()); // third retains the moved-from snapshot
+        // third's own Variant was already moved-from, so marker was the
+        // sole remaining owner; the snapshot is released here, not retained.
+        EXPECT_EQ(before, CountOpenDescriptors());
     }
     EXPECT_EQ(before, CountOpenDescriptors());
 }

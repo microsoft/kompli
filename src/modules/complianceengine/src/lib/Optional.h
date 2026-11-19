@@ -174,11 +174,13 @@ public:
 
     const T* operator->() const&
     {
+        CheckValue();
         return this->mValue;
     }
 
     T* operator->() &
     {
+        CheckValue();
         return this->mValue;
     }
 
