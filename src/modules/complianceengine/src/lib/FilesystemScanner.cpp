@@ -289,6 +289,81 @@ static bool ScanDirRecursive(const std::string& dir, dev_t rootDev, std::map<std
     return ::closedir(dirDeleter.release()) == 0;
 }
 
+namespace
+{
+// Body of the detached scanner process started by BackgroundScan. Never returns: every
+// path ends in _exit.
+[[noreturn]] void ScanAndPublishCache(const std::string& root, const std::string& cachePath, const std::string& tmpPath, const std::string& lockPath)
+{
+    CloseInheritedFileDescriptors();
+    (void)::chdir("/");
+
+    auto lockResult = FileLock::Make(lockPath);
+    if (!lockResult.HasValue())
+    {
+        // Unable to obtain lock (either open or flock failure, likely another process scanning).
+        _exit(0);
+    }
+    FileLock lock = std::move(lockResult.Value());
+
+    time_t start = ::time(nullptr);
+    FilesystemScanner::FSCache cache;
+    cache.scan_start_time = start;
+    // Determine root device for boundary detection
+    struct stat rootSt;
+    if (::lstat(root.c_str(), &rootSt) != 0)
+    {
+        _exit(1);
+    }
+    if (!ScanDirRecursive(root, rootSt.st_dev, cache.entries))
+    {
+        _exit(1);
+    }
+    time_t end = ::time(nullptr);
+    cache.scan_end_time = end;
+    // Build and atomically replace cache file.
+
+    std::ofstream ofs(tmpPath.c_str(), std::ios::out | std::ios::trunc);
+    if (!ofs.is_open())
+    {
+        _exit(1);
+    }
+    ofs << "# FilesystemScanCache-V1 " << static_cast<long>(start) << ' ' << static_cast<long>(end) << '\n';
+    for (const auto& kv : cache.entries)
+    {
+        const auto& path = kv.first;
+        const auto& st = kv.second.st;
+        ofs << path << ' ' << static_cast<unsigned long long>(st.st_dev) << ' ' << static_cast<unsigned long long>(st.st_ino) << ' '
+            << static_cast<unsigned>(st.st_mode) << ' ' << static_cast<unsigned>(st.st_nlink) << ' ' << static_cast<long long>(st.st_uid) << ' '
+            << static_cast<long>(st.st_gid) << ' ' << static_cast<long long>(st.st_size) << ' ' << static_cast<long>(st.st_blksize) << ' '
+            << static_cast<long long>(st.st_blocks) << '\n';
+    }
+    ofs.flush();
+    ofs.close();
+    if (!ofs || ::rename(tmpPath.c_str(), cachePath.c_str()) != 0)
+    {
+        ::unlink(tmpPath.c_str());
+        _exit(1);
+    }
+    _exit(0);
+}
+
+// Approved child-process exception boundary: the forked scanner runs on a copy of the
+// caller's stack, so no exception may unwind into copied engine/host frames. Any
+// exception ends the process with status 1.
+[[noreturn]] void RunScannerProcess(const std::string& root, const std::string& cachePath, const std::string& tmpPath, const std::string& lockPath)
+{
+    try
+    {
+        ScanAndPublishCache(root, cachePath, tmpPath, lockPath);
+    }
+    catch (...)
+    {
+        _exit(1);
+    }
+}
+} // namespace
+
 pid_t BackgroundScan(const std::string& root, const std::string& cachePath, const std::string& lockPath)
 {
     std::string tmpPath = cachePath + ".tmp";
@@ -314,65 +389,7 @@ pid_t BackgroundScan(const std::string& root, const std::string& cachePath, cons
             _exit(0);
         }
 
-        CloseInheritedFileDescriptors();
-        (void)::chdir("/");
-
-        auto lockResult = FileLock::Make(lockPath);
-        if (!lockResult.HasValue())
-        {
-            // Unable to obtain lock (either open or flock failure, likely another process scanning).
-            _exit(0);
-        }
-        FileLock lock = std::move(lockResult.Value());
-
-        time_t start = ::time(nullptr);
-        std::shared_ptr<FilesystemScanner::FSCache> cache((FilesystemScanner::FSCache*)nullptr);
-        try
-        {
-            cache.reset(new FilesystemScanner::FSCache());
-        }
-        catch (...)
-        {
-            _exit(1);
-        }
-        cache->scan_start_time = start;
-        // Determine root device for boundary detection
-        struct stat rootSt;
-        if (::lstat(root.c_str(), &rootSt) != 0)
-        {
-            _exit(1);
-        }
-        if (!ScanDirRecursive(root, rootSt.st_dev, cache->entries))
-        {
-            _exit(1);
-        }
-        time_t end = ::time(nullptr);
-        cache->scan_end_time = end;
-        // Build and atomically replace cache file.
-
-        std::ofstream ofs(tmpPath.c_str(), std::ios::out | std::ios::trunc);
-        if (!ofs.is_open())
-        {
-            _exit(1);
-        }
-        ofs << "# FilesystemScanCache-V1 " << static_cast<long>(start) << ' ' << static_cast<long>(end) << '\n';
-        for (const auto& kv : cache->entries)
-        {
-            const auto& path = kv.first;
-            const auto& st = kv.second.st;
-            ofs << path << ' ' << static_cast<unsigned long long>(st.st_dev) << ' ' << static_cast<unsigned long long>(st.st_ino) << ' '
-                << static_cast<unsigned>(st.st_mode) << ' ' << static_cast<unsigned>(st.st_nlink) << ' ' << static_cast<long long>(st.st_uid) << ' '
-                << static_cast<long>(st.st_gid) << ' ' << static_cast<long long>(st.st_size) << ' ' << static_cast<long>(st.st_blksize) << ' '
-                << static_cast<long long>(st.st_blocks) << '\n';
-        }
-        ofs.flush();
-        ofs.close();
-        if (!ofs || ::rename(tmpPath.c_str(), cachePath.c_str()) != 0)
-        {
-            ::unlink(tmpPath.c_str());
-            _exit(1);
-        }
-        _exit(0);
+        RunScannerProcess(root, cachePath, tmpPath, lockPath);
     }
 
     pid_t waitResult = -1;

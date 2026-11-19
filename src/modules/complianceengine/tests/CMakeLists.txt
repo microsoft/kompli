@@ -278,6 +278,18 @@ add_executable(result-allocation-test ResultAllocationTest.cpp)
 target_link_libraries(result-allocation-test PRIVATE GTest::gtest_main)
 gtest_discover_tests(result-allocation-test XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR})
 
+# Keep intentional allocation faults out of the shared test executable.
+add_executable(filesystem-scanner-allocation-test FilesystemScannerAllocationTest.cpp)
+target_link_libraries(filesystem-scanner-allocation-test PRIVATE
+    OpenSSL::Crypto
+    GTest::gtest_main
+    complianceenginelib
+    logging
+    commonutils
+    parsonlib
+)
+gtest_discover_tests(filesystem-scanner-allocation-test XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR})
+
 add_library(file_regex_match_fallback_compile OBJECT ../src/lib/procedures/FileRegexMatch.cpp)
 target_compile_definitions(file_regex_match_fallback_compile PRIVATE USE_REGEX_FALLBACK=1)
 target_include_directories(file_regex_match_fallback_compile PRIVATE $<TARGET_PROPERTY:complianceenginelib,INCLUDE_DIRECTORIES>)
