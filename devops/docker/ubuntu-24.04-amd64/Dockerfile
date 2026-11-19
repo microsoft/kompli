@@ -35,7 +35,7 @@ ENV PATH="/opt/kompli-venv/bin:${PATH}"
 WORKDIR /git
 
 # Initial CMake version needed for vcpkg boostrap
-ARG CMAKE_VERSION=v3.30.1
+ARG CMAKE_VERSION=v4.4.2
 COPY devops/scripts/install-container-cmake.sh /usr/local/bin/install-container-cmake
 RUN bash /usr/local/bin/install-container-cmake "$CMAKE_VERSION" /usr/local
 
@@ -57,4 +57,8 @@ RUN --network=none --mount=type=bind,source=src,target=/source/src \
         -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_TELEMETRY=OFF && \
     cmake --build /tmp/kompli-offline/build --parallel "$(nproc)" && \
     rm -rf /tmp/kompli-offline
+RUN command -v cmake && \
+    cmake --version && \
+    ls -l /usr/local/bin/cmake && \
+    ls -l /usr/bin/cmake
 WORKDIR /kompli

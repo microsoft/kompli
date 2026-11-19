@@ -27,19 +27,20 @@ trap 'rm -rf -- "$install_root"' EXIT
 mkdir -p "$VCPKG_DOWNLOADS" "$VCPKG_DEFAULT_BINARY_CACHE" "$X_VCPKG_REGISTRIES_CACHE"
 bash "$KOMPLI_VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
-final_version="$(jq -er '
-    [.tools[] | select(.name == "cmake" and .os == "linux" and .arch == "amd64")]
-    | if length == 1 then .[0].version else error("Expected one Linux amd64 CMake tool") end
-' "$KOMPLI_VCPKG_ROOT/scripts/vcpkg-tools.json")"
+# Keep the image's CMake version; vcpkg's private tool may be older.
+final_version="$(cmake --version)"
+final_version="${final_version#cmake version }"
+final_version="${final_version%%$'\n'*}"
 
-if ninja="$("$KOMPLI_VCPKG_ROOT/vcpkg" fetch ninja --x-stderr-status)"; then
+if ninja_output="$("$KOMPLI_VCPKG_ROOT/vcpkg" fetch ninja --x-stderr-status)"; then
+    ninja="${ninja_output##*$'\n'}"
     if [[ ! -x "$ninja" ]]; then
         echo "vcpkg did not return an executable Ninja tool: $ninja" >&2
         exit 1
     fi
 else
     status="$?"
-    printf '%s\n' "$ninja" >&2
+    printf '%s\n' "$ninja_output" >&2
     exit "$status"
 fi
 export PATH="$(dirname "$ninja"):$PATH"

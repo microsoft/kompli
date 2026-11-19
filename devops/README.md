@@ -16,28 +16,34 @@ This folder contains the artifacts and scripts used by our engineering systems (
   - `terraform` - terraform modules for provisioning Azure resources for E2E tests
 - `rpm` - RPM packaging scripts
 
+## Development container
+
+The [development container](../.devcontainer/devcontainer.json) includes Azure CLI
+and its `azure-devops` extension for inspecting Azure Pipelines. After changing
+the configuration, run **Dev Containers: Rebuild Container** in VS Code. Verify
+the installation with `az --version` and `az extension show --name azure-devops`.
+Authenticate with `az login` before accessing private builds.
+
 ## Updating build containers used for CI builds
 All build containers use a two-stage CMake source build:
 
-1. `ARG CMAKE_VERSION=v3.30.1` selects the bootstrap CMake tag. This version
-   supports the system OpenSSL 1.1 development libraries on Oracle Linux 8,
-   RHEL 8, and Ubuntu 20.04.
+1. `ARG CMAKE_VERSION=v4.4.2` selects the CMake tag installed in the image.
 2. The bootstrap CMake installs the dependencies from
    [`src/vcpkg.json`](../src/vcpkg.json), including OpenSSL 3.6 or newer. vcpkg
    acquires Ninja first, then uses the bootstrap tools without downloading a
    newer CMake binary.
-3. The final CMake version is selected from the Linux amd64 entry in
-   [`external/vcpkg/scripts/vcpkg-tools.json`](../external/vcpkg/scripts/vcpkg-tools.json)
-   and built from source against the static OpenSSL libraries installed by
+3. The same CMake version is rebuilt from source against the static OpenSSL libraries installed by
    vcpkg. Static linking keeps the final tools usable after the temporary
    dependency installation is removed. Headers, libraries, and pkg-config
    metadata all come from that same OpenSSL prefix.
-4. The manifest is installed again with the final CMake to refresh package ABIs
-   and populate the binary cache used by subsequent offline project builds.
+4. The manifest is installed again using vcpkg's normal tool selection to refresh
+   package ABIs and populate the binary cache used by subsequent offline project
+   builds. vcpkg may acquire a private CMake for dependencies, but it does not
+   replace the image's CMake in `/usr/local`.
 
 Both CMake builds verify the installed `cmake`, `ctest`, and `cpack` versions.
-`--build-arg CMAKE_VERSION=v3.30.1` can override the bootstrap tag only; the
-final version always follows vcpkg's tool metadata. Build images from the repository root
+`--build-arg CMAKE_VERSION=v4.4.2` selects both the bootstrap and final versions;
+the version must satisfy the project's `cmake_minimum_required`. Build images from the repository root
 with Podman (or Docker with BuildKit enabled) and the vcpkg submodule initialized,
 for example:
 

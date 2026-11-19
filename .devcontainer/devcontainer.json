@@ -12,7 +12,10 @@
 			"installZsh": true,
 			"installOhMyZsh": true
 		},
-		"ghcr.io/devcontainers/features/github-cli:1": {}
+		"ghcr.io/devcontainers/features/github-cli:1": {},
+		"ghcr.io/devcontainers/features/azure-cli:1": {
+			"extensions": "azure-devops"
+		}
 	},
 	"customizations": {
 		"vscode": {

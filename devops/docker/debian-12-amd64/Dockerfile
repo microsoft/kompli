@@ -28,7 +28,7 @@ ENV PATH="/opt/kompli-venv/bin:${PATH}"
 WORKDIR /git
 
 # Initial CMake version needed for vcpkg boostrap
-ARG CMAKE_VERSION=v3.30.1
+ARG CMAKE_VERSION=v4.4.2
 COPY devops/scripts/install-container-cmake.sh /usr/local/bin/install-container-cmake
 RUN bash /usr/local/bin/install-container-cmake "$CMAKE_VERSION" /usr/local
 
