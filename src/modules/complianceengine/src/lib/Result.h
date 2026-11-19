@@ -71,6 +71,8 @@ struct Error
     }
     ~Error() = default;
 };
+static_assert(std::is_nothrow_move_constructible<Error>::value && std::is_nothrow_destructible<Error>::value,
+    "Error must move and destroy without throwing");
 std::ostream& operator<<(std::ostream& os, const ComplianceEngine::Error& error);
 
 namespace
@@ -109,10 +111,12 @@ protected:
         Reset();
     }
 
+    // Precondition: this storage is empty, and other holds a constructed
+    // payload (not a moved-from Result). Construct first, so mTag publishes
+    // only once the placement-new succeeds.
     void CopyFrom(const Storage& other)
     {
-        mTag = other.mTag;
-        if (mTag == Tag::Value)
+        if (other.mTag == Tag::Value)
         {
             mPointer.value = ::new (static_cast<void*>(mBuffer)) T(*other.mPointer.value);
         }
@@ -120,9 +124,27 @@ protected:
         {
             mPointer.error = ::new (static_cast<void*>(mBuffer)) ComplianceEngine::Error(*other.mPointer.error);
         }
+        mTag = other.mTag;
     }
 
-    void Reset() noexcept(NoexceptDestructible<T>())
+    // Precondition: this storage is empty, and other holds a constructed
+    // payload (not a moved-from Result). Nonthrowing because Result<T>
+    // asserts T's move constructor and destructor are nonthrowing.
+    void MoveFrom(Storage& other) noexcept
+    {
+        if (other.mTag == Tag::Value)
+        {
+            mPointer.value = ::new (static_cast<void*>(mBuffer)) T(std::move(*other.mPointer.value));
+        }
+        else
+        {
+            mPointer.error = ::new (static_cast<void*>(mBuffer)) ComplianceEngine::Error(std::move(*other.mPointer.error));
+        }
+        mTag = other.mTag;
+        other.Reset();
+    }
+
+    void Reset() noexcept
     {
         if (mTag == Tag::Value)
         {
@@ -160,8 +182,9 @@ public:
     {
         if (this != &other)
         {
+            CopyStorage copy(other); // May throw; *this stays untouched until here.
             this->Reset();
-            this->CopyFrom(other);
+            this->MoveFrom(copy);
         }
         return *this;
     }
@@ -183,8 +206,13 @@ class Result : private ResultDetail::CopyStorage<T, std::is_copy_constructible<T
     using Storage = ResultDetail::CopyStorage<T, std::is_copy_constructible<T>::value>;
     using Tag = typename ResultDetail::Storage<T>::Tag;
 
+    // Existing type guards first so reference/Error-as-value report their
+    // own message; destructor before move so a throwing destructor reports
+    // its own message even if a compiler stops at the first failure.
     static_assert(!std::is_reference<T>::value, "Result cannot hold references");
     static_assert(!std::is_same<T, ComplianceEngine::Error>::value, "Result cannot hold Error as its value type");
+    static_assert(std::is_nothrow_destructible<T>::value, "Result requires a nonthrowing destructor");
+    static_assert(std::is_nothrow_move_constructible<T>::value, "Result requires a nonthrowing move constructor");
 
 public:
     Result(T value)
@@ -200,24 +228,15 @@ public:
 
     Result(const Result&) = default;
 
-    Result(Result&& other) noexcept(NoexceptMovable<T>())
+    Result(Result&& other) noexcept
     {
-        this->mTag = other.mTag;
-        if (this->mTag == Tag::Value)
-        {
-            this->mPointer.value = ::new (static_cast<void*>(this->mBuffer)) T(std::move(*other.mPointer.value));
-        }
-        else
-        {
-            this->mPointer.error = ::new (static_cast<void*>(this->mBuffer)) ComplianceEngine::Error(std::move(*other.mPointer.error));
-        }
-        other.Reset();
+        this->MoveFrom(other);
     }
 
     ~Result() = default;
 
 private:
-    void Reset() noexcept(NoexceptDestructible<T>())
+    void Reset() noexcept
     {
         Storage::Reset();
     }
@@ -225,7 +244,7 @@ private:
 public:
     Result& operator=(const Result&) = default;
 
-    Result& operator=(Result&& other) noexcept(NoexceptMovable<T>())
+    Result& operator=(Result&& other) noexcept
     {
         if (this == &other)
         {
@@ -233,17 +252,7 @@ public:
         }
 
         Reset();
-        this->mTag = other.mTag;
-        if (this->mTag == Tag::Value)
-        {
-            this->mPointer.value = ::new (static_cast<void*>(this->mBuffer)) T(std::move(*other.mPointer.value));
-        }
-        else
-        {
-            this->mPointer.error = ::new (static_cast<void*>(this->mBuffer)) ComplianceEngine::Error(std::move(*other.mPointer.error));
-        }
-
-        other.Reset();
+        this->MoveFrom(other);
         return *this;
     }
 
@@ -257,7 +266,7 @@ public:
         return HasValue();
     }
 
-    T ValueOr(T default_value) const& noexcept(NoexceptCopyable<T>() && NoexceptMovable<T>())
+    T ValueOr(T default_value) const& noexcept(NoexceptCopyable<T>())
     {
         if (this->mTag == Tag::Error)
         {
@@ -267,7 +276,7 @@ public:
         return *this->mPointer.value;
     }
 
-    T ValueOr(T default_value) && noexcept(NoexceptMovable<T>())
+    T ValueOr(T default_value) && noexcept
     {
         if (this->mTag == Tag::Error)
         {

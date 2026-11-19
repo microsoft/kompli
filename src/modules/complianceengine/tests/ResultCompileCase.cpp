@@ -30,6 +30,11 @@ struct ThrowingMove
     ThrowingMove(ThrowingMove&&) noexcept(false);
 };
 
+struct ThrowingDestructor
+{
+    ~ThrowingDestructor() noexcept(false);
+};
+
 #if RESULT_COMPILE_CASE == 0
 static_assert(std::is_copy_constructible<Result<int>>::value && std::is_copy_assignable<Result<int>>::value, "Result int copies");
 static_assert(!std::is_copy_constructible<Result<std::unique_ptr<int>>>::value && !std::is_copy_assignable<Result<std::unique_ptr<int>>>::value,
@@ -59,14 +64,11 @@ void ValidControl()
     otherResult = nonassignableResult;
 
     Result<const int> constResult(1);
-    Result<ThrowingMove> throwingResult(ThrowingMove(1));
-    Result<ThrowingMove> movedThrowingResult(std::move(throwingResult));
     Result<void> voidSuccess = Result<void>::Success();
     Result<void> voidFailure(Error("error"));
     (void)voidSuccess.HasValue();
     (void)voidFailure.Error();
     (void)constResult;
-    (void)movedThrowingResult;
 }
 #elif RESULT_COMPILE_CASE == 1
 void CopyMoveOnlyResult()
@@ -110,6 +112,10 @@ void ImplicitIntegerError()
 {
     Error error = 5;
 }
+#elif RESULT_COMPILE_CASE == 10
+static_assert(sizeof(Result<ThrowingMove>) > 0, "instantiate Result with a throwing move");
+#elif RESULT_COMPILE_CASE == 11
+static_assert(sizeof(Result<ThrowingDestructor>) > 0, "instantiate Result with a throwing destructor");
 #else
 #error Unknown Result compile case
 #endif

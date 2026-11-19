@@ -29,6 +29,11 @@ struct ThrowingMove
     ThrowingMove(ThrowingMove&&) noexcept(false);
 };
 
+struct ThrowingDestructor
+{
+    ~ThrowingDestructor() noexcept(false);
+};
+
 #if OPTIONAL_COMPILE_CASE == 0
 static_assert(std::is_copy_constructible<Optional<int>>::value && std::is_copy_assignable<Optional<int>>::value, "Optional int copies");
 static_assert(!std::is_copy_constructible<Optional<std::unique_ptr<int>>>::value && !std::is_copy_assignable<Optional<std::unique_ptr<int>>>::value,
@@ -52,10 +57,7 @@ void ValidControl()
     otherOptional = nonassignableOptional;
 
     Optional<const int> constOptional(1);
-    Optional<ThrowingMove> throwingOptional(ThrowingMove(1));
-    Optional<ThrowingMove> movedThrowingOptional(std::move(throwingOptional));
     (void)constOptional;
-    (void)movedThrowingOptional;
 }
 #elif OPTIONAL_COMPILE_CASE == 1
 void CopyMoveOnlyOptional()
@@ -79,6 +81,10 @@ void MutateConstOptional()
 static_assert(sizeof(Optional<void>) > 0, "instantiate Optional void");
 #elif OPTIONAL_COMPILE_CASE == 5
 static_assert(sizeof(Optional<int&>) > 0, "instantiate Optional reference");
+#elif OPTIONAL_COMPILE_CASE == 6
+static_assert(sizeof(Optional<ThrowingMove>) > 0, "instantiate Optional with a throwing move");
+#elif OPTIONAL_COMPILE_CASE == 7
+static_assert(sizeof(Optional<ThrowingDestructor>) > 0, "instantiate Optional with a throwing destructor");
 #else
 #error Unknown Optional compile case
 #endif

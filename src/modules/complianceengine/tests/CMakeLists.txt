@@ -142,6 +142,8 @@ check_wrapper_compile_case(Optional "${optional_compile_case_source}" 2 "move-on
 check_wrapper_compile_case(Optional "${optional_compile_case_source}" 3 "const mutation" "cannot assign to return value|assignment of read-only location")
 check_wrapper_compile_case(Optional "${optional_compile_case_source}" 4 "void" "Optional cannot hold void")
 check_wrapper_compile_case(Optional "${optional_compile_case_source}" 5 "reference" "Optional cannot hold references")
+check_wrapper_compile_case(Optional "${optional_compile_case_source}" 6 "throwing move" "Optional requires a nonthrowing move constructor")
+check_wrapper_compile_case(Optional "${optional_compile_case_source}" 7 "throwing destructor" "Optional requires a nonthrowing destructor")
 
 check_wrapper_compile_case(Result "${result_compile_case_source}" 0 "control" "")
 check_wrapper_compile_case(Result "${result_compile_case_source}" 1 "move-only copy construction" "deleted")
@@ -153,6 +155,8 @@ check_wrapper_compile_case(Result "${result_compile_case_source}" 6 "Error value
 check_wrapper_compile_case(Result "${result_compile_case_source}" 7 "void default construction" "calling a private constructor|is private within this context")
 check_wrapper_compile_case(Result "${result_compile_case_source}" 8 "void empty-brace return" "calling a private constructor|is private within this context")
 check_wrapper_compile_case(Result "${result_compile_case_source}" 9 "implicit integer Error" "no viable conversion|to non-scalar type")
+check_wrapper_compile_case(Result "${result_compile_case_source}" 10 "throwing move" "Result requires a nonthrowing move constructor")
+check_wrapper_compile_case(Result "${result_compile_case_source}" 11 "throwing destructor" "Result requires a nonthrowing destructor")
 
 set(PROCEDURES
     procedures/AideAttributesTest.cpp

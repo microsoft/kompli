@@ -26,41 +26,40 @@ struct CopyConstructibleNotAssignable
     int number;
 };
 
-struct FallbackState
+struct ThrowingCopyState
 {
+    bool armed = false;
     int copies = 0;
-    int moves = 0;
-    bool throwOnMove = false;
 };
 
-struct ThrowingFallbackMove
+// A noexcept move, and a copy that throws when its shared state is armed --
+// isolates a throwing copy from the (always nonthrowing) move.
+struct ThrowingCopy
 {
-    FallbackState* state;
+    ThrowingCopyState* state;
     int value;
 
-    ThrowingFallbackMove(FallbackState& counters, int number) noexcept
-        : state(&counters),
+    ThrowingCopy(ThrowingCopyState& sharedState, int number) noexcept
+        : state(&sharedState),
           value(number)
     {
     }
 
-    ThrowingFallbackMove(const ThrowingFallbackMove& other) noexcept
+    ThrowingCopy(const ThrowingCopy& other)
         : state(other.state),
           value(other.value)
     {
         ++state->copies;
-    }
-
-    ThrowingFallbackMove(ThrowingFallbackMove&& other)
-        : state(other.state),
-          value(other.value)
-    {
-        ++state->moves;
-        if (state->throwOnMove)
+        if (state->armed)
         {
-            throw std::runtime_error("fallback move");
+            throw std::runtime_error("copy");
         }
     }
+
+    ThrowingCopy(ThrowingCopy&&) noexcept = default;
+    ~ThrowingCopy() = default;
+    ThrowingCopy& operator=(const ThrowingCopy&) = delete;
+    ThrowingCopy& operator=(ThrowingCopy&&) = delete;
 };
 
 static_assert(std::is_copy_constructible<Optional<int>>::value, "copyable Optional must be copy constructible");
@@ -71,10 +70,12 @@ static_assert(std::is_copy_assignable<Optional<CopyConstructibleNotAssignable>>:
 static_assert(std::is_same<decltype(std::declval<Optional<int>&&>().Value()), int>::value, "rvalue Optional access returns by value");
 static_assert(!noexcept(std::declval<Optional<int>&&>().Value()), "checked rvalue Optional access may throw");
 static_assert(noexcept(std::declval<const Optional<int>&>().ValueOr(std::declval<const int&>())), "nonthrowing scalar ValueOr remains nonthrowing");
-static_assert(std::is_nothrow_copy_constructible<ThrowingFallbackMove>::value, "test isolates a throwing fallback move");
-static_assert(!std::is_nothrow_move_constructible<ThrowingFallbackMove>::value, "test fallback move can throw");
-static_assert(!noexcept(std::declval<const Optional<ThrowingFallbackMove>&>().ValueOr(std::declval<const ThrowingFallbackMove&>())),
-    "const ValueOr must permit a fallback move to throw");
+static_assert(std::is_nothrow_move_constructible<Optional<int>>::value, "Optional<int> move construction is nonthrowing");
+static_assert(std::is_nothrow_move_assignable<Optional<int>>::value, "Optional<int> move assignment is nonthrowing");
+static_assert(!std::is_nothrow_copy_constructible<ThrowingCopy>::value, "test isolates a throwing copy");
+static_assert(std::is_nothrow_move_constructible<ThrowingCopy>::value, "test copy type has a nonthrowing move");
+static_assert(!noexcept(std::declval<const Optional<ThrowingCopy>&>().ValueOr(std::declval<ThrowingCopy>())),
+    "const ValueOr must permit a throwing copy");
 } // namespace
 
 class OptionalTest : public ::testing::Test
@@ -171,24 +172,25 @@ TEST_F(OptionalTest, ValueOr)
     ASSERT_EQ(opt.ValueOr(42), 43);
 }
 
-TEST_F(OptionalTest, ConstValueOrPropagatesFallbackMoveAndCopiesPresentValue)
+TEST_F(OptionalTest, ValueOrPropagatesThrowingCopyAndIsolatesFallbackMove)
 {
-    FallbackState state;
-    const ThrowingFallbackMove fallback(state, 42);
-    const Optional<ThrowingFallbackMove> empty{};
-    state.throwOnMove = true;
-    EXPECT_THROW(empty.ValueOr(fallback), std::runtime_error);
+    // Engaged: the stored value's copy (for the by-value return) is what
+    // can throw, not the fallback construction.
+    ThrowingCopyState state;
+    const Optional<ThrowingCopy> present(ThrowingCopy(state, 7));
+    state.copies = 0;
+    state.armed = true;
+    EXPECT_THROW(present.ValueOr(ThrowingCopy(state, 42)), std::runtime_error);
     EXPECT_EQ(1, state.copies);
-    EXPECT_EQ(1, state.moves);
 
-    state.throwOnMove = false;
-    const Optional<ThrowingFallbackMove> present(ThrowingFallbackMove(state, 7));
-    const int movesBefore = state.moves;
-    const int copiesBefore = state.copies;
-    state.throwOnMove = true;
-    EXPECT_EQ(7, present.ValueOr(fallback).value);
-    EXPECT_EQ(copiesBefore + 2, state.copies);
-    EXPECT_EQ(movesBefore, state.moves);
+    // Empty: a prvalue fallback is move-constructed into the parameter and
+    // moved back out on return, so the throwing copy never runs.
+    state.armed = false;
+    const Optional<ThrowingCopy> empty{};
+    state.copies = 0;
+    state.armed = true;
+    EXPECT_EQ(42, empty.ValueOr(ThrowingCopy(state, 42)).value);
+    EXPECT_EQ(0, state.copies);
 }
 
 TEST_F(OptionalTest, Reset)

@@ -28,6 +28,8 @@ protected:
         Reset();
     }
 
+    // Precondition: this storage is empty. Only publishes mValue once the
+    // placement-new succeeds, so a throwing copy leaves this storage empty.
     void CopyFrom(const Storage& other)
     {
         if (nullptr != other.mValue)
@@ -36,7 +38,18 @@ protected:
         }
     }
 
-    void Reset() noexcept(NoexceptDestructible<T>())
+    // Precondition: this storage is empty. Nonthrowing because Optional<T>
+    // asserts T's move constructor and destructor are nonthrowing.
+    void MoveFrom(Storage& other) noexcept
+    {
+        if (nullptr != other.mValue)
+        {
+            mValue = ::new (static_cast<void*>(mBuffer)) T(std::move(*other.mValue));
+        }
+        other.Reset();
+    }
+
+    void Reset() noexcept
     {
         if (nullptr != mValue)
         {
@@ -62,8 +75,9 @@ public:
     {
         if (this != &other)
         {
+            CopyStorage copy(other); // May throw; *this stays untouched until here.
             this->Reset();
-            this->CopyFrom(other);
+            this->MoveFrom(copy);
         }
         return *this;
     }
@@ -82,8 +96,13 @@ public:
 template <typename T>
 class Optional : private OptionalDetail::CopyStorage<T, std::is_copy_constructible<T>::value>
 {
+    // Existing type guards first so void/reference report their own
+    // message; destructor before move so a throwing destructor reports its
+    // own message even if a compiler stops at the first failure.
     static_assert(!std::is_void<T>::value, "Optional cannot hold void");
     static_assert(!std::is_reference<T>::value, "Optional cannot hold references");
+    static_assert(std::is_nothrow_destructible<T>::value, "Optional requires a nonthrowing destructor");
+    static_assert(std::is_nothrow_move_constructible<T>::value, "Optional requires a nonthrowing move constructor");
 
 public:
     Optional() = default;
@@ -96,13 +115,9 @@ public:
 
     Optional(const Optional&) = default;
 
-    Optional(Optional&& other) noexcept(NoexceptMovable<T>())
+    Optional(Optional&& other) noexcept
     {
-        if (nullptr != other.mValue)
-        {
-            this->mValue = ::new (static_cast<void*>(this->mBuffer)) T(std::move(*other.mValue));
-        }
-        other.Reset();
+        this->MoveFrom(other);
     }
 
     Optional& operator=(const Optional&) = default;
@@ -114,19 +129,13 @@ public:
         return *this;
     }
 
-    Optional& operator=(Optional&& other) noexcept(NoexceptMovable<T>())
+    Optional& operator=(Optional&& other) noexcept
     {
-        if (this == &other)
+        if (this != &other)
         {
-            return *this;
+            Reset();
+            this->MoveFrom(other);
         }
-
-        Reset();
-        if (nullptr != other.mValue)
-        {
-            this->mValue = ::new (static_cast<void*>(this->mBuffer)) T(std::move(*other.mValue));
-        }
-        other.Reset();
         return *this;
     }
 
@@ -135,7 +144,7 @@ public:
         return this->mValue != nullptr;
     }
 
-    T ValueOr(T default_value) const noexcept(NoexceptCopyable<T>() && NoexceptMovable<T>())
+    T ValueOr(T default_value) const noexcept(NoexceptCopyable<T>())
     {
         if (nullptr == this->mValue)
         {
@@ -178,7 +187,7 @@ public:
         return HasValue();
     }
 
-    void Reset() noexcept(NoexceptDestructible<T>())
+    void Reset() noexcept
     {
         OptionalDetail::CopyStorage<T, std::is_copy_constructible<T>::value>::Reset();
     }
