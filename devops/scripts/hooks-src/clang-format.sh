@@ -7,10 +7,11 @@
 # file was reformatted (so the developer re-stages the corrected files).
 #
 # Files checked:
+#   src/{engine,benchmarkio,kompli,telemetry}/**/*.{h,hpp,c,cpp}
+#   src/tools/lua-evaluator/**/*.{h,hpp,c,cpp}
 #   src/modules/complianceengine/**/*.{h,hpp,c,cpp}
-#   src/common/telemetry/**/*.{h,hpp,c,cpp}
 # Excluded:
-#   src/modules/complianceengine/src/lib/ProcedureMap.{h,cpp}  (generated)
+#   src/engine/ProcedureMap.{h,cpp}  (generated)
 
 set -euo pipefail
 
@@ -19,8 +20,8 @@ readonly REPO_ROOT="$(env -u GIT_DIR git -C "$HOOK_DIR" rev-parse --show-topleve
 # shellcheck source=common.sh
 source "$HOOK_DIR/common.sh"
 
-readonly PATTERN='^(src/modules/complianceengine|src/common/telemetry)/.*\.(h|hpp|c|cpp)$'
-readonly EXCLUDE='^src/modules/complianceengine/src/lib/ProcedureMap\.(h|cpp)$'
+readonly PATTERN='^src/(engine|benchmarkio|kompli|tools/lua-evaluator|telemetry|modules/complianceengine)/.*\.(h|hpp|c|cpp)$'
+readonly EXCLUDE='^src/engine/ProcedureMap\.(h|cpp)$'
 
 mapfile -t _MATCHED < <(filter_files "$PATTERN" "$@")
 
