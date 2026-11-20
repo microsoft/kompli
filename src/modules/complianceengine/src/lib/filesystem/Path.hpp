@@ -18,6 +18,10 @@
 namespace ComplianceEngine
 {
 class ContextInterface;
+namespace Tests
+{
+class PathTestAccess; // defined only in the test target
+}
 namespace Filesystem
 {
 enum class MountPolicy
@@ -98,8 +102,7 @@ public:
         Result<struct stat> Stat() const;
         Result<bool> SetOwnership(UserId owner, GroupId group) const;
         Result<bool> SetMode(mode_t mode) const;
-        Result<ReadableFile> OpenReadOnly() const;
-        Result<ReadableFile> OpenReadOnly(ReadableFile::Policy policy) const;
+        Result<ReadableFile> OpenReadOnly(ReadableFile::Policy policy = ReadableFile::Policy()) const;
 
     private:
         friend class Path;
@@ -124,18 +127,19 @@ public:
         Step(const Step&) = delete;
         Step& operator=(const Step&) = delete;
         Step(Step&& other) noexcept
-            : mData(other.mData)
+            : mData(std::move(other.mData))
         {
         }
         Step& operator=(Step&& other) & noexcept
         {
-            mData = other.mData;
+            if (this != &other)
+                mData = std::move(other.mData);
             return *this;
         }
         ~Step() noexcept = default;
         ::ComplianceEngine::Filesystem::Metadata Metadata() const;
-        Component Target() const noexcept;
-        std::size_t RetainedDescriptors() const noexcept;
+        Component Target() const;
+        std::size_t RetainedDescriptors() const;
 
     private:
         struct Data;
@@ -143,6 +147,11 @@ public:
             : mData(std::move(data))
         {
         }
+        // Checked moved-from guard, ADR-0048 Decision 2: every state-reading
+        // operation calls this first, before any other validation or native
+        // dispatch, so a moved-from Step diagnoses deterministically instead
+        // of reading retired state.
+        void RequireLive() const;
         std::shared_ptr<const Data> mData;
         friend class Path;
     };
@@ -151,12 +160,13 @@ public:
     Path(const Path&) = delete;
     Path& operator=(const Path&) = delete;
     Path(Path&& other) noexcept
-        : mState(other.mState)
+        : mState(std::move(other.mState))
     {
     }
     Path& operator=(Path&& other) & noexcept
     {
-        mState = other.mState;
+        if (this != &other)
+            mState = std::move(other.mState);
         return *this;
     }
     ~Path() noexcept = default;
@@ -167,16 +177,25 @@ public:
     Result<Step> Apply(Step&& step) &;
     Result<bool> Freeze() &;
     // Root is the permanently retained process root, not the current barrier.
-    Component Root() const noexcept;
-    Component Leaf() const noexcept;
-    std::string LookupName() const;
-    std::string ToString() const;
-    std::size_t Size() const noexcept;
-    std::size_t RetainedDescriptors() const noexcept;
-    ResolverLimits Limits() const noexcept;
-    const ContextInterface& Context() const noexcept;
+    Component Root() const;
+    Component Leaf() const;
+    std::size_t Size() const;
+    std::size_t RetainedDescriptors() const;
+    ResolverLimits Limits() const;
+    const ContextInterface& Context() const;
 
 private:
+    // no production caller (logging included); kept for the
+    // bounded-authority test accessor below, not deleted, because leaf
+    // metadata is not an equivalent oracle.
+    std::string LookupName() const;
+    std::string ToString() const;
+    friend class ::ComplianceEngine::Tests::PathTestAccess;
+    // Checked moved-from guard, ADR-0048 Decision 2: every state-reading
+    // operation calls this first, before any other validation or native
+    // dispatch, so a moved-from Path diagnoses deterministically instead of
+    // reading retired state.
+    void RequireLive() const;
     struct State;
     enum class InputRole
     {
@@ -185,8 +204,10 @@ private:
     };
     class Resolver;
     // Private Path member (not anonymous-namespace) because it constructs
-    // the private nested Resolver and reads limits only through the public
-    // Limits() accessor.
+    // the private nested Resolver and reads mState directly: both callers
+    // (Resolve, already checked; Make's factory loop, never moved) already
+    // guarantee a live Path, so this internal read bypasses the checked
+    // Limits() accessor rather than duplicating its moved-from check.
     static Result<Variant<Step, RejectionReason>> ResolveInput(const Path& path, std::string name, Policy policy, InputRole role, std::size_t& followed);
     explicit Path(std::shared_ptr<const State> state) noexcept
         : mState(std::move(state))

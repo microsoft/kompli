@@ -10,7 +10,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <string>
 #include <sys/stat.h>
 
 namespace ComplianceEngine
@@ -99,8 +98,6 @@ private:
     Roles mRoles;
     VerifiedBindings mBindings;
 };
-
-Result<std::uint64_t> ParseMountId(const std::string& fdinfo);
 } // namespace Detail
 } // namespace Filesystem
 } // namespace ComplianceEngine

@@ -400,12 +400,61 @@ Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, c
 
 namespace
 {
+// Refuses a mutation on a target reachable through more than one directory
+// entry: a hard link to a file outside the intended tree is an ordinary
+// directory entry that passes symlink rejection and path confinement the
+// same way a single-link file does, so neither catches it.
+// Directories are exempt: every directory's link count is always at least
+// two, so a plain "> 1" test would refuse every directory, including home
+// directories. Checked immediately before each mutation (ownership, then
+// mode), never up front, so an already-compliant hard-linked file stays
+// Compliant. Refuses if either the acquisition-time link count or a fresh
+// stat taken right before this mutation is above one: a fresh-only check
+// is bypassable, because a writer of the directory can unlink the pin's
+// inside name after acquisition, leaving only the fresh stat to see one
+// link while the pin still names the outside file.
+Optional<Status> RefuseMutationIfHardLinked(const std::string& path, bool isDirectory, nlink_t acquisitionLinks, nlink_t freshLinks,
+    IndicatorsTree& indicators, OsConfigLogHandle log)
+{
+    if (isDirectory || ((acquisitionLinks <= 1) && (freshLinks <= 1)))
+    {
+        return Optional<Status>();
+    }
+    OsConfigLogError(log, "Refusing to remediate '%s': file has hard links (acquisition-time %lu, fresh %lu)", path.c_str(),
+        static_cast<unsigned long>(acquisitionLinks), static_cast<unsigned long>(freshLinks));
+    return Optional<Status>(indicators.NonCompliant("Refusing to remediate hard-linked file '" + path + "'"));
+}
+
+// A fresh (live) link-count read taken right before a mutation. The pinned
+// route re-stats through the pin's own identity-verified round trip; the
+// by-name route re-stats the already-held descriptor directly.
+template <typename Pin>
+Result<nlink_t> FreshLinkCount(const Pin* pin, int fd)
+{
+    if (nullptr != pin)
+    {
+        auto fresh = pin->Stat();
+        if (!fresh.HasValue())
+        {
+            return std::move(fresh).Error();
+        }
+        return static_cast<nlink_t>(fresh.Value().st_nlink);
+    }
+    struct stat fresh = {};
+    if (fstat(fd, &fresh) < 0)
+    {
+        const int status = errno;
+        return Error("Stat error '" + std::string(strerror(status)) + "'", status);
+    }
+    return static_cast<nlink_t>(fresh.st_nlink);
+}
+
 // Shared remediation body. The pinned caller borrows its already acquired
 // target; the compatibility path caller opens once and may additionally check
 // a historical identity. Only the pinned caller preserves collector continuity.
 template <typename Pin>
 Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params, const Optional<FileIdentity>& expectedIdentity, const Pin* pin,
-    bool requireUnique, IndicatorsTree& indicators, ContextInterface& context)
+    IndicatorsTree& indicators, ContextInterface& context)
 {
     if (params.groupId.HasValue() && (params.group.HasValue() || params.groupId.Value() < 0))
     {
@@ -483,21 +532,22 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
 
     // Historical identity checking belongs only to the compatibility path.
     // A mismatch detects a changed target, but a match is not a continuous
-    // pin from an earlier traversal. Unique-link observation is repeated on
-    // the live pin before each mutation for the dotfile caller below.
-    if (expectedIdentity.HasValue() || requireUnique)
+    // pin from an earlier traversal.
+    if (expectedIdentity.HasValue())
     {
-        if (expectedIdentity.HasValue() && ((statbuf.st_dev != expectedIdentity.Value().device) || (statbuf.st_ino != expectedIdentity.Value().inode)))
+        if ((statbuf.st_dev != expectedIdentity.Value().device) || (statbuf.st_ino != expectedIdentity.Value().inode))
         {
             OsConfigLogError(log, "Refusing to remediate '%s': it no longer refers to the originally observed file", params.path.c_str());
             return indicators.NonCompliant("Refusing to remediate '" + params.path + "': path no longer refers to the originally observed file");
         }
-        if (statbuf.st_nlink > 1)
-        {
-            OsConfigLogError(log, "Refusing to remediate '%s': file has %lu hard links", params.path.c_str(), static_cast<unsigned long>(statbuf.st_nlink));
-            return indicators.NonCompliant("Refusing to remediate hard-linked file '" + params.path + "'");
-        }
     }
+
+    // Acquisition-time link count, fixed once here and reused by
+    // both mutation-stage checks below. Pinned: the pin's recorded metadata,
+    // from when FTW acquired it, independent of this call. By-name: statbuf
+    // above already holds the fstat from this call's single open.
+    const bool isDirectory = S_ISDIR(statbuf.st_mode);
+    const nlink_t acquisitionLinks = (nullptr != pin) ? static_cast<nlink_t>(pin->Metadata().Stat().st_nlink) : static_cast<nlink_t>(statbuf.st_nlink);
 
     uid_t uid = statbuf.st_uid;
     gid_t gid = statbuf.st_gid;
@@ -584,17 +634,15 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
         OsConfigLogInfo(log, "Changing owner of '%s' from %d:%d to %d:%d", params.path.c_str(), statbuf.st_uid, statbuf.st_gid, uid, gid);
         // Operate on the already-opened inode through /proc/self/fd rather than re-resolving the
         // path string, so the change cannot be redirected to a different file via a symlink swap.
-        if (nullptr != pin && requireUnique)
+        auto freshLinksBeforeOwnership = FreshLinkCount(pin, fd);
+        if (!freshLinksBeforeOwnership.HasValue())
         {
-            auto fresh = pin->Stat();
-            if (!fresh.HasValue())
-            {
-                return std::move(fresh).Error();
-            }
-            if (fresh.Value().st_nlink > 1)
-            {
-                return indicators.NonCompliant("Refusing to remediate hard-linked file '" + params.path + "'");
-            }
+            return std::move(freshLinksBeforeOwnership).Error();
+        }
+        auto ownershipRefusal = RefuseMutationIfHardLinked(params.path, isDirectory, acquisitionLinks, freshLinksBeforeOwnership.Value(), indicators, log);
+        if (ownershipRefusal.HasValue())
+        {
+            return ownershipRefusal.Value();
         }
         if (nullptr != pin)
         {
@@ -636,17 +684,15 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
         // Operate on the already-opened inode through /proc/self/fd. fchmod() does not work on an
         // O_PATH descriptor, but chmod() through the magic link applies to the inode the descriptor
         // pins (verified above not to be a symlink), so it is not subject to a symlink race.
-        if (nullptr != pin && requireUnique)
+        auto freshLinksBeforeMode = FreshLinkCount(pin, fd);
+        if (!freshLinksBeforeMode.HasValue())
         {
-            auto fresh = pin->Stat();
-            if (!fresh.HasValue())
-            {
-                return std::move(fresh).Error();
-            }
-            if (fresh.Value().st_nlink > 1)
-            {
-                return indicators.NonCompliant("Refusing to remediate hard-linked file '" + params.path + "'");
-            }
+            return std::move(freshLinksBeforeMode).Error();
+        }
+        auto modeRefusal = RefuseMutationIfHardLinked(params.path, isDirectory, acquisitionLinks, freshLinksBeforeMode.Value(), indicators, log);
+        if (modeRefusal.HasValue())
+        {
+            return modeRefusal.Value();
         }
         if (nullptr != pin)
         {
@@ -671,21 +717,25 @@ Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params,
 }
 } // namespace
 
+// Refuses to mutate a hard-linked non-directory target: a
+// configured path that is a hard link to a file elsewhere would otherwise
+// let remediation re-own and re-mode that unrelated file. Used directly by
+// FilePermissionsCollection and UserHomeDirectoryPermissions as well.
 Result<Status> RemediateFilePermissions(const FilePermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
-    return RemediateFilePermissionsImpl<Filesystem::Path::Component>(params, Optional<FileIdentity>(), nullptr, false, indicators, context);
+    return RemediateFilePermissionsImpl<Filesystem::Path::Component>(params, Optional<FileIdentity>(), nullptr, indicators, context);
 }
 
 Result<Status> EnforceFilePermissionsAtIdentity(const FilePermissionsParams& params, const FileIdentity& expectedIdentity, IndicatorsTree& indicators,
     ContextInterface& context)
 {
-    return RemediateFilePermissionsImpl<Filesystem::Path::Component>(params, Optional<FileIdentity>(expectedIdentity), nullptr, false, indicators, context);
+    return RemediateFilePermissionsImpl<Filesystem::Path::Component>(params, Optional<FileIdentity>(expectedIdentity), nullptr, indicators, context);
 }
 
-Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Path::Component& component, bool requireUnique,
+Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Path::Component& component,
     IndicatorsTree& indicators, ContextInterface& context)
 {
-    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(), &component, requireUnique, indicators, context);
+    return RemediateFilePermissionsImpl(params, Optional<FileIdentity>(), &component, indicators, context);
 }
 
 Result<Status> AuditFilePermissionsCollection(const FilePermissionsCollectionParams& params, IndicatorsTree& indicators, ContextInterface& context)

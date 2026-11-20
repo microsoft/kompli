@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <limits>
 #include <linux/magic.h>
+#include <string>
 #include <sys/statfs.h>
 #include <unistd.h>
 #include <utility>
@@ -20,6 +21,68 @@ namespace Filesystem
 {
 namespace Detail
 {
+namespace
+{
+Result<std::uint64_t> ParseMountId(const std::string& fdinfo)
+{
+    if (fdinfo.find('\0') != std::string::npos)
+    {
+        return Error("Malformed procfs descriptor information", EPROTO);
+    }
+    bool found = false;
+    std::uint64_t mountId = 0;
+    std::size_t lineStart = 0;
+    while (lineStart < fdinfo.size())
+    {
+        const std::size_t end = fdinfo.find('\n', lineStart);
+        if (end == std::string::npos)
+        {
+            return Error("Truncated procfs descriptor information", EPROTO);
+        }
+
+        if (fdinfo.compare(lineStart, 7, "mnt_id:") == 0)
+        {
+            if (found)
+            {
+                return Error("Duplicate procfs descriptor mount ID", EPROTO);
+            }
+            found = true;
+            std::size_t position = lineStart + 7;
+            while ((position < end) && ((fdinfo[position] == ' ') || (fdinfo[position] == '\t')))
+            {
+                ++position;
+            }
+
+            if (position == end)
+            {
+                return Error("Empty procfs descriptor mount ID", EPROTO);
+            }
+
+            for (; position < end; ++position)
+            {
+                const char digit = fdinfo[position];
+                if ((digit < '0') || (digit > '9') || (mountId > (std::numeric_limits<std::uint64_t>::max() - static_cast<unsigned>(digit - '0')) / 10))
+                {
+                    return Error("Invalid procfs descriptor mount ID", EPROTO);
+                }
+                mountId = (mountId * 10) + static_cast<unsigned>(digit - '0');
+            }
+
+            if (mountId == 0)
+            {
+                return Error("Invalid procfs descriptor mount ID", EPROTO);
+            }
+        }
+        lineStart = end + 1;
+    }
+
+    if (!found)
+    {
+        return Error("Missing procfs descriptor mount ID", EPROTO);
+    }
+    return mountId;
+}
+} // namespace
 bool ProcfsDescriptorAccess::IsProcfsDirectory(const ContextInterface& context, const Descriptor& descriptor)
 {
     struct statfs filesystem = {};
@@ -212,66 +275,6 @@ Result<std::uint64_t> ProcfsDescriptorAccess::ReadMountId(const Descriptor& desc
     }
     Descriptor info = std::move(opened).Value();
     return ReadMountIdBytes(context, info, byteCap);
-}
-
-Result<std::uint64_t> ParseMountId(const std::string& fdinfo)
-{
-    if (fdinfo.find('\0') != std::string::npos)
-    {
-        return Error("Malformed procfs descriptor information", EPROTO);
-    }
-    bool found = false;
-    std::uint64_t mountId = 0;
-    std::size_t lineStart = 0;
-    while (lineStart < fdinfo.size())
-    {
-        const std::size_t end = fdinfo.find('\n', lineStart);
-        if (end == std::string::npos)
-        {
-            return Error("Truncated procfs descriptor information", EPROTO);
-        }
-
-        if (fdinfo.compare(lineStart, 7, "mnt_id:") == 0)
-        {
-            if (found)
-            {
-                return Error("Duplicate procfs descriptor mount ID", EPROTO);
-            }
-            found = true;
-            std::size_t position = lineStart + 7;
-            while ((position < end) && ((fdinfo[position] == ' ') || (fdinfo[position] == '\t')))
-            {
-                ++position;
-            }
-
-            if (position == end)
-            {
-                return Error("Empty procfs descriptor mount ID", EPROTO);
-            }
-
-            for (; position < end; ++position)
-            {
-                const char digit = fdinfo[position];
-                if ((digit < '0') || (digit > '9') || (mountId > (std::numeric_limits<std::uint64_t>::max() - static_cast<unsigned>(digit - '0')) / 10))
-                {
-                    return Error("Invalid procfs descriptor mount ID", EPROTO);
-                }
-                mountId = (mountId * 10) + static_cast<unsigned>(digit - '0');
-            }
-
-            if (mountId == 0)
-            {
-                return Error("Invalid procfs descriptor mount ID", EPROTO);
-            }
-        }
-        lineStart = end + 1;
-    }
-
-    if (!found)
-    {
-        return Error("Missing procfs descriptor mount ID", EPROTO);
-    }
-    return mountId;
 }
 
 } // namespace Detail

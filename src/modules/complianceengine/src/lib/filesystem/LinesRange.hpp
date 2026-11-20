@@ -60,14 +60,14 @@ public:
 
         Iterator(); // end sentinel
         Iterator(Iterator&&) noexcept;
-        Iterator& operator=(Iterator&&) noexcept;
+        Iterator& operator=(Iterator&&) & noexcept;
         Iterator(const Iterator&) = delete;
         Iterator& operator=(const Iterator&) = delete;
         ~Iterator();
 
         reference operator*() const;
         pointer operator->() const;
-        Iterator& operator++();
+        Iterator& operator++() &;
         bool operator!=(const Iterator& other) const;
 
     private:

@@ -37,7 +37,7 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
 
     auto processFile = [isPublic, isRemediation, &indicators, &context](const Filesystem::FilesystemCollectionEntry& entry) -> Result<Status> {
         auto pin = entry.LiveComponent();
-        if (!pin.HasValue() || entry.missing)
+        if (!pin.HasValue() || !entry.metadata.HasValue())
         {
             return Error("SSH key collection requires a live regular-file pin", EBADF);
         }
@@ -132,7 +132,11 @@ Result<Status> SshKeyPermsHelper(bool isPublic, bool isRemediation, IndicatorsTr
             params.mask = 0137; // private key stricter forbidden bits
         }
 
-        Result<Status> result = isRemediation ? EnforcePinnedFilePermissions(params, pin.Value(), false, indicators, context) :
+        // EnforcePinnedFilePermissions refuses to mutate a hard-linked
+        // non-directory target: a hard link inside /etc/ssh to a
+        // file outside it would otherwise let remediation re-own and
+        // re-mode that unrelated file.
+        Result<Status> result = isRemediation ? EnforcePinnedFilePermissions(params, pin.Value(), indicators, context) :
                                                 CheckPinnedFilePermissions(params, pin.Value(), indicators, context);
         if (!result.HasValue())
         {

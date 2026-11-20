@@ -109,10 +109,11 @@ Result<Status> RemediateFilePermissionsCollection(const FilePermissionsCollectio
 
 // Synchronous borrow: the caller keeps the acquired regular-file pin live
 // throughout inspection/mutation. path is diagnostic only, never reopened.
-// requireUnique retains the dotfile rule's fresh hard-link safeguard.
+// Refuses to mutate a non-directory whose link count (acquisition-time or a
+// fresh stat just before the mutation) is above one.
 Result<Status> CheckPinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Path::Component& component, IndicatorsTree& indicators,
     ContextInterface& context);
-Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Path::Component& component, bool requireUnique,
+Result<Status> EnforcePinnedFilePermissions(const FilePermissionsParams& params, const Filesystem::Path::Component& component,
     IndicatorsTree& indicators, ContextInterface& context);
 } // namespace ComplianceEngine
 #endif // COMPLIANCEENGINE_PROCEDURES_FILE_PERMISSIONS_H

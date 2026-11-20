@@ -1860,3 +1860,145 @@ TEST_F(EnsureFilePermissionsTest, NumericOwnershipRejectsInvalidCombinationsAndR
     ASSERT_FALSE(remediation.HasValue());
     EXPECT_EQ(remediation.Error().code, ENOTSUP);
 }
+
+// TM-12, by-name route: unlike EnsureFilePermissionsTest above, this fixture
+// never skips without root. Its files are owned by the test user, and every
+// rule below avoids an owner requirement (or names the current user), so
+// only the mode is non-compliant -- the by-name route's open()/fstat()/
+// chown()/chmod() sequence uses raw libc calls, not context seams, so the
+// unprivileged oracle is the real file.
+class EnsureFilePermissionsUnprivilegedTest : public ::testing::Test
+{
+protected:
+    std::string testDir;
+    MockContext mContext;
+    IndicatorsTree indicators;
+
+    void SetUp() override
+    {
+        testDir = mContext.GetTempdirPath() + "/file-permissions-unprivileged";
+        ASSERT_EQ(0, mkdir(testDir.c_str(), 0700));
+        indicators.Push("EnsureFilePermissionsUnprivileged");
+    }
+};
+
+// TM-12 (red first): a configured path that is a hard link to a second file
+// must be refused, and both names keep their original mode.
+TEST_F(EnsureFilePermissionsUnprivilegedTest, TM12HardLinkedConfiguredPathRefusesModeChange)
+{
+    const std::string target = testDir + "/target";
+    std::ofstream(target) << "content";
+    ASSERT_EQ(0, chmod(target.c_str(), 0777));
+    const std::string second = testDir + "/second-link";
+    ASSERT_EQ(0, link(target.c_str(), second.c_str()));
+
+    FilePermissionsParams params;
+    params.path = target;
+    params.mask = 0177; // forbidden bits: needs 0600
+
+    auto result = RemediateFilePermissions(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+
+    struct stat targetAfter = {}, secondAfter = {};
+    ASSERT_EQ(0, stat(target.c_str(), &targetAfter));
+    ASSERT_EQ(0, stat(second.c_str(), &secondAfter));
+    EXPECT_EQ(0777u, static_cast<unsigned>(targetAfter.st_mode & 0777));
+    EXPECT_EQ(0777u, static_cast<unsigned>(secondAfter.st_mode & 0777));
+}
+
+// TM-12 (red first): FilePermissionsCollection over a directory holding one
+// hard-linked and one ordinary non-compliant file remediates the ordinary
+// file, refuses the hard-linked one, and reports NonCompliant overall.
+TEST_F(EnsureFilePermissionsUnprivilegedTest, TM12FilePermissionsCollectionRefusesHardLinkedFileButRemediatesOrdinary)
+{
+    const std::string linked = testDir + "/linked";
+    std::ofstream(linked) << "content";
+    ASSERT_EQ(0, chmod(linked.c_str(), 0777));
+    const std::string linkedSecond = testDir + "/linked-second";
+    ASSERT_EQ(0, link(linked.c_str(), linkedSecond.c_str()));
+
+    const std::string ordinary = testDir + "/ordinary";
+    std::ofstream(ordinary) << "content";
+    ASSERT_EQ(0, chmod(ordinary.c_str(), 0777));
+
+    FilePermissionsCollectionParams params;
+    params.directory = testDir;
+    params.filePattern = "*";
+    params.mask = 0177;
+
+    auto result = RemediateFilePermissionsCollection(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+
+    struct stat linkedAfter = {}, ordinaryAfter = {};
+    ASSERT_EQ(0, stat(linked.c_str(), &linkedAfter));
+    ASSERT_EQ(0, stat(ordinary.c_str(), &ordinaryAfter));
+    EXPECT_EQ(0777u, static_cast<unsigned>(linkedAfter.st_mode & 0777));
+    EXPECT_EQ(0600u, static_cast<unsigned>(ordinaryAfter.st_mode & 0777));
+}
+
+// Green-baseline control: a single-link file is remediated normally.
+TEST_F(EnsureFilePermissionsUnprivilegedTest, GreenBaselineSingleLinkFileIsRemediated)
+{
+    const std::string target = testDir + "/single";
+    std::ofstream(target) << "content";
+    ASSERT_EQ(0, chmod(target.c_str(), 0777));
+
+    FilePermissionsParams params;
+    params.path = target;
+    params.mask = 0177;
+
+    auto result = RemediateFilePermissions(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::Compliant, result.Value());
+
+    struct stat after = {};
+    ASSERT_EQ(0, stat(target.c_str(), &after));
+    EXPECT_EQ(0600u, static_cast<unsigned>(after.st_mode & 0777));
+}
+
+// Green-baseline control: a directory needing a mode change is remediated
+// although its st_nlink is always >= 2 -- guards rule 1 (non-directories
+// only); a plain st_nlink > 1 implementation would refuse every directory.
+TEST_F(EnsureFilePermissionsUnprivilegedTest, GreenBaselineDirectoryNeedingModeChangeIsRemediated)
+{
+    const std::string dir = testDir + "/needs-mode";
+    ASSERT_EQ(0, mkdir(dir.c_str(), 0777));
+
+    FilePermissionsParams params;
+    params.path = dir;
+    params.mask = 0177;
+
+    auto result = RemediateFilePermissions(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::Compliant, result.Value());
+
+    struct stat after = {};
+    ASSERT_EQ(0, stat(dir.c_str(), &after));
+    EXPECT_EQ(0600u, static_cast<unsigned>(after.st_mode & 0777));
+}
+
+// Green-baseline control: an already-compliant hard-linked file stays
+// Compliant, with no mutation attempt (guards rule 2: checked only when a
+// change is needed).
+TEST_F(EnsureFilePermissionsUnprivilegedTest, GreenBaselineCompliantHardLinkedFileStaysCompliant)
+{
+    const std::string target = testDir + "/compliant";
+    std::ofstream(target) << "content";
+    ASSERT_EQ(0, chmod(target.c_str(), 0600));
+    const std::string second = testDir + "/compliant-second";
+    ASSERT_EQ(0, link(target.c_str(), second.c_str()));
+
+    FilePermissionsParams params;
+    params.path = target;
+    params.mask = 0177;
+
+    auto result = RemediateFilePermissions(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::Compliant, result.Value());
+
+    struct stat after = {};
+    ASSERT_EQ(0, stat(target.c_str(), &after));
+    EXPECT_EQ(0600u, static_cast<unsigned>(after.st_mode & 0777));
+}

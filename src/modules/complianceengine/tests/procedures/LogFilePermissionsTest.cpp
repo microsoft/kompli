@@ -4,9 +4,11 @@
 #include "Evaluator.h"
 #include "MockContext.h"
 
+#include <FilePermissions.h>
 #include <LogFilePermissions.h>
 #include <cerrno>
 #include <dirent.h>
+#include <filesystem/FilesystemCollection.hpp>
 #include <fstream>
 #include <grp.h>
 #include <gtest/gtest.h>
@@ -21,12 +23,63 @@
 #include <vector>
 
 using ComplianceEngine::AuditLogFilePermissions;
+using ComplianceEngine::EnforcePinnedFilePermissions;
 using ComplianceEngine::Error;
+using ComplianceEngine::FilePermissionsParams;
 using ComplianceEngine::IndicatorsTree;
 using ComplianceEngine::LogFilePermissionsParams;
+using ComplianceEngine::Pattern;
 using ComplianceEngine::RemediateLogFilePermissions;
 using ComplianceEngine::Result;
 using ComplianceEngine::Status;
+
+namespace
+{
+// TM-12 test helper: acquires a live pin for a regular-file child of
+// `directory` directly through the pinned filesystem route, bypassing
+// LogFilePermissions' own hardcoded log-file owner rules. This lets a test
+// construct FilePermissionsParams with an achievable (unprivileged) owner
+// requirement while still exercising the same shared pinned-remediation
+// implementation LogFilePermissions uses. Uses the streaming FTW::Files
+// range directly (not the retained CollectFilesystem convenience wrapper,
+// whose published entries are detached snapshots without a live pin).
+ComplianceEngine::Optional<ComplianceEngine::Filesystem::Path::Component> AcquireRegularFilePin(ComplianceEngine::ContextInterface& context,
+    const std::string& directory, const std::string& filename)
+{
+    using namespace ComplianceEngine::Filesystem;
+    FilesystemCollectionRequest request(directory, FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    request.yieldType = FilesystemYieldType::RegularFiles;
+    auto resolved = ResolveFilesystemCollectionRequest(request);
+    if (!resolved.HasValue())
+    {
+        return {};
+    }
+    auto root = Path::Make(context, resolved.Value().rootPath, CollectionRootPolicy(resolved.Value()), CollectionRootLimits(resolved.Value()));
+    if (!root.HasValue() || !root.Value().Is<Path>())
+    {
+        return {};
+    }
+    auto opened = FTW::Files(ComplianceEngine::As<Path>(std::move(root).Value()), resolved.Value().rootPath, CollectionContinuation(resolved.Value()));
+    if (!opened.HasValue())
+    {
+        return {};
+    }
+    auto files = std::move(opened).Value();
+    const std::string target = directory + "/" + filename;
+    ComplianceEngine::Optional<Path::Component> found;
+    for (const auto& entry : files)
+    {
+        if (entry.HasValue() && entry.Value().path == target)
+        {
+            found = entry.Value().LiveComponent();
+            break;
+        }
+    }
+    files.Stop();
+    return found;
+}
+} // namespace
 
 // These range/error tests do not require privileged user and group setup.
 class LogFileRangeTest : public ::testing::Test
@@ -284,6 +337,159 @@ TEST_F(LogFileRangeTest, RootDirectoryLinkIsFollowedAndDepthThirtyThreeErrors)
     ASSERT_FALSE(tooDeep.HasValue());
     // The unraised 16-cursor budget fails explicitly before depth 33.
     EXPECT_EQ(EMFILE, tooDeep.Error().code);
+}
+
+// TM-12: a hard link inside the scanned tree to a file outside it is an
+// ordinary directory entry; Path confinement and sealed descriptor authority
+// accept it by design (no symlink is followed and no name leaves the
+// barrier). Remediation must refuse to mutate the held pin rather than
+// following the link to the outside inode. The consumer's owner rule
+// (root|syslog) expects root, so an unprivileged run cannot observe a real
+// ownership change; the oracle is therefore the mutation seams themselves.
+TEST_F(LogFileRangeTest, TM12HardLinkedFileWithinScannedTreeRefusesMutation)
+{
+    const std::string outside = context.GetTempdirPath() + "/tm12-outside.log";
+    std::ofstream(outside) << "log";
+    ASSERT_EQ(0, chmod(outside.c_str(), 0777));
+    const std::string linked = testDir + "/linked.log";
+    ASSERT_EQ(0, link(outside.c_str(), linked.c_str()));
+
+    EXPECT_CALL(context, ChownPinnedFileDescriptor(::testing::_, ::testing::_, ::testing::_)).Times(0);
+    EXPECT_CALL(context, ChmodPinnedAlias(::testing::_, ::testing::_, ::testing::_)).Times(0);
+
+    const auto result = Run(true);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+
+    struct stat after = {};
+    ASSERT_EQ(0, stat(outside.c_str(), &after));
+    EXPECT_EQ(0777, after.st_mode & 0777);
+}
+
+// TM-12: an unlink of the inside name between acquisition and the fresh
+// pre-mutation check must not defeat the refusal. A fresh-only check would
+// be fooled here (by the time any fresh stat runs, only the outside name
+// remains, showing one link); the acquisition-time count, recorded once by
+// FTW when the pin was taken, still shows two and must still refuse.
+TEST_F(LogFileRangeTest, TM12UnlinkAfterAcquisitionStillRefusesViaAcquisitionTimeLinkCount)
+{
+    const std::string outside = context.GetTempdirPath() + "/tm12-outside-unlink.log";
+    std::ofstream(outside) << "log";
+    ASSERT_EQ(0, chmod(outside.c_str(), 0777));
+    const std::string linked = testDir + "/linked-unlink.log";
+    ASSERT_EQ(0, link(outside.c_str(), linked.c_str()));
+    struct stat target = {};
+    ASSERT_EQ(0, stat(outside.c_str(), &target));
+
+    // Let the first stat matching this inode (the acquisition snapshot) pass
+    // through unmodified, then unlink the inside name on the next one (the
+    // first fresh pre-mutation check), simulating an attacker racing the
+    // directory entry away right after acquisition.
+    bool sawAcquisitionStat = false;
+    bool unlinkedInside = false;
+    ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
+        struct stat actual = {};
+        if (!unlinkedInside && 0 == fstat(descriptor, &actual) && actual.st_dev == target.st_dev && actual.st_ino == target.st_ino)
+        {
+            if (!sawAcquisitionStat)
+            {
+                sawAcquisitionStat = true;
+            }
+            else
+            {
+                unlinkedInside = true;
+                EXPECT_EQ(0, unlink(linked.c_str()));
+            }
+        }
+        return context.RealStatFileDescriptor(descriptor, metadata);
+    });
+
+    EXPECT_CALL(context, ChownPinnedFileDescriptor(::testing::_, ::testing::_, ::testing::_)).Times(0);
+    EXPECT_CALL(context, ChmodPinnedAlias(::testing::_, ::testing::_, ::testing::_)).Times(0);
+
+    const auto result = Run(true);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    EXPECT_TRUE(sawAcquisitionStat);
+    EXPECT_TRUE(unlinkedInside);
+    EXPECT_NE(0, access(linked.c_str(), F_OK));
+}
+
+// TM-12: ownership and mode are separate mutation steps, each preceded by
+// its own fresh check. A link added between them (simulated here right as
+// ownership "succeeds") must make the mode step refuse after ownership has
+// already changed; the verdict is NonCompliant, not Compliant -- the
+// operation is not atomic.
+TEST_F(LogFileRangeTest, TM12LinkAddedBetweenOwnershipAndModeStagesRefusesModeAfterOwnershipChanged)
+{
+    const std::string target = testDir + "/needs-both.log";
+    std::ofstream(target) << "log";
+    ASSERT_EQ(0, chmod(target.c_str(), 0777));
+    // As root the new file is already root:root and would need no ownership
+    // change; give it a non-root owner so the ownership stage runs either way.
+    if (0 == geteuid())
+    {
+        ASSERT_EQ(0, chown(target.c_str(), 1, 1));
+    }
+    struct stat before = {};
+    ASSERT_EQ(0, stat(target.c_str(), &before));
+    ASSERT_NE(0u, before.st_uid);
+    const std::string extraLink = context.GetTempdirPath() + "/tm12-extra-link.log";
+
+    // Simulates a privileged chown succeeding (an unprivileged real chown to
+    // root would fail with EPERM); the property under test is the
+    // subsequent mode-stage refusal, not the ownership outcome itself. The
+    // group is not pinned: the rule keeps an already-accepted primary group.
+    EXPECT_CALL(context, ChownPinnedFileDescriptor(::testing::_, 0, ::testing::_)).Times(1).WillOnce([&](int descriptor, uid_t, gid_t) {
+        struct stat pinned = {};
+        EXPECT_EQ(0, fstat(descriptor, &pinned));
+        EXPECT_EQ(0, link(target.c_str(), extraLink.c_str()));
+        return 0;
+    });
+    EXPECT_CALL(context, ChmodPinnedAlias(::testing::_, ::testing::_, ::testing::_)).Times(0);
+
+    const auto result = Run(true);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+
+    struct stat after = {};
+    ASSERT_EQ(0, stat(target.c_str(), &after));
+    EXPECT_EQ(0777, after.st_mode & 0777);
+}
+
+// TM-12 green-baseline control: a hard-linked file that already satisfies
+// the rule must stay Compliant, with no mutation attempt at all. This uses
+// the pinned route directly (bypassing LogFilePermissions' hardcoded
+// root-owned pattern rules) so full compliance is achievable without
+// privilege: the only property under test is that the refusal is checked
+// "only when a change is needed" (rule 2) -- an up-front, unconditional
+// refusal would turn this test red.
+TEST_F(LogFileRangeTest, TM12CompliantHardLinkedFileStaysCompliantWithoutMutation)
+{
+    struct passwd* self = getpwuid(getuid());
+    ASSERT_NE(nullptr, self);
+    const std::string outside = context.GetTempdirPath() + "/tm12-outside-compliant.log";
+    std::ofstream(outside) << "log";
+    ASSERT_EQ(0, chmod(outside.c_str(), 0600));
+    const std::string linked = testDir + "/compliant-linked.log";
+    ASSERT_EQ(0, link(outside.c_str(), linked.c_str()));
+
+    FilePermissionsParams params;
+    params.path = linked;
+    auto ownerPattern = Pattern::Make(self->pw_name);
+    ASSERT_TRUE(ownerPattern.HasValue());
+    params.owner = {{ownerPattern.Value()}};
+    params.mask = 0177;
+
+    auto pin = AcquireRegularFilePin(context, testDir, "compliant-linked.log");
+    ASSERT_TRUE(pin.HasValue());
+
+    EXPECT_CALL(context, ChownPinnedFileDescriptor(::testing::_, ::testing::_, ::testing::_)).Times(0);
+    EXPECT_CALL(context, ChmodPinnedAlias(::testing::_, ::testing::_, ::testing::_)).Times(0);
+
+    auto result = EnforcePinnedFilePermissions(params, pin.Value(), indicators, context);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::Compliant, result.Value());
 }
 
 class EnsureLogfileAccessTest : public ::testing::Test
@@ -750,17 +956,57 @@ TEST_F(EnsureLogfileAccessTest, RemediateIgnoresSpecialFiles)
     EXPECT_TRUE(S_ISDIR(dirStat.st_mode));
 }
 
+// TM-12 root-gated real control: with a hard link to the scanned file from
+// outside the tree, remediation must leave the real file's owner and mode
+// untouched; once the outside link is removed, the same file (same inside
+// name) is remediated normally.
+TEST_F(EnsureLogfileAccessTest, TM12HardLinkedLogfileIsNotRemediatedWhileUnlinkedCopyIs)
+{
+    CreateLogFile("tm12-hardlink.log", "bin", "bin", 0777);
+    const std::string targetPath = testDir + "/tm12-hardlink.log";
+    const std::string outsideLink = mContext.GetTempdirPath() + "/tm12-log-outside";
+    ASSERT_EQ(0, ::link(targetPath.c_str(), outsideLink.c_str()));
+    struct stat before = {};
+    ASSERT_EQ(0, ::stat(targetPath.c_str(), &before));
+
+    LogFilePermissionsParams params;
+    params.path = testDir;
+
+    EXPECT_CALL(mContext, ChownPinnedFileDescriptor(::testing::_, ::testing::_, ::testing::_)).Times(0);
+    EXPECT_CALL(mContext, ChmodPinnedAlias(::testing::_, ::testing::_, ::testing::_)).Times(0);
+    auto linked = RemediateLogFilePermissions(params, indicators, mContext);
+    ASSERT_TRUE(linked.HasValue()) << linked.Error().message;
+    EXPECT_EQ(Status::NonCompliant, linked.Value());
+    struct stat afterLinked = {};
+    ASSERT_EQ(0, ::stat(targetPath.c_str(), &afterLinked));
+    EXPECT_EQ(before.st_uid, afterLinked.st_uid);
+    EXPECT_EQ(before.st_gid, afterLinked.st_gid);
+    EXPECT_EQ(before.st_mode, afterLinked.st_mode);
+
+    ASSERT_EQ(0, ::unlink(outsideLink.c_str()));
+    ExpectPinnedRemediation({"tm12-hardlink.log"});
+    auto unlinked = RemediateLogFilePermissions(params, indicators, mContext);
+    ASSERT_TRUE(unlinked.HasValue()) << unlinked.Error().message;
+    EXPECT_EQ(Status::Compliant, unlinked.Value());
+    CheckPinnedRemediationTargets();
+    struct stat afterSecond = {};
+    ASSERT_EQ(0, ::stat(targetPath.c_str(), &afterSecond));
+    EXPECT_TRUE(afterSecond.st_uid == 0 || afterSecond.st_uid == 101);
+    EXPECT_TRUE(afterSecond.st_gid == 0 || afterSecond.st_gid == 4);
+    EXPECT_EQ(afterSecond.st_mode & 0777, 0640u);
+}
+
 // Test default path behavior
 TEST_F(EnsureLogfileAccessTest, DefaultPath)
 {
     LogFilePermissionsParams params; // No path specified, should use /var/log
 
-    // Since we can't create files in /var/log in tests, this should just not crash
+    // Audit-only: this test must never remediate the real host /var/log (a
+    // remediation call here would chown/chmod whatever the test host
+    // actually has there, which is never acceptable from an automated test).
+    // Since we can't create files in /var/log in tests, this should just not crash.
     auto auditResult = AuditLogFilePermissions(params, indicators, mContext);
     ASSERT_TRUE(auditResult.HasValue()); // Should handle missing /var/log gracefully
-
-    auto remediateResult = RemediateLogFilePermissions(params, indicators, mContext);
-    ASSERT_TRUE(remediateResult.HasValue()); // Should handle missing /var/log gracefully
 }
 
 // Test specific pattern edge cases

@@ -116,7 +116,7 @@ public:
     {
         return mReserved;
     }
-    const Error& Failure() const
+    Error Failure() const
     {
         return mError.Value();
     }
@@ -200,6 +200,8 @@ Result<Descriptor> ContextInterface::OpenVerifiedAt(const Descriptor& directory,
     switch (profile)
     {
         case OpenProfile::PinDirectory:
+            if (!Filesystem::Detail::IsSingleChildComponent(name))
+                return Error("Child pin requires a single component", EINVAL);
             flags |= O_PATH | O_DIRECTORY | O_NOFOLLOW;
             break;
         case OpenProfile::PinSelfDirectory:

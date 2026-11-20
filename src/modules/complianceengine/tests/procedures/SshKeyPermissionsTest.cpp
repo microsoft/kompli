@@ -5,18 +5,24 @@
 #include "Evaluator.h"
 #include "MockContext.h"
 
+#include <FilePermissions.h>
 #include <SshKeyPermissions.h>
 #include <cerrno>
 #include <fcntl.h>
+#include <filesystem/FilesystemCollection.hpp>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
 #include <map>
+#include <pwd.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 using ComplianceEngine::AuditSshKeyPermissions;
+using ComplianceEngine::EnforcePinnedFilePermissions;
+using ComplianceEngine::FilePermissionsParams;
 using ComplianceEngine::IndicatorsTree;
+using ComplianceEngine::Pattern;
 using ComplianceEngine::RemediateSshKeyPermissions;
 using ComplianceEngine::SshKeyPermissionsParams;
 using ComplianceEngine::SshKeyType;
@@ -24,6 +30,54 @@ using ComplianceEngine::Status;
 
 static const char kPublicKeySample[] = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyMaterial user@example\n";
 static const char kPrivateKeyHeader[] = "-----BEGIN OPENSSH PRIVATE KEY-----\n";
+
+namespace
+{
+// TM-12 test helper: acquires a live pin for a regular-file child of
+// `directory` directly through the pinned filesystem route, bypassing
+// SshKeyPermissions' own hardcoded root-owned rules. This lets a test
+// construct FilePermissionsParams with an achievable (unprivileged) owner
+// requirement while still exercising the same shared pinned-remediation
+// implementation SshKeyPermissions uses. Uses the streaming FTW::Files
+// range directly (not the retained CollectFilesystem convenience wrapper,
+// whose published entries are detached snapshots without a live pin).
+ComplianceEngine::Optional<ComplianceEngine::Filesystem::Path::Component> AcquireRegularFilePin(ComplianceEngine::ContextInterface& context,
+    const std::string& directory, const std::string& filename)
+{
+    using namespace ComplianceEngine::Filesystem;
+    FilesystemCollectionRequest request(directory, FilesystemRootKind::Directory);
+    request.direction = FilesystemDirection::Down;
+    request.yieldType = FilesystemYieldType::RegularFiles;
+    auto resolved = ResolveFilesystemCollectionRequest(request);
+    if (!resolved.HasValue())
+    {
+        return {};
+    }
+    auto root = Path::Make(context, resolved.Value().rootPath, CollectionRootPolicy(resolved.Value()), CollectionRootLimits(resolved.Value()));
+    if (!root.HasValue() || !root.Value().Is<Path>())
+    {
+        return {};
+    }
+    auto opened = FTW::Files(ComplianceEngine::As<Path>(std::move(root).Value()), resolved.Value().rootPath, CollectionContinuation(resolved.Value()));
+    if (!opened.HasValue())
+    {
+        return {};
+    }
+    auto files = std::move(opened).Value();
+    const std::string target = directory + "/" + filename;
+    ComplianceEngine::Optional<Path::Component> found;
+    for (const auto& entry : files)
+    {
+        if (entry.HasValue() && entry.Value().path == target)
+        {
+            found = entry.Value().LiveComponent();
+            break;
+        }
+    }
+    files.Stop();
+    return found;
+}
+} // namespace
 
 TEST(SshKeyRangeTest, MissingRootRemainsCompliantAndDeniedRootIsAnError)
 {
@@ -356,6 +410,191 @@ TEST(SshKeyRangeTest, RootSymlinkIsFollowedButInteriorDirectorySymlinkIsNot)
     EXPECT_EQ(Status::Compliant, result.Value());
 }
 
+// TM-12: a hard link inside the scanned SSH key tree to a file outside it
+// is an ordinary directory entry; Path confinement and sealed descriptor
+// authority accept it by design. Remediation must refuse to mutate the
+// held pin rather than following the link to the outside inode. The
+// consumer's owner rule (root/root|ssh_keys) expects root, so an
+// unprivileged run cannot observe a real ownership change; the oracle is
+// therefore the mutation seams themselves.
+TEST(SshKeyRangeTest, TM12HardLinkedKeyWithinScannedTreeRefusesMutation)
+{
+    ::testing::StrictMock<MockContext> context;
+    IndicatorsTree indicators;
+    indicators.Push("SSH");
+    const std::string root = context.GetTempdirPath() + "/ssh";
+    ASSERT_EQ(0, mkdir(root.c_str(), 0700));
+    context.SetSpecialFilePath("/etc/ssh", root);
+    context.AllowIncidentalNativeAccess();
+
+    const std::string outside = context.GetTempdirPath() + "/tm12-ssh-outside";
+    std::ofstream(outside) << kPublicKeySample;
+    ASSERT_EQ(0, chmod(outside.c_str(), 0777));
+    const std::string linked = root + "/key";
+    ASSERT_EQ(0, link(outside.c_str(), linked.c_str()));
+
+    EXPECT_CALL(context, ChownPinnedFileDescriptor(::testing::_, ::testing::_, ::testing::_)).Times(0);
+    EXPECT_CALL(context, ChmodPinnedAlias(::testing::_, ::testing::_, ::testing::_)).Times(0);
+
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Public;
+    const auto result = RemediateSshKeyPermissions(params, indicators, context);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+
+    struct stat after = {};
+    ASSERT_EQ(0, stat(outside.c_str(), &after));
+    EXPECT_EQ(0777, after.st_mode & 0777);
+}
+
+// TM-12: an unlink of the inside name between acquisition and the fresh
+// pre-mutation check must not defeat the refusal. A fresh-only check would
+// be fooled here (by the time any fresh stat runs, only the outside name
+// remains, showing one link); the acquisition-time count, recorded once by
+// FTW when the pin was taken, still shows two and must still refuse.
+TEST(SshKeyRangeTest, TM12UnlinkAfterAcquisitionStillRefusesViaAcquisitionTimeLinkCount)
+{
+    ::testing::StrictMock<MockContext> context;
+    IndicatorsTree indicators;
+    indicators.Push("SSH");
+    const std::string root = context.GetTempdirPath() + "/ssh";
+    ASSERT_EQ(0, mkdir(root.c_str(), 0700));
+    context.SetSpecialFilePath("/etc/ssh", root);
+    context.AllowIncidentalNativeAccess();
+
+    const std::string outside = context.GetTempdirPath() + "/tm12-ssh-outside-unlink";
+    std::ofstream(outside) << kPublicKeySample;
+    ASSERT_EQ(0, chmod(outside.c_str(), 0777));
+    const std::string linked = root + "/key";
+    ASSERT_EQ(0, link(outside.c_str(), linked.c_str()));
+    struct stat target = {};
+    ASSERT_EQ(0, stat(outside.c_str(), &target));
+
+    bool sawAcquisitionStat = false;
+    bool unlinkedInside = false;
+    ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
+        struct stat actual = {};
+        if (!unlinkedInside && 0 == fstat(descriptor, &actual) && actual.st_dev == target.st_dev && actual.st_ino == target.st_ino)
+        {
+            if (!sawAcquisitionStat)
+            {
+                sawAcquisitionStat = true;
+            }
+            else
+            {
+                unlinkedInside = true;
+                EXPECT_EQ(0, unlink(linked.c_str()));
+            }
+        }
+        return context.RealStatFileDescriptor(descriptor, metadata);
+    });
+
+    EXPECT_CALL(context, ChownPinnedFileDescriptor(::testing::_, ::testing::_, ::testing::_)).Times(0);
+    EXPECT_CALL(context, ChmodPinnedAlias(::testing::_, ::testing::_, ::testing::_)).Times(0);
+
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Public;
+    const auto result = RemediateSshKeyPermissions(params, indicators, context);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+    EXPECT_TRUE(sawAcquisitionStat);
+    EXPECT_TRUE(unlinkedInside);
+}
+
+// TM-12: ownership and mode are separate mutation steps, each preceded by
+// its own fresh check. A link added between them (simulated here right as
+// ownership "succeeds") must make the mode step refuse after ownership has
+// already changed; the verdict is NonCompliant, not Compliant -- the
+// operation is not atomic.
+TEST(SshKeyRangeTest, TM12LinkAddedBetweenOwnershipAndModeStagesRefusesModeAfterOwnershipChanged)
+{
+    ::testing::StrictMock<MockContext> context;
+    IndicatorsTree indicators;
+    indicators.Push("SSH");
+    const std::string root = context.GetTempdirPath() + "/ssh";
+    ASSERT_EQ(0, mkdir(root.c_str(), 0700));
+    context.SetSpecialFilePath("/etc/ssh", root);
+    context.AllowIncidentalNativeAccess();
+
+    const std::string target = root + "/key";
+    std::ofstream(target) << kPublicKeySample;
+    ASSERT_EQ(0, chmod(target.c_str(), 0777));
+    // As root the new file is already root:root and would need no ownership
+    // change; give it a non-root owner so the ownership stage runs either way.
+    if (0 == geteuid())
+    {
+        ASSERT_EQ(0, chown(target.c_str(), 1, 1));
+    }
+    struct stat before = {};
+    ASSERT_EQ(0, stat(target.c_str(), &before));
+    ASSERT_NE(0u, before.st_uid);
+    const std::string extraLink = context.GetTempdirPath() + "/tm12-ssh-extra-link";
+
+    // Simulates a privileged chown succeeding (an unprivileged real chown to
+    // root would fail with EPERM); the property under test is the
+    // subsequent mode-stage refusal, not the ownership outcome itself. The
+    // group is not pinned: the rule keeps an already-accepted primary group.
+    EXPECT_CALL(context, ChownPinnedFileDescriptor(::testing::_, 0, ::testing::_)).Times(1).WillOnce([&](int descriptor, uid_t, gid_t) {
+        struct stat pinned = {};
+        EXPECT_EQ(0, fstat(descriptor, &pinned));
+        EXPECT_EQ(0, link(target.c_str(), extraLink.c_str()));
+        return 0;
+    });
+    EXPECT_CALL(context, ChmodPinnedAlias(::testing::_, ::testing::_, ::testing::_)).Times(0);
+
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Public;
+    const auto result = RemediateSshKeyPermissions(params, indicators, context);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+
+    struct stat after = {};
+    ASSERT_EQ(0, stat(target.c_str(), &after));
+    EXPECT_EQ(0777, after.st_mode & 0777);
+}
+
+// TM-12 green-baseline control: a hard-linked file that already satisfies
+// the rule must stay Compliant, with no mutation attempt at all. This uses
+// the pinned route directly (bypassing SshKeyPermissions' hardcoded
+// root-owned rules) so full compliance is achievable without privilege: the
+// only property under test is that the refusal is checked "only when a
+// change is needed" (rule 2) -- an up-front, unconditional refusal would
+// turn this test red.
+TEST(SshKeyRangeTest, TM12CompliantHardLinkedKeyStaysCompliantWithoutMutation)
+{
+    ::testing::StrictMock<MockContext> context;
+    IndicatorsTree indicators;
+    indicators.Push("SSH");
+    const std::string root = context.GetTempdirPath() + "/ssh";
+    ASSERT_EQ(0, mkdir(root.c_str(), 0700));
+    context.AllowIncidentalNativeAccess();
+
+    struct passwd* self = getpwuid(getuid());
+    ASSERT_NE(nullptr, self);
+    const std::string outside = context.GetTempdirPath() + "/tm12-ssh-outside-compliant";
+    std::ofstream(outside) << kPublicKeySample;
+    ASSERT_EQ(0, chmod(outside.c_str(), 0600));
+    const std::string linked = root + "/compliant-key";
+    ASSERT_EQ(0, link(outside.c_str(), linked.c_str()));
+
+    FilePermissionsParams params;
+    params.path = linked;
+    auto ownerPattern = Pattern::Make(self->pw_name);
+    ASSERT_TRUE(ownerPattern.HasValue());
+    params.owner = {{ownerPattern.Value()}};
+    params.mask = 0177;
+
+    auto pin = AcquireRegularFilePin(context, root, "compliant-key");
+    ASSERT_TRUE(pin.HasValue());
+
+    EXPECT_CALL(context, ChownPinnedFileDescriptor(::testing::_, ::testing::_, ::testing::_)).Times(0);
+    EXPECT_CALL(context, ChmodPinnedAlias(::testing::_, ::testing::_, ::testing::_)).Times(0);
+
+    auto result = EnforcePinnedFilePermissions(params, pin.Value(), indicators, context);
+    ASSERT_TRUE(result.HasValue()) << result.Error().message;
+    EXPECT_EQ(Status::Compliant, result.Value());
+}
+
 class EnsureSshKeyPermsTest : public ::testing::Test
 {
 protected:
@@ -569,6 +808,56 @@ TEST_F(EnsureSshKeyPermsTest, PrivateKeyRemediation)
     ASSERT_TRUE(post.HasValue());
     ASSERT_EQ(post.Value(), Status::Compliant);
     CheckPinnedKeyReadCount();
+}
+
+// TM-12 root-gated real control: with a hard link to the key from outside
+// the scanned tree, remediation must leave the real file's mode untouched
+// (ownership is already root:root in this fixture); once the outside link
+// is removed, the same key (same inside name) is remediated normally.
+TEST_F(EnsureSshKeyPermsTest, TM12HardLinkedKeyIsNotRemediatedWhileUnlinkedCopyIs)
+{
+    if (0 != ::geteuid())
+        GTEST_SKIP() << "Actual root ownership and chown are required for this control";
+    std::string keyPath = mSshDir + "/id_ed25519_tm12";
+    {
+        std::ofstream f(keyPath);
+        f << kPrivateKeyHeader << "...payload...\n";
+    }
+    ASSERT_EQ(0, ::chmod(keyPath.c_str(), 0777));
+    struct stat keyIdentity = {};
+    ASSERT_EQ(0, ::stat(keyPath.c_str(), &keyIdentity));
+    ASSERT_EQ(0u, keyIdentity.st_uid) << "test precondition: key must already be root-owned";
+    ASSERT_EQ(0u, keyIdentity.st_gid) << "test precondition: key must already be root-group-owned";
+
+    const std::string outsideLink = mContext.GetTempdirPath() + "/tm12-ssh-outside-link";
+    ASSERT_EQ(0, ::link(keyPath.c_str(), outsideLink.c_str()));
+
+    mContext.AllowFileRead();
+    EXPECT_CALL(mContext, ChownPinnedFileDescriptor(::testing::_, ::testing::_, ::testing::_)).Times(0);
+    EXPECT_CALL(mContext, ChmodPinnedAlias(::testing::_, ::testing::_, ::testing::_)).Times(0);
+
+    SshKeyPermissionsParams params;
+    params.type = SshKeyType::Private;
+    auto linked = RemediateSshKeyPermissions(params, mIndicators, mContext);
+    ASSERT_TRUE(linked.HasValue()) << linked.Error().message;
+    EXPECT_EQ(Status::NonCompliant, linked.Value());
+    struct stat stillBad = {};
+    ASSERT_EQ(0, ::stat(keyPath.c_str(), &stillBad));
+    EXPECT_EQ(0777, stillBad.st_mode & 0777);
+
+    ASSERT_EQ(0, ::unlink(outsideLink.c_str()));
+    EXPECT_CALL(mContext, ChownPinnedFileDescriptor(::testing::_, ::testing::_, ::testing::_)).Times(0); // already root:root
+    EXPECT_CALL(mContext, ChmodPinnedAlias(::testing::_, ::testing::_, static_cast<mode_t>(S_IFREG | 0640)))
+        .Times(1)
+        .WillOnce([this](int procfsDirectory, const char* decimalAlias, mode_t mode) {
+            return mContext.RealChmodPinnedAlias(procfsDirectory, decimalAlias, mode);
+        });
+    auto unlinked = RemediateSshKeyPermissions(params, mIndicators, mContext);
+    ASSERT_TRUE(unlinked.HasValue()) << unlinked.Error().message;
+    EXPECT_EQ(Status::Compliant, unlinked.Value());
+    struct stat fixed = {};
+    ASSERT_EQ(0, ::stat(keyPath.c_str(), &fixed));
+    EXPECT_EQ(0640, fixed.st_mode & 0777);
 }
 
 TEST_F(EnsureSshKeyPermsTest, RemediationNoKeys)

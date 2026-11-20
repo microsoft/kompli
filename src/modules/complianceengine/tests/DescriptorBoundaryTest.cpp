@@ -194,7 +194,7 @@ TEST(DescriptorBoundaryTest, ChildPinsRejectTraversalBeforeNativeDispatch)
     Descriptor directory = std::move(opened).Value();
     EXPECT_CALL(context, OpenNativeAt(_, _, _)).Times(0);
     const char* invalidNames[] = {nullptr, "", "/", "/absolute", ".", "..", "../outside", "link/child", "a/", "a//b"};
-    for (Profile profile : {Profile::PinChild, Profile::PinChildDirectory})
+    for (Profile profile : {Profile::PinChild, Profile::PinChildDirectory, Profile::PinDirectory})
     {
         for (const char* name : invalidNames)
         {

@@ -152,7 +152,7 @@ LinesRange::Iterator::Iterator(Iterator&& other) noexcept
     other.mRange = nullptr;
 }
 
-LinesRange::Iterator& LinesRange::Iterator::operator=(Iterator&& other) noexcept
+LinesRange::Iterator& LinesRange::Iterator::operator=(Iterator&& other) & noexcept
 {
     if (this != &other)
     {
@@ -177,7 +177,7 @@ LinesRange::Iterator::pointer LinesRange::Iterator::operator->() const
     return &**this;
 }
 
-LinesRange::Iterator& LinesRange::Iterator::operator++()
+LinesRange::Iterator& LinesRange::Iterator::operator++() &
 {
     assert(mRange && mRange->mState != State::Closed && mCurrent.HasValue());
     Next();

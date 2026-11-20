@@ -3,6 +3,7 @@
 
 #include <DescriptorTestAccess.h>
 #include <MockContext.h>
+#include <PathTestAccess.h>
 #include <cerrno>
 #include <dirent.h>
 #include <fcntl.h>
@@ -33,6 +34,7 @@ using ComplianceEngine::Filesystem::ResolverLimits;
 using ComplianceEngine::Filesystem::Detail::Descriptor;
 using ComplianceEngine::Filesystem::Detail::ProcfsDescriptorAccess;
 using ComplianceEngine::Tests::DescriptorTestAccess;
+using ComplianceEngine::Tests::PathTestAccess;
 using testing::_;
 using testing::NiceMock;
 
@@ -1767,7 +1769,7 @@ TEST_F(ReadableFileTest, InverseStepKeepsPhysicalDirectoryAfterNameReplacement)
     ASSERT_TRUE(viaLink.Value().Is<Path::Step>());
     auto inverse = path.Apply(ComplianceEngine::As<Path::Step>(std::move(viaLink.Value())));
     ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;
-    EXPECT_EQ(root + "/physical", path.ToString());
+    EXPECT_EQ(root + "/physical", PathTestAccess::ToString(path));
     const auto inode = path.Leaf().Metadata().Stat().st_ino;
     auto child = path.Resolve("child", policy);
     ASSERT_TRUE(child.HasValue());
@@ -1784,7 +1786,7 @@ TEST_F(ReadableFileTest, InverseStepKeepsPhysicalDirectoryAfterNameReplacement)
     EXPECT_EQ(inode, path.Leaf().Metadata().Stat().st_ino);
     auto back = path.Apply(std::move(inverse.Value()));
     ASSERT_TRUE(back.HasValue()) << back.Error().message;
-    EXPECT_EQ(root, path.ToString());
+    EXPECT_EQ(root, PathTestAccess::ToString(path));
     auto heldFile = detached.Stat();
     ASSERT_TRUE(heldFile.HasValue());
     EXPECT_EQ(detached.Metadata().Stat().st_ino, heldFile.Value().st_ino);
@@ -2078,7 +2080,7 @@ TEST_F(ReadableFileTest, RetiringResolvedPathVisitsRootPhysicalAncestorAndLeafPi
     ASSERT_TRUE(selected.Value().Is<Path::Step>());
     auto inverse = path->Apply(ComplianceEngine::As<Path::Step>(std::move(selected.Value())));
     ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;
-    EXPECT_EQ(root + "/hidden/leaf", path->ToString());
+    EXPECT_EQ(root + "/hidden/leaf", PathTestAccess::ToString(*path));
     selected = ComplianceEngine::Error("Release selected Step", EINVAL);
     inverse = ComplianceEngine::Error("Release inverse Step", EINVAL);
     const std::size_t pins = path->RetainedDescriptors();

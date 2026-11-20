@@ -140,11 +140,10 @@ FilePermissionsParams GetFilePermissionArgs(const std::string& filename, const s
 
 Result<Status> ProcessLogfile(const FilesystemCollectionEntry& entry, const DaemonUidSet& daemonUids, IndicatorsTree& indicators, ContextInterface& context, bool remediate)
 {
-    const struct stat statInfo = entry.metadata;
     const std::string fullPath = entry.path;
     const std::size_t separator = fullPath.find_last_of('/');
     const std::string filename = fullPath.substr(separator + 1);
-    if (entry.missing)
+    if (!entry.metadata.HasValue())
     {
         // A DT_REG name vanished between enumeration and acquisition. This
         // carries no file metadata or pin; emit the old missing-file verdict
@@ -155,6 +154,7 @@ Result<Status> ProcessLogfile(const FilesystemCollectionEntry& entry, const Daem
         indicators.Pop();
         return verdict;
     }
+    const struct stat statInfo = entry.metadata.Value();
     if (S_ISDIR(statInfo.st_mode))
     {
         return Status::Compliant;
@@ -176,7 +176,11 @@ Result<Status> ProcessLogfile(const FilesystemCollectionEntry& entry, const Daem
     auto pin = entry.LiveComponent();
     if (!pin.HasValue())
         return Error("Logfile collection requires an acquired file", EBADF);
-    Result<Status> result = remediate ? EnforcePinnedFilePermissions(params, pin.Value(), false, indicators, context) :
+    // EnforcePinnedFilePermissions refuses to mutate a hard-linked
+    // non-directory target: a hard link inside /var/log to a file
+    // outside it would otherwise let remediation re-own and re-mode that
+    // unrelated file.
+    Result<Status> result = remediate ? EnforcePinnedFilePermissions(params, pin.Value(), indicators, context) :
                                         CheckPinnedFilePermissions(params, pin.Value(), indicators, context);
     if (!result.HasValue())
     {

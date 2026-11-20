@@ -235,8 +235,7 @@ public:
     Result<struct stat> Stat() const;
     Result<bool> SetOwnership(UserId owner, GroupId group) const;
     Result<bool> SetMode(mode_t mode) const;
-    Result<ReadableFile> OpenReadOnly() const;
-    Result<ReadableFile> OpenReadOnly(ReadableFile::Policy policy) const;
+    Result<ReadableFile> OpenReadOnly(ReadableFile::Policy policy = ReadableFile::Policy()) const;
 
 private:
     friend class ::ComplianceEngine::Filesystem::Path;

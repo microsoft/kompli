@@ -21,6 +21,7 @@
 #include <limits>
 #include <linux/magic.h>
 #include <memory>
+#include <stdexcept>
 #include <sys/statfs.h>
 #include <type_traits>
 #include <unistd.h>
@@ -312,11 +313,6 @@ Result<bool> Handle::SetMode(mode_t mode) const
     return SetModeWithProcfs(*this, procfs, mode);
 }
 
-Result<ReadableFile> Handle::OpenReadOnly() const
-{
-    return OpenReadOnly(ReadableFile::Policy{});
-}
-
 Result<ReadableFile> Handle::OpenReadOnly(ReadableFile::Policy policy) const
 {
     if (mMetadata.mType != Type::RegularFile)
@@ -457,10 +453,6 @@ Result<bool> Path::Component::SetMode(mode_t mode) const
 {
     return mAcquisition->SetMode(mode);
 }
-Result<ReadableFile> Path::Component::OpenReadOnly() const
-{
-    return mAcquisition->OpenReadOnly();
-}
 Result<ReadableFile> Path::Component::OpenReadOnly(ReadableFile::Policy policy) const
 {
     return mAcquisition->OpenReadOnly(policy);
@@ -538,52 +530,73 @@ struct Path::Step::Data
     std::uint64_t lookupMount = 0;
     bool hasLookupMount = false;
 };
+void Path::Step::RequireLive() const
+{
+    if (!mData)
+        throw std::logic_error("Path::Step: use after move");
+}
 ::ComplianceEngine::Filesystem::Metadata Path::Step::Metadata() const
 {
+    RequireLive();
     auto acquired = Target().Metadata();
     if (!mData->hasLookupMount)
         return acquired;
     return ::ComplianceEngine::Filesystem::Metadata(acquired.mType, acquired.mStat, LookupMountId(mData->lookupMount), acquired.mTargetMount,
         acquired.mLookupName, acquired.mEffectiveName);
 }
-Path::Component Path::Step::Target() const noexcept
+Path::Component Path::Step::Target() const
 {
+    RequireLive();
     return mData->pushed.empty() ? mData->attach : mData->pushed.back();
 }
-std::size_t Path::Step::RetainedDescriptors() const noexcept
+std::size_t Path::Step::RetainedDescriptors() const
 {
+    RequireLive();
     return 2 + mData->popped.size() + mData->pushed.size();
 }
-Path::Component Path::Root() const noexcept
+void Path::RequireLive() const
 {
+    if (!mState)
+        throw std::logic_error("Path: use after move");
+}
+Path::Component Path::Root() const
+{
+    RequireLive();
     return mState->pins.front();
 }
-Path::Component Path::Leaf() const noexcept
+Path::Component Path::Leaf() const
 {
+    RequireLive();
     return mState->pins.back();
 }
 std::string Path::LookupName() const
 {
+    RequireLive();
     return mState->lookup;
 }
 std::string Path::ToString() const
 {
+    RequireLive();
     return mState->effective;
 }
-std::size_t Path::Size() const noexcept
+std::size_t Path::Size() const
 {
+    RequireLive();
     return mState->pins.size();
 }
-std::size_t Path::RetainedDescriptors() const noexcept
+std::size_t Path::RetainedDescriptors() const
 {
+    RequireLive();
     return mState->pins.size();
 }
-ResolverLimits Path::Limits() const noexcept
+ResolverLimits Path::Limits() const
 {
+    RequireLive();
     return mState->limits;
 }
-const ContextInterface& Path::Context() const noexcept
+const ContextInterface& Path::Context() const
 {
+    RequireLive();
     return mState->context.get();
 }
 // Checked pinned-link readers and the root-component factory dispatch
@@ -651,6 +664,15 @@ Result<LinkTarget> Path::ReadPinnedLink(const Descriptor& linkPin, std::size_t t
         return Error("Not an ordinary filesystem symlink", ELOOP);
     return ReadVerifiedLinkText(linkPin, before, targetByteCap);
 }
+
+namespace
+{
+// A rejected (not failed) resolution outcome.
+Result<Variant<Path::Step, Path::RejectionReason>> Rejected(Path::RejectionReason reason)
+{
+    return Variant<Path::Step, Path::RejectionReason>(InPlaceType<Path::RejectionReason>{}, reason);
+}
+} // namespace
 
 class Path::Resolver
 {
@@ -733,7 +755,7 @@ public:
                     if (!Following(intermediate))
                     {
                         if (direct && !HasComponent(pending) && mRole == InputRole::Leaf && mPolicy.rejectedLinks == RejectedLinkDisposition::Skip)
-                            return Variant<Step, RejectionReason>(InPlaceType<RejectionReason>{}, RejectionReason::Excluded);
+                            return Rejected(RejectionReason::Excluded);
                         return Error("Held symlink following is disabled", ELOOP);
                     }
                     if (mFollowed >= source->limits.linkExpansions)
@@ -773,7 +795,7 @@ public:
                 // Only this direct child lookup can report absence; expanded link targets
                 // and trusted helper failures retain their error provenance.
                 if (direct && !HasComponent(pending) && opened.Error().code == ENOENT && mPolicy.missingFiles == MissingFileDisposition::Report)
-                    return Variant<Step, RejectionReason>(InPlaceType<RejectionReason>{}, RejectionReason::Missing);
+                    return Rejected(RejectionReason::Missing);
                 return Error("Cannot pin confined component", opened.Error().code);
             }
             // Stat and mount are observed together, through the shared
@@ -800,7 +822,7 @@ public:
                 if (!Following(intermediate))
                 {
                     if (direct && !HasComponent(pending) && mRole == InputRole::Leaf && mPolicy.rejectedLinks == RejectedLinkDisposition::Skip)
-                        return Variant<Step, RejectionReason>(InPlaceType<RejectionReason>{}, RejectionReason::Excluded);
+                        return Rejected(RejectionReason::Excluded);
                     return Error("Symlink following is disabled", ELOOP);
                 }
                 if (mFollowed >= source->limits.linkExpansions)
@@ -888,7 +910,7 @@ public:
             if (!S_ISDIR(snapshot.st_mode) && !S_ISREG(snapshot.st_mode))
             {
                 if (!HasComponent(pending) && mRole == InputRole::Leaf && mPolicy.unsupportedTypes == UnsupportedTypeDisposition::Skip)
-                    return Variant<Step, RejectionReason>(InPlaceType<RejectionReason>{}, RejectionReason::UnsupportedType);
+                    return Rejected(RejectionReason::UnsupportedType);
                 return Error("Unsupported confined object", EOPNOTSUPP);
             }
             if (intermediate && !S_ISDIR(snapshot.st_mode))
@@ -912,7 +934,7 @@ public:
         if (directLink && mRole == InputRole::Leaf && !FollowingFinal(mStack.back().Metadata().FileType()))
         {
             if (mPolicy.rejectedLinks == RejectedLinkDisposition::Skip)
-                return Variant<Step, RejectionReason>(InPlaceType<RejectionReason>{}, RejectionReason::Excluded);
+                return Rejected(RejectionReason::Excluded);
             return Error("Terminal symlink policy rejects target", ELOOP);
         }
         return Prepare();
@@ -1046,7 +1068,10 @@ private:
 
 Result<Variant<Path::Step, Path::RejectionReason>> Path::ResolveInput(const Path& path, std::string name, Policy policy, InputRole role, std::size_t& followed)
 {
-    auto validation = Validate(policy, path.Limits());
+    // Both callers (Resolve, already checked; Make's factory loop, never
+    // moved) already guarantee a live `path`, so this reads mState directly
+    // rather than through the checked Limits() accessor (ADR-0048).
+    auto validation = Validate(policy, path.mState->limits);
     if (validation.HasValue())
         return std::move(validation).Value();
     if (!Detail::IsSingleChildComponent(name) && role == InputRole::Leaf)
@@ -1060,12 +1085,18 @@ Result<Variant<Path::Step, Path::RejectionReason>> Path::ResolveInput(const Path
 }
 Result<Variant<Path::Step, Path::RejectionReason>> Path::Resolve(std::string name, Policy policy) const
 {
+    RequireLive();
     std::size_t followed = 0;
     return ResolveInput(*this, std::move(name), policy, InputRole::Leaf, followed);
 }
 Result<Path::Step> Path::Apply(Step&& step) &
 {
-    auto delta = step.mData;
+    RequireLive();
+    step.RequireLive();
+    // ADR-0048 Decision 4: consume the Step's payload here, before any
+    // other validation, so the caller's Step is moved-from on every return
+    // path below -- success or rejection alike.
+    auto delta = std::move(step.mData);
     auto source = mState;
     if (source->pins.size() != delta->sourceDepth || delta->popped.size() >= delta->sourceDepth)
         return Error("Stale Path step depth", ESTALE);
@@ -1125,6 +1156,7 @@ Result<Path::Step> Path::Apply(Step&& step) &
 }
 Result<bool> Path::Freeze() &
 {
+    RequireLive();
     auto source = mState;
     if (source->boundary == source->pins.size() - 1)
         return false;
@@ -1292,7 +1324,6 @@ FilesystemCollectionEntry Snapshot(const FilesystemCollectionEntry& live)
     FilesystemCollectionEntry copy;
     copy.path = live.path;
     copy.metadata = live.metadata;
-    copy.missing = live.missing;
     return copy;
 }
 
@@ -1344,6 +1375,10 @@ struct EntryCharge
         : owner(std::move(counter))
     {
     }
+    EntryCharge(const EntryCharge&) = delete;
+    EntryCharge& operator=(const EntryCharge&) = delete;
+    EntryCharge(EntryCharge&&) = delete;
+    EntryCharge& operator=(EntryCharge&&) = delete;
     ~EntryCharge() noexcept
     {
         // A corrupted retention ledger must not wrap and admit more pins.
@@ -1356,6 +1391,10 @@ struct EntryCharge
     std::shared_ptr<RetentionCounter> owner;
     PinCharge pins;
 };
+static_assert(!std::is_copy_constructible<EntryCharge>::value && !std::is_copy_assignable<EntryCharge>::value,
+    "EntryCharge is only ever held by shared_ptr, never copied");
+static_assert(!std::is_move_constructible<EntryCharge>::value && !std::is_move_assignable<EntryCharge>::value,
+    "EntryCharge is only ever held by shared_ptr, never moved");
 } // namespace
 
 struct FileRange::State
@@ -1447,7 +1486,7 @@ struct FileRange::State
 
     Result<bool> Offer(FilesystemCollectionEntry entry, PinCharge ownerCharge = PinCharge())
     {
-        if (!entry.missing && !Yield(request.yieldType, entry.metadata))
+        if (entry.metadata.HasValue() && !Yield(request.yieldType, entry.metadata.Value()))
             return true;
         if (retainEntries)
         {
@@ -1518,7 +1557,6 @@ struct FileRange::State
             return OperationError("acquire child", full, ENOENT);
         FilesystemCollectionEntry missing;
         missing.path = full;
-        missing.missing = true;
         return Offer(std::move(missing));
     }
 

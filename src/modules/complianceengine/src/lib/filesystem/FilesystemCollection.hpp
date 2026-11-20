@@ -174,28 +174,29 @@ class FileRange;
 struct FilesystemCollectionEntry
 {
     FilesystemCollectionEntry() = default;
-    FilesystemCollectionEntry(FilesystemCollectionEntry&&) = default;
-    FilesystemCollectionEntry& operator=(FilesystemCollectionEntry&&) = default;
+    ~FilesystemCollectionEntry() noexcept = default;
     FilesystemCollectionEntry(const FilesystemCollectionEntry&) = delete;
     FilesystemCollectionEntry& operator=(const FilesystemCollectionEntry&) = delete;
+    FilesystemCollectionEntry(FilesystemCollectionEntry&&) = default;
+    FilesystemCollectionEntry& operator=(FilesystemCollectionEntry&&) & = default;
     std::string path;
-    struct stat metadata = {}; // accepted pin observation; invalid when missing is true
-    // A regular-file name observed in readdir but lost before acquisition;
-    // this is not a stat snapshot, file identity, or mutation authority.
-    bool missing = false;
+    // Accepted pin observation; absent exactly when the entry is missing (a
+    // DT_REG name observed in readdir but lost before acquisition). Absence
+    // carries no stat snapshot, file identity, or mutation authority.
+    Optional<struct stat> metadata;
     // Owning acquired object, independent of range advancement and closure.
     // Snapshots and missing observations have no component authority.
     Optional<Path::Component> LiveComponent() const
     {
         return mComponent;
     }
+
+private:
+    friend class FTW::FileRange;
     void OwnComponent(Path::Component component)
     {
         mComponent = std::move(component);
     }
-
-private:
-    friend class FTW::FileRange;
     Optional<Path::Component> mComponent;
     // Private lifetime charge: no Path, Component or traversal State is owned here.
     std::shared_ptr<void> mRetentionCharge;

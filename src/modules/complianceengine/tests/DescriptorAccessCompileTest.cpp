@@ -4,8 +4,10 @@
 #include <ContextInterface.h>
 #include <DescriptorTestAccess.h>
 #include <MockContext.h>
+#include <PathTestAccess.h>
 #include <cstddef>
 #include <filesystem/Descriptor.hpp>
+#include <filesystem/FilesystemCollection.hpp>
 #include <filesystem/LinesRange.hpp>
 #include <filesystem/Path.hpp>
 #include <filesystem/ProcfsDescriptorAccess.hpp>
@@ -348,6 +350,14 @@ static_assert(!CanCloseComponent<C>::value && !CanTestComponentValue<C>::value &
     "Shared acquisition never exposes empty state, native pin or checked close");
 static_assert(std::is_same<decltype(std::declval<const P&>().Root()), C>::value && std::is_same<decltype(std::declval<const P&>().Leaf()), C>::value,
     "Path gives owning pin values");
+// ADR-0048 Decision 2: a moved-from Path diagnoses with std::logic_error
+// before any other validation or native dispatch, so these six accessors
+// (noexcept before ADR-0048) cannot stay noexcept -- a noexcept function that
+// throws terminates the process.
+static_assert(!noexcept(std::declval<const P&>().Root()) && !noexcept(std::declval<const P&>().Leaf()) && !noexcept(std::declval<const P&>().Size()) &&
+                  !noexcept(std::declval<const P&>().RetainedDescriptors()) && !noexcept(std::declval<const P&>().Limits()) &&
+                  !noexcept(std::declval<const P&>().Context()),
+    "A moved-from Path's checked accessors cannot be noexcept (ADR-0048)");
 using Step = P::Step;
 static_assert(!std::is_default_constructible<P>::value && !std::is_copy_constructible<P>::value && std::is_nothrow_move_constructible<P>::value &&
                   std::is_nothrow_move_assignable<P>::value,
@@ -357,6 +367,10 @@ static_assert(!std::is_default_constructible<Step>::value && !std::is_copy_const
     "A delta owns its pins, including after moving");
 static_assert(std::is_same<decltype(std::declval<const Step&>().Target()), C>::value && std::is_same<decltype(std::declval<const Step&>().Metadata()), M>::value,
     "Step publishes owned components and detached facts");
+// ADR-0048 Decision 2: a moved-from Step diagnoses the same way; Target and
+// RetainedDescriptors were noexcept before ADR-0048 and cannot stay so.
+static_assert(!noexcept(std::declval<const Step&>().Target()) && !noexcept(std::declval<const Step&>().RetainedDescriptors()),
+    "A moved-from Step's checked accessors cannot be noexcept (ADR-0048)");
 static_assert(std::is_same<decltype(std::declval<const P&>().Resolve(std::string{}, P::Policy{})), ComplianceEngine::Result<ComplianceEngine::Variant<Step, P::RejectionReason>>>::value,
     "Resolve returns an owning delta or a rejection");
 static_assert(std::is_same<decltype(std::declval<P&>().Apply(std::declval<Step&&>())), ComplianceEngine::Result<Step>>::value &&
@@ -378,6 +392,9 @@ DENY_PATH_MEMBER(AcquireChild, .AcquireChild(std::string{}, P::Policy{}))
 DENY_PATH_MEMBER(IsFrozen, .IsFrozen())
 DENY_PATH_MEMBER(Components, .Components())
 DENY_PATH_MEMBER(Pin, .Pin())
+// LookupName/ToString are private outside the PathTestAccess friend.
+DENY_PATH_MEMBER(LookupName, .LookupName())
+DENY_PATH_MEMBER(ToString, .ToString())
 #undef DENY_PATH_MEMBER
 template <typename T, typename = void>
 struct CanFreeze : std::false_type
@@ -428,8 +445,75 @@ static_assert(CanMakeLines<const ContextInterface&>::value && !CanMakeLines<cons
     "A LinesRange cannot retain a temporary context (path-only overload)");
 static_assert(CanMakeLinesWithPolicy<const ContextInterface&>::value && !CanMakeLinesWithPolicy<const ContextInterface&&>::value,
     "A LinesRange cannot retain a temporary context (path+policy overload)");
-static_assert(std::is_same<decltype(std::declval<const P&>().LookupName()), std::string>::value &&
-                  std::is_same<decltype(std::declval<const P&>().ToString()), std::string>::value,
+// LinesRange::Iterator is move-only and single-pass; every observed use
+// increments or assigns an lvalue (range-for, LinesRangeTest). &-qualifying
+// operator++ and operator=(Iterator&&) removes only the dangling
+// `auto& it = ++range.begin();` form -- the lvalue forms stay well-formed.
+template <typename T, typename = void>
+struct CanIncrementIterator : std::false_type
+{
+};
+template <typename T>
+struct CanIncrementIterator<T, typename Void<decltype(++std::declval<T>())>::type> : std::true_type
+{
+};
+static_assert(CanIncrementIterator<Lines::Iterator&>::value, "An lvalue LinesRange::Iterator can be incremented");
+static_assert(!CanIncrementIterator<Lines::Iterator&&>::value, "A temporary LinesRange::Iterator cannot be incremented");
+template <typename T, typename = void>
+struct CanMoveAssignIntoIterator : std::false_type
+{
+};
+template <typename T>
+struct CanMoveAssignIntoIterator<T, typename Void<decltype(std::declval<T>() = std::declval<Lines::Iterator&&>())>::type> : std::true_type
+{
+};
+static_assert(CanMoveAssignIntoIterator<Lines::Iterator&>::value, "An lvalue LinesRange::Iterator accepts move assignment");
+static_assert(!CanMoveAssignIntoIterator<Lines::Iterator&&>::value, "A temporary LinesRange::Iterator cannot be the target of move assignment");
+// FilesystemCollectionEntry::operator=(FilesystemCollectionEntry&&)
+// is &-qualified the same way, for the same reason -- no observed caller
+// assigns into a temporary, and a borrowed *this could otherwise dangle.
+using Entry = ComplianceEngine::Filesystem::FilesystemCollectionEntry;
+template <typename T, typename = void>
+struct CanMoveAssignIntoEntry : std::false_type
+{
+};
+template <typename T>
+struct CanMoveAssignIntoEntry<T, typename Void<decltype(std::declval<T>() = std::declval<Entry&&>())>::type> : std::true_type
+{
+};
+static_assert(CanMoveAssignIntoEntry<Entry&>::value, "An lvalue FilesystemCollectionEntry accepts move assignment");
+static_assert(!CanMoveAssignIntoEntry<Entry&&>::value, "A temporary FilesystemCollectionEntry cannot be the target of move assignment");
+// FilesystemCollectionEntry completes its rule of five (destructor
+// `= default`); it stays move-only and nonthrowing to move or assign.
+static_assert(!std::is_copy_constructible<Entry>::value && !std::is_copy_assignable<Entry>::value, "FilesystemCollectionEntry is move-only");
+static_assert(std::is_nothrow_move_constructible<Entry>::value && std::is_nothrow_move_assignable<Entry>::value,
+    "FilesystemCollectionEntry moves without throwing");
+// OwnComponent is callable only by the traversal code that produces
+// entries (FTW::FileRange, including its nested State), never by an
+// ordinary caller holding a FilesystemCollectionEntry.
+template <typename T, typename = void>
+struct CanOwnComponent : std::false_type
+{
+};
+template <typename T>
+struct CanOwnComponent<T, typename Void<decltype(std::declval<T&>().OwnComponent(std::declval<C>()))>::type> : std::true_type
+{
+};
+static_assert(!CanOwnComponent<Entry>::value, "OwnComponent must be traversal-private");
+// Handle and Path::Component each merge their two OpenReadOnly
+// overloads into one, defaulting the Policy, so both call forms below name
+// the same declaration.
+static_assert(std::is_same<decltype(std::declval<const H&>().OpenReadOnly()), ComplianceEngine::Result<R>>::value &&
+                  std::is_same<decltype(std::declval<const H&>().OpenReadOnly(R::Policy{})), ComplianceEngine::Result<R>>::value,
+    "Handle::OpenReadOnly is one overload with a default Policy");
+static_assert(std::is_same<decltype(std::declval<const C&>().OpenReadOnly()), ComplianceEngine::Result<R>>::value &&
+                  std::is_same<decltype(std::declval<const C&>().OpenReadOnly(R::Policy{})), ComplianceEngine::Result<R>>::value,
+    "Path::Component::OpenReadOnly is one overload with a default Policy");
+// Path::LookupName()/ToString() are private, no production caller
+// (logging included); the bounded-authority PathTestAccess friend is the
+// only caller left, so these are checked through it, not through P directly.
+static_assert(std::is_same<decltype(ComplianceEngine::Tests::PathTestAccess::LookupName(std::declval<const P&>())), std::string>::value &&
+                  std::is_same<decltype(ComplianceEngine::Tests::PathTestAccess::ToString(std::declval<const P&>())), std::string>::value,
     "Names are returned by owning value, not borrowed storage");
 static_assert(!std::is_default_constructible<D>::value && !std::is_copy_constructible<D>::value && std::is_nothrow_move_constructible<D>::value,
     "Descriptor has one owner or is consumed");

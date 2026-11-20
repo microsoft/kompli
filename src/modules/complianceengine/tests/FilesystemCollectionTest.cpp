@@ -4,6 +4,7 @@
 #include "MockContext.h"
 #include "TemporaryDirectory.h"
 
+#include <PathTestAccess.h>
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
@@ -46,6 +47,7 @@ using ComplianceEngine::Filesystem::StreamFilesystemCollection;
 using ComplianceEngine::Filesystem::SymlinkPolicy;
 using ComplianceEngine::Filesystem::UnsupportedTypeDisposition;
 using ComplianceEngine::Filesystem::FTW::Files;
+using ComplianceEngine::Tests::PathTestAccess;
 namespace
 {
 static_assert(std::is_same<decltype(std::declval<const FilesystemCollectionEntry&>().LiveComponent()), ComplianceEngine::Optional<Path::Component>>::value,
@@ -264,7 +266,7 @@ TEST(FilesystemCollectionTest, MovedRootReportsOriginalSpellingWithoutUsingItAsA
     ASSERT_TRUE(acquired.Value().Is<Path>());
     Path accepted = As<Path>(std::move(acquired).Value());
     ASSERT_TRUE(accepted.Freeze().HasValue());
-    EXPECT_EQ(tree.Path("actual"), accepted.ToString());
+    EXPECT_EQ(tree.Path("actual"), PathTestAccess::ToString(accepted));
     auto files = Files(std::move(accepted), request.rootPath, CollectionContinuation(resolved.Value()));
     ASSERT_TRUE(files.HasValue()) << files.Error().message;
     auto entry = files->begin();
@@ -327,8 +329,8 @@ TEST(FilesystemCollectionTest, NestedInverseRestoresOriginalPhysicalBindingsAfte
     ASSERT_TRUE(root.HasValue()) << root.Error().message;
     ASSERT_TRUE(root.Value().Is<Path>());
     Path accepted = As<Path>(std::move(root).Value());
-    EXPECT_EQ(tree.Path("alias"), accepted.LookupName());
-    EXPECT_EQ(tree.Path("actual"), accepted.ToString());
+    EXPECT_EQ(tree.Path("alias"), PathTestAccess::LookupName(accepted));
+    EXPECT_EQ(tree.Path("actual"), PathTestAccess::ToString(accepted));
     ASSERT_EQ(0, ::rename(tree.Path("actual").c_str(), tree.Path("old").c_str()));
     tree.Directory("actual");
     tree.Directory("actual/a");
@@ -406,7 +408,7 @@ TEST(FilesystemCollectionTest, NestedInverseRestoresOriginalPhysicalBindingsAfte
         ASSERT_TRUE(pin.HasValue());
         seen.push_back(item.Value().path);
         inodes.push_back(pin.Value().Metadata().Stat().st_ino);
-        EXPECT_EQ(item.Value().metadata.st_ino, inodes.back());
+        EXPECT_EQ(item.Value().metadata.Value().st_ino, inodes.back());
         if (seen.size() == 1)
             retainedNestedTarget = std::move(pin);
     }
@@ -452,8 +454,8 @@ TEST(FilesystemCollectionTest, LinkedRootAcceptsDistinctAbsoluteBindingsAfterRep
     ASSERT_TRUE(root.HasValue()) << root.Error().message;
     ASSERT_TRUE(root.Value().Is<Path>());
     Path accepted = As<Path>(std::move(root).Value());
-    EXPECT_EQ(tree.Path("alias"), accepted.LookupName());
-    EXPECT_EQ(tree.Path("actual"), accepted.ToString());
+    EXPECT_EQ(tree.Path("alias"), PathTestAccess::LookupName(accepted));
+    EXPECT_EQ(tree.Path("actual"), PathTestAccess::ToString(accepted));
     ASSERT_EQ(0, ::rename(tree.Path("actual").c_str(), tree.Path("old").c_str()));
     tree.Directory("actual");
     tree.Directory("actual/a");
@@ -545,7 +547,7 @@ TEST(FilesystemCollectionTest, OwnedLiveEntryOutlivesRangeButCollectedSnapshotHa
     ::testing::StrictMock<MockContext> context;
     // No EXPECT_CALL in this test constrains any native seam.
     context.AllowIncidentalNativeAccess();
-    ComplianceEngine::Optional<FilesystemCollectionEntry> owned;
+    ComplianceEngine::Optional<Path::Component> owned;
     ino_t inode = 0;
     {
         auto opened = Files(request, context);
@@ -553,23 +555,18 @@ TEST(FilesystemCollectionTest, OwnedLiveEntryOutlivesRangeButCollectedSnapshotHa
         auto entry = opened->begin();
         ASSERT_NE(entry, opened->end());
         ASSERT_TRUE(entry->HasValue());
-        ASSERT_TRUE(entry->Value().LiveComponent().HasValue());
-        // View exposes a const reference; copy the independently owning pin
-        // value rather than pretending that std::move can transfer its entry.
-        FilesystemCollectionEntry retained;
-        retained.path = entry->Value().path;
-        retained.metadata = entry->Value().metadata;
-        auto pin = entry->Value().LiveComponent();
-        ASSERT_TRUE(pin.HasValue());
-        retained.OwnComponent(std::move(pin).Value());
-        owned = std::move(retained);
-        inode = owned.Value().metadata.st_ino;
+        ASSERT_TRUE(entry->Value().metadata.HasValue());
+        inode = entry->Value().metadata.Value().st_ino;
+        // View exposes a const reference to the traversal-produced entry;
+        // LiveComponent() copies out its independently owning pin -- the
+        // only public way to retain one beyond the range.
+        owned = entry->Value().LiveComponent();
+        ASSERT_TRUE(owned.HasValue());
         opened->Stop();
     }
     ASSERT_EQ(0, unlink(tree.Path("file").c_str()));
     ASSERT_TRUE(owned.HasValue());
-    ASSERT_TRUE(owned.Value().LiveComponent().HasValue());
-    auto inspected = owned.Value().LiveComponent().Value().Stat();
+    auto inspected = owned.Value().Stat();
     ASSERT_TRUE(inspected.HasValue()) << inspected.Error().message;
     EXPECT_EQ(inode, inspected.Value().st_ino);
     owned.Reset();
@@ -1005,10 +1002,9 @@ TEST(FilesystemCollectionTest, MissingRegularNameReportsWithoutFabricatingAMetad
     EXPECT_EQ(0, unlinkStatus) << unlinkError;
     ASSERT_NE(missing, opened->end());
     ASSERT_TRUE(missing->HasValue()) << missing->Error().message;
-    EXPECT_TRUE(missing->Value().missing);
+    EXPECT_FALSE(missing->Value().metadata.HasValue()); // no accepted stat exists
     EXPECT_EQ(tree.Path("root/vanishing"), missing->Value().path);
     EXPECT_FALSE(missing->Value().LiveComponent().HasValue());
-    EXPECT_EQ(0, missing->Value().metadata.st_mode); // no accepted stat exists
     opened->Stop();
 
     tree.File("root/vanishing");
@@ -1478,7 +1474,7 @@ TEST(FilesystemCollectionTest, DistinguishesAbsentRootFromEmptyDirectoryAndFileR
     EXPECT_EQ((std::vector<std::string>{tree.Path("empty")}), Paths(directory->entries));
     ASSERT_TRUE(file.HasValue());
     EXPECT_EQ((std::vector<std::string>{tree.Path("file")}), Paths(file->entries));
-    EXPECT_TRUE(S_ISREG(file->entries[0].metadata.st_mode));
+    EXPECT_TRUE(S_ISREG(file->entries[0].metadata.Value().st_mode));
 }
 
 TEST(FilesystemCollectionTest, NoneAndDepthZeroInspectDirectEntriesWithoutDescending)
@@ -1608,7 +1604,7 @@ TEST(FilesystemCollectionTest, SkipsAndFollowsDirectoryLinksIndependently)
     const auto alias = std::find_if(followed->entries.begin(), followed->entries.end(),
         [&tree](const FilesystemCollectionEntry& entry) { return entry.path == tree.Path("root/alias"); });
     ASSERT_NE(followed->entries.end(), alias);
-    EXPECT_TRUE(S_ISDIR(alias->metadata.st_mode));
+    EXPECT_TRUE(S_ISDIR(alias->metadata.Value().st_mode));
     EXPECT_TRUE(followed->exclusions.empty());
 
     // A file-only follow setting does not cause directory traversal.
@@ -2704,7 +2700,7 @@ TEST(FilesystemCollectionTest, RootDirectoryLinkSkipIsAnExclusionNotAnAbsentRoot
     const auto followed = CollectFilesystem(request);
     ASSERT_TRUE(followed.HasValue());
     EXPECT_EQ(2u, followed->entries.size());
-    EXPECT_TRUE(S_ISDIR(followed->entries[0].metadata.st_mode));
+    EXPECT_TRUE(S_ISDIR(followed->entries[0].metadata.Value().st_mode));
     ASSERT_EQ(1u, followed->exclusions.size());
     EXPECT_EQ(tree.Path("alias/descendant-link"), followed->exclusions[0].path);
     EXPECT_EQ("link policy", followed->exclusions[0].reason);
@@ -2731,7 +2727,7 @@ TEST(FilesystemCollectionTest, RootFileLinkAndChildFileLinkUseIndependentSetting
     const auto followedRoot = CollectFilesystem(file);
     ASSERT_TRUE(followedRoot.HasValue());
     ASSERT_EQ(1u, followedRoot->entries.size());
-    EXPECT_TRUE(S_ISREG(followedRoot->entries[0].metadata.st_mode));
+    EXPECT_TRUE(S_ISREG(followedRoot->entries[0].metadata.Value().st_mode));
     EXPECT_TRUE(followedRoot->exclusions.empty());
 
     FilesystemCollectionRequest children(tree.Path("root"), FilesystemRootKind::Directory);
@@ -2749,7 +2745,7 @@ TEST(FilesystemCollectionTest, RootFileLinkAndChildFileLinkUseIndependentSetting
     const auto alias = std::find_if(followedChild->entries.begin(), followedChild->entries.end(),
         [&tree](const FilesystemCollectionEntry& entry) { return entry.path == tree.Path("root/alias"); });
     ASSERT_NE(followedChild->entries.end(), alias);
-    EXPECT_TRUE(S_ISREG(alias->metadata.st_mode));
+    EXPECT_TRUE(S_ISREG(alias->metadata.Value().st_mode));
     EXPECT_TRUE(followedChild->exclusions.empty());
 
     children.yieldType = FilesystemYieldType::SymbolicLinks;
@@ -2943,7 +2939,7 @@ TEST(FilesystemCollectionTest, ReplacingPinnedChildLinkKeepsAcceptedTargetIdenti
     // observation is published even after the name is replaced.
     struct stat first = {};
     ASSERT_EQ(0, stat(tree.Path("root/first").c_str(), &first));
-    EXPECT_EQ(first.st_ino, alias->metadata.st_ino);
+    EXPECT_EQ(first.st_ino, alias->metadata.Value().st_ino);
 }
 
 TEST(FilesystemCollectionTest, ReplacingPinnedRootLinkKeepsAcceptedTargetIdentity)
@@ -2990,7 +2986,7 @@ TEST(FilesystemCollectionTest, ReplacingPinnedRootLinkKeepsAcceptedTargetIdentit
     // A replacement name cannot change the accepted pinned target snapshot.
     struct stat first = {};
     ASSERT_EQ(0, stat(tree.Path("first").c_str(), &first));
-    EXPECT_EQ(first.st_ino, entry.metadata.st_ino);
+    EXPECT_EQ(first.st_ino, entry.metadata.Value().st_ino);
 }
 
 TEST(FilesystemCollectionTest, FactoryPropagatesNativeRootOpenFailureWithoutTreatingItAsMissing)
@@ -3552,9 +3548,9 @@ TEST(FilesystemCollectionTest, LinkSelectionPublishesAcceptedTargetMetadata)
     ASSERT_NE(followed->entries.end(), link);
     struct stat target = {};
     ASSERT_EQ(0, stat(tree.Path("root/target").c_str(), &target));
-    EXPECT_TRUE(S_ISREG(link->metadata.st_mode));
-    EXPECT_EQ(target.st_dev, link->metadata.st_dev);
-    EXPECT_EQ(target.st_ino, link->metadata.st_ino);
+    EXPECT_TRUE(S_ISREG(link->metadata.Value().st_mode));
+    EXPECT_EQ(target.st_dev, link->metadata.Value().st_dev);
+    EXPECT_EQ(target.st_ino, link->metadata.Value().st_ino);
 
     request.yieldType = FilesystemYieldType::SymbolicLinks;
     request.childFileLinkAction = SymlinkPolicy::DoNotFollow;
