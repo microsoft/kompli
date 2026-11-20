@@ -35,6 +35,13 @@ enum class Format
     Junit
 };
 
+enum class PlanPin
+{
+    Caret,
+    Tilde,
+    Exact
+};
+
 // A rule's mode inside a plan, selected by `plan`'s --audit/--remediate/--enforce
 // toggles and read back by `run`. `Enforce` is accepted and recorded (kept in the
 // contract, see docs/CLI.md) even though nothing can execute it yet.
@@ -112,6 +119,8 @@ struct Options
     std::vector<ParamOverride> paramOverrides;
     // `plan` only: write the generated plan here instead of stdout.
     Optional<std::string> output;
+    PlanPin pin = PlanPin::Caret;
+    bool pinSpecified = false;
 };
 
 void PrintHelp(const std::string& programName);
