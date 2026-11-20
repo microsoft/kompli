@@ -1,57 +1,44 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-#include <CommonUtils.h>
 #include <Evaluator.h>
+#include <GroupsIterator.h>
 #include <PasswdGroupsExist.h>
 #include <Result.h>
-#include <grp.h>
-#include <pwd.h>
+#include <UsersIterator.h>
 #include <set>
 #include <string>
 
 namespace ComplianceEngine
 {
-// NOTE: This procedure has no dedicated unit test. AuditPasswdGroupsExist enumerates the live
-// account and group databases directly through the NSS entry points (setpwent/getpwent,
-// setgrent/getgrent), which resolve against the host's real /etc/passwd and /etc/group. There is
-// no seam to inject fixture data, so the audit's outcome cannot be made deterministic from a test
-// without altering the system databases. The remediation-logic fix is instead covered by code
-// review against the Result<Status> contract exercised by the other procedures.
 Result<Status> AuditPasswdGroupsExist(IndicatorsTree& indicators, ContextInterface& context)
 {
-    UNUSED(context);
+    // This rule checks local files, not NSS sources such as SSSD or systemd.
+    auto groups = GroupsRange::Make(context.GetSpecialFilePath("/etc/group"), context.GetLogHandle());
+    if (!groups.HasValue())
+    {
+        return groups.Error();
+    }
 
-    struct group* grp = nullptr;
-    struct passwd* pwd = nullptr;
     std::set<gid_t> etcGroupGroups;
-
-    setgrent();
-    for (errno = 0, grp = getgrent(); nullptr != grp; errno = 0, grp = getgrent())
+    for (const auto& group : groups.Value())
     {
-        etcGroupGroups.insert(grp->gr_gid);
-    }
-    int status = errno;
-    endgrent();
-    if (0 != status)
-    {
-        return Error(std::string("getgrent failed: ") + strerror(status), status);
+        etcGroupGroups.insert(group.gr_gid);
     }
 
-    setpwent();
+    auto users = UsersRange::Make(context.GetSpecialFilePath("/etc/passwd"), context.GetLogHandle());
+    if (!users.HasValue())
+    {
+        return users.Error();
+    }
+
     Status result = Status::Compliant;
-    for (errno = 0, pwd = getpwent(); nullptr != pwd; errno = 0, pwd = getpwent())
+    for (const auto& user : users.Value())
     {
-        if (etcGroupGroups.find(pwd->pw_gid) == etcGroupGroups.end())
+        if (etcGroupGroups.find(user.pw_gid) == etcGroupGroups.end())
         {
-            result = indicators.NonCompliant(std::string("User's '") + std::string(pwd->pw_name) + "' group " + std::to_string(pwd->pw_gid) +
+            result = indicators.NonCompliant(std::string("User's '") + std::string(user.pw_name) + "' group " + std::to_string(user.pw_gid) +
                                              " from /etc/passwd does not exist in /etc/group");
         }
-    }
-    status = errno;
-    endpwent();
-    if (0 != status)
-    {
-        return Error(std::string("getpwent failed: ") + strerror(status), status);
     }
 
     if (result == Status::Compliant)

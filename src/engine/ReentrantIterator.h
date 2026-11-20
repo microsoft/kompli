@@ -82,10 +82,20 @@ public:
             throw std::logic_error("Dereferencing end iterator");
         }
 
+        fpos_t position;
+        const auto positionStatus = fgetpos(mRange->GetStream(), &position);
+        const auto positionError = errno;
         EntryType* entry = nullptr;
-        if (0 != mGetter(mRange->GetStream(), &mStorage, mBuffer.data(), mBuffer.size(), &entry))
+        auto status = mGetter(mRange->GetStream(), &mStorage, mBuffer.data(), mBuffer.size(), &entry);
+        if (0 != status)
         {
-            auto status = errno;
+            // Older glibc versions also return ERANGE for stream read failures.
+            if (ferror(mRange->GetStream()))
+            {
+                OsConfigLogError(mRange->GetLogHandle(), "Failed to read next entry: input stream read error");
+                throw std::runtime_error("Failed to read next entry: input stream read error");
+            }
+
             if (ENOENT == status)
             {
                 OsConfigLogDebug(mRange->GetLogHandle(), "Reached end of entries in the input stream");
@@ -96,6 +106,13 @@ public:
 
             if (ERANGE == status)
             {
+                // Older glibc versions consume a partial line when the buffer is too small.
+                if (0 != positionStatus || 0 != fsetpos(mRange->GetStream(), &position))
+                {
+                    const auto error = 0 != positionStatus ? positionError : errno;
+                    OsConfigLogError(mRange->GetLogHandle(), "Failed to restore entry position: %s", strerror(error));
+                    throw std::runtime_error("Failed to restore entry position: " + std::string(strerror(error)));
+                }
                 OsConfigLogDebug(mRange->GetLogHandle(), "Buffer too small, resizing to %zu bytes", mBuffer.size() * 2);
                 mBuffer.resize(mBuffer.size() * 2); // Resize buffer if it was too small
                 return next();                      // Retry with the new buffer size

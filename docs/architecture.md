@@ -17,6 +17,15 @@ Kompli design principles are the following:
 
 The main way to extend kompli is by developing new [procedures](../src/modules/complianceengine/src/lib/procedures/).
 
+`PasswdGroupsExist` compares primary group IDs in the local `/etc/passwd` and
+`/etc/group` files. It does not enumerate NSS providers such as SSSD or systemd:
+remote accounts are outside this rule's scope, and an unavailable NSS provider
+must not cause a local-file audit to fail. File-open and read failures still
+surface as audit errors. The shared file iterators check stream errors before
+retrying with a larger buffer, since older glibc versions also report read
+failures as `ERANGE`. Retries restore the stream position so oversized entries
+are not skipped on those versions.
+
 # 2. Overall kompli Architecture
 
 ## 2.1. Repository Layout

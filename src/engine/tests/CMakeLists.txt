@@ -35,6 +35,7 @@ set(PROCEDURES
     procedures/NoDuplicateEntriesTest.cpp
     procedures/NoWorldWritableFilesTest.cpp
     procedures/PasswordChangeDateTest.cpp
+    procedures/PasswdGroupsExistTest.cpp
     procedures/NoUnownedFilesTest.cpp
     procedures/RootPathSecurityTest.cpp
     procedures/SshKeyPermissionsTest.cpp
