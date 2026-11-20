@@ -21,7 +21,9 @@ The main way to extend kompli is by developing new [procedures](../src/modules/c
 `/etc/group` files. It does not enumerate NSS providers such as SSSD or systemd:
 remote accounts are outside this rule's scope, and an unavailable NSS provider
 must not cause a local-file audit to fail. File-open and read failures still
-surface as audit errors.
+surface as audit errors. The shared file iterators check stream errors before
+retrying with a larger buffer, since older glibc versions also report read
+failures as `ERANGE`.
 
 # 2. Overall kompli Architecture
 

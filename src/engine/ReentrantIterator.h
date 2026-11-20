@@ -83,9 +83,16 @@ public:
         }
 
         EntryType* entry = nullptr;
-        if (0 != mGetter(mRange->GetStream(), &mStorage, mBuffer.data(), mBuffer.size(), &entry))
+        auto status = mGetter(mRange->GetStream(), &mStorage, mBuffer.data(), mBuffer.size(), &entry);
+        if (0 != status)
         {
-            auto status = errno;
+            // Older glibc versions also return ERANGE for stream read failures.
+            if (ferror(mRange->GetStream()))
+            {
+                OsConfigLogError(mRange->GetLogHandle(), "Failed to read next entry: input stream read error");
+                throw std::runtime_error("Failed to read next entry: input stream read error");
+            }
+
             if (ENOENT == status)
             {
                 OsConfigLogDebug(mRange->GetLogHandle(), "Reached end of entries in the input stream");
