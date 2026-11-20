@@ -11,6 +11,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <map>
+#include <memory>
+#include <parson.h>
 #include <string>
 #include <unistd.h>
 #include <utility>
@@ -93,9 +95,14 @@ TEST_F(TelemetryTest, TelemetrySerializesEventWithParson)
     close(pipeDescriptors[0]);
     ASSERT_GT(bytesRead, 0);
 
-    auto json = ComplianceEngine::JsonWrapper::FromString(buffer);
-    ASSERT_TRUE(json.HasValue());
-    auto* object = json_value_get_object(json.Value().get());
+    // Parson writes the embedded NUL bytes as "\u0000". JsonWrapper::FromString rejects that by design
+    // (ingress hardening), while the production consumer (nlohmann::json) accepts it, so parse with parson.
+    auto rejected = ComplianceEngine::JsonWrapper::FromString(buffer);
+    EXPECT_FALSE(rejected.HasValue());
+
+    std::unique_ptr<JSON_Value, decltype(&json_value_free)> root(json_parse_string(buffer), json_value_free);
+    ASSERT_NE(nullptr, root.get());
+    auto* object = json_value_get_object(root.get());
     ASSERT_NE(nullptr, object);
     EXPECT_STREQ("audit", json_object_get_string(object, "EventName"));
     EXPECT_EQ(std::string("rule\0\"\n", 7), std::string(json_object_get_string(object, "name"), json_object_get_string_len(object, "name")));

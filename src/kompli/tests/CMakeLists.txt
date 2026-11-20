@@ -14,7 +14,7 @@ add_executable(kompli-cli-tests
 )
 
 target_include_directories(kompli-cli-tests PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../tests
+    ${CMAKE_SOURCE_DIR}/engine/tests
 )
 
 # The schema conformance test reads the shipped schema from the source tree.

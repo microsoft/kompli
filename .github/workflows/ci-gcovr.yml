@@ -50,7 +50,7 @@ jobs:
           clean: true
 
       - name: Docker login
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -158,6 +158,12 @@ jobs:
                   group = "src/common"
               } else if (filename ~ /^src\/modules\//) {
                   match(filename, /^src\/modules\/[^\/]+/)
+                  group = substr(filename, RSTART, RLENGTH)
+              } else if (filename ~ /^src\/tools\/[^\/]+\//) {
+                  match(filename, /^src\/tools\/[^\/]+/)
+                  group = substr(filename, RSTART, RLENGTH)
+              } else if (filename ~ /^src\/[^\/]+\//) {
+                  match(filename, /^src\/[^\/]+/)
                   group = substr(filename, RSTART, RLENGTH)
               } else {
                   group = "other directories"
