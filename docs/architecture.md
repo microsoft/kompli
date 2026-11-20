@@ -23,7 +23,8 @@ remote accounts are outside this rule's scope, and an unavailable NSS provider
 must not cause a local-file audit to fail. File-open and read failures still
 surface as audit errors. The shared file iterators check stream errors before
 retrying with a larger buffer, since older glibc versions also report read
-failures as `ERANGE`.
+failures as `ERANGE`. Retries restore the stream position so oversized entries
+are not skipped on those versions.
 
 # 2. Overall kompli Architecture
 

@@ -82,6 +82,9 @@ public:
             throw std::logic_error("Dereferencing end iterator");
         }
 
+        fpos_t position;
+        const auto positionStatus = fgetpos(mRange->GetStream(), &position);
+        const auto positionError = errno;
         EntryType* entry = nullptr;
         auto status = mGetter(mRange->GetStream(), &mStorage, mBuffer.data(), mBuffer.size(), &entry);
         if (0 != status)
@@ -103,6 +106,13 @@ public:
 
             if (ERANGE == status)
             {
+                // Older glibc versions consume a partial line when the buffer is too small.
+                if (0 != positionStatus || 0 != fsetpos(mRange->GetStream(), &position))
+                {
+                    const auto error = 0 != positionStatus ? positionError : errno;
+                    OsConfigLogError(mRange->GetLogHandle(), "Failed to restore entry position: %s", strerror(error));
+                    throw std::runtime_error("Failed to restore entry position: " + std::string(strerror(error)));
+                }
                 OsConfigLogDebug(mRange->GetLogHandle(), "Buffer too small, resizing to %zu bytes", mBuffer.size() * 2);
                 mBuffer.resize(mBuffer.size() * 2); // Resize buffer if it was too small
                 return next();                      // Retry with the new buffer size

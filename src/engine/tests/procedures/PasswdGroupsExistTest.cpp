@@ -84,6 +84,22 @@ TEST_F(PasswdGroupsExistTest, EndOfFileIsNotAnError)
     EXPECT_EQ(Status::Compliant, result.Value());
 }
 
+TEST_F(PasswdGroupsExistTest, LargePasswdEntryStillRequiresItsGroup)
+{
+    SetFiles("alice:x:1000:12345:" + std::string(4096, 'a') + ":/home/alice:/bin/sh\n", "root:x:0:\n");
+    const auto result = AuditPasswdGroupsExist(mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+}
+
+TEST_F(PasswdGroupsExistTest, LargeGroupEntryIsNotSkipped)
+{
+    SetFiles("alice:x:1000:12345::/home/alice:/bin/sh\n", "users:x:12345:" + std::string(4096, 'a') + "\n");
+    const auto result = AuditPasswdGroupsExist(mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+}
+
 TEST_F(PasswdGroupsExistTest, MissingGroupFileReturnsError)
 {
     mContext.SetSpecialFilePath("/etc/group", mContext.GetTempdirPath() + "/missing-group");
