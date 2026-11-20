@@ -325,6 +325,120 @@ Desired objects (`MmiSet`). Same key-value format as init entries. Triggers exec
 
 Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns a string that begins with `PASS` on success or contains a descriptive log on failure.
 
+## 5.2. Filesystem acquisition
+
+The engine's filesystem code (`src/modules/complianceengine/src/lib/filesystem/`)
+gives procedures a single, pin-based way to look up, read and change files and
+directories, instead of operating on pathnames directly. It is used by the
+log-file, SSH-key and generic file-permissions procedures and by every
+directory walk.
+
+**Roles.** `Descriptor` is the innermost, move-only owner of one native file
+descriptor plus the `ContextInterface` that must close it; it has no public
+accessors beyond its context. `Handle` wraps a `Descriptor` together with the
+`Metadata` (type, `stat`, lookup/target mount identifiers, and the name it was
+looked up and resolved under) captured when it was pinned, and exposes the
+stat, read-only open, ownership and mode operations. `Path::Component` is a copyable, non-nullable,
+shared view of an already-acquired `Handle`; there is no way to construct an
+empty one, and absence is expressed as `Optional<Component>`. `Path::Step` is
+a move-only, pinned delta from a `Path`'s current leaf — the result of
+`Resolve()` — that releases its own pins by RAII if it is dropped instead of
+applied. `Path` itself is a physical pin stack that always holds the process
+root and every ancestor down to its current barrier. `FTW::FileRange` (under
+`filesystem/FilesystemCollection.hpp`) drives a directory walk over a `Path`,
+using `FTW::Detail::DirectoryCursor` to enumerate children and retaining the
+inverse `Step`s needed to unwind the walk.
+
+**Sealed descriptor authority.** Every native descriptor stays behind
+`ContextInterface`: ordinary code cannot obtain, duplicate or release a raw
+descriptor integer, and `ProcfsDescriptorAccess` (the verified `/proc` session
+described below) cannot be constructed outside the filesystem wrappers.
+`ContextInterface` itself has a small, fixed set of production subclasses
+(`CommonContext` and the CLI and Guest Configuration contexts derived from it)
+plus a test mock, all
+under project control; adding another subclass is a reviewed change, not an
+API available to ordinary callers. A `ContextInterface` is application-scoped:
+one instance is created for the process or CLI invocation and must outlive
+every `Descriptor`, `Handle`, `Path`, `Step` and directory cursor it issued.
+Acquisition from a temporary context is rejected at compile time (deleted
+rvalue overloads on `Path::Make`, `Descriptor`'s and `Handle`'s pinning
+constructors, and the internal `ContextInterface` open operations), so a
+dangling context reference cannot be constructed.
+
+**Barrier, Resolve and Apply.** A `Path` always keeps the process root pinned,
+even when its traversal barrier narrows. `Freeze()` moves the barrier to the
+current leaf and only narrows it — never widens it — so a walk cannot later
+escape its own start directory. `Resolve(name, policy)` looks up one child
+name against policy (symlink handling per component class, mount-crossing
+rules) and returns a `Step` without mutating the `Path`; `Apply(Step&&)`
+commits that `Step` onto the `Path` and returns the inverse `Step` needed to
+undo it. Both reject any attempt to cross the barrier, including a `..` that
+would pop above it or an absolute link target outside the current root
+bindings.
+
+**Moves and moved-from access.** `Descriptor`, `Handle`, `Path` and `Step` are
+move-only owners. Moving one of them transfers its pinned state outright: the
+moved-from object retains no payload. Every state-reading operation on a
+moved-from `Path` or `Step` (`Resolve`, `Apply`, `Freeze`, `Root`, `Leaf`,
+`Metadata`, and so on) throws `std::logic_error` before any native dispatch,
+so stale use fails closed instead of silently reading retired state;
+destroying or re-assigning a moved-from owner stays a safe no-op.
+
+**Close.** Disposal is destructor-only RAII: there is no public `Close()`.
+Each owner attempts its native close exactly once, never retries it, and logs
+any failure as a single best-effort diagnostic (emission is not guaranteed);
+`EBADF` is logged as an ownership bug. This is read/`O_PATH` cleanup only —
+these descriptors carry no buffered writes to lose. The generic file writer
+is explicitly excluded: it must still use an explicit checked commit (temp
+file, `fsync`, checked close, atomic rename), because RAII only abandons an
+uncommitted write, it does not commit one.
+
+**Limits.** Filesystem acquisition bounds memory with counts and explicit
+length limits, not running byte totals: an absolute input path is limited to
+the configured target length (4096 bytes by default), each name to `NAME_MAX`,
+and a symlink target is read once into a bounded buffer, all checked before
+any native call; a walk's
+retained snapshots are bounded by `FilesystemCollectionLimits::retainedObservations`
+(an entry count, default 8192), not a byte budget. Every limit is fail-closed:
+reaching it is an explicit error, never a silent truncation or a partial,
+reported-as-complete result.
+
+**Platform requirement: a verified procfs session.** Reading file contents,
+enumerating a directory and changing a file's mode reopen the held pin
+through the current task's `/proc/self/task/<tid>/fd` magic link, after
+verifying that `/proc` shows this process and task. Today, every acquired
+pin's mount identifier is also read eagerly from the matching, verified
+`/proc/.../fdinfo` entry at acquisition time, whether or not the active
+policy confines by mount. A missing `/proc`, a `/proc` from a different PID
+namespace, or a failed identity check makes acquisition — and so every typed
+audit or remediation — fail closed with an explicit error: never a
+wrong-object operation and never a compliant or skipped verdict. The legacy,
+by-name `FilePermissions` route and `FilePermissionsCollection`'s
+directory-walk route are not yet migrated onto this verified path; they
+still build their own `/proc/self/fd/<fd>` text paths for the mutation
+syscalls.
+
+**Point-in-time verdict semantics.** A verdict (audit or remediation result)
+describes the objects that were bound to the configured path *when they were
+pinned*. There is no re-resolution after the walk and no change notification:
+if the path's parent is renamed or replaced after pinning, the report still
+names the originally configured path, but it describes the objects acquired
+at that earlier point in time. This drift is an accepted limitation for
+periodic audits, not a correctness bug to work around.
+
+**Remediation safety.** Permission remediation refuses to change a
+non-directory object whose hard-link count is above one — directories are
+exempt, since they cannot be hard-linked — so changing a file reachable from
+the scanned tree cannot also re-own or re-mode a different name for the same
+inode elsewhere on the same filesystem. The check runs both at acquisition
+time and again, freshly, immediately before each mutation; a narrow window
+between opening an object and its first inspection remains. Symlinks are
+never followed during pinned acquisition unless a policy explicitly opts in
+per link class (prefix, file or directory), and every pin is opened with
+`O_NOFOLLOW` on its final component. The not-yet-migrated by-name
+`FilePermissions` route opens its configured path in one call, so it only
+refuses a symlink in the final component.
+
 ## 5.3. kompli CLI Mode
 
 The kompli CLI (`src/modules/complianceengine/src/kompli/`) is a standalone CLI

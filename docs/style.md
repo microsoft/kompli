@@ -190,6 +190,25 @@ Apart from that there are style rules that can't be expressed in clang-format bu
 # Error Handling
 - For C, return integer status codes for functions that can fail, typically using standard errno values, and 0 for success
 - For C++ using complex/optional error types is recommended
+- `Result<T>`, `Result<void>` and `Optional<T>` (`src/modules/complianceengine/src/lib/Result.h`,
+  `Optional.h`) and `Variant<...>` (`Variant.hpp`) are the engine's value
+  wrappers for fallible and optional/sum-typed returns; prefer them over
+  inventing a new error or optional-value shape:
+  - every payload type they hold must have a nonthrowing move constructor and
+    destructor (enforced with `static_assert`s), so the wrappers' own move and
+    reset operations are unconditionally `noexcept`;
+  - `Result<T>`/`Optional<T>` construct their payload before committing any
+    tag or pointer change, so a throwing constructor never leaves a half-set
+    object;
+  - after a whole-object move, `Result<T>`, `Result<void>` and `Variant` enter
+    a diagnosed moved-from state: state queries (`HasValue()`, `operator bool`,
+    `Variant::Is<T>()`) report false/no-value, and value-producing accessors
+    (`Value()`, `Error()`, `Variant::Get<T>()`/`As<T>()`) throw
+    `std::logic_error` instead of reading retired state; destroying or
+    reassigning a moved-from wrapper stays safe. `Optional<T>` instead treats
+    moved-from as its ordinary empty state.
+  - use `Result<void>` for an operation that can fail but returns nothing on
+    success, instead of `Optional<Error>` or a bare boolean.
 - Always validate function inputs
 - Use early returns for validation and error conditions
 - Log errors with descriptive messages using OsConfigLogError, OsConfigLogWarning, or OsConfigLogInfo
