@@ -339,11 +339,11 @@ directory walk.
 
 **Roles.** `Descriptor` is the innermost, move-only owner of one native file
 descriptor plus the `ContextInterface` that must close it; it has no public
-accessors beyond its context. `Handle` wraps a `Descriptor` together with the
+accessors beyond its context. `Pin` wraps a `Descriptor` together with the
 `Metadata` (type, `stat`, lookup/target mount identifiers, and the name it was
 looked up and resolved under) captured when it was pinned, and exposes the
 stat, read-only open, ownership and mode operations. `Path::Component` is a copyable, non-nullable,
-shared view of an already-acquired `Handle`; there is no way to construct an
+shared view of an already-acquired `Pin`; there is no way to construct an
 empty one, and absence is expressed as `Optional<Component>`. `Path::Step` is
 a move-only, pinned delta from a `Path`'s current leaf — the result of
 `Resolve()` — that releases its own pins by RAII if it is dropped instead of
@@ -363,9 +363,9 @@ plus a test mock, all
 under project control; adding another subclass is a reviewed change, not an
 API available to ordinary callers. A `ContextInterface` is application-scoped:
 one instance is created for the process or CLI invocation and must outlive
-every `Descriptor`, `Handle`, `Path`, `Step` and directory cursor it issued.
+every `Descriptor`, `Pin`, `Path`, `Step` and directory cursor it issued.
 Acquisition from a temporary context is rejected at compile time (deleted
-rvalue overloads on `Path::Make`, `Descriptor`'s and `Handle`'s pinning
+rvalue overloads on `Path::Make`, `Descriptor`'s and `Pin`'s pinning
 constructors, and the internal `ContextInterface` open operations), so a
 dangling context reference cannot be constructed.
 
@@ -380,7 +380,7 @@ undo it. Both reject any attempt to cross the barrier, including a `..` that
 would pop above it or an absolute link target outside the current root
 bindings.
 
-**Moves and moved-from access.** `Descriptor`, `Handle`, `Path` and `Step` are
+**Moves and moved-from access.** `Descriptor`, `Pin`, `Path` and `Step` are
 move-only owners. Moving one of them transfers its pinned state outright: the
 moved-from object retains no payload. Every state-reading operation on a
 moved-from `Path` or `Step` (`Resolve`, `Apply`, `Freeze`, `Root`, `Leaf`,
