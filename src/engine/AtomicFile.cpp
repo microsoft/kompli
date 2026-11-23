@@ -136,7 +136,7 @@ Result<TemporaryFile> CreateTemporaryFile(int parent, const std::string& path)
 
 Result<bool> CopyExtendedAttributes(int source, int target, const std::string& path)
 {
-    ssize_t listSize;
+    ssize_t listSize = 0;
     do
     {
         listSize = flistxattr(source, nullptr, 0);
@@ -155,7 +155,7 @@ Result<bool> CopyExtendedAttributes(int source, int target, const std::string& p
     }
 
     std::vector<char> names(static_cast<size_t>(listSize));
-    ssize_t actualSize;
+    ssize_t actualSize = 0;
     do
     {
         actualSize = flistxattr(source, names.data(), names.size());
@@ -176,7 +176,7 @@ Result<bool> CopyExtendedAttributes(int source, int target, const std::string& p
         }
         const char* name = names.data() + position;
 
-        ssize_t valueSize;
+        ssize_t valueSize = 0;
         do
         {
             valueSize = fgetxattr(source, name, nullptr, 0);
@@ -189,7 +189,7 @@ Result<bool> CopyExtendedAttributes(int source, int target, const std::string& p
         std::vector<char> value(static_cast<size_t>(valueSize));
         if (valueSize > 0)
         {
-            ssize_t readSize;
+            ssize_t readSize = 0;
             do
             {
                 readSize = fgetxattr(source, name, value.data(), value.size());
