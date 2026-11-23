@@ -23,7 +23,7 @@ their relationships and the [CLI contract](cli.md) for commands and formats.
 | <a id="rule"></a>**Rule** | One `spec.rules` entry. Its `id` selects a rule within a definition; `ruleId` is the separate stable external-correlation value; `ruleName` names its core procedure. |
 | <a id="plan"></a>**Plan** | CLI JSON selecting definition files and per-rule modes/parameters for a later `run`; it references definitions rather than embedding their procedures. |
 | <a id="typed-result"></a>**Typed result** | In-process C++ `Result<T>`, carrying a value or error; an audit value is `AuditResult` with status and payload. This type is not a JSON result or a separate public execution protocol. |
-| <a id="rule-result"></a>**Rule result** | Canonical per-rule JSON in a CLI result document's `rules` array. Its status, action, parameters and diagnostics describe one selected rule, not the whole run. |
+| <a id="rule-result"></a>**Rule result** | Canonical per-rule JSON in a CLI result document's `rules` array, which has one entry per benchmark rule. A rule selected by the plan carries its status, action, parameters and diagnostics; a rule absent from the plan has status `Skipped` and no `action`. Each entry describes one rule, not the whole run. |
 | <a id="result-document"></a>**Result document** | Whole-run JSON from `BenchmarkFormatter`, with `timestamp`, `host`, `rules`, `durationMs` and overall `status`. CLI `render` consumes this document, not a bare rule result. |
 
 ## Machine Configuration interfaces
