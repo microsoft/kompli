@@ -17,7 +17,7 @@ namespace ComplianceEngine
 ContextInterface::ContextInterface()
 {
     // Each context owns one budget throughout the lifetime of its borrowed
-    // Descriptor/Handle/cursor owners. A failed RLIMIT query is retained as
+    // Descriptor/Pin/cursor owners. A failed RLIMIT query is retained as
     // an explicit error on every attempted managed acquisition.
     struct rlimit limit = {};
     if (::getrlimit(RLIMIT_NOFILE, &limit) != 0)

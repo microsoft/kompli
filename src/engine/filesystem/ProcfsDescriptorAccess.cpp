@@ -257,7 +257,7 @@ Result<std::uint64_t> ProcfsDescriptorAccess::ReadMountIdBytes(const ContextInte
 
 // The byte cap is validated once, at acceptance (Path::Make's ResolverLimits
 // check, the FTW continuation check, and FilesystemCollection's request
-// validation all reject 0 and an overflowing cap before any Path/Handle
+// validation all reject 0 and an overflowing cap before any Path/Pin
 // acquisition can reach here); ReadMountId relies on that validation instead
 // of re-checking the cap itself.
 // Move misuse (a consumed target or a consumed procfs session) still throws

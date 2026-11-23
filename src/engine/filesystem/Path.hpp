@@ -4,8 +4,8 @@
 #ifndef COMPLIANCEENGINE_FILESYSTEM_PATH_HPP
 #define COMPLIANCEENGINE_FILESYSTEM_PATH_HPP
 
-#include "Handle.hpp"
 #include "PathLinkAccess.hpp"
+#include "Pin.hpp"
 #include "PrefixLimits.hpp"
 #include "Variant.hpp"
 
@@ -107,17 +107,17 @@ public:
     private:
         friend class Path;
         friend class FTW::Detail::DirectoryCursor;
-        explicit Component(Detail::Handle owned);
-        // The shared owner is immutable; these read the shared Handle's
+        explicit Component(Detail::Pin owned);
+        // The shared owner is immutable; these read the shared Pin's
         // acquisition directly (no copy), needing Component's private
-        // mAcquisition plus the same friend-chain access to Handle/Metadata
+        // mAcquisition plus the same friend-chain access to Pin/Metadata
         // Path already has -- Component, nested in Path, inherits it.
         static bool SameAcquisition(const Component& first, const Component& second) noexcept;
         static std::size_t LookupNameBytes(const Component& owner) noexcept;
         static std::size_t EffectiveNameBytes(const Component& owner) noexcept;
         static std::string LookupName(const Component& owner);
         static std::string EffectiveName(const Component& owner);
-        std::shared_ptr<const Detail::Handle> mAcquisition;
+        std::shared_ptr<const Detail::Pin> mAcquisition;
     };
 
     class Step
@@ -216,11 +216,11 @@ private:
     // Checked root-component factory: dispatches through Component's
     // private constructor, so it stays a private member of Path, the
     // narrowest existing friend -- not an anonymous-namespace function.
-    static Component MakeRootComponent(Detail::Handle root);
+    static Component MakeRootComponent(Detail::Pin root);
     // Checked pinned-link readers: dispatch through ContextInterface's
     // friend-gated native surface (ReadLink/StatFile/StatusFlags/...), so
     // they stay private members of Path, the narrowest existing friend that
-    // needs no Handle/Component state -- not anonymous-namespace functions.
+    // needs no Pin/Component state -- not anonymous-namespace functions.
     static Result<Detail::LinkTarget> ReadPinnedLink(const Detail::Descriptor& linkPin, std::size_t targetByteCap);
     static Result<Detail::LinkTarget> ReadVerifiedLinkText(const Detail::Descriptor& linkPin, const struct stat& before, std::size_t targetByteCap);
     std::shared_ptr<const State> mState;

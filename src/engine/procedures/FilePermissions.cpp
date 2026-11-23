@@ -230,8 +230,8 @@ Result<Status> EnsureFilePermissionsCollectionHelper(const FilePermissionsCollec
     }
 }
 
-template <typename Pin>
-static Result<Status> AuditFilePermissionsImpl(const FilePermissionsParams& params, const Pin* pin, IndicatorsTree& indicators, ContextInterface& context)
+template <typename PinnedObject>
+static Result<Status> AuditFilePermissionsImpl(const FilePermissionsParams& params, const PinnedObject* pin, IndicatorsTree& indicators, ContextInterface& context)
 {
     assert(params.behavior.HasValue());
     if (params.groupId.HasValue() && (params.group.HasValue() || params.groupId.Value() < 0))
@@ -428,8 +428,8 @@ Optional<Status> RefuseMutationIfHardLinked(const std::string& path, bool isDire
 // A fresh (live) link-count read taken right before a mutation. The pinned
 // route re-stats through the pin's own identity-verified round trip; the
 // by-name route re-stats the already-held descriptor directly.
-template <typename Pin>
-Result<nlink_t> FreshLinkCount(const Pin* pin, int fd)
+template <typename PinnedObject>
+Result<nlink_t> FreshLinkCount(const PinnedObject* pin, int fd)
 {
     if (nullptr != pin)
     {
@@ -452,9 +452,9 @@ Result<nlink_t> FreshLinkCount(const Pin* pin, int fd)
 // Shared remediation body. The pinned caller borrows its already acquired
 // target; the compatibility path caller opens once and may additionally check
 // a historical identity. Only the pinned caller preserves collector continuity.
-template <typename Pin>
-Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params, const Optional<FileIdentity>& expectedIdentity, const Pin* pin,
-    IndicatorsTree& indicators, ContextInterface& context)
+template <typename PinnedObject>
+Result<Status> RemediateFilePermissionsImpl(const FilePermissionsParams& params, const Optional<FileIdentity>& expectedIdentity,
+    const PinnedObject* pin, IndicatorsTree& indicators, ContextInterface& context)
 {
     if (params.groupId.HasValue() && (params.group.HasValue() || params.groupId.Value() < 0))
     {

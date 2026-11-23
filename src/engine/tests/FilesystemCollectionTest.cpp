@@ -581,7 +581,7 @@ TEST(FilesystemCollectionTest, StopBeforeFirstPullReleasesUnyieldedFilePinOnce)
     ::testing::StrictMock<MockContext> context;
     // No EXPECT_CALL in this test constrains any native seam.
     context.AllowIncidentalNativeAccess();
-    struct Pin
+    struct PinRecord
     {
         int descriptor = -1;
         dev_t device = 0;
@@ -591,7 +591,7 @@ TEST(FilesystemCollectionTest, StopBeforeFirstPullReleasesUnyieldedFilePinOnce)
     };
     // Native mocks are noexcept. Bound all bookkeeping before entering them;
     // record failures as scalars and assert only after returning to the test.
-    Pin openedPins[128] = {};
+    PinRecord openedPins[128] = {};
     std::size_t openedCount = 0;
     std::size_t liveCount = 0;
     bool tooManyPins = false, badStat = false, duplicateOpen = false;
@@ -609,7 +609,7 @@ TEST(FilesystemCollectionTest, StopBeforeFirstPullReleasesUnyieldedFilePinOnce)
                 tooManyPins = true;
             else
             {
-                Pin& pin = openedPins[openedCount++];
+                PinRecord& pin = openedPins[openedCount++];
                 pin.descriptor = descriptor;
                 pin.device = held.st_dev;
                 pin.inode = held.st_ino;
@@ -668,7 +668,7 @@ TEST(FilesystemCollectionTest, StopBeforeFirstPullReleasesUnyieldedFilePinOnce)
         std::size_t directoryPins = 0;
         for (const auto index : ownedPins)
         {
-            const Pin& pin = openedPins[index];
+            const PinRecord& pin = openedPins[index];
             EXPECT_EQ(0u, pin.closeAttempts);
             struct stat held = {};
             ASSERT_EQ(0, fstat(pin.descriptor, &held));

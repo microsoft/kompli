@@ -33,7 +33,7 @@ namespace Detail
 {
 class Descriptor;
 class ProcfsDescriptorAccess;
-class Handle;
+class Pin;
 struct LinkTarget;
 } // namespace Detail
 namespace FTW
@@ -45,7 +45,7 @@ class DirectoryCursor;
 } // namespace FTW
 class Path;
 class ReadableFile;
-enum class Type; // Directory or RegularFile; full definition in filesystem/Handle.hpp.
+enum class Type; // Directory or RegularFile; full definition in filesystem/Pin.hpp.
 } // namespace Filesystem
 // A single network interface as reported by the system: its name and the IFF_* flags
 // bitmask (see <net/if.h>). Produced by ContextInterface::GetNetworkInterfaces().
@@ -189,7 +189,7 @@ protected:
 private:
     friend class Filesystem::Detail::Descriptor;
     friend class Filesystem::Detail::ProcfsDescriptorAccess;
-    friend class Filesystem::Detail::Handle;
+    friend class Filesystem::Detail::Pin;
     friend class Filesystem::Path;
     friend class Filesystem::ReadableFile;
     friend class Filesystem::FTW::Detail::DirectoryCursor;

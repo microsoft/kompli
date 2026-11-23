@@ -34,7 +34,7 @@ public:
 
 private:
     friend class ::ComplianceEngine::ContextInterface;
-    friend class ::ComplianceEngine::Filesystem::Detail::Handle;
+    friend class ::ComplianceEngine::Filesystem::Detail::Pin;
     friend class ::ComplianceEngine::Filesystem::Path;
     friend class ::ComplianceEngine::Tests::DescriptorTestAccess;
     static Result<ProcfsDescriptorAccess> Make(const ContextInterface& context);
@@ -65,7 +65,7 @@ private:
     // CurrentProcessId/CurrentThreadId/StatFile, all synchronous); it does
     // not retain it, so no deleted rvalue overload applies here.
     bool VerifyRole(const ContextInterface& context, Role role) const;
-    // Only Path/Handle's acquisition internals and the test-access friend may
+    // Only Path/Pin's acquisition internals and the test-access friend may
     // read a verified fdinfo mount ID; an unvalidated byte cap must never
     // reach here from outside those acceptance points (see Path::Make's
     // ResolverLimits validation and FilesystemCollection's request validation).

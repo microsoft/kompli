@@ -22,7 +22,7 @@ using ComplianceEngine::ContextInterface;
 using ComplianceEngine::Filesystem::Type;
 using ComplianceEngine::Filesystem::Detail::Descriptor;
 using Procfs = ComplianceEngine::Filesystem::Detail::ProcfsDescriptorAccess;
-using Handle = ComplianceEngine::Filesystem::Detail::Handle;
+using Pin = ComplianceEngine::Filesystem::Detail::Pin;
 using Profile = ContextInterface::OpenProfile;
 
 static_assert(noexcept(std::declval<const ContextInterface&>().GetLogHandle()), "Logging access is nonthrowing");
@@ -112,22 +112,22 @@ DENY_CONTEXT_CALL(NativeThreadId, .NativeThreadId())
     };                                                                                                                                                 \
     static_assert(!CanHelper##name<ComplianceEngine::Filesystem::wrapper>::value, #name " must be wrapper-private");
 
-DENY_HELPER_CALL(ActivateReadOnly, Detail::Handle,
+DENY_HELPER_CALL(ActivateReadOnly, Detail::Pin,
     (std::declval<const ContextInterface&>(), std::declval<const Descriptor&>(), std::declval<const struct stat&>(), Type::RegularFile))
-DENY_HELPER_CALL(OpenAndVerifyAlias, Detail::Handle,
+DENY_HELPER_CALL(OpenAndVerifyAlias, Detail::Pin,
     (std::declval<const ContextInterface&>(), std::declval<const Procfs&>(), std::declval<const Descriptor&>(), std::declval<const struct stat&>(), Type::RegularFile))
-DENY_HELPER_CALL(AcquirePinnedObject, Detail::Handle,
+DENY_HELPER_CALL(AcquirePinnedObject, Detail::Pin,
     (std::declval<const ContextInterface&>(), std::declval<Descriptor>(), std::size_t{}, std::declval<const char*>()))
 DENY_HELPER_CALL(ReadPinnedLink, Path, (std::declval<const Descriptor&>(), std::size_t{}))
 DENY_HELPER_CALL(ReadVerifiedLinkText, Path, (std::declval<const Descriptor&>(), std::declval<const struct stat&>(), std::size_t{}))
-// Handle::Impl/Path::Impl/ProcfsDescriptorAccess::Impl do not exist as
+// Pin::Impl/Path::Impl/ProcfsDescriptorAccess::Impl do not exist as
 // wrapper types (no CanNameImpl target exists for any of these classes;
 // see below); each helper below is a direct private static member of its
 // narrowest friended owner, covered here individually.
-DENY_HELPER_CALL(Inspect, Detail::Handle, (std::declval<const Handle&>()))
-DENY_HELPER_CALL(SetModeWithProcfs, Detail::Handle, (std::declval<const Handle&>(), std::declval<const Procfs&>(), mode_t{}))
-DENY_HELPER_CALL(PinProcessRoot, Detail::Handle, (std::declval<const ContextInterface&>(), std::declval<ComplianceEngine::Filesystem::PrefixLimits>()))
-DENY_HELPER_CALL(MakeRootComponent, Path, (std::declval<ComplianceEngine::Filesystem::Detail::Handle>()))
+DENY_HELPER_CALL(Inspect, Detail::Pin, (std::declval<const Pin&>()))
+DENY_HELPER_CALL(SetModeWithProcfs, Detail::Pin, (std::declval<const Pin&>(), std::declval<const Procfs&>(), mode_t{}))
+DENY_HELPER_CALL(PinProcessRoot, Detail::Pin, (std::declval<const ContextInterface&>(), std::declval<ComplianceEngine::Filesystem::PrefixLimits>()))
+DENY_HELPER_CALL(MakeRootComponent, Path, (std::declval<ComplianceEngine::Filesystem::Detail::Pin>()))
 DENY_HELPER_CALL(SameAcquisition, Path::Component,
     (std::declval<const ComplianceEngine::Filesystem::Path::Component&>(), std::declval<const ComplianceEngine::Filesystem::Path::Component&>()))
 DENY_HELPER_CALL(LookupNameBytes, Path::Component, (std::declval<const ComplianceEngine::Filesystem::Path::Component&>()))
@@ -202,7 +202,7 @@ static_assert(!CanReleaseOwned<Descriptor>::value, "ReleaseOwned must be Descrip
 
 // ReadMountId and VerifyRole are private non-static members of
 // ProcfsDescriptorAccess, callable only through its friend boundary
-// (ContextInterface, Handle, Path, and the test-access friend), not by an
+// (ContextInterface, Pin, Path, and the test-access friend), not by an
 // ordinary caller holding a session by const reference.
 #define DENY_PROCFS_MEMBER_CALL(name, arguments)                                                                                                       \
     template <typename T, typename = void>                                                                                                             \
@@ -294,7 +294,7 @@ namespace
 using C = ComplianceEngine::Filesystem::Path::Component;
 using D = ComplianceEngine::Filesystem::Detail::Descriptor;
 using M = ComplianceEngine::Filesystem::Metadata;
-using H = ComplianceEngine::Filesystem::Detail::Handle;
+using Pin = ComplianceEngine::Filesystem::Detail::Pin;
 static_assert(!std::is_default_constructible<C>::value, "Component requires a complete acquisition");
 static_assert(std::is_nothrow_copy_constructible<C>::value && std::is_nothrow_copy_assignable<C>::value, "Shared acquisition copy cannot throw");
 static_assert(std::is_nothrow_move_constructible<C>::value && std::is_nothrow_move_assignable<C>::value, "Move-as-copy cannot throw");
@@ -500,12 +500,12 @@ struct CanOwnComponent<T, typename Void<decltype(std::declval<T&>().OwnComponent
 {
 };
 static_assert(!CanOwnComponent<Entry>::value, "OwnComponent must be traversal-private");
-// Handle and Path::Component each merge their two OpenReadOnly
+// Pin and Path::Component each merge their two OpenReadOnly
 // overloads into one, defaulting the Policy, so both call forms below name
 // the same declaration.
-static_assert(std::is_same<decltype(std::declval<const H&>().OpenReadOnly()), ComplianceEngine::Result<R>>::value &&
-                  std::is_same<decltype(std::declval<const H&>().OpenReadOnly(R::Policy{})), ComplianceEngine::Result<R>>::value,
-    "Handle::OpenReadOnly is one overload with a default Policy");
+static_assert(std::is_same<decltype(std::declval<const Pin&>().OpenReadOnly()), ComplianceEngine::Result<R>>::value &&
+                  std::is_same<decltype(std::declval<const Pin&>().OpenReadOnly(R::Policy{})), ComplianceEngine::Result<R>>::value,
+    "Pin::OpenReadOnly is one overload with a default Policy");
 static_assert(std::is_same<decltype(std::declval<const C&>().OpenReadOnly()), ComplianceEngine::Result<R>>::value &&
                   std::is_same<decltype(std::declval<const C&>().OpenReadOnly(R::Policy{})), ComplianceEngine::Result<R>>::value,
     "Path::Component::OpenReadOnly is one overload with a default Policy");
@@ -526,13 +526,13 @@ struct CanDescriptorHasValue<T, typename Void<decltype(std::declval<T&>().HasVal
 {
 };
 static_assert(!CanDescriptorHasValue<D>::value, "No empty Descriptor API");
-static_assert(!CanCloseComponent<D>::value && !CanCloseComponent<H>::value, "Unique owners cannot explicitly close");
-static_assert(std::is_nothrow_destructible<D>::value && std::is_nothrow_destructible<H>::value && std::is_nothrow_destructible<C>::value,
+static_assert(!CanCloseComponent<D>::value && !CanCloseComponent<Pin>::value, "Unique owners cannot explicitly close");
+static_assert(std::is_nothrow_destructible<D>::value && std::is_nothrow_destructible<Pin>::value && std::is_nothrow_destructible<C>::value,
     "Owner disposal is noexcept");
-static_assert(std::is_nothrow_move_constructible<H>::value && std::is_nothrow_move_assignable<H>::value, "Handle transfers without copying names");
-static_assert(std::is_same<decltype(std::declval<const H&>().Metadata()), M>::value && !noexcept(std::declval<const H&>().Metadata()) &&
+static_assert(std::is_nothrow_move_constructible<Pin>::value && std::is_nothrow_move_assignable<Pin>::value, "Pin transfers without copying names");
+static_assert(std::is_same<decltype(std::declval<const Pin&>().Metadata()), M>::value && !noexcept(std::declval<const Pin&>().Metadata()) &&
                   std::is_same<decltype(std::declval<const Step&>().Metadata()), M>::value && !noexcept(std::declval<const Step&>().Metadata()),
-    "Handle and Step produce owning fallible metadata copies");
+    "Pin and Step produce owning fallible metadata copies");
 static_assert(!std::is_default_constructible<M>::value, "Metadata cannot be fabricated");
 static_assert(!std::is_constructible<ComplianceEngine::Filesystem::LookupMountId, std::uint64_t>::value &&
                   !std::is_constructible<ComplianceEngine::Filesystem::TargetMountId, std::uint64_t>::value,
@@ -581,7 +581,7 @@ struct CanOldEffective<T, typename Void<decltype(std::declval<T&>().EffectiveNam
 {
 };
 // No class in this module defines a struct/class named Impl (see the
-// DENY_HELPER_CALL entries above for Descriptor's, Handle's, Path's,
+// DENY_HELPER_CALL entries above for Descriptor's, Pin's, Path's,
 // Path::Component's, and ProcfsDescriptorAccess's private members).
 // DirectoryCursor's own helper, OpenChildren, is a plain private static
 // member declared directly on DirectoryCursor, checked the same way below.
@@ -593,12 +593,12 @@ template <typename T>
 struct CanHelperOpenChildren<T, typename Void<decltype(T::OpenChildren(std::declval<C>()))>::type> : std::true_type
 {
 };
-static_assert(!CanOpenChildren<C>::value && !CanOpenChildren<H>::value, "Directory enumeration is FTW-only");
-static_assert(!CanOldAcquired<C>::value && !CanOldAcquired<H>::value && !CanOldAcquired<Step>::value, "No duplicate observation API");
-static_assert(!CanOldLookup<C>::value && !CanOldLookup<H>::value && !CanOldEffective<C>::value && !CanOldEffective<H>::value,
+static_assert(!CanOpenChildren<C>::value && !CanOpenChildren<Pin>::value, "Directory enumeration is FTW-only");
+static_assert(!CanOldAcquired<C>::value && !CanOldAcquired<Pin>::value && !CanOldAcquired<Step>::value, "No duplicate observation API");
+static_assert(!CanOldLookup<C>::value && !CanOldLookup<Pin>::value && !CanOldEffective<C>::value && !CanOldEffective<Pin>::value,
     "Acquisition names live in immutable metadata");
 static_assert(!CanHelperOpenChildren<Cursor>::value, "OpenChildren must be wrapper-private");
-static_assert(!std::is_constructible<D, const ContextInterface&, int>::value && !std::is_constructible<H, D&&>::value,
+static_assert(!std::is_constructible<D, const ContextInterface&, int>::value && !std::is_constructible<Pin, D&&>::value,
     "Native adoption is private to the verified boundary");
 static_assert(!std::is_constructible<M, ComplianceEngine::Filesystem::Type, const struct stat&, ComplianceEngine::Filesystem::LookupMountId, ComplianceEngine::Filesystem::TargetMountId,
                   ComplianceEngine::Filesystem::Detail::LookupSpelling, ComplianceEngine::Filesystem::Detail::EffectiveSpelling>::value,

@@ -190,7 +190,7 @@ add_library(complianceenginelib STATIC
     filesystem/LinesRange.cpp
     filesystem/FilesystemCollection.cpp
     filesystem/FilesystemHelpers.cpp
-    filesystem/Handle.cpp
+    filesystem/FTWDirectoryCursor.cpp
     filesystem/ProcfsDescriptorAccess.cpp
     filesystem/Path.cpp
     filesystem/ReadableFile.cpp

@@ -20,10 +20,10 @@ namespace Filesystem
 {
 namespace Detail
 {
-class Handle;
+class Pin;
 }
 // Owns a separate read-only descriptor verified against a live regular-file
-// Handle. Each bound context must outlive operations and cleanup that use it,
+// Pin. Each bound context must outlive operations and cleanup that use it,
 // including cleanup of replaced ownership during a move. No descriptor escapes.
 class ReadableFile
 {
@@ -80,7 +80,7 @@ public:
     void Close() noexcept;
 
 private:
-    friend class Detail::Handle;
+    friend class Detail::Pin;
     ReadableFile(Detail::Descriptor&& descriptor, Policy policy) noexcept;
     Optional<Detail::Descriptor> mDescriptor;
     std::size_t mInterruptRetriesRemaining;

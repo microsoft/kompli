@@ -15,7 +15,7 @@ namespace Filesystem
 {
 namespace Detail
 {
-// Shared acquisition/inspection primitives; no Path or Handle dependency.
+// Shared acquisition/inspection primitives; no Path or Pin dependency.
 int SavedError() noexcept;
 // Diagnostics only: callers decide whether a failed close is primary.
 void LogSecondaryClose(const ContextInterface& context, int error);

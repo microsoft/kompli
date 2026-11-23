@@ -32,8 +32,8 @@ namespace ComplianceEngine
 namespace Filesystem
 {
 using Detail::Descriptor;
-using Detail::Handle;
 using Detail::LinkTarget;
+using Detail::Pin;
 using Detail::ProcfsDescriptorAccess;
 using Detail::SavedError;
 namespace
@@ -111,7 +111,7 @@ using Detail::SavedError;
 // still reject a wrong-object alias. The pin's mount was already established
 // and stored at acquisition time (Path resolution or PinProcessRoot); a live
 // O_PATH pin cannot change mount, so activation performs no mount re-read here.
-Result<Descriptor> Handle::OpenAndVerifyAlias(const ContextInterface& context, const ProcfsDescriptorAccess& procfs, const Descriptor& pin,
+Result<Descriptor> Pin::OpenAndVerifyAlias(const ContextInterface& context, const ProcfsDescriptorAccess& procfs, const Descriptor& pin,
     const struct stat& before, Type directory)
 {
     // Only the decimal alias of the held pin is followed intentionally.
@@ -134,7 +134,7 @@ Result<Descriptor> Handle::OpenAndVerifyAlias(const ContextInterface& context, c
     return aliasOwner;
 }
 
-Result<Descriptor> Handle::ActivateReadOnly(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, Type directory)
+Result<Descriptor> Pin::ActivateReadOnly(const ContextInterface& context, const Descriptor& pin, const struct stat& snapshot, Type directory)
 {
     struct stat before = {};
     if (context.StatFile(pin, &before) != 0)
@@ -174,17 +174,17 @@ Result<Descriptor> Handle::ActivateReadOnly(const ContextInterface& context, con
     return OpenAndVerifyAlias(context, procfs, pin, before, directory);
 }
 
-Handle::Handle(Descriptor descriptor, ::ComplianceEngine::Filesystem::Metadata metadata)
+Pin::Pin(Descriptor descriptor, ::ComplianceEngine::Filesystem::Metadata metadata)
     : mDescriptor(std::move(descriptor)),
       mMetadata(std::move(metadata))
 {
 }
-Handle::Handle(Handle&& other) noexcept
+Pin::Pin(Pin&& other) noexcept
     : mDescriptor(std::move(other.mDescriptor)),
       mMetadata(std::move(other.mMetadata))
 {
 }
-Handle& Handle::operator=(Handle&& other) & noexcept
+Pin& Pin::operator=(Pin&& other) & noexcept
 {
     if (this != &other)
     {
@@ -193,16 +193,16 @@ Handle& Handle::operator=(Handle&& other) & noexcept
     }
     return *this;
 }
-::ComplianceEngine::Filesystem::Metadata Handle::Metadata() const
+::ComplianceEngine::Filesystem::Metadata Pin::Metadata() const
 {
     return mMetadata;
 }
-Result<struct stat> Handle::Stat() const
+Result<struct stat> Pin::Stat() const
 {
     return Inspect(*this);
 }
 
-Result<struct stat> Handle::Inspect(const Handle& owner)
+Result<struct stat> Pin::Inspect(const Pin& owner)
 {
     // Inspection uses the sealed pin directly; no procfs roles are needed.
     const auto& context = owner.mDescriptor.Context();
@@ -227,7 +227,7 @@ Result<struct stat> Handle::Inspect(const Handle& owner)
     return after;
 }
 
-Result<bool> Handle::SetOwnership(UserId owner, GroupId group) const
+Result<bool> Pin::SetOwnership(UserId owner, GroupId group) const
 {
     const auto& context = mDescriptor.Context();
     auto beforeMutation = Inspect(*this);
@@ -250,7 +250,7 @@ Result<bool> Handle::SetOwnership(UserId owner, GroupId group) const
     return true;
 }
 
-Result<bool> Handle::SetModeWithProcfs(const Handle& owner, const ProcfsDescriptorAccess& procfs, mode_t mode)
+Result<bool> Pin::SetModeWithProcfs(const Pin& owner, const ProcfsDescriptorAccess& procfs, mode_t mode)
 {
     const auto& context = owner.mDescriptor.Context();
     auto beforeMutation = Inspect(owner);
@@ -300,7 +300,7 @@ Result<bool> Handle::SetModeWithProcfs(const Handle& owner, const ProcfsDescript
     return true;
 }
 
-Result<bool> Handle::SetMode(mode_t mode) const
+Result<bool> Pin::SetMode(mode_t mode) const
 {
     const auto& context = mDescriptor.Context();
     // Check ownership at the sealed boundary before acquiring procfs roles.
@@ -313,7 +313,7 @@ Result<bool> Handle::SetMode(mode_t mode) const
     return SetModeWithProcfs(*this, procfs, mode);
 }
 
-Result<ReadableFile> Handle::OpenReadOnly(ReadableFile::Policy policy) const
+Result<ReadableFile> Pin::OpenReadOnly(ReadableFile::Policy policy) const
 {
     if (mMetadata.mType != Type::RegularFile)
     {
@@ -327,7 +327,7 @@ Result<ReadableFile> Handle::OpenReadOnly(ReadableFile::Policy policy) const
     return ReadableFile(std::move(activated).Value(), policy);
 }
 
-Result<Handle::AcquiredPin> Handle::AcquirePinnedObject(const ContextInterface& context, Descriptor pin, std::size_t fdinfoByteCap, const char* statFailureMessage)
+Result<Pin::AcquiredPin> Pin::AcquirePinnedObject(const ContextInterface& context, Descriptor pin, std::size_t fdinfoByteCap, const char* statFailureMessage)
 {
     struct stat snapshot = {};
     if (context.StatFile(pin, &snapshot) != 0)
@@ -344,7 +344,7 @@ Result<Handle::AcquiredPin> Handle::AcquirePinnedObject(const ContextInterface& 
     return AcquiredPin{std::move(pin), snapshot, mount.Value()};
 }
 
-Result<Handle> Handle::PinProcessRoot(const ContextInterface& context, PrefixLimits limits)
+Result<Pin> Pin::PinProcessRoot(const ContextInterface& context, PrefixLimits limits)
 {
     auto opened = context.OpenAbsolutePin("/");
     if (!opened.HasValue())
@@ -361,13 +361,13 @@ Result<Handle> Handle::PinProcessRoot(const ContextInterface& context, PrefixLim
     {
         return Error("Process root is not a directory", ENOTDIR);
     }
-    // Metadata lives inline in Handle, so constructing it here allocates
-    // nothing on the heap; the next heap allocation is the shared Handle
-    // wrapper below, at the point where the root Handle is first wrapped
+    // Metadata lives inline in Pin, so constructing it here allocates
+    // nothing on the heap; the next heap allocation is the shared Pin
+    // wrapper below, at the point where the root Pin is first wrapped
     // for sharing.
     ::ComplianceEngine::Filesystem::Metadata facts(Type::Directory, object.snapshot, LookupMountId(object.mount), TargetMountId(object.mount),
         LookupSpelling("/"), EffectiveSpelling("/"));
-    Handle root(std::move(object.pin), std::move(facts));
+    Pin root(std::move(object.pin), std::move(facts));
     return root;
 }
 
@@ -379,11 +379,11 @@ namespace Detail
 {
 Result<DirectoryCursor> DirectoryCursor::OpenChildren(::ComplianceEngine::Filesystem::Path::Component owner)
 {
-    const auto& handle = *owner.mAcquisition;
-    if (handle.mMetadata.FileType() != Type::Directory)
+    const auto& acquisition = *owner.mAcquisition;
+    if (acquisition.mMetadata.FileType() != Type::Directory)
         return Error("Directory enumeration requires a directory pin", EINVAL);
-    const auto& context = handle.mDescriptor.Context();
-    auto activated = Handle::ActivateReadOnly(context, handle.mDescriptor, handle.mMetadata.Stat(), Type::Directory);
+    const auto& context = acquisition.mDescriptor.Context();
+    auto activated = Pin::ActivateReadOnly(context, acquisition.mDescriptor, acquisition.mMetadata.Stat(), Type::Directory);
     if (!activated.HasValue())
         return std::move(activated).Error();
     Descriptor operational = std::move(activated).Value();
@@ -414,8 +414,8 @@ std::string Path::Component::EffectiveName(const Component& owner)
 {
     return owner.mAcquisition->mMetadata.mEffectiveName.mValue;
 }
-Path::Component::Component(Detail::Handle owned)
-    : mAcquisition(std::make_shared<const Detail::Handle>(std::move(owned)))
+Path::Component::Component(Detail::Pin owned)
+    : mAcquisition(std::make_shared<const Detail::Pin>(std::move(owned)))
 {
 }
 Path::Component::Component(const Component& other) noexcept
@@ -603,12 +603,12 @@ const ContextInterface& Path::Context() const
 // through ContextInterface's friend-gated native surface or Component's
 // private constructor, so they stay direct private members of Path (the
 // narrowest friend that already has both), not anonymous-namespace functions.
-Path::Component Path::MakeRootComponent(Handle root)
+Path::Component Path::MakeRootComponent(Pin root)
 {
     return Component(std::move(root));
 }
 
-// A live O_PATH pin cannot change mount (see Handle::OpenAndVerifyAlias
+// A live O_PATH pin cannot change mount (see Pin::OpenAndVerifyAlias
 // above), and the resolver observes this pin's mount once at acquisition,
 // before deciding to follow it as a link (Resolver::Run, the mount read
 // immediately after the child pin's stat). So this reader does not re-read
@@ -801,11 +801,11 @@ public:
             // Stat and mount are observed together, through the shared
             // acquisition helper; its procfs session retires before it
             // returns, so only the new child pin remains owned afterward.
-            auto acquired = Handle::AcquirePinnedObject(source->context.get(), std::move(opened).Value(), source->limits.shared.fdinfoBytes,
+            auto acquired = Pin::AcquirePinnedObject(source->context.get(), std::move(opened).Value(), source->limits.shared.fdinfoBytes,
                 "Cannot inspect confined component");
             if (!acquired.HasValue())
                 return std::move(acquired).Error();
-            Handle::AcquiredPin object = std::move(acquired).Value();
+            Pin::AcquiredPin object = std::move(acquired).Value();
             Descriptor pin = std::move(object.pin);
             const struct stat snapshot = object.snapshot;
             const std::uint64_t mount = object.mount;
@@ -921,8 +921,8 @@ public:
             ::ComplianceEngine::Filesystem::Metadata metadata(S_ISDIR(snapshot.st_mode) ? Type::Directory : Type::RegularFile, snapshot,
                 LookupMountId(linkTerminal ? mDirectMount : mount), TargetMountId(mount), Detail::LookupSpelling(linkTerminal ? mDirectLookup : lookup),
                 Detail::EffectiveSpelling(lookup));
-            Handle handle(std::move(pin), std::move(metadata));
-            Component pushed(std::move(handle));
+            Pin acquisition(std::move(pin), std::move(metadata));
+            Component pushed(std::move(acquisition));
             mStack.push_back(std::move(pushed));
             ++mNewPins;
             if (mStack.size() - 1 > source->limits.depth)
@@ -1195,7 +1195,7 @@ Result<Variant<Path, Path::RejectionReason>> Path::Make(const ContextInterface& 
     if (chunks > (std::numeric_limits<std::size_t>::max() - 128) / 4 || !Fits(0, 128 + 4 * chunks, limits.shared.work))
         return Error("Path work budget exhausted", E2BIG);
     const std::size_t rootWork = 128 + 4 * chunks;
-    auto root = Handle::PinProcessRoot(context, limits.shared);
+    auto root = Pin::PinProcessRoot(context, limits.shared);
     if (!root.HasValue())
         return std::move(root).Error();
     Component rootComponent = MakeRootComponent(std::move(root).Value());
@@ -1228,7 +1228,7 @@ Result<Variant<Path, Path::RejectionReason>> Path::Make(const ContextInterface& 
 }
 
 // Co-located FTW continuation requires the complete private directory cursor
-// factory and Handle activation helper above; no generic Component API.
+// factory and Pin activation helper above; no generic Component API.
 namespace
 {
 using Detail::PathOperationSlots;

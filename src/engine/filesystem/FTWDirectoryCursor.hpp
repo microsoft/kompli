@@ -39,7 +39,7 @@ public:
 private:
     friend class ::ComplianceEngine::ContextInterface;
     friend class ::ComplianceEngine::Filesystem::FTW::FileRange;
-    // Activates a fresh read-only directory pin on the Handle an
+    // Activates a fresh read-only directory pin on the Pin an
     // already-accepted Path::Component owns, then hands it to
     // ContextInterface's friend-gated OpenDirectoryCursor. A private
     // static member of DirectoryCursor (the only wrapper that needs it),

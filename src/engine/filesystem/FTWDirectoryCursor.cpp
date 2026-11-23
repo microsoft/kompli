@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-#include "ContextInterface.h"
 #include "FTWDirectoryCursor.hpp"
+
+#include "ContextInterface.h"
 #include "FilesystemHelpers.hpp"
 
 #include <cerrno>

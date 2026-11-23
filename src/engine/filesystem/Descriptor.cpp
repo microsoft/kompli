@@ -5,7 +5,7 @@
 
 #include "FTWDirectoryCursor.hpp"
 #include "FilesystemHelpers.hpp"
-#include "Handle.hpp" // Filesystem::Type (Directory/RegularFile): OpenAlias/OpenPinAlias mode selector.
+#include "Pin.hpp" // Filesystem::Type (Directory/RegularFile): OpenAlias/OpenPinAlias mode selector.
 #include "ProcfsDescriptorAccess.hpp"
 
 #include <algorithm>

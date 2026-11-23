@@ -7,7 +7,7 @@
 #include <ContextInterface.h>
 #include <filesystem/Descriptor.hpp>
 #include <filesystem/FTWDirectoryCursor.hpp>
-#include <filesystem/Handle.hpp>
+#include <filesystem/Pin.hpp>
 #include <filesystem/ProcfsDescriptorAccess.hpp>
 #include <stdexcept>
 #include <type_traits>

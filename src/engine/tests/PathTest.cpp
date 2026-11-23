@@ -14,8 +14,8 @@
 #include <fcntl.h>
 #include <filesystem/FilesystemCollection.hpp>
 #include <filesystem/FilesystemHelpers.hpp>
-#include <filesystem/Handle.hpp>
 #include <filesystem/Path.hpp>
+#include <filesystem/Pin.hpp>
 #include <filesystem/ProcfsDescriptorAccess.hpp>
 #include <filesystem/ReadableFile.hpp>
 #include <fstream>
@@ -52,7 +52,7 @@ using ComplianceEngine::Filesystem::ReadableFile;
 using ComplianceEngine::Filesystem::ResolverLimits;
 using ComplianceEngine::Filesystem::Type;
 using ComplianceEngine::Filesystem::Detail::Descriptor;
-using ComplianceEngine::Filesystem::Detail::Handle;
+using ComplianceEngine::Filesystem::Detail::Pin;
 using ComplianceEngine::Filesystem::FTW::Files;
 using ComplianceEngine::Tests::DescriptorTestAccess;
 using ComplianceEngine::Tests::PathTestAccess;
@@ -469,7 +469,7 @@ TEST_F(PathAliasTest, TypedOpenAndDuplicateSetCloseOnExecAtomically)
 }
 
 // Directory read-only activation (procfs alias -> fdopendir handoff) is a
-// private Handle/DirectoryCursor operation with no direct public
+// private Pin/DirectoryCursor operation with no direct public
 // entry point; FTW::Files(Path, ...) is the public route that drives it (via
 // FileRange::State::Initialize).
 TEST_F(PathAliasTest, DirectoryActivationTransfersVerifiedOwnerWithoutDuplicate)
@@ -807,12 +807,12 @@ TEST(PathTest, DoesNotOfferUncheckedDescriptorConstructionOrCopy)
 {
     static_assert(!std::is_constructible<Descriptor, int>::value, "Native adoption is private to acquisition owners");
     static_assert(!HasPublicNativeAdoption<Descriptor>::value, "Raw native ownership adoption cannot be public");
-    static_assert(!std::is_default_constructible<Handle>::value, "A handle requires a checked acquisition");
-    static_assert(!std::is_constructible<Handle, int>::value, "A raw fd cannot construct a handle");
-    static_assert(!std::is_copy_constructible<Handle>::value, "A pinned descriptor cannot be copied");
-    static_assert(!std::is_copy_assignable<Handle>::value, "A pinned descriptor cannot be copied");
-    static_assert(std::is_move_constructible<Handle>::value, "A pinned descriptor can transfer ownership");
-    static_assert(std::is_move_assignable<Handle>::value, "A pinned descriptor can transfer ownership");
+    static_assert(!std::is_default_constructible<Pin>::value, "A pin requires a checked acquisition");
+    static_assert(!std::is_constructible<Pin, int>::value, "A raw fd cannot construct a pin");
+    static_assert(!std::is_copy_constructible<Pin>::value, "A pinned descriptor cannot be copied");
+    static_assert(!std::is_copy_assignable<Pin>::value, "A pinned descriptor cannot be copied");
+    static_assert(std::is_move_constructible<Pin>::value, "A pinned descriptor can transfer ownership");
+    static_assert(std::is_move_assignable<Pin>::value, "A pinned descriptor can transfer ownership");
     static_assert(!std::is_default_constructible<Path>::value, "No unapproved root constructor is exposed");
 }
 
@@ -930,7 +930,7 @@ TEST_F(PathAliasTest, ActivationErrorRemainsPrimaryWhenDiagnosticCleanupFails)
     EXPECT_NE(std::string::npos, text.find("Failed to close filesystem resource: " + std::string(strerror(EIO))));
 }
 
-// Read-only file activation (procfs alias through Handle::ActivateReadOnly
+// Read-only file activation (procfs alias through Pin::ActivateReadOnly
 // with the mount already held) is reachable publicly via
 // Path::Component::OpenReadOnly(); ReadableFile::Stat()/Read()/Close() give
 // equivalent observation and control over the activated file.
@@ -972,7 +972,7 @@ TEST_F(PathAliasTest, AliasStaysOnPinnedFileAfterNameReplacementAndUnlink)
 
 // Directory read-only activation is only reachable through FTW::Files(); see
 // DirectoryActivationTransfersVerifiedOwnerWithoutDuplicate above, which
-// already exercises the same Handle::ActivateReadOnly(directory)
+// already exercises the same Pin::ActivateReadOnly(directory)
 // branch with richer native-call assertions (flags, single-close, no leak).
 // Moving the resulting Descriptor and retaining single ownership across a
 // move is a generic Descriptor-class invariant, not specific to directory
@@ -1105,7 +1105,7 @@ TEST_F(PathAliasTest, ProcfsMountIdAcceptsValidAndRejectsMalformedInformationDur
 // PinProcessRoot during ordinary root acquisition -- exercised here.
 //
 // Descriptor-accounting bound, re-derived for this new route (verified by
-// tracing Path::Make(context, "/", ...) -> Handle::PinProcessRoot,
+// tracing Path::Make(context, "/", ...) -> Pin::PinProcessRoot,
 // Path.cpp ~454, and ProcfsDescriptorAccess::Make, ProcfsDescriptorAccess.cpp
 // ~48-126, and confirmed by this test actually running green at these exact
 // values rather than looser ones):
