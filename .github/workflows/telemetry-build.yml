@@ -29,7 +29,7 @@ jobs:
         run: echo "::warning::KompliTelemetryApiKey is an intentionally invalid placeholder; this workflow only verifies that telemetry builds."
 
       - name: Login to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -42,7 +42,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           container: microsoft/kompli/ubuntu-22.04-amd64
           mount: ${{ github.workspace }}:${{ env.MOUNT }}
-          tag: "@sha256:93793e1d5981e4abf256988afabe289807ef6f710714b394b51e5baf6d9a77e5"
+          tag: "@sha256:ff9492087fda67081afee9fff170d3ab0636eec5cac54afc5c315382ce33d253"
           verify: true
           args: -e KompliTelemetryApiKey=${{ env.KompliTelemetryApiKey }}
 

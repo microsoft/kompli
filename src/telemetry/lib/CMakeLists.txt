@@ -33,9 +33,13 @@ ExternalProject_Add(
         ${ONEDS_CPP_SDK_VERSION}
     GIT_SUBMODULES
         ""           # This disables submodule checkout
+    PATCH_COMMAND
+        ${CMAKE_COMMAND} -DSDK_SOURCE_DIR=<SOURCE_DIR>
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/Patch1dsSdk.cmake
     CMAKE_ARGS
         -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}  # use the same toolchain
         -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5
         -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
         -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
         -DBUILD_FUNC_TESTS=OFF
