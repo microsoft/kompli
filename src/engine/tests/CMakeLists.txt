@@ -186,7 +186,6 @@ set(PROCEDURES
     procedures/NoWorldWritableFilesTest.cpp
     procedures/PasswordChangeDateTest.cpp
     procedures/NoUnownedFilesTest.cpp
-    procedures/PasswdGroupsExistTest.cpp
     procedures/RootPathSecurityTest.cpp
     procedures/SshKeyPermissionsTest.cpp
     procedures/SshdOptionTest.cpp

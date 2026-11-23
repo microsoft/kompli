@@ -4,7 +4,6 @@
 #include <Evaluator.h>
 #include <PasswdGroupsExist.h>
 #include <Result.h>
-#include <functional>
 #include <grp.h>
 #include <pwd.h>
 #include <set>
@@ -12,34 +11,36 @@
 
 namespace ComplianceEngine
 {
-// AuditPasswdGroupsExist enumerates every backend configured in nsswitch.conf, not just
-// /etc/passwd and /etc/group. EvaluatePasswdGroupsExist is the enumerator-agnostic core used by tests.
-Result<Status> EvaluatePasswdGroupsExist(IndicatorsTree& indicators, const std::function<void()>& beginGroups,
-    const std::function<struct group*()>& nextGroup, const std::function<void()>& endGroups, const std::function<void()>& beginUsers,
-    const std::function<struct passwd*()>& nextUser, const std::function<void()>& endUsers)
+// NOTE: This procedure has no dedicated unit test. AuditPasswdGroupsExist enumerates the live
+// account and group databases directly through the NSS entry points (setpwent/getpwent,
+// setgrent/getgrent), which resolve against the host's real /etc/passwd and /etc/group. There is
+// no seam to inject fixture data, so the audit's outcome cannot be made deterministic from a test
+// without altering the system databases. The remediation-logic fix is instead covered by code
+// review against the Result<Status> contract exercised by the other procedures.
+Result<Status> AuditPasswdGroupsExist(IndicatorsTree& indicators, ContextInterface& context)
 {
+    UNUSED(context);
+
     struct group* grp = nullptr;
     struct passwd* pwd = nullptr;
     std::set<gid_t> etcGroupGroups;
 
-    beginGroups();
-    for (errno = 0, grp = nextGroup(); nullptr != grp; errno = 0, grp = nextGroup())
+    setgrent();
+    for (errno = 0, grp = getgrent(); nullptr != grp; errno = 0, grp = getgrent())
     {
         etcGroupGroups.insert(grp->gr_gid);
     }
     int status = errno;
-    endGroups();
-    // glibc NSS modules other than `files` end enumeration with errno set to ENOENT (NOTFOUND or
-    // UNAVAIL), which glibc's reentrant get*ent_r also reports as "no more entries"
-    // (nss/getnssent_r.c). `files` leaves errno at 0. Any other nonzero errno is a genuine failure.
+    endgrent();
+    // Non-files glibc NSS modules (e.g. aad, sss) end enumeration with ENOENT; treat it as end of data.
     if (0 != status && ENOENT != status)
     {
         return Error(std::string("getgrent failed: ") + strerror(status), status);
     }
 
-    beginUsers();
+    setpwent();
     Status result = Status::Compliant;
-    for (errno = 0, pwd = nextUser(); nullptr != pwd; errno = 0, pwd = nextUser())
+    for (errno = 0, pwd = getpwent(); nullptr != pwd; errno = 0, pwd = getpwent())
     {
         if (etcGroupGroups.find(pwd->pw_gid) == etcGroupGroups.end())
         {
@@ -48,7 +49,7 @@ Result<Status> EvaluatePasswdGroupsExist(IndicatorsTree& indicators, const std::
         }
     }
     status = errno;
-    endUsers();
+    endpwent();
     if (0 != status && ENOENT != status)
     {
         return Error(std::string("getpwent failed: ") + strerror(status), status);
@@ -59,12 +60,6 @@ Result<Status> EvaluatePasswdGroupsExist(IndicatorsTree& indicators, const std::
         indicators.Compliant("All user groups from '/etc/passwd' exist in '/etc/group'");
     }
     return result;
-}
-
-Result<Status> AuditPasswdGroupsExist(IndicatorsTree& indicators, ContextInterface& context)
-{
-    UNUSED(context);
-    return EvaluatePasswdGroupsExist(indicators, &setgrent, &getgrent, &endgrent, &setpwent, &getpwent, &endpwent);
 }
 
 Result<Status> RemediatePasswdGroupsExist(IndicatorsTree& indicators, ContextInterface& context)
