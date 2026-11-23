@@ -40,13 +40,13 @@ struct MockContext : public ComplianceEngine::ContextInterface
     {
         return ContextInterface::OpenNativeAt(directory, path, flags);
     }
-    int RealStatFileDescriptor(int fd, struct stat* metadata) const
+    int RealStatNativeDescriptor(int fd, struct stat* metadata) const
     {
-        return ContextInterface::StatFileDescriptor(fd, metadata);
+        return ContextInterface::StatNativeDescriptor(fd, metadata);
     }
-    ssize_t RealReadFileDescriptor(int fd, void* buffer, std::size_t size) const
+    ssize_t RealReadNativeDescriptor(int fd, void* buffer, std::size_t size) const
     {
-        return ContextInterface::ReadFileDescriptor(fd, buffer, size);
+        return ContextInterface::ReadNativeDescriptor(fd, buffer, size);
     }
     // Needed by the readlink buffer-size tests, which must assert the size
     // Path requests while still performing the real read.
@@ -54,9 +54,9 @@ struct MockContext : public ComplianceEngine::ContextInterface
     {
         return ContextInterface::ReadLinkDescriptor(fd, buffer, size);
     }
-    ComplianceEngine::Result<void> RealCloseFileDescriptor(int fd) const
+    ComplianceEngine::Result<void> RealCloseNativeDescriptor(int fd) const
     {
-        return ContextInterface::CloseFileDescriptor(fd);
+        return ContextInterface::CloseNativeDescriptor(fd);
     }
     int RealDuplicateDescriptor(int fd) const
     {
@@ -82,15 +82,15 @@ struct MockContext : public ComplianceEngine::ContextInterface
     MOCK_METHOD(ComplianceEngine::Result<std::string>, GetFileContents, (const std::string& filePath), (const, override));
     MOCK_METHOD(int, OpenNativePath, (const char* path, int flags), (const, noexcept, override));
     MOCK_METHOD(int, OpenNativeAt, (int directory, const char* path, int flags), (const, noexcept, override));
-    MOCK_METHOD(int, StatFileDescriptor, (int descriptor, struct stat* metadata), (const, noexcept, override));
+    MOCK_METHOD(int, StatNativeDescriptor, (int descriptor, struct stat* metadata), (const, noexcept, override));
     MOCK_METHOD(int, StatFilesystemDescriptor, (int descriptor, struct statfs* metadata), (const, noexcept, override));
-    MOCK_METHOD(ssize_t, ReadFileDescriptor, (int descriptor, void* buffer, std::size_t size), (const, noexcept, override));
+    MOCK_METHOD(ssize_t, ReadNativeDescriptor, (int descriptor, void* buffer, std::size_t size), (const, noexcept, override));
     MOCK_METHOD(ssize_t, ReadLinkDescriptor, (int descriptor, char* buffer, std::size_t size), (const, noexcept, override));
     MOCK_METHOD(int, StatusFlagsDescriptor, (int descriptor), (const, noexcept, override));
     MOCK_METHOD(int, DescriptorFlagsDescriptor, (int descriptor), (const, noexcept, override));
     MOCK_METHOD(int, DuplicateDescriptor, (int descriptor), (const, noexcept, override));
     MOCK_METHOD(DIR*, FdOpenDirectory, (int descriptor), (const, noexcept, override));
-    MOCK_METHOD(ComplianceEngine::Result<void>, CloseFileDescriptor, (int descriptor), (const, noexcept, override));
+    MOCK_METHOD(ComplianceEngine::Result<void>, CloseNativeDescriptor, (int descriptor), (const, noexcept, override));
     MOCK_METHOD(int, ChownPinnedFileDescriptor, (int descriptor, uid_t owner, gid_t group), (const, noexcept, override));
     MOCK_METHOD(int, ChmodPinnedAlias, (int procfsDirectory, const char* decimalAlias, mode_t mode), (const, noexcept, override));
     MOCK_METHOD(pid_t, NativeProcessId, (), (const, noexcept, override));
@@ -150,8 +150,8 @@ struct MockContext : public ComplianceEngine::ContextInterface
         ON_CALL(*this, OpenNativeAt(testing::_, testing::_, testing::_)).WillByDefault([this](int directory, const char* path, int flags) {
             return ContextInterface::OpenNativeAt(directory, path, flags);
         });
-        ON_CALL(*this, StatFileDescriptor(testing::_, testing::_)).WillByDefault([this](int descriptor, struct stat* metadata) {
-            return ContextInterface::StatFileDescriptor(descriptor, metadata);
+        ON_CALL(*this, StatNativeDescriptor(testing::_, testing::_)).WillByDefault([this](int descriptor, struct stat* metadata) {
+            return ContextInterface::StatNativeDescriptor(descriptor, metadata);
         });
         ON_CALL(*this, StatFilesystemDescriptor(testing::_, testing::_)).WillByDefault([this](int descriptor, struct statfs* metadata) {
             return ContextInterface::StatFilesystemDescriptor(descriptor, metadata);
@@ -169,11 +169,11 @@ struct MockContext : public ComplianceEngine::ContextInterface
             return ContextInterface::DuplicateDescriptor(descriptor);
         });
         ON_CALL(*this, FdOpenDirectory(testing::_)).WillByDefault([this](int descriptor) { return ContextInterface::FdOpenDirectory(descriptor); });
-        ON_CALL(*this, ReadFileDescriptor(testing::_, testing::_, testing::_)).WillByDefault([this](int descriptor, void* buffer, std::size_t size) {
-            return ContextInterface::ReadFileDescriptor(descriptor, buffer, size);
+        ON_CALL(*this, ReadNativeDescriptor(testing::_, testing::_, testing::_)).WillByDefault([this](int descriptor, void* buffer, std::size_t size) {
+            return ContextInterface::ReadNativeDescriptor(descriptor, buffer, size);
         });
-        ON_CALL(*this, CloseFileDescriptor(testing::_)).WillByDefault([this](int descriptor) {
-            return ContextInterface::CloseFileDescriptor(descriptor);
+        ON_CALL(*this, CloseNativeDescriptor(testing::_)).WillByDefault([this](int descriptor) {
+            return ContextInterface::CloseNativeDescriptor(descriptor);
         });
         ON_CALL(*this, ChownPinnedFileDescriptor(testing::_, testing::_, testing::_)).WillByDefault([this](int descriptor, uid_t owner, gid_t group) {
             return ContextInterface::ChownPinnedFileDescriptor(descriptor, owner, group);
@@ -252,7 +252,7 @@ struct MockContext : public ComplianceEngine::ContextInterface
     // target); incidental unless the test is exercising that inspection.
     void AllowDescriptorInspection()
     {
-        EXPECT_CALL(*this, StatFileDescriptor(testing::_, testing::_)).Times(testing::AnyNumber());
+        EXPECT_CALL(*this, StatNativeDescriptor(testing::_, testing::_)).Times(testing::AnyNumber());
         EXPECT_CALL(*this, StatFilesystemDescriptor(testing::_, testing::_)).Times(testing::AnyNumber());
         EXPECT_CALL(*this, StatusFlagsDescriptor(testing::_)).Times(testing::AnyNumber());
         EXPECT_CALL(*this, DescriptorFlagsDescriptor(testing::_)).Times(testing::AnyNumber());
@@ -263,7 +263,7 @@ struct MockContext : public ComplianceEngine::ContextInterface
     // test is exercising read content/retry/short-read behavior itself.
     void AllowFileRead()
     {
-        EXPECT_CALL(*this, ReadFileDescriptor(testing::_, testing::_, testing::_)).Times(testing::AnyNumber());
+        EXPECT_CALL(*this, ReadNativeDescriptor(testing::_, testing::_, testing::_)).Times(testing::AnyNumber());
     }
 
     // close() calls on a file descriptor; incidental RAII cleanup unless the
@@ -271,7 +271,7 @@ struct MockContext : public ComplianceEngine::ContextInterface
     // behavior, which should keep its own exact expectation instead.
     void AllowDescriptorClose()
     {
-        EXPECT_CALL(*this, CloseFileDescriptor(testing::_)).Times(testing::AnyNumber());
+        EXPECT_CALL(*this, CloseNativeDescriptor(testing::_)).Times(testing::AnyNumber());
     }
 
     // fdopendir()/readdir()/closedir() calls; incidental unless the test is

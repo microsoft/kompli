@@ -46,6 +46,12 @@ private:
     // close through the owning context and log any failure. Shared by the
     // destructor and move-assignment so they stay in sync by construction.
     void ReleaseOwned() noexcept;
+    // Checked moved-from guard: throws std::logic_error if this owner has
+    // already been consumed (see the -1 sentinel above). Private so a
+    // native-dispatch friend (ContextInterface) can validate ownership
+    // immediately before reading mDescriptor, without a free function that
+    // would need the raw native integer passed to it from outside the class.
+    void RequireOwnership() const;
 
     std::reference_wrapper<const ContextInterface> mContext;
     int mDescriptor;

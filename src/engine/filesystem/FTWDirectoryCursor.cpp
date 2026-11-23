@@ -3,6 +3,7 @@
 #include "FTWDirectoryCursor.hpp"
 
 #include "ContextInterface.h"
+#include "Descriptor.hpp"
 #include "FilesystemHelpers.hpp"
 
 #include <cerrno>
@@ -12,6 +13,8 @@ namespace ComplianceEngine
 {
 namespace Filesystem
 {
+using Detail::Descriptor;
+using Detail::Pin;
 namespace FTW
 {
 namespace Detail
@@ -99,7 +102,47 @@ Result<Optional<DirectoryChild>> DirectoryCursor::NextEntry()
     }
 }
 
+Result<DirectoryCursor> DirectoryCursor::OpenChildren(::ComplianceEngine::Filesystem::Path::Component owner)
+{
+    const auto& acquisition = *owner.mAcquisition;
+    if (acquisition.mMetadata.FileType() != Type::Directory)
+        return Error("Directory enumeration requires a directory pin", EINVAL);
+    const auto& context = acquisition.mDescriptor.Context();
+    auto activated = Pin::ActivateReadOnly(context, acquisition.mDescriptor, acquisition.mMetadata.Stat(), Type::Directory);
+    if (!activated.HasValue())
+        return std::move(activated).Error();
+    Descriptor operational = std::move(activated).Value();
+    return context.OpenDirectoryCursor(std::move(operational));
+}
+
 } // namespace Detail
 } // namespace FTW
 } // namespace Filesystem
+} // namespace ComplianceEngine
+
+namespace ComplianceEngine
+{
+using Filesystem::Detail::Descriptor;
+
+Result<void> ContextInterface::CloseOwnedDirectoryCursor(DIR* stream) const noexcept
+{
+    ReleaseManagedDescriptor();
+    return CloseDirectory(stream);
+}
+Result<Filesystem::FTW::Detail::DirectoryCursor> ContextInterface::OpenDirectoryCursor(Descriptor&& owner) const&
+{
+    owner.RequireOwnership();
+    if (&owner.mContext.get() != this)
+    {
+        return Error("Foreign directory stream descriptor", EINVAL);
+    }
+    DIR* stream = FdOpenDirectory(owner.mDescriptor);
+    if (!stream)
+    {
+        return Error("Cannot open directory stream", errno ? errno : EIO);
+    }
+    owner.mDescriptor = -1;
+    return Filesystem::FTW::Detail::DirectoryCursor(*this, stream);
+}
+
 } // namespace ComplianceEngine

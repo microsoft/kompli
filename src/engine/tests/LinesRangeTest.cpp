@@ -170,14 +170,14 @@ TEST_F(PathFile, DoNotFollowRejectsIntermediateAndFinalSymlinksWithoutReading)
     ASSERT_EQ(0, ::symlink(path.c_str(), (path + ".old").c_str()));
     const auto chained = path + ".link/" + path.substr(path.find_last_of('/') + 1) + ".old";
     int reads = 0, intermediateCloses = 0, finalCloses = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         reads += IsFileDescriptor(fd, true);
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
         intermediateCloses += IsLinkDescriptor(fd, path + ".link");
         finalCloses += IsLinkDescriptor(fd, path + ".old");
-        return context.RealCloseFileDescriptor(fd);
+        return context.RealCloseNativeDescriptor(fd);
     });
     EXPECT_EQ("plain", Collect(chained, LinesRange::Policy{}).Value());
     EXPECT_GT(reads, 0);
@@ -200,9 +200,9 @@ TEST_F(PathFile, DefaultLimitsBoundBytesAndInterruptedReads)
     const std::size_t cap = LinesRange::Policy{}.limits.maxBytes;
     std::size_t requested = 0;
     int probes = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         requested += size;
         if (size == 1)
             ++probes;
@@ -216,9 +216,9 @@ TEST_F(PathFile, DefaultLimitsBoundBytesAndInterruptedReads)
     EXPECT_EQ(1, probes);
 
     int attempts = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         ++attempts;
         errno = EINTR;
         return -1;
@@ -235,14 +235,14 @@ TEST_F(PathFile, DefaultLimitsBoundBytesAndInterruptedReads)
 TEST_F(PathFile, ValidationAndMakeAreFactoryOperations)
 {
     int fileStats = 0;
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
         if (IsFileDescriptor(fd, false))
         {
             ++fileStats;
             errno = EIO;
             return -1;
         }
-        return context.RealStatFileDescriptor(fd, metadata);
+        return context.RealStatNativeDescriptor(fd, metadata);
     });
     auto invalidPath = LinesRange::Make(context, "relative", Limited(16));
     EXPECT_FALSE(invalidPath.HasValue());
@@ -326,10 +326,10 @@ TEST_F(PathFile, NulAtStartMiddleOrEndNeverYieldsAffectedLine)
     {
         Write(content);
         int closes = 0, items = 0;
-        ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+        ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
             if (IsFileDescriptor(fd, true))
                 ++closes;
-            return context.RealCloseFileDescriptor(fd);
+            return context.RealCloseNativeDescriptor(fd);
         });
         auto opened = LinesRange::Make(context, path);
         ASSERT_TRUE(opened.HasValue());
@@ -355,10 +355,10 @@ TEST_F(PathFile, ValidLineThenNulAcrossReadChunksYieldsErrorNotTruncatedLine)
         const std::string valid = "ok\n";
         Write(valid + std::string(padding - valid.size(), '\xff') + std::string("\0tail\n", 6));
         int closes = 0;
-        ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+        ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
             if (IsFileDescriptor(fd, true))
                 ++closes;
-            return context.RealCloseFileDescriptor(fd);
+            return context.RealCloseNativeDescriptor(fd);
         });
         auto opened = LinesRange::Make(context, path, Limited(8200));
         ASSERT_TRUE(opened.HasValue());
@@ -385,10 +385,10 @@ TEST_F(PathFile, SpanDelimiterAcrossRefillDefersLaterNulUntilAdvance)
         const std::string first(padding, 'x');
         Write(first + std::string("\n\0tail", 6));
         int reads = 0;
-        ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+        ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
             if (IsFileDescriptor(fd, true))
                 ++reads;
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         });
 
         auto opened = LinesRange::Make(context, path, Limited(padding + 6));
@@ -415,17 +415,17 @@ TEST_F(PathFile, BoundedChunksAndLazyEarlyBreakCloseExactlyOnce)
     Write(std::string(20000, 'x') + "\n" + std::string(50000, 'y'));
     int reads = 0, closes = 0;
     std::size_t largest = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         ++reads;
         largest = std::max(largest, size);
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         if (IsFileDescriptor(fd, true))
             ++closes;
-        return context.RealCloseFileDescriptor(fd);
+        return context.RealCloseNativeDescriptor(fd);
     });
     auto opened = LinesRange::Make(context, path, Limited(80000));
     ASSERT_TRUE(opened.HasValue());
@@ -456,16 +456,16 @@ TEST_F(PathFile, ShortNativeReadsFillOneBoundedChunkBeforeEarlyBreak)
     Write("first\nsecond\n");
     std::vector<std::size_t> requests;
     int closes = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         requests.push_back(size);
-        return context.RealReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 2));
+        return context.RealReadNativeDescriptor(fd, buffer, std::min<std::size_t>(size, 2));
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         if (IsFileDescriptor(fd, true))
             ++closes;
-        return context.RealCloseFileDescriptor(fd);
+        return context.RealCloseNativeDescriptor(fd);
     });
     auto opened = LinesRange::Make(context, path, Limited(13));
     ASSERT_TRUE(opened.HasValue());
@@ -508,10 +508,10 @@ TEST_F(PathFile, CloseInvalidatesBufferedIteratorWithoutReadingTail)
 {
     Write("first\nsecond\n");
     int reads = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
         if (IsFileDescriptor(fd, true))
             ++reads;
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
     auto opened = LinesRange::Make(context, path, Limited(13));
     ASSERT_TRUE(opened.HasValue());
@@ -531,10 +531,10 @@ TEST_F(PathFile, ExactChunkCapProbesOnceAndCumulativeInterruptsIncludeProbe)
 {
     Write(std::string(8192, 'x'));
     std::vector<std::size_t> requests;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
         if (IsFileDescriptor(fd, true))
             requests.push_back(size);
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
     EXPECT_EQ(std::string(8192, 'x'), Collect(path, Limited(8192)).Value());
     EXPECT_EQ((std::vector<std::size_t>{8192, 1}), requests);
@@ -545,16 +545,16 @@ TEST_F(PathFile, ExactChunkCapProbesOnceAndCumulativeInterruptsIncludeProbe)
 
     Write(std::string(8192, 'x'));
     int interrupts = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         if ((size == 8192 && interrupts == 0) || (size == 1 && interrupts == 1))
         {
             ++interrupts;
             errno = EINTR;
             return -1;
         }
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
     auto result = Collect(path, Limited(8192, 1));
     ASSERT_FALSE(result.HasValue());
@@ -567,16 +567,16 @@ TEST_F(PathFile, InterruptedReadBudgetIsSharedAcrossDataChunks)
 {
     Write(std::string(8193, 'x'));
     std::vector<std::size_t> requests;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         requests.push_back(size);
         if (requests.size() == 1 || requests.size() == 3)
         {
             errno = EINTR;
             return -1;
         }
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
     auto result = Collect(path, Limited(8193, 1));
     ASSERT_FALSE(result.HasValue());
@@ -589,16 +589,16 @@ TEST_F(PathFile, RangeMoveAndEarlyCloseNeverReadTail)
 {
     Write("one\nsecond\n");
     int reads = 0, closes = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         ++reads;
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         if (IsFileDescriptor(fd, true))
             ++closes;
-        return context.RealCloseFileDescriptor(fd);
+        return context.RealCloseNativeDescriptor(fd);
     });
     {
         auto opened = LinesRange::Make(context, path, Limited(11));
@@ -635,11 +635,11 @@ TEST_F(PathFile, RepeatedFailedCloseSucceedsWithoutRetry)
 {
     Write("a\n");
     int closes = 0;
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsFileDescriptor(fd, true);
         if (data)
             ++closes;
-        context.RealCloseFileDescriptor(fd);
+        context.RealCloseNativeDescriptor(fd);
         if (!data)
             return ComplianceEngine::Result<void>::Success();
         errno = EBADF;
@@ -669,11 +669,11 @@ TEST_F(PathFile, FailedExplicitCloseLogsDescriptorErrorOnlyOnce)
     context.SetLogHandle(logHandle);
 
     int closes = 0;
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsFileDescriptor(fd, true);
         if (data)
             ++closes;
-        context.RealCloseFileDescriptor(fd);
+        context.RealCloseNativeDescriptor(fd);
         if (!data)
             return ComplianceEngine::Result<void>::Success();
         errno = EBADF;
@@ -707,11 +707,11 @@ TEST_F(PathFile, DestructionAndMoveAssignmentLogDataFailureOncePerRange)
     ASSERT_NE(nullptr, logHandle);
     context.SetLogHandle(logHandle);
     int closes = 0;
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsFileDescriptor(fd, true);
         if (data)
             ++closes;
-        context.RealCloseFileDescriptor(fd);
+        context.RealCloseNativeDescriptor(fd);
         if (!data)
             return ComplianceEngine::Result<void>::Success();
         errno = EBADF;
@@ -749,11 +749,11 @@ TEST_F(PathFile, DestructorReportsNativeDataCloseFailureOnce)
     ASSERT_NE(nullptr, logHandle);
     context.SetLogHandle(logHandle);
     int closes = 0;
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
         const bool data = IsFileDescriptor(fd, true);
         if (data)
             ++closes;
-        context.RealCloseFileDescriptor(fd);
+        context.RealCloseNativeDescriptor(fd);
         if (!data)
             return ComplianceEngine::Result<void>::Success();
         errno = EIO;
@@ -779,10 +779,10 @@ TEST_F(PathFile, MoveAssignmentClosesOldOwnershipAndTransfersNew)
 {
     Write("x");
     int closes = 0;
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         if (IsFileDescriptor(fd, true))
             ++closes;
-        return context.RealCloseFileDescriptor(fd);
+        return context.RealCloseNativeDescriptor(fd);
     });
     auto first = LinesRange::Make(context, path);
     auto second = LinesRange::Make(context, path);
@@ -800,9 +800,9 @@ TEST_F(PathFile, MoveConstructionLeavesSourceInertBeforeBeginDuringReadAndAfterE
 {
     Write("one\ntwo\n");
     int closes = 0;
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         closes += IsFileDescriptor(fd, true);
-        return context.RealCloseFileDescriptor(fd);
+        return context.RealCloseNativeDescriptor(fd);
     });
     for (const int stage : {0, 1, 2})
     {
@@ -850,13 +850,13 @@ TEST_F(PathFile, MoveAssignmentAcrossContextsPreservesSourceAndSelfMoveAndCloses
     NiceMock<MockContext> otherContext;
     const std::string otherPath = otherContext.MakeTempfile("new\nnext\n");
     int oldCloses = 0, newCloses = 0;
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         oldCloses += IsFileDescriptor(fd, true);
-        return context.RealCloseFileDescriptor(fd);
+        return context.RealCloseNativeDescriptor(fd);
     });
-    ON_CALL(otherContext, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(otherContext, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         newCloses += IsFileDescriptor(fd, true, otherPath);
-        return otherContext.RealCloseFileDescriptor(fd);
+        return otherContext.RealCloseNativeDescriptor(fd);
     });
     auto old = LinesRange::Make(context, path);
     auto fresh = LinesRange::Make(otherContext, otherPath);
@@ -904,16 +904,16 @@ TEST_F(PathFile, MoveAssignmentAcrossContextsPreservesSourceAndSelfMoveAndCloses
 TEST_F(PathFile, CloseBeforeBeginDoesNotReadOrReopen)
 {
     int reads = 0, closes = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         ++reads;
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         if (IsFileDescriptor(fd, true))
             ++closes;
-        return context.RealCloseFileDescriptor(fd);
+        return context.RealCloseNativeDescriptor(fd);
     });
     auto opened = LinesRange::Make(context, path);
     ASSERT_TRUE(opened.HasValue());
@@ -933,20 +933,20 @@ TEST_F(PathFile, FactoryFailureClosesAcquiredPinAndReportsPrimary)
     ASSERT_NE(nullptr, logHandle);
     context.SetLogHandle(logHandle);
     int dataStats = 0, pinCloses = 0, dataCloses = 0;
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
         if (IsFileDescriptor(fd, true) && ++dataStats == 1)
         {
             errno = EACCES;
             return -1;
         }
-        return context.RealStatFileDescriptor(fd, metadata);
+        return context.RealStatNativeDescriptor(fd, metadata);
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         const bool pin = IsFileDescriptor(fd, false);
         const bool data = IsFileDescriptor(fd, true);
         pinCloses += pin;
         dataCloses += data;
-        context.RealCloseFileDescriptor(fd);
+        context.RealCloseNativeDescriptor(fd);
         if (pin)
         {
             errno = EBADF;
@@ -976,23 +976,23 @@ TEST_F(PathFile, FactoryClosesPinAfterIdentityCheckBeforeReturnOrRead)
     Write("content\n");
     int pin = -1, data = -1, reads = 0;
     int dataCloses = 0;
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
         if (IsFileDescriptor(fd, true))
             data = fd;
-        return context.RealStatFileDescriptor(fd, metadata);
+        return context.RealStatNativeDescriptor(fd, metadata);
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         if (IsFileDescriptor(fd, false))
             pin = fd;
         if (IsFileDescriptor(fd, true))
             ++dataCloses;
-        return context.RealCloseFileDescriptor(fd);
+        return context.RealCloseNativeDescriptor(fd);
     });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         ++reads;
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
     auto opened = LinesRange::Make(context, path);
     ASSERT_TRUE(opened.HasValue());
@@ -1016,7 +1016,7 @@ TEST_F(PathFile, EarlyStatFailuresCloseEveryAcquiredDescriptor)
     {
         int stats = 0;
         std::vector<int> observed, closed;
-        ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
             if (IsFileDescriptor(fd, failReadable))
             {
                 ++stats;
@@ -1024,12 +1024,12 @@ TEST_F(PathFile, EarlyStatFailuresCloseEveryAcquiredDescriptor)
                 errno = EACCES;
                 return -1;
             }
-            return context.RealStatFileDescriptor(fd, metadata);
+            return context.RealStatNativeDescriptor(fd, metadata);
         });
-        ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+        ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
             if (IsFileDescriptor(fd, failReadable))
                 closed.push_back(fd);
-            return context.RealCloseFileDescriptor(fd);
+            return context.RealCloseNativeDescriptor(fd);
         });
         auto opened = LinesRange::Make(context, path);
         ASSERT_FALSE(opened.HasValue());
@@ -1049,17 +1049,17 @@ TEST_F(PathFile, PinAndDataCloseFailuresAreDiagnosticOnly)
     OsConfigLogHandle logHandle = OpenLog(logPath.c_str(), nullptr);
     ASSERT_NE(nullptr, logHandle);
     context.SetLogHandle(logHandle);
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
         if (IsFileDescriptor(fd, true))
             ++dataStats;
-        return context.RealStatFileDescriptor(fd, metadata);
+        return context.RealStatNativeDescriptor(fd, metadata);
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         const bool pin = IsFileDescriptor(fd, false);
         const bool data = IsFileDescriptor(fd, true);
         pinCloses += pin;
         dataCloses += data;
-        context.RealCloseFileDescriptor(fd);
+        context.RealCloseNativeDescriptor(fd);
         if (pin)
         {
             errno = EACCES;
@@ -1072,11 +1072,11 @@ TEST_F(PathFile, PinAndDataCloseFailuresAreDiagnosticOnly)
         }
         return ComplianceEngine::Result<void>::Success();
     });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         ++reads;
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
     auto opened = LinesRange::Make(context, path);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
@@ -1109,16 +1109,16 @@ TEST_F(PathFile, AcquisitionReleaseReportsPinFailureWithoutRejectingReader)
     context.SetLogHandle(logHandle);
     int dataStats = 0, failedPins = 0, dataCloses = 0;
     bool releasingPins = false;
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
         if (IsFileDescriptor(fd, true) && ++dataStats == 2)
             releasingPins = true;
-        return context.RealStatFileDescriptor(fd, metadata);
+        return context.RealStatNativeDescriptor(fd, metadata);
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsFileDescriptor(fd, true);
         const bool fail = releasingPins && IsFileDescriptor(fd, false); // Only the selected file pin, not ancestor pins.
         dataCloses += data;
-        context.RealCloseFileDescriptor(fd);
+        context.RealCloseNativeDescriptor(fd);
         if (fail)
         {
             errno = ++failedPins == 1 ? EACCES : EIO;
@@ -1144,20 +1144,20 @@ TEST_F(PathFile, FailedAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
 {
     Write("a");
     int dataStats = 0, pinCloses = 0, dataCloses = 0;
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) -> int {
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) -> int {
         if (IsFileDescriptor(fd, true) && ++dataStats == 1)
         {
             errno = EACCES;
             return -1;
         }
-        return context.RealStatFileDescriptor(fd, metadata);
+        return context.RealStatNativeDescriptor(fd, metadata);
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
         const bool pin = IsFileDescriptor(fd, false);
         const bool data = IsFileDescriptor(fd, true);
         pinCloses += pin;
         dataCloses += data;
-        context.RealCloseFileDescriptor(fd);
+        context.RealCloseNativeDescriptor(fd);
         if (pin)
         {
             errno = EIO;
@@ -1172,10 +1172,10 @@ TEST_F(PathFile, FailedAcquisitionAndPinCleanupDoNotLeakOrReplacePrimary)
     EXPECT_EQ(1, dataStats);
     EXPECT_GE(pinCloses, 1);
     EXPECT_EQ(1, dataCloses);
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
         if (IsFileDescriptor(fd, true))
             ++dataStats;
-        return context.RealStatFileDescriptor(fd, metadata);
+        return context.RealStatNativeDescriptor(fd, metadata);
     });
     dataStats = pinCloses = dataCloses = 0;
     auto acquired = LinesRange::Make(context, path);
@@ -1208,8 +1208,8 @@ TEST_F(PathFile, PinnedInodeSymlinkAndNonregular)
 {
     Write("original");
     bool replaced = false;
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-        const int status = context.RealStatFileDescriptor(fd, metadata);
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        const int status = context.RealStatNativeDescriptor(fd, metadata);
         if (status == 0 && !replaced && IsFileDescriptor(fd, false) && ::rename(path.c_str(), (path + ".old").c_str()) == 0)
         {
             const int replacement = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
@@ -1223,7 +1223,9 @@ TEST_F(PathFile, PinnedInodeSymlinkAndNonregular)
     });
     EXPECT_EQ("original", Collect(path, Limited(8)).Value());
     ASSERT_TRUE(replaced);
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) { return context.RealStatFileDescriptor(fd, metadata); });
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        return context.RealStatNativeDescriptor(fd, metadata);
+    });
     ASSERT_EQ(0, ::symlink(path.c_str(), (path + ".link").c_str()));
     EXPECT_EQ("new", Collect(path + ".link", Limited(3)).Value());
     auto reject = Limited(3);
@@ -1245,18 +1247,18 @@ TEST_F(PathFile, AncestorReplacementBeforeAcquisitionRespectsLinkPolicy)
 
     bool swapped = false;
     int reads = 0, linkCloses = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         reads += IsFileDescriptor(fd, true, alternate + "/target");
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
         linkCloses += IsLinkDescriptor(fd, ancestor);
-        return context.RealCloseFileDescriptor(fd);
+        return context.RealCloseNativeDescriptor(fd);
     });
     struct stat processRoot = {};
     ASSERT_EQ(0, ::stat("/", &processRoot));
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-        const int status = context.RealStatFileDescriptor(fd, metadata);
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        const int status = context.RealStatNativeDescriptor(fd, metadata);
         if (!swapped && status == 0 && metadata->st_dev == processRoot.st_dev && metadata->st_ino == processRoot.st_ino)
         {
             swapped = true;
@@ -1288,8 +1290,8 @@ TEST_F(PathFile, AncestorReplacementAfterAcquisitionKeepsPinnedFile)
     ASSERT_TRUE(MakeAncestorTargets(ancestor, alternate));
 
     bool swapped = false;
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-        const int status = context.RealStatFileDescriptor(fd, metadata);
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        const int status = context.RealStatNativeDescriptor(fd, metadata);
         if (!swapped && status == 0 && IsFileDescriptor(fd, false, requested))
         {
             swapped = true;
@@ -1309,20 +1311,20 @@ TEST_F(PathFile, VerificationAndFinalAdvanceReportErrors)
 {
     Write("abc\n");
     int stats = 0;
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-        const int status = context.RealStatFileDescriptor(fd, metadata);
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        const int status = context.RealStatNativeDescriptor(fd, metadata);
         if (status == 0 && IsFileDescriptor(fd, true) && ++stats == 2)
             ++metadata->st_ino;
         return status;
     });
     EXPECT_EQ(EAGAIN, Collect(path, Limited(4)).Error().code);
     int reads = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
         reads += IsFileDescriptor(fd, true);
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-        const int status = context.RealStatFileDescriptor(fd, metadata);
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        const int status = context.RealStatNativeDescriptor(fd, metadata);
         if (status == 0 && IsFileDescriptor(fd, true) && reads > 0)
             ++metadata->st_mtim.tv_nsec;
         return status;
@@ -1341,10 +1343,12 @@ TEST_F(PathFile, VerificationAndFinalAdvanceReportErrors)
     ++cursor;
     EXPECT_FALSE(cursor != range.end());
     range.Close();
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) { return context.RealStatFileDescriptor(fd, metadata); });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        return context.RealStatNativeDescriptor(fd, metadata);
+    });
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         return 0;
     });
     EXPECT_EQ(EIO, Collect(path, Limited(4)).Error().code);
@@ -1354,12 +1358,12 @@ TEST_F(PathFile, ErrorsOnIntermediateReadsAndRetryLimit)
 {
     Write("a\n" + std::string(8190, 'x') + "b\n");
     int reads = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         if (++reads == 1)
         {
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         }
         errno = EACCES;
         return -1;
@@ -1375,16 +1379,16 @@ TEST_F(PathFile, ErrorsOnIntermediateReadsAndRetryLimit)
     ++it;
     EXPECT_FALSE(it != range.end());
     range.Close();
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         errno = EINTR;
         return -1;
     });
     EXPECT_EQ(E2BIG, Collect(path, Limited(4, 1)).Error().code);
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         return static_cast<ssize_t>(size + 1);
     });
     EXPECT_EQ(EIO, Collect(path, Limited(4)).Error().code);
@@ -1394,9 +1398,9 @@ TEST_F(PathFile, DataCloseFailureDoesNotReplaceVerifiedInputOrReadFailure)
 {
     Write("abc\n");
     int dataCloses = 0;
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsFileDescriptor(fd, true);
-        context.RealCloseFileDescriptor(fd);
+        context.RealCloseNativeDescriptor(fd);
         if (data)
         {
             ++dataCloses;
@@ -1409,9 +1413,9 @@ TEST_F(PathFile, DataCloseFailureDoesNotReplaceVerifiedInputOrReadFailure)
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ("abc", result.Value());
     EXPECT_EQ(1, dataCloses);
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         errno = EIO;
         return -1;
     });
@@ -1426,12 +1430,12 @@ TEST_F(PathFile, LastUnterminatedLineRequiresVerificationButNotSuccessfulDisposa
 {
     Write("tail");
     int reads = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
         reads += IsFileDescriptor(fd, true);
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-        const int status = context.RealStatFileDescriptor(fd, metadata);
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        const int status = context.RealStatNativeDescriptor(fd, metadata);
         if (status == 0 && IsFileDescriptor(fd, true) && reads > 0)
             ++metadata->st_ctim.tv_nsec;
         return status;
@@ -1449,12 +1453,14 @@ TEST_F(PathFile, LastUnterminatedLineRequiresVerificationButNotSuccessfulDisposa
     EXPECT_EQ(1, lines);
     EXPECT_GT(reads, 0);
     range.Close();
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) { return context.RealStatFileDescriptor(fd, metadata); });
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+        return context.RealStatNativeDescriptor(fd, metadata);
+    });
     int closes = 0;
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) -> ComplianceEngine::Result<void> {
         const bool data = IsFileDescriptor(fd, true);
         closes += data;
-        context.RealCloseFileDescriptor(fd);
+        context.RealCloseNativeDescriptor(fd);
         if (data)
         {
             errno = EIO;
@@ -1480,18 +1486,18 @@ TEST_F(PathFile, FailedMakeAndEofStatReturnErrorsAndCloseOwnedDescriptors)
 {
     Write("a");
     int stats = 0, closes = 0;
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) -> int {
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) -> int {
         if (IsFileDescriptor(fd, true) && ++stats == 2)
         {
             errno = EIO;
             return -1;
         }
-        return context.RealStatFileDescriptor(fd, metadata);
+        return context.RealStatNativeDescriptor(fd, metadata);
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         if (IsFileDescriptor(fd, true))
             ++closes;
-        return context.RealCloseFileDescriptor(fd);
+        return context.RealCloseNativeDescriptor(fd);
     });
     auto makeFailure = Collect(path, Limited(1));
     ASSERT_FALSE(makeFailure.HasValue());
@@ -1501,11 +1507,11 @@ TEST_F(PathFile, FailedMakeAndEofStatReturnErrorsAndCloseOwnedDescriptors)
     closes = 0;
     stats = 0;
     int reads = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) {
         reads += IsFileDescriptor(fd, true);
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) -> int {
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) -> int {
         if (IsFileDescriptor(fd, true) && reads > 0)
         {
             errno = EACCES;
@@ -1513,7 +1519,7 @@ TEST_F(PathFile, FailedMakeAndEofStatReturnErrorsAndCloseOwnedDescriptors)
         }
         if (IsFileDescriptor(fd, true))
             ++stats;
-        return context.RealStatFileDescriptor(fd, metadata);
+        return context.RealStatNativeDescriptor(fd, metadata);
     });
     auto eofFailure = Collect(path, Limited(1));
     ASSERT_FALSE(eofFailure.HasValue());
@@ -1527,20 +1533,20 @@ TEST_F(PathFile, FailedReadDuringIterationYieldsErrorAndClosesData)
 {
     Write("first\n" + std::string(8192 - std::string("first\n").size(), 'x') + "second\n");
     int reads = 0, closes = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsFileDescriptor(fd, true))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         if (++reads == 1)
         {
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         }
         errno = EIO;
         return -1;
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         if (IsFileDescriptor(fd, true))
             ++closes;
-        return context.RealCloseFileDescriptor(fd);
+        return context.RealCloseNativeDescriptor(fd);
     });
     {
         auto opened = LinesRange::Make(context, path, Limited(8199));

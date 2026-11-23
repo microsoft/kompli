@@ -59,7 +59,7 @@ int ContextInterface::OpenNativeAt(int directory, const char* path, int flags) c
     return ::openat(directory, path, flags);
 }
 
-int ContextInterface::StatFileDescriptor(int descriptor, struct stat* metadata) const noexcept
+int ContextInterface::StatNativeDescriptor(int descriptor, struct stat* metadata) const noexcept
 {
     return ::fstat(descriptor, metadata);
 }
@@ -88,12 +88,12 @@ DIR* ContextInterface::FdOpenDirectory(int descriptor) const noexcept
     return ::fdopendir(descriptor);
 }
 
-ssize_t ContextInterface::ReadFileDescriptor(int descriptor, void* buffer, std::size_t size) const noexcept
+ssize_t ContextInterface::ReadNativeDescriptor(int descriptor, void* buffer, std::size_t size) const noexcept
 {
     return ::read(descriptor, buffer, size);
 }
 
-Result<void> ContextInterface::CloseFileDescriptor(int descriptor) const noexcept
+Result<void> ContextInterface::CloseNativeDescriptor(int descriptor) const noexcept
 {
     if (::close(descriptor) != 0)
     {

@@ -152,7 +152,7 @@ TEST_F(ReadableFileTest, DescriptorFinalScopeLogsNativeErrorOnceWithoutRetryInMo
     ASSERT_TRUE(acquired.HasValue()) << acquired.Error().message;
     Descriptor owner = std::move(acquired).Value();
     {
-        EXPECT_CALL(context, CloseFileDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) {
+        EXPECT_CALL(context, CloseNativeDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) {
             EXPECT_EQ(0, ::close(descriptor));
             errno = EACCES;
             return ComplianceEngine::Error(errno ? errno : EIO);
@@ -186,12 +186,12 @@ TEST_F(ReadableFileTest, DescriptorMoveReplacementRoutesFailedCloseToOldContextO
     ASSERT_TRUE(incomingResult.HasValue()) << incomingResult.Error().message;
     Descriptor incoming = std::move(incomingResult).Value();
     {
-        EXPECT_CALL(oldContext, CloseFileDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) -> ComplianceEngine::Result<void> {
+        EXPECT_CALL(oldContext, CloseNativeDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) -> ComplianceEngine::Result<void> {
             EXPECT_EQ(0, ::close(descriptor));
             errno = EIO;
             return ComplianceEngine::Error(errno ? errno : EIO);
         });
-        EXPECT_CALL(incomingContext, CloseFileDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) {
+        EXPECT_CALL(incomingContext, CloseNativeDescriptor(testing::_)).Times(1).WillOnce([](int descriptor) {
             return NativeCloseResult(::close(descriptor));
         });
         testing::internal::CaptureStderr();
@@ -240,7 +240,7 @@ TEST_F(ReadableFileTest, AliasOpenFailureDoesNotReopenNameOrLeak)
         }
         return context.RealOpenNativeAt(directory, name, flags);
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
         struct statfs filesystem = {};
         const bool procfs = (0 == ::fstatfs(descriptor, &filesystem)) && (PROC_SUPER_MAGIC == filesystem.f_type);
         const int status = ::close(descriptor);
@@ -281,7 +281,7 @@ TEST_F(ReadableFileTest, AliasOutputRemainsReadableWhenProcfsHelperCloseFails)
         }
         return descriptor;
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
         struct statfs filesystem = {};
         const bool procfs = (0 == ::fstatfs(descriptor, &filesystem)) && (PROC_SUPER_MAGIC == filesystem.f_type);
         const int status = ::close(descriptor);
@@ -337,7 +337,7 @@ TEST_F(ReadableFileTest, SurvivesPinAndNameReplacementAndInspectsReadableDescrip
     ASSERT_TRUE(after.HasValue());
     EXPECT_EQ(before.Value().st_ino, after.Value().st_ino);
     EXPECT_EQ(before.Value().st_size, after.Value().st_size);
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(1).WillOnce([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
     readable.Close();
     readable.Close();
     EXPECT_EQ(EBADF, readable.Read(1).Error().code);
@@ -399,7 +399,7 @@ TEST_F(ReadableFileTest, NativeDescriptorZeroRemainsOwnedThroughEofUntilClose)
             {
                 ::_exit(6);
             }
-            EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
+            EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
                 if (descriptor == STDIN_FILENO)
                 {
                     if (closed)
@@ -431,10 +431,10 @@ TEST_F(ReadableFileTest, ReturnsOwnedBinaryChunksWithoutTextFiltering)
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
 
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 2)).Times(1);
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 8)).Times(1);
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1);
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(0);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 2)).Times(1);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 8)).Times(1);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 5)).Times(1);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 1)).Times(0);
     auto first = readable.Read(2);
     ASSERT_TRUE(first.HasValue());
     ASSERT_TRUE(first.Value().HasValue());
@@ -463,17 +463,17 @@ TEST_F(ReadableFileTest, ShortNativeReadsFillCapacityAtShrinkingOffsetsWithoutEo
     ReadableFile readable = std::move(activated).Value();
     EXPECT_FALSE(readable.AtEnd());
     void* start = nullptr;
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 5)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
         start = buffer;
-        return context.RealReadFileDescriptor(fd, buffer, 1);
+        return context.RealReadNativeDescriptor(fd, buffer, 1);
     });
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 4)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 4)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
         EXPECT_EQ(static_cast<char*>(start) + 1, buffer);
-        return context.RealReadFileDescriptor(fd, buffer, 2);
+        return context.RealReadNativeDescriptor(fd, buffer, 2);
     });
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 2)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t size) {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 2)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t size) {
         EXPECT_EQ(static_cast<char*>(start) + 3, buffer);
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
     auto filled = readable.Read(5);
     ASSERT_TRUE(filled.HasValue());
@@ -497,13 +497,13 @@ TEST_F(ReadableFileTest, EofAfterShortProgressReturnsEngagedPartialButImmediateE
     ReadableFile readable = std::move(activated).Value();
     EXPECT_FALSE(readable.AtEnd());
     void* start = nullptr;
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 5)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
         start = buffer;
-        return context.RealReadFileDescriptor(fd, buffer, 2);
+        return context.RealReadNativeDescriptor(fd, buffer, 2);
     });
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 3)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t size) {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 3)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t size) {
         EXPECT_EQ(static_cast<char*>(start) + 2, buffer);
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
     auto partial = readable.Read(5);
     ASSERT_TRUE(partial.HasValue());
@@ -511,7 +511,7 @@ TEST_F(ReadableFileTest, EofAfterShortProgressReturnsEngagedPartialButImmediateE
     EXPECT_EQ("ab", partial.Value().Value());
     EXPECT_TRUE(readable.AtEnd());
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, _)).Times(0);
     auto eof = readable.Read(5);
     ASSERT_TRUE(eof.HasValue());
     EXPECT_FALSE(eof.Value().HasValue());
@@ -544,7 +544,7 @@ TEST_F(ReadableFileTest, ObservedEofTransfersWithOwnershipAndResetsOnClose)
     EXPECT_FALSE(moved.AtEnd());
     EXPECT_EQ(EBADF, moved.Read(1).Error().code);
     EXPECT_TRUE(replacement.AtEnd());
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, _)).Times(0);
     auto eof = replacement.Read(1);
     ASSERT_TRUE(eof.HasValue());
     EXPECT_FALSE(eof.Value().HasValue());
@@ -563,27 +563,27 @@ TEST_F(ReadableFileTest, InterruptedShortReadsShareCumulativeBudgetAndAllowProgr
     ReadableFile readable = std::move(activated).Value();
     int calls = 0;
     void* start = nullptr;
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(2).WillRepeatedly([&](int fd, void* buffer, std::size_t) -> ssize_t {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 5)).Times(2).WillRepeatedly([&](int fd, void* buffer, std::size_t) -> ssize_t {
         if (++calls == 1)
         {
             errno = EINTR;
             return -1;
         }
         start = buffer;
-        return context.RealReadFileDescriptor(fd, buffer, 2);
+        return context.RealReadNativeDescriptor(fd, buffer, 2);
     });
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 3)).Times(2).WillRepeatedly([&](int fd, void* buffer, std::size_t) -> ssize_t {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 3)).Times(2).WillRepeatedly([&](int fd, void* buffer, std::size_t) -> ssize_t {
         EXPECT_EQ(static_cast<char*>(start) + 2, buffer);
         if (++calls == 3)
         {
             errno = EINTR;
             return -1;
         }
-        return context.RealReadFileDescriptor(fd, buffer, 1);
+        return context.RealReadNativeDescriptor(fd, buffer, 1);
     });
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 2)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t size) {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 2)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t size) {
         EXPECT_EQ(static_cast<char*>(start) + 3, buffer);
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
     auto filled = readable.Read(5);
     ASSERT_TRUE(filled.HasValue());
@@ -592,7 +592,7 @@ TEST_F(ReadableFileTest, InterruptedShortReadsShareCumulativeBudgetAndAllowProgr
     EXPECT_FALSE(readable.AtEnd());
     EXPECT_EQ(4, calls);
     // The budget belongs to the readable owner across subsequent calls.
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
         errno = EINTR;
         return -1;
     });
@@ -609,10 +609,10 @@ TEST_F(ReadableFileTest, NativeErrorAfterShortProgressDoesNotReturnPartialDataOr
     auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
-        return context.RealReadFileDescriptor(fd, buffer, 2);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 5)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
+        return context.RealReadNativeDescriptor(fd, buffer, 2);
     });
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 3)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 3)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
         errno = EIO;
         return -1;
     });
@@ -636,10 +636,10 @@ TEST_F(ReadableFileTest, ExhaustedEintrAfterShortProgressIsErrorNotPartialData)
     auto activated = pinned.Value().OpenReadOnly(ReadableFile::Policy(0));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 3)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
-        return context.RealReadFileDescriptor(fd, buffer, 1);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 3)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
+        return context.RealReadNativeDescriptor(fd, buffer, 1);
     });
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 2)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 2)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
         errno = EINTR;
         return -1;
     });
@@ -662,10 +662,10 @@ TEST_F(ReadableFileTest, OverreportOnReducedRemainingRequestFailsBeforePublishin
     auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
-        return context.RealReadFileDescriptor(fd, buffer, 2);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 5)).Times(1).WillOnce([&](int fd, void* buffer, std::size_t) {
+        return context.RealReadNativeDescriptor(fd, buffer, 2);
     });
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 3)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t { return 4; });
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 3)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t { return 4; });
     auto failed = readable.Read(5);
     ASSERT_FALSE(failed.HasValue());
     EXPECT_EQ(EIO, failed.Error().code);
@@ -686,14 +686,14 @@ TEST_F(ReadableFileTest, ZeroBudgetPreservesInterruptedReadAndInspectErrnosWitho
     auto activated = pinned.Value().OpenReadOnly(ReadableFile::Policy(0));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
         errno = EINTR;
         return -1;
     });
     auto interrupted = readable.Read(1);
     ASSERT_FALSE(interrupted.HasValue());
     EXPECT_EQ(EINTR, interrupted.Error().code);
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
         errno = EIO;
         return -1;
     });
@@ -701,14 +701,14 @@ TEST_F(ReadableFileTest, ZeroBudgetPreservesInterruptedReadAndInspectErrnosWitho
     ASSERT_FALSE(failed.HasValue());
     EXPECT_EQ(EIO, failed.Error().code);
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
-    EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(1).WillOnce([](int, struct stat*) {
+    EXPECT_CALL(context, StatNativeDescriptor(_, _)).Times(1).WillOnce([](int, struct stat*) {
         errno = EACCES;
         return -1;
     });
     auto inspection = readable.Stat();
     ASSERT_FALSE(inspection.HasValue());
     EXPECT_EQ(EACCES, inspection.Error().code);
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, _)).Times(0);
     EXPECT_EQ(EINVAL, readable.Read(0).Error().code);
     EXPECT_EQ(EINVAL, readable.Read(static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()) + 1).Error().code);
     if (std::string().max_size() < static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()))
@@ -731,7 +731,7 @@ TEST_F(ReadableFileTest, InterruptedReadConsumesOnlyRetriesAndPreservesBinaryDat
     auto activated = pinned.Value().OpenReadOnly(ReadableFile::Policy(2));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 8))
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 8))
         .Times(3)
         .WillOnce([](int, void*, std::size_t) -> ssize_t {
             errno = EINTR;
@@ -741,8 +741,8 @@ TEST_F(ReadableFileTest, InterruptedReadConsumesOnlyRetriesAndPreservesBinaryDat
             errno = EINTR;
             return -1;
         })
-        .WillOnce([&](int descriptor, void* buffer, std::size_t size) { return context.RealReadFileDescriptor(descriptor, buffer, size); });
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 5)).Times(1);
+        .WillOnce([&](int descriptor, void* buffer, std::size_t size) { return context.RealReadNativeDescriptor(descriptor, buffer, size); });
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 5)).Times(1);
     auto read = readable.Read(8);
     ASSERT_TRUE(read.HasValue());
     ASSERT_TRUE(read.Value().HasValue());
@@ -763,7 +763,7 @@ TEST_F(ReadableFileTest, ExhaustedInterruptedReadReturnsNativeEintrAfterLimitPlu
     auto activated = pinned.Value().OpenReadOnly(ReadableFile::Policy(1));
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(2).WillRepeatedly([](int, void*, std::size_t) -> ssize_t {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 1)).Times(2).WillRepeatedly([](int, void*, std::size_t) -> ssize_t {
         errno = EINTR;
         return -1;
     });
@@ -786,14 +786,14 @@ TEST_F(ReadableFileTest, InterruptedBudgetMovesWithReadableAcrossSeparateReads)
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
     int calls = 0;
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(4).WillRepeatedly([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 1)).Times(4).WillRepeatedly([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         ++calls;
         if ((calls == 1) || (calls == 3))
         {
             errno = EINTR;
             return -1;
         }
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
 
     auto first = readable.Read(1);
@@ -822,7 +822,7 @@ TEST_F(ReadableFileTest, NonInterruptedNativeErrorsNeverSpendRetryBudget)
     ReadableFile readable = std::move(activated).Value();
     for (const int failure : {EAGAIN, EIO})
     {
-        EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([failure](int, void*, std::size_t) -> ssize_t {
+        EXPECT_CALL(context, ReadNativeDescriptor(_, _, 1)).Times(1).WillOnce([failure](int, void*, std::size_t) -> ssize_t {
             errno = failure;
             return -1;
         });
@@ -849,7 +849,7 @@ TEST_F(ReadableFileTest, EmptyFilePositiveReadReturnsEof)
     ASSERT_TRUE(metadata.HasValue());
     EXPECT_EQ(0, metadata.Value().st_size);
     EXPECT_FALSE(readable.AtEnd()); // stat does not predict EOF
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 1)).Times(1);
     auto end = readable.Read(1);
     ASSERT_TRUE(end.HasValue());
     EXPECT_FALSE(end.Value().HasValue());
@@ -868,7 +868,7 @@ TEST_F(ReadableFileTest, OverreportedReadIsAnErrorNotDataOrEof)
     auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t { return 2; });
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t { return 2; });
     auto overreported = readable.Read(1);
     ASSERT_FALSE(overreported.HasValue());
     EXPECT_EQ(EIO, overreported.Error().code);
@@ -887,7 +887,7 @@ TEST_F(ReadableFileTest, FailedReadPreservesDescriptorForSubsequentRead)
     auto activated = pinned.Value().OpenReadOnly();
     ASSERT_TRUE(activated.HasValue());
     ReadableFile readable = std::move(activated).Value();
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, 1)).Times(1).WillOnce([](int, void*, std::size_t) -> ssize_t {
         errno = EIO;
         return -1;
     });
@@ -967,7 +967,7 @@ TEST_F(ReadableFileTest, RejectsDirectoryInvalidCapAndPinInspectionFailureWithou
         auto oversizedCap = Path::Make(context, source, policy, limits);
         ASSERT_FALSE(oversizedCap.HasValue());
         EXPECT_EQ(EINVAL, oversizedCap.Error().code);
-        EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(1).WillOnce([](int, struct stat*) {
+        EXPECT_CALL(context, StatNativeDescriptor(_, _)).Times(1).WillOnce([](int, struct stat*) {
             errno = EIO;
             return -1;
         });
@@ -993,7 +993,7 @@ TEST_F(ReadableFileTest, CloseFailureIsReportedOnceAndDoesNotCloseReusedDescript
     int reused = -1;
     {
         ReadableFile readable = std::move(activated).Value();
-        EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([&](int descriptor) -> ComplianceEngine::Result<void> {
+        EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(1).WillOnce([&](int descriptor) -> ComplianceEngine::Result<void> {
             EXPECT_EQ(0, ::close(descriptor));
             const int replacement = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
             EXPECT_GE(replacement, 0);
@@ -1040,7 +1040,7 @@ TEST_F(ReadableFileTest, FailedCloseTransfersNoErrorThroughMoveConstructionOrAss
     const auto before = OpenDescriptors();
     {
         ReadableFile failed = std::move(first).Value();
-        EXPECT_CALL(context, CloseFileDescriptor(_))
+        EXPECT_CALL(context, CloseNativeDescriptor(_))
             .Times(2)
             .WillOnce([](int descriptor) {
                 EXPECT_EQ(0, ::close(descriptor));
@@ -1071,7 +1071,7 @@ TEST_F(ReadableFileTest, NativeCloseErrorIsReportedOnceAndDoesNotRetry)
     pinned = ComplianceEngine::Error("Release pin", EINVAL);
     {
         ReadableFile readable = std::move(activated).Value();
-        EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) -> ComplianceEngine::Result<void> {
+        EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(1).WillOnce([](int descriptor) -> ComplianceEngine::Result<void> {
             EXPECT_EQ(0, ::close(descriptor));
             errno = EIO;
             return ComplianceEngine::Error(errno ? errno : EIO);
@@ -1096,7 +1096,7 @@ TEST_F(ReadableFileTest, DestructorReportsFailedNativeCloseOnce)
         testing::internal::CaptureStderr();
         {
             ReadableFile readable = std::move(activated).Value();
-            EXPECT_CALL(selectedContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) {
+            EXPECT_CALL(selectedContext, CloseNativeDescriptor(_)).Times(1).WillOnce([](int descriptor) {
                 EXPECT_EQ(0, ::close(descriptor));
                 errno = EACCES;
                 return ComplianceEngine::Error(errno ? errno : EIO);
@@ -1136,7 +1136,7 @@ TEST_F(ReadableFileTest, MoveAssignmentReportsFailedCloseAndRetainsIncomingOwner
         {
             ReadableFile destination = std::move(oldOpened).Value();
             ReadableFile source = std::move(newOpened).Value();
-            EXPECT_CALL(selectedContext, CloseFileDescriptor(_))
+            EXPECT_CALL(selectedContext, CloseNativeDescriptor(_))
                 .Times(2)
                 .WillOnce([](int descriptor) {
                     EXPECT_EQ(0, ::close(descriptor));
@@ -1186,7 +1186,7 @@ TEST_F(ReadableFileTest, DestructorAndMoveAssignmentCloseOnce)
         pinned = ComplianceEngine::Error("Release pin", EINVAL);
         ReadableFile readable = std::move(first).Value();
         ReadableFile moved = std::move(second).Value();
-        EXPECT_CALL(context, CloseFileDescriptor(_))
+        EXPECT_CALL(context, CloseNativeDescriptor(_))
             .Times(2)
             .WillOnce([](int descriptor) -> ComplianceEngine::Result<void> {
                 const int result = ::close(descriptor);
@@ -1221,7 +1221,7 @@ TEST_F(ReadableFileTest, SameContextMoveConstructorAssignmentAndSelfMoveKeepSing
     EXPECT_TRUE(moved.Stat().HasValue());
 
     ReadableFile incoming = std::move(second).Value();
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(2).WillRepeatedly([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(2).WillRepeatedly([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
     ReadableFile& self = moved;
     moved = std::move(self);
     EXPECT_TRUE(moved.Stat().HasValue());
@@ -1259,23 +1259,23 @@ TEST_F(ReadableFileTest, CrossContextMoveAssignmentClosesOldOwnerAndRoutesIncomi
 
     ReadableFile destination = std::move(activated).Value();
     ReadableFile source = std::move(foreignActivated).Value();
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([&](int descriptor) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(1).WillOnce([&](int descriptor) -> ComplianceEngine::Result<void> {
         oldDescriptor = descriptor;
         return NativeCloseResult(::close(descriptor));
     });
-    EXPECT_CALL(foreignContext, CloseFileDescriptor(_)).Times(1).WillOnce([&](int descriptor) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(foreignContext, CloseNativeDescriptor(_)).Times(1).WillOnce([&](int descriptor) -> ComplianceEngine::Result<void> {
         EXPECT_EQ(incomingDescriptor, descriptor);
         return NativeCloseResult(::close(descriptor));
     });
-    EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(0);
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
-    EXPECT_CALL(foreignContext, StatFileDescriptor(_, _)).Times(1).WillOnce([&](int descriptor, struct stat* metadata) {
+    EXPECT_CALL(context, StatNativeDescriptor(_, _)).Times(0);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, _)).Times(0);
+    EXPECT_CALL(foreignContext, StatNativeDescriptor(_, _)).Times(1).WillOnce([&](int descriptor, struct stat* metadata) {
         incomingDescriptor = descriptor;
-        return foreignContext.RealStatFileDescriptor(descriptor, metadata);
+        return foreignContext.RealStatNativeDescriptor(descriptor, metadata);
     });
-    EXPECT_CALL(foreignContext, ReadFileDescriptor(_, _, _)).Times(1).WillOnce([&](int descriptor, void* buffer, std::size_t size) {
+    EXPECT_CALL(foreignContext, ReadNativeDescriptor(_, _, _)).Times(1).WillOnce([&](int descriptor, void* buffer, std::size_t size) {
         EXPECT_EQ(incomingDescriptor, descriptor);
-        return foreignContext.RealReadFileDescriptor(descriptor, buffer, size);
+        return foreignContext.RealReadNativeDescriptor(descriptor, buffer, size);
     });
 
     destination = std::move(source);
@@ -1322,12 +1322,12 @@ TEST_F(ReadableFileTest, CrossContextMoveReplacementReportsOldOwnerCloseFailure)
 
     ReadableFile destination = std::move(oldOpened).Value();
     ReadableFile source = std::move(newOpened).Value();
-    EXPECT_CALL(oldContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) {
+    EXPECT_CALL(oldContext, CloseNativeDescriptor(_)).Times(1).WillOnce([](int descriptor) {
         EXPECT_EQ(0, ::close(descriptor));
         errno = EIO;
         return ComplianceEngine::Error(errno ? errno : EIO);
     });
-    EXPECT_CALL(newContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
+    EXPECT_CALL(newContext, CloseNativeDescriptor(_)).Times(1).WillOnce([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
     destination = std::move(source);
     EXPECT_EQ(1, oldContext.logHandleRequests);
     EXPECT_FALSE(source.AtEnd());
@@ -1364,8 +1364,8 @@ TEST_F(ReadableFileTest, CrossContextClosedAndMovedFromAssignmentsTransferEofAnd
     ASSERT_TRUE(bytes.Value().HasValue());
     EXPECT_EQ("b", bytes.Value().Value());
     EXPECT_TRUE(source.AtEnd());
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
-    EXPECT_CALL(foreignContext, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(1).WillOnce([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
+    EXPECT_CALL(foreignContext, CloseNativeDescriptor(_)).Times(1).WillOnce([](int descriptor) { return NativeCloseResult(::close(descriptor)); });
     destination.Close();
     EXPECT_FALSE(destination.AtEnd());
     ReadableFile closedOld(std::move(destination));
@@ -1376,10 +1376,10 @@ TEST_F(ReadableFileTest, CrossContextClosedAndMovedFromAssignmentsTransferEofAnd
     destination = std::move(moved); // closed destination adopts another context
     EXPECT_FALSE(moved.AtEnd());
     EXPECT_TRUE(destination.AtEnd());
-    EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(0);
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
-    EXPECT_CALL(foreignContext, StatFileDescriptor(_, _)).Times(1);
-    EXPECT_CALL(foreignContext, ReadFileDescriptor(_, _, _)).Times(0); // cached EOF
+    EXPECT_CALL(context, StatNativeDescriptor(_, _)).Times(0);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, _)).Times(0);
+    EXPECT_CALL(foreignContext, StatNativeDescriptor(_, _)).Times(1);
+    EXPECT_CALL(foreignContext, ReadNativeDescriptor(_, _, _)).Times(0); // cached EOF
     EXPECT_TRUE(destination.Stat().HasValue());
     auto eof = destination.Read(1);
     ASSERT_TRUE(eof.HasValue());
@@ -1456,17 +1456,17 @@ TEST_F(ReadableFileTest, ChildStatFailureOutranksDiagnosticPinRelease)
             childFd = fd;
         return fd;
     });
-    EXPECT_CALL(context, StatFileDescriptor(_, _)).WillRepeatedly([&](int fd, struct stat* out) {
+    EXPECT_CALL(context, StatNativeDescriptor(_, _)).WillRepeatedly([&](int fd, struct stat* out) {
         if (fd == childFd)
         {
             errno = EACCES;
             return -1;
         }
-        return context.RealStatFileDescriptor(fd, out);
+        return context.RealStatNativeDescriptor(fd, out);
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         const bool child = fd == childFd;
-        auto result = context.RealCloseFileDescriptor(fd);
+        auto result = context.RealCloseNativeDescriptor(fd);
         if (child)
         {
             disposalFailed = true;
@@ -1637,8 +1637,8 @@ TEST_F(ReadableFileTest, MutationPreflightBlocksBothSyscallsAndPostcheckReportsP
         struct stat initial = {};
         ASSERT_EQ(0, ::stat(source.c_str(), &initial));
         bool reject = true;
-        ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-            const int result = context.RealStatFileDescriptor(fd, metadata);
+        ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+            const int result = context.RealStatNativeDescriptor(fd, metadata);
             if (reject && result == 0 && metadata->st_ino == initial.st_ino && metadata->st_dev == initial.st_dev)
             {
                 errno = EIO;
@@ -1663,8 +1663,8 @@ TEST_F(ReadableFileTest, MutationPreflightBlocksBothSyscallsAndPostcheckReportsP
         ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&context));
         reject = false;
         std::size_t inspections = 0;
-        ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-            const int result = context.RealStatFileDescriptor(fd, metadata);
+        ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+            const int result = context.RealStatNativeDescriptor(fd, metadata);
             if (result == 0 && metadata->st_ino == initial.st_ino && metadata->st_dev == initial.st_dev && ++inspections == 6)
             {
                 errno = EIO; // First fresh pin observation after successful chmod.
@@ -1816,7 +1816,7 @@ TEST_F(ReadableFileTest, PathOwnersLogEachFailedDisposalOnceAndDoNotRetryReusedN
         const auto target = path->Leaf().Metadata().Stat();
         Path::Component retained = path->Leaf();
         Path moved(std::move(*path)); // move-as-copy keeps both snapshots owning the same pins
-        EXPECT_CALL(context, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+        EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
             ++closed;
             struct stat observed = {};
             const bool isTarget = ::fstat(fd, &observed) == 0 && observed.st_ino == target.st_ino && observed.st_dev == target.st_dev;
@@ -1892,9 +1892,9 @@ TEST_F(ReadableFileTest, PathMoveAssignmentReleasesReplacedPinThroughOriginalCon
     const auto replacedPins = replaced->RetainedDescriptors();
     const auto incomingPins = incoming->RetainedDescriptors();
     std::size_t oldCloses = 0, incomingCloses = 0;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(replacedPins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(replacedPins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         ++oldCloses;
-        auto result = context.RealCloseFileDescriptor(fd);
+        auto result = context.RealCloseNativeDescriptor(fd);
         if (oldCloses == 1)
         {
             errno = EIO;
@@ -1902,9 +1902,9 @@ TEST_F(ReadableFileTest, PathMoveAssignmentReleasesReplacedPinThroughOriginalCon
         }
         return result;
     });
-    EXPECT_CALL(incomingContext, CloseFileDescriptor(_)).Times(incomingPins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(incomingContext, CloseNativeDescriptor(_)).Times(incomingPins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         ++incomingCloses;
-        return incomingContext.RealCloseFileDescriptor(fd);
+        return incomingContext.RealCloseNativeDescriptor(fd);
     });
     *replaced = std::move(*incoming);
     EXPECT_EQ(replacedPins, oldCloses);
@@ -1932,7 +1932,7 @@ TEST_F(ReadableFileTest, FailedPinDisposalAndLoggerDoNotSkipRemainingOwners)
     const auto pins = path->RetainedDescriptors();
     ASSERT_GT(pins, 1u);
     std::size_t attempts = 0;
-    EXPECT_CALL(selected, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(selected, CloseNativeDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         ++attempts;
         EXPECT_EQ(0, ::close(fd));
         if (attempts == 1)
@@ -1984,7 +1984,7 @@ TEST_F(ReadableFileTest, DiagnosticTransitionReleasePreservesUndoAndHeldTarget)
     selected = ComplianceEngine::Error("Release selected Step", EINVAL);
     undo = ComplianceEngine::Error("Release inverse Step", EINVAL);
     restore = ComplianceEngine::Error("Release restored Step", EINVAL);
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(1).WillOnce([&](int fd) -> ComplianceEngine::Result<void> {
         ++attempts;
         struct stat target = {};
         EXPECT_EQ(0, ::fstat(fd, &target));
@@ -2031,12 +2031,12 @@ TEST_F(ReadableFileTest, ChildAcquisitionSurvivesFailedProcfsHelperDisposal)
             childOpened = true;
         return fd;
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         const std::string alias = "/proc/self/fd/" + std::to_string(fd);
         char target[256] = {};
         const ssize_t length = ::readlink(alias.c_str(), target, sizeof(target));
         const bool procfs = length >= 6 && std::string(target, static_cast<std::size_t>(length)).find("/proc/") == 0;
-        auto result = context.RealCloseFileDescriptor(fd);
+        auto result = context.RealCloseNativeDescriptor(fd);
         if (childOpened && procfs && !helperFailed)
         {
             helperFailed = true;
@@ -2086,9 +2086,9 @@ TEST_F(ReadableFileTest, RetiringResolvedPathVisitsRootPhysicalAncestorAndLeafPi
     const std::size_t pins = path->RetainedDescriptors();
     ASSERT_GT(pins, 2u);
     std::size_t closes = 0;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         ++closes;
-        return context.RealCloseFileDescriptor(fd);
+        return context.RealCloseNativeDescriptor(fd);
     });
     path.reset();
     EXPECT_EQ(pins, closes);

@@ -324,7 +324,7 @@ TEST(SshKeyRangeTest, OriginalKeyReadErrorOutranksDestructorCloseFailure)
     context.SetSpecialFilePath("/etc/ssh", root);
     struct stat expectedKey = {};
     ASSERT_EQ(0, ::stat(key.c_str(), &expectedKey));
-    // ReadFileDescriptor is excluded: this test constrains it below with its
+    // ReadNativeDescriptor is excluded: this test constrains it below with its
     // own full-wildcard EXPECT_CALL/WillRepeatedly (the read-fault
     // injection). CloseDirectory only gets an ON_CALL default-action
     // override, not its own EXPECT_CALL, so it stays in the catch-all.
@@ -335,14 +335,14 @@ TEST(SshKeyRangeTest, OriginalKeyReadErrorOutranksDestructorCloseFailure)
     context.AllowDirectoryEnumeration();
     context.AllowIdentityLookup();
     EXPECT_CALL(context, GetFileContents(::testing::_)).Times(0);
-    EXPECT_CALL(context, ReadFileDescriptor(::testing::_, ::testing::_, ::testing::_)).WillRepeatedly([&](int fd, void* data, std::size_t size) {
+    EXPECT_CALL(context, ReadNativeDescriptor(::testing::_, ::testing::_, ::testing::_)).WillRepeatedly([&](int fd, void* data, std::size_t size) {
         struct stat actual = {};
         if (::fstat(fd, &actual) == 0 && actual.st_dev == expectedKey.st_dev && actual.st_ino == expectedKey.st_ino)
         {
             errno = EACCES;
             return static_cast<ssize_t>(-1);
         }
-        return context.RealReadFileDescriptor(fd, data, size);
+        return context.RealReadNativeDescriptor(fd, data, size);
     });
     ON_CALL(context, CloseDirectory(::testing::_)).WillByDefault([](DIR* stream) {
         const int result = closedir(stream);
@@ -472,7 +472,7 @@ TEST(SshKeyRangeTest, TM12UnlinkAfterAcquisitionStillRefusesViaAcquisitionTimeLi
 
     bool sawAcquisitionStat = false;
     bool unlinkedInside = false;
-    ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
+    ON_CALL(context, StatNativeDescriptor(::testing::_, ::testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
         struct stat actual = {};
         if (!unlinkedInside && 0 == fstat(descriptor, &actual) && actual.st_dev == target.st_dev && actual.st_ino == target.st_ino)
         {
@@ -486,7 +486,7 @@ TEST(SshKeyRangeTest, TM12UnlinkAfterAcquisitionStillRefusesViaAcquisitionTimeLi
                 EXPECT_EQ(0, unlink(linked.c_str()));
             }
         }
-        return context.RealStatFileDescriptor(descriptor, metadata);
+        return context.RealStatNativeDescriptor(descriptor, metadata);
     });
 
     EXPECT_CALL(context, ChownPinnedFileDescriptor(::testing::_, ::testing::_, ::testing::_)).Times(0);
@@ -611,7 +611,7 @@ protected:
         ASSERT_EQ(0, ::mkdir(mSshDir.c_str(), 0755));
         mContext.SetSpecialFilePath("/etc/ssh", mSshDir);
         EXPECT_CALL(mContext, GetFileContents(::testing::_)).Times(0);
-        // ReadFileDescriptor is excluded here: every test that reads a key
+        // ReadNativeDescriptor is excluded here: every test that reads a key
         // constrains it itself via ExpectPinnedKeyReads() below with its own
         // full-wildcard EXPECT_CALL/WillRepeatedly; a test with no key to
         // read (no ExpectPinnedKeyReads call) declares AllowFileRead()
@@ -630,7 +630,7 @@ protected:
         ASSERT_EQ(0, ::stat(path.c_str(), &expectedKey));
         mKeyReads = 0;
         mExpectedKeyReads = count;
-        EXPECT_CALL(mContext, ReadFileDescriptor(::testing::_, ::testing::_, ::testing::_))
+        EXPECT_CALL(mContext, ReadNativeDescriptor(::testing::_, ::testing::_, ::testing::_))
             .WillRepeatedly([this, expectedKey, readError](int fd, void* data, std::size_t size) -> ssize_t {
                 struct stat actual = {};
                 if (::fstat(fd, &actual) == 0 && actual.st_dev == expectedKey.st_dev && actual.st_ino == expectedKey.st_ino)
@@ -642,7 +642,7 @@ protected:
                         return -1;
                     }
                 }
-                return mContext.RealReadFileDescriptor(fd, data, size);
+                return mContext.RealReadNativeDescriptor(fd, data, size);
             });
     }
 
@@ -678,7 +678,7 @@ TEST_F(EnsureSshKeyPermsTest, RegularFileRootPropagatesTraversalError)
     std::ofstream(root) << "not a directory\n";
     mContext.SetSpecialFilePath("/etc/ssh", root);
     // No key to read in this test (the root itself is rejected first); the
-    // fixture excludes ReadFileDescriptor from its catch-all because other
+    // fixture excludes ReadNativeDescriptor from its catch-all because other
     // tests constrain it via ExpectPinnedKeyReads().
     mContext.AllowFileRead();
     SshKeyPermissionsParams params;
@@ -863,7 +863,7 @@ TEST_F(EnsureSshKeyPermsTest, TM12HardLinkedKeyIsNotRemediatedWhileUnlinkedCopyI
 TEST_F(EnsureSshKeyPermsTest, RemediationNoKeys)
 {
     // No key to read in this test (the directory is empty); the fixture
-    // excludes ReadFileDescriptor from its catch-all because other tests
+    // excludes ReadNativeDescriptor from its catch-all because other tests
     // constrain it via ExpectPinnedKeyReads().
     mContext.AllowFileRead();
     SshKeyPermissionsParams params;

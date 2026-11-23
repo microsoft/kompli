@@ -191,6 +191,7 @@ add_library(complianceenginelib STATIC
     filesystem/FilesystemCollection.cpp
     filesystem/FilesystemHelpers.cpp
     filesystem/FTWDirectoryCursor.cpp
+    filesystem/Pin.cpp
     filesystem/ProcfsDescriptorAccess.cpp
     filesystem/Path.cpp
     filesystem/ReadableFile.cpp

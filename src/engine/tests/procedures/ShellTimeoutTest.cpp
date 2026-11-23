@@ -47,7 +47,7 @@ protected:
         mContext.SetSpecialFilePath("/etc/profile", missingPath);
         mContext.SetSpecialFilePath("/etc/profile.d/", mContext.GetTempdirPath() + "/missing-config-directory");
         // No test in this fixture constrains open/stat/identity seams; only
-        // OpenNativeAt/ReadFileDescriptor/CloseFileDescriptor get
+        // OpenNativeAt/ReadNativeDescriptor/CloseNativeDescriptor get
         // test-specific ON_CALL overrides in a few tests below, each paired
         // with its own later EXPECT_CALL that takes priority over this
         // catch-all.
@@ -162,13 +162,13 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, ReachedReadFailureIsNotMissing
 {
     const auto path = mContext.MakeTempfile("TMOUT=900\nreadonly TMOUT\nexport TMOUT\n");
     mContext.SetSpecialFilePath("/etc/bashrc", path);
-    ON_CALL(mContext, ReadFileDescriptor(testing::_, testing::_, testing::_)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(mContext, ReadNativeDescriptor(testing::_, testing::_, testing::_)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsData(fd, path))
-            return mContext.RealReadFileDescriptor(fd, buffer, size);
+            return mContext.RealReadNativeDescriptor(fd, buffer, size);
         errno = EIO;
         return -1;
     });
-    EXPECT_CALL(mContext, ReadFileDescriptor(testing::_, testing::_, testing::_)).Times(testing::AnyNumber());
+    EXPECT_CALL(mContext, ReadNativeDescriptor(testing::_, testing::_, testing::_)).Times(testing::AnyNumber());
 
     const auto result = AuditShellTimeout(mIndicators, mContext);
     ASSERT_FALSE(result.HasValue());
@@ -236,26 +236,26 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateStopsWithoutReadingTa
     mContext.SetSpecialFilePath("/etc/bashrc", path);
     int reads = 0;
     int closes = 0;
-    ON_CALL(mContext, ReadFileDescriptor(testing::_, testing::_, testing::_)).WillByDefault([&](int descriptor, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(mContext, ReadNativeDescriptor(testing::_, testing::_, testing::_)).WillByDefault([&](int descriptor, void* buffer, std::size_t size) -> ssize_t {
         if (!IsData(descriptor, path))
-            return mContext.RealReadFileDescriptor(descriptor, buffer, size);
+            return mContext.RealReadNativeDescriptor(descriptor, buffer, size);
         ++reads;
         if (reads == 1)
         {
-            return mContext.RealReadFileDescriptor(descriptor, buffer, size);
+            return mContext.RealReadNativeDescriptor(descriptor, buffer, size);
         }
         errno = EIO;
         return -1;
     });
-    ON_CALL(mContext, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
+    ON_CALL(mContext, CloseNativeDescriptor(testing::_)).WillByDefault([&](int descriptor) {
         closes += IsData(descriptor, path);
-        return mContext.RealCloseFileDescriptor(descriptor);
+        return mContext.RealCloseNativeDescriptor(descriptor);
     });
     // Newer than the fixture's catch-all; the exact read/close-count property
     // is already enforced below via the hand-counted reads/closes, not gMock
     // cardinality.
-    EXPECT_CALL(mContext, ReadFileDescriptor(testing::_, testing::_, testing::_)).Times(testing::AnyNumber());
-    EXPECT_CALL(mContext, CloseFileDescriptor(testing::_)).Times(testing::AnyNumber());
+    EXPECT_CALL(mContext, ReadNativeDescriptor(testing::_, testing::_, testing::_)).Times(testing::AnyNumber());
+    EXPECT_CALL(mContext, CloseNativeDescriptor(testing::_)).Times(testing::AnyNumber());
 
     const auto result = AuditShellTimeout(mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
@@ -274,9 +274,9 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateCloseFailurePreserves
     ASSERT_NE(nullptr, logHandle);
     mContext.SetLogHandle(logHandle);
     int closes = 0;
-    ON_CALL(mContext, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
+    ON_CALL(mContext, CloseNativeDescriptor(testing::_)).WillByDefault([&](int descriptor) {
         const bool data = IsData(descriptor, path);
-        mContext.RealCloseFileDescriptor(descriptor);
+        mContext.RealCloseNativeDescriptor(descriptor);
         if (data)
         {
             ++closes;
@@ -288,7 +288,7 @@ TEST_F(EnsureDefaultShellTimeoutIsConfiguredTest, DuplicateCloseFailurePreserves
     // Newer than the fixture's catch-all; the exact close-count property is
     // already enforced below via the hand-counted `closes`, not gMock
     // cardinality.
-    EXPECT_CALL(mContext, CloseFileDescriptor(testing::_)).Times(testing::AnyNumber());
+    EXPECT_CALL(mContext, CloseNativeDescriptor(testing::_)).Times(testing::AnyNumber());
 
     const auto result = AuditShellTimeout(mIndicators, mContext);
     CloseLog(&logHandle);

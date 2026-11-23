@@ -497,7 +497,7 @@ TEST_F(PathAliasTest, DirectoryActivationTransfersVerifiedOwnerWithoutDuplicate)
             }
             return descriptor;
         });
-        EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
+        EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
             EXPECT_NE(descriptor, alias);
             const int status = ::close(descriptor);
             EXPECT_EQ(0, status);
@@ -549,7 +549,7 @@ TEST_F(PathAliasTest, FailedDirectoryTransferPreservesNativeErrorAndClosesOwnerO
         errno = EACCES;
         return nullptr;
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
         EXPECT_EQ(0, ::close(descriptor));
         if (descriptor == operational)
         {
@@ -685,7 +685,7 @@ TEST_F(PathAliasTest, DirectoryCursorOutlivesRetiredSourcePin)
 
     int pinFd = -1;
     int pinCloses = 0;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
         if (descriptor == pinFd)
             ++pinCloses;
         return NativeCloseResult(::close(descriptor));
@@ -849,10 +849,10 @@ TEST_F(PathAliasTest, FactoryAcquisitionErrorOutranksCloseFailureAndLogsPath)
     struct stat root = {};
     ASSERT_EQ(0, ::stat("/", &root));
     int rootCloses = 0;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         struct stat held = {};
         const bool rootPin = ::fstat(fd, &held) == 0 && held.st_dev == root.st_dev && held.st_ino == root.st_ino;
-        auto result = context.RealCloseFileDescriptor(fd);
+        auto result = context.RealCloseNativeDescriptor(fd);
         if (rootPin)
         {
             ++rootCloses;
@@ -896,7 +896,7 @@ TEST_F(PathAliasTest, ActivationErrorRemainsPrimaryWhenDiagnosticCleanupFails)
     OsConfigLogHandle log = OpenLog(logPath.c_str(), nullptr);
     ASSERT_NE(nullptr, log);
     context.SetLogHandle(log);
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(pins).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         const std::size_t index = attempts++;
         EXPECT_EQ(0, ::close(fd));
         if (index == 0)
@@ -908,7 +908,7 @@ TEST_F(PathAliasTest, ActivationErrorRemainsPrimaryWhenDiagnosticCleanupFails)
     });
     // The consumer owns this precedence decision: keep the activation error
     // and record a subsequent release error, not a success-shaped fallback.
-    EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(1).WillOnce([](int, struct stat*) {
+    EXPECT_CALL(context, StatNativeDescriptor(_, _)).Times(1).WillOnce([](int, struct stat*) {
         errno = EINVAL;
         return -1;
     });
@@ -995,7 +995,7 @@ TEST_F(PathAliasTest, ActivationHandsOffOwnerWithoutRetryingFailedClose)
         // The activated reader is independently owned: dropping the pin must
         // not affect it, and a failed close of the reader must not be retried.
         path.reset();
-        EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int descriptor) {
+        EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(1).WillOnce([](int descriptor) {
             EXPECT_EQ(0, ::close(descriptor));
             errno = EIO;
             return ComplianceEngine::Error(errno ? errno : EIO);
@@ -1026,9 +1026,9 @@ TEST_F(PathAliasTest, ExactAndOneOverFdinfoCapApplyDuringPathAcquisition)
             offsets.erase(fd);
         return fd;
     });
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (DescriptorTarget(fd).find("/fdinfo/") == std::string::npos)
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         std::size_t& offset = offsets[fd];
         const std::size_t count = std::min(size, fdinfo.size() - offset);
         if (count != 0)
@@ -1054,7 +1054,7 @@ TEST_F(PathAliasTest, ExactAndOneOverFdinfoCapApplyDuringPathAcquisition)
 
 // Every input of the former direct-call ParseMountId test, ported to the
 // production acquisition boundary: fdinfo bytes are injected through the
-// mocked ReadFileDescriptor exactly as ExactAndOneOverFdinfoCapApplyDuringPathAcquisition
+// mocked ReadNativeDescriptor exactly as ExactAndOneOverFdinfoCapApplyDuringPathAcquisition
 // does, so the parser is exercised only as PinProcessRoot reaches it, not by
 // calling it directly.
 TEST_F(PathAliasTest, ProcfsMountIdAcceptsValidAndRejectsMalformedInformationDuringAcquisition)
@@ -1067,9 +1067,9 @@ TEST_F(PathAliasTest, ProcfsMountIdAcceptsValidAndRejectsMalformedInformationDur
     const std::size_t before = CountOpenDescriptors();
     auto injectFdinfo = [&](const std::string& information) {
         auto offsets = std::make_shared<std::map<int, std::size_t>>();
-        EXPECT_CALL(strict, ReadFileDescriptor(_, _, _)).WillRepeatedly([&strict, offsets, information](int fd, void* buffer, std::size_t size) -> ssize_t {
+        EXPECT_CALL(strict, ReadNativeDescriptor(_, _, _)).WillRepeatedly([&strict, offsets, information](int fd, void* buffer, std::size_t size) -> ssize_t {
             if (DescriptorTarget(fd).find("/fdinfo/") == std::string::npos)
-                return strict.RealReadFileDescriptor(fd, buffer, size);
+                return strict.RealReadNativeDescriptor(fd, buffer, size);
             std::size_t& offset = (*offsets)[fd];
             const std::size_t count = std::min(size, information.size() - offset);
             if (count != 0)
@@ -1152,7 +1152,7 @@ TEST_F(PathAliasTest, FdinfoReadOverreportRejectsActualRequestAndClosesHelpers)
                 }
                 return descriptor;
             });
-            EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).WillRepeatedly([&](int descriptor, void* buffer, std::size_t size) -> ssize_t {
+            EXPECT_CALL(context, ReadNativeDescriptor(_, _, _)).WillRepeatedly([&](int descriptor, void* buffer, std::size_t size) -> ssize_t {
                 const std::string target = DescriptorTarget(descriptor);
                 if ((0 == target.find("/proc/")) && (std::string::npos != target.find("/fdinfo/")))
                 {
@@ -1160,12 +1160,12 @@ TEST_F(PathAliasTest, FdinfoReadOverreportRejectsActualRequestAndClosesHelpers)
                     ++overreports;
                     return static_cast<ssize_t>(size + 1); // No write: even an overreported count cannot be read from buffer.
                 }
-                return context.RealReadFileDescriptor(descriptor, buffer, size);
+                return context.RealReadNativeDescriptor(descriptor, buffer, size);
             });
-            EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
+            EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
                 EXPECT_EQ(1U, live.erase(descriptor));
                 ++closed;
-                return context.RealCloseFileDescriptor(descriptor);
+                return context.RealCloseNativeDescriptor(descriptor);
             });
             auto limits = AmpleLimits();
             limits.shared.fdinfoBytes = cap;
@@ -1235,7 +1235,7 @@ TEST_F(PathAliasTest, PinnedLinkRejectsEmptyNulAndNonLinkAndClosesLinkPinOnce)
     // has the same identity again), is never surfaced as a directory stream,
     // and is closed through the context seam exactly once. Identity is
     // st_dev/st_ino plus S_ISLNK, from a real fstat() on the exact fd
-    // ReadLinkDescriptor receives and, for CloseFileDescriptor and every
+    // ReadLinkDescriptor receives and, for CloseNativeDescriptor and every
     // OpenNativeAt/OpenNativePath result, a real fstat() taken *before*
     // delegating to the real close or returning the descriptor to the caller
     // (fstat on an already-closed fd cannot observe anything, and the
@@ -1312,7 +1312,7 @@ TEST_F(PathAliasTest, PinnedLinkRejectsEmptyNulAndNonLinkAndClosesLinkPinOnce)
                 std::memcpy(buffer, fillBytes, static_cast<std::size_t>(injectedReturn));
             return injectedReturn;
         });
-        EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+        EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
             recordIdentity(closes, "close", fd); // fstat before delegating: the fd is still open here.
             return NativeCloseResult(::close(fd));
         });
@@ -1411,8 +1411,8 @@ TEST_F(PathAliasTest, PinnedLinkRejectsEmptyNulAndNonLinkAndClosesLinkPinOnce)
         const std::size_t beforeNonLink = CountOpenDescriptors();
         bool liedToResolver = false;
         EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).Times(0);
-        EXPECT_CALL(context, StatFileDescriptor(_, _)).WillRepeatedly([&](int fd, struct stat* metadata) {
-            const int status = context.RealStatFileDescriptor(fd, metadata);
+        EXPECT_CALL(context, StatNativeDescriptor(_, _)).WillRepeatedly([&](int fd, struct stat* metadata) {
+            const int status = context.RealStatNativeDescriptor(fd, metadata);
             if ((0 == status) && !liedToResolver && !S_ISLNK(metadata->st_mode))
             {
                 liedToResolver = true;
@@ -1463,8 +1463,8 @@ TEST_F(PathAliasTest, PinnedLinkReadRechecksIdentity)
         readSeen = true;
         return ::readlinkat(fd, "", buffer, size);
     });
-    EXPECT_CALL(context, StatFileDescriptor(_, _)).WillRepeatedly([&](int fd, struct stat* snapshot) {
-        const int status = context.RealStatFileDescriptor(fd, snapshot);
+    EXPECT_CALL(context, StatNativeDescriptor(_, _)).WillRepeatedly([&](int fd, struct stat* snapshot) {
+        const int status = context.RealStatNativeDescriptor(fd, snapshot);
         if (readSeen && !corrupted && status == 0 && S_ISLNK(snapshot->st_mode))
         {
             corrupted = true;
@@ -1503,8 +1503,8 @@ TEST_F(PathAliasTest, PinnedLinkReadFailsClosedOnStatObservationErrors)
         enteredPinnedReader = true;
         return ::fcntl(fd, F_GETFL);
     });
-    EXPECT_CALL(context, StatFileDescriptor(_, _)).WillRepeatedly([&](int fd, struct stat* snapshot) {
-        const int status = context.RealStatFileDescriptor(fd, snapshot);
+    EXPECT_CALL(context, StatNativeDescriptor(_, _)).WillRepeatedly([&](int fd, struct stat* snapshot) {
+        const int status = context.RealStatNativeDescriptor(fd, snapshot);
         if (enteredPinnedReader && !failedStat && status == 0 && S_ISLNK(snapshot->st_mode))
         {
             failedStat = true;
@@ -1653,14 +1653,14 @@ TEST_F(PathAliasTest, MovedFromPathChecksEveryAccessorBeforeNativeDispatch)
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&strict));
     EXPECT_CALL(strict, OpenNativePath(_, _)).Times(0);
     EXPECT_CALL(strict, OpenNativeAt(_, _, _)).Times(0);
-    EXPECT_CALL(strict, StatFileDescriptor(_, _)).Times(0);
+    EXPECT_CALL(strict, StatNativeDescriptor(_, _)).Times(0);
     EXPECT_CALL(strict, StatFilesystemDescriptor(_, _)).Times(0);
-    EXPECT_CALL(strict, ReadFileDescriptor(_, _, _)).Times(0);
+    EXPECT_CALL(strict, ReadNativeDescriptor(_, _, _)).Times(0);
     EXPECT_CALL(strict, ReadLinkDescriptor(_, _, _)).Times(0);
     EXPECT_CALL(strict, StatusFlagsDescriptor(_)).Times(0);
     EXPECT_CALL(strict, DescriptorFlagsDescriptor(_)).Times(0);
     EXPECT_CALL(strict, DuplicateDescriptor(_)).Times(0);
-    EXPECT_CALL(strict, CloseFileDescriptor(_)).Times(0);
+    EXPECT_CALL(strict, CloseNativeDescriptor(_)).Times(0);
     EXPECT_CALL(strict, NativeProcessId()).Times(0);
     EXPECT_CALL(strict, NativeThreadId()).Times(0);
     EXPECT_THROW((void)path.Root(), std::logic_error);
@@ -1701,11 +1701,11 @@ TEST_F(PathAliasTest, MovedFromStepChecksEveryAccessorBeforeNativeDispatch)
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&strict));
     EXPECT_CALL(strict, OpenNativePath(_, _)).Times(0);
     EXPECT_CALL(strict, OpenNativeAt(_, _, _)).Times(0);
-    EXPECT_CALL(strict, StatFileDescriptor(_, _)).Times(0);
+    EXPECT_CALL(strict, StatNativeDescriptor(_, _)).Times(0);
     EXPECT_CALL(strict, StatFilesystemDescriptor(_, _)).Times(0);
-    EXPECT_CALL(strict, ReadFileDescriptor(_, _, _)).Times(0);
+    EXPECT_CALL(strict, ReadNativeDescriptor(_, _, _)).Times(0);
     EXPECT_CALL(strict, DuplicateDescriptor(_)).Times(0);
-    EXPECT_CALL(strict, CloseFileDescriptor(_)).Times(0);
+    EXPECT_CALL(strict, CloseNativeDescriptor(_)).Times(0);
     EXPECT_THROW((void)step.Metadata(), std::logic_error);
     EXPECT_THROW((void)step.Target(), std::logic_error);
     EXPECT_THROW((void)step.RetainedDescriptors(), std::logic_error);
@@ -1745,9 +1745,9 @@ TEST_F(PathAliasTest, ApplyChecksTheMovedFromPathAndTheMovedFromStepArgument)
     ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&strict));
     EXPECT_CALL(strict, OpenNativePath(_, _)).Times(0);
     EXPECT_CALL(strict, OpenNativeAt(_, _, _)).Times(0);
-    EXPECT_CALL(strict, StatFileDescriptor(_, _)).Times(0);
+    EXPECT_CALL(strict, StatNativeDescriptor(_, _)).Times(0);
     EXPECT_CALL(strict, DuplicateDescriptor(_)).Times(0);
-    EXPECT_CALL(strict, CloseFileDescriptor(_)).Times(0);
+    EXPECT_CALL(strict, CloseNativeDescriptor(_)).Times(0);
     // Path checked first: a live Step argument is never touched.
     EXPECT_THROW((void)path.Apply(std::move(liveStep.Value())), std::logic_error);
     EXPECT_NO_THROW((void)liveStep.Value().Target()); // never reached, so never consumed
@@ -1806,7 +1806,7 @@ TEST_F(PathAliasTest, MovingOrAssigningIntoAMovedFromPathFollowsLifetimeRules)
         std::unique_ptr<Path> movedFrom(new Path(std::move(keep)));
         keep = std::move(*movedFrom); // keep is live again; *movedFrom is moved-from
         ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&strict));
-        EXPECT_CALL(strict, CloseFileDescriptor(_)).Times(0);
+        EXPECT_CALL(strict, CloseNativeDescriptor(_)).Times(0);
         EXPECT_CALL(strict, OpenNativePath(_, _)).Times(0);
         EXPECT_CALL(strict, OpenNativeAt(_, _, _)).Times(0);
         movedFrom.reset(); // destroys the moved-from Path; no native call
@@ -1985,7 +1985,7 @@ TEST_F(PathAliasTest, SiblingStepsStaleButInverseRestoresExactContext)
     EXPECT_CALL(context, OpenNativePath(_, _)).Times(0);
     EXPECT_CALL(context, OpenNativeAt(_, _, _)).Times(0);
     EXPECT_CALL(context, DuplicateDescriptor(_)).Times(0);
-    EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(0);
+    EXPECT_CALL(context, StatNativeDescriptor(_, _)).Times(0);
     auto inverse = path.Apply(std::move(left.Value()));
     ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;
     EXPECT_EQ(root + "/left", PathTestAccess::ToString(path));
@@ -2000,7 +2000,7 @@ TEST_F(PathAliasTest, SiblingStepsStaleButInverseRestoresExactContext)
     ASSERT_TRUE(restored.HasValue()) << restored.Error().message;
     EXPECT_EQ(before, PathTestAccess::ToString(path));
     EXPECT_EQ(initialDepth, path.Size());
-    testing::Mock::VerifyAndClearExpectations(&context); // re-resolving "right" below makes a real OpenNativeAt/StatFileDescriptor call
+    testing::Mock::VerifyAndClearExpectations(&context); // re-resolving "right" below makes a real OpenNativeAt/StatNativeDescriptor call
     auto freshRight = SelectStep(path, "right", CrossMountPathPolicy());
     ASSERT_TRUE(freshRight.HasValue());
     auto replay = path.Apply(std::move(freshRight.Value()));
@@ -2211,8 +2211,8 @@ TEST_F(PathAliasTest, PinnedLinkInspectionSurvivesNameReplacementDuringResolve)
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     bool replaced = false;
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int descriptor, struct stat* snapshot) {
-        const int status = context.RealStatFileDescriptor(descriptor, snapshot);
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int descriptor, struct stat* snapshot) {
+        const int status = context.RealStatNativeDescriptor(descriptor, snapshot);
         if ((0 == status) && S_ISLNK(snapshot->st_mode) && !replaced)
         {
             replaced = true;
@@ -2254,8 +2254,8 @@ TEST_F(PathAliasTest, PinnedAbsoluteLinkInspectionSurvivesNameReplacementDuringR
     ASSERT_TRUE(opened.HasValue());
     Path path = std::move(opened).Value();
     bool replaced = false;
-    ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int descriptor, struct stat* snapshot) {
-        const int status = context.RealStatFileDescriptor(descriptor, snapshot);
+    ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int descriptor, struct stat* snapshot) {
+        const int status = context.RealStatNativeDescriptor(descriptor, snapshot);
         if ((0 == status) && S_ISLNK(snapshot->st_mode) && !replaced)
         {
             replaced = true;
@@ -2366,7 +2366,7 @@ TEST_F(PathAliasTest, ProcfsHelperCloseFailuresAreDiagnosticAndAcquisitionSuccee
     ASSERT_NE(nullptr, log);
     context.SetLogHandle(log);
     std::size_t failed = 0;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
         const bool helper = IsProcfsHelper(descriptor);
         const int status = ::close(descriptor);
         EXPECT_EQ(0, status);
@@ -2395,7 +2395,7 @@ TEST_F(PathAliasTest, PrimaryFdinfoReadErrorOutranksHelperCloseFailure)
 {
     const auto before = CountOpenDescriptors();
     bool failedRead = false, failedClose = false;
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).WillRepeatedly([&](int descriptor, void* buffer, std::size_t size) -> ssize_t {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, _)).WillRepeatedly([&](int descriptor, void* buffer, std::size_t size) -> ssize_t {
         if (!failedRead && (0 == DescriptorTarget(descriptor).find("/proc/")) && (std::string::npos != DescriptorTarget(descriptor).find("/fdinfo/")))
         {
             failedRead = true;
@@ -2404,7 +2404,7 @@ TEST_F(PathAliasTest, PrimaryFdinfoReadErrorOutranksHelperCloseFailure)
         }
         return ::read(descriptor, buffer, size);
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int descriptor) -> ComplianceEngine::Result<void> {
         const bool helper = IsProcfsHelper(descriptor);
         const int status = ::close(descriptor);
         EXPECT_EQ(0, status);
@@ -2673,12 +2673,12 @@ TEST_F(PathAliasTest, UnsupportedTypedSkipSurvivesFailedTemporaryPinClose)
     auto policy = CrossMountPathPolicy(true);
     policy.unsupportedTypes = ComplianceEngine::Filesystem::UnsupportedTypeDisposition::Skip;
     const auto before = CountOpenDescriptors();
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         struct stat info = {};
         const bool inspected = ::fstat(fd, &info) == 0;
         const bool fifo = inspected && S_ISFIFO(info.st_mode);
         const bool hiddenDirectory = inspected && S_ISDIR(info.st_mode) && DescriptorTarget(fd) == directory;
-        auto result = context.RealCloseFileDescriptor(fd);
+        auto result = context.RealCloseNativeDescriptor(fd);
         if (fifo || hiddenDirectory)
         {
             if (fifo)
@@ -2706,10 +2706,10 @@ TEST_F(PathAliasTest, MissingFactorySelectionSurvivesDiagnosticRootCloseFailure)
     struct stat root = {};
     ASSERT_EQ(0, ::stat("/", &root));
     int failed = 0;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         struct stat acquired = {};
         const bool processRoot = ::fstat(fd, &acquired) == 0 && acquired.st_dev == root.st_dev && acquired.st_ino == root.st_ino;
-        auto result = context.RealCloseFileDescriptor(fd);
+        auto result = context.RealCloseNativeDescriptor(fd);
         if (processRoot)
         {
             ++failed;
@@ -3503,8 +3503,8 @@ TEST_F(PathAliasTest, InvalidAbsoluteFactoryInputNeverPublishesPartialPath)
 TEST_F(PathAliasTest, ProcessRootMountObservationIsRetainedAcrossResolveAndInverse)
 {
     int observations = 0;
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).WillRepeatedly([&](int fd, void* buffer, std::size_t count) {
-        const ssize_t bytes = context.RealReadFileDescriptor(fd, buffer, count);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, _)).WillRepeatedly([&](int fd, void* buffer, std::size_t count) {
+        const ssize_t bytes = context.RealReadNativeDescriptor(fd, buffer, count);
         if (bytes > 0 && DescriptorTarget(fd).find("/fdinfo/") != std::string::npos &&
             std::string(static_cast<char*>(buffer), static_cast<std::size_t>(bytes)).find("mnt_id:") != std::string::npos)
             ++observations;
@@ -3997,8 +3997,8 @@ TEST_F(PathAliasTest, HeldFileMountFactsAreObservedAtAcquisitionOnly)
     const std::string file = context.MakeTempfile("held");
     const std::string name = file.substr(file.find_last_of("/") + 1);
     int records = 0;
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).WillRepeatedly([&](int fd, void* buffer, std::size_t count) {
-        const ssize_t bytes = context.RealReadFileDescriptor(fd, buffer, count);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, _)).WillRepeatedly([&](int fd, void* buffer, std::size_t count) {
+        const ssize_t bytes = context.RealReadNativeDescriptor(fd, buffer, count);
         if (bytes > 0 && DescriptorTarget(fd).find("/fdinfo/") != std::string::npos &&
             std::string(static_cast<char*>(buffer), static_cast<std::size_t>(bytes)).find("mnt_id:") != std::string::npos)
             ++records;
@@ -4218,7 +4218,7 @@ TEST_F(PathAliasTest, CopiedLeafOutlivesPathMoveAndFailedFinalCloseIsNotRetried)
     auto activated = surviving->OpenReadOnly();
     ASSERT_TRUE(activated.HasValue()) << activated.Error().message;
     activated.Value().Close();
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int fd) {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(1).WillOnce([](int fd) {
         const int status = ::close(fd);
         EXPECT_EQ(0, status);
         errno = EIO;
@@ -4366,8 +4366,8 @@ TEST_F(PathAliasTest, DirectUnsupportedSkipSurvivesFailedTemporaryPinClose)
             specialPin = fd;
         return fd;
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
-        auto status = context.RealCloseFileDescriptor(fd);
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+        auto status = context.RealCloseNativeDescriptor(fd);
         if (fd == specialPin && !failed)
         {
             failed = true;

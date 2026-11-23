@@ -238,7 +238,7 @@ TEST(DescriptorBoundaryTest, MovedDescriptorLogsFailedCloseOnlyOnce)
     Descriptor original = std::move(opened).Value();
     Descriptor moved(std::move(original));
     EXPECT_FALSE(DescriptorTestAccess::ConsumedDescriptor(original) != -1);
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int fd) {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(1).WillOnce([](int fd) {
         EXPECT_EQ(0, ::close(fd));
         errno = EIO;
         return ComplianceEngine::Error(errno ? errno : EIO);
@@ -260,7 +260,7 @@ TEST(DescriptorBoundaryTest, NativeCloseErrorRelinquishesDescriptorBeforeReuse)
     ASSERT_TRUE(opened.HasValue());
     Descriptor owner = std::move(opened).Value();
     int reused = -1;
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(1).WillOnce([&](int fd) -> ComplianceEngine::Result<void> {
         EXPECT_EQ(0, ::close(fd));
         const int replacement = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
         EXPECT_GE(replacement, 0);
@@ -304,7 +304,7 @@ TEST(DescriptorBoundaryTest, BadDescriptorCloseLogsOwnershipBugOnceWithoutRetry)
     auto opened = DescriptorTestAccess::OpenAbsolutePin(context, "/proc");
     ASSERT_TRUE(opened.HasValue());
     Descriptor owner = std::move(opened).Value();
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int fd) {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(1).WillOnce([](int fd) {
         EXPECT_EQ(0, ::close(fd));
         errno = EBADF;
         return ComplianceEngine::Error(errno ? errno : EIO);
@@ -341,7 +341,7 @@ TEST(DescriptorBoundaryTest, TypedCloseErrorOutranksAmbientErrnoChangedBeforeLog
     auto opened = DescriptorTestAccess::OpenAbsolutePin(context, "/proc");
     ASSERT_TRUE(opened.HasValue());
     Descriptor owner = std::move(opened).Value();
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(1).WillOnce([](int fd) -> ComplianceEngine::Result<void> {
         EXPECT_EQ(0, ::close(fd));
         errno = EBADF;
         return ComplianceEngine::Error(EIO);
@@ -366,7 +366,7 @@ TEST(DescriptorBoundaryTest, MovedFromDescriptorRetainsContextIdentityWithoutNat
     auto opened = DescriptorTestAccess::OpenAbsolutePin(context, "/");
     ASSERT_TRUE(opened.HasValue());
     Descriptor source = std::move(opened).Value();
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(1).WillOnce([&](int fd) { return context.RealCloseFileDescriptor(fd); });
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(1).WillOnce([&](int fd) { return context.RealCloseNativeDescriptor(fd); });
     {
         Descriptor destination(std::move(source));
         EXPECT_EQ(&context, &source.Context());
@@ -486,9 +486,9 @@ TEST(DescriptorBoundaryTest, ConsumedOwnersThrowBeforeEveryNativeAccess)
     };
     EXPECT_CALL(context, OpenNativeAt(_, _, _)).Times(0);
     EXPECT_CALL(context, DuplicateDescriptor(_)).Times(0);
-    EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(0);
+    EXPECT_CALL(context, StatNativeDescriptor(_, _)).Times(0);
     EXPECT_CALL(context, StatFilesystemDescriptor(_, _)).Times(0);
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, _)).Times(0);
     EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).Times(0);
     EXPECT_CALL(context, StatusFlagsDescriptor(_)).Times(0);
     EXPECT_CALL(context, DescriptorFlagsDescriptor(_)).Times(0);
@@ -572,9 +572,9 @@ TEST(DescriptorBoundaryTest, PartialProcfsFactoryRollsBackEveryAcquiredRole)
             epochs.Acquired(fd);
             return fd;
         });
-        EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+        EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) {
             epochs.Closed(fd);
-            return context.RealCloseFileDescriptor(fd);
+            return context.RealCloseNativeDescriptor(fd);
         });
         auto opened = DescriptorTestAccess::ProcfsAccess(context);
         ASSERT_FALSE(opened.HasValue());
@@ -612,9 +612,9 @@ TEST(DescriptorBoundaryTest, ProcfsSessionPinsNamedVerifiedRolesAndReleasesEachO
         observe(fd, name);
         return fd;
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) {
         epochs.Closed(fd);
-        return context.RealCloseFileDescriptor(fd);
+        return context.RealCloseNativeDescriptor(fd);
     });
     {
         auto opened = DescriptorTestAccess::ProcfsAccess(context);
@@ -661,9 +661,9 @@ TEST(DescriptorBoundaryTest, ProcfsSuccessfulSessionDisposalDoesNotRetryFailedCl
         epochs.Acquired(fd);
         return fd;
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         epochs.Closed(fd);
-        auto status = context.RealCloseFileDescriptor(fd);
+        auto status = context.RealCloseNativeDescriptor(fd);
         if (!status)
             epochs.invalid = true;
         if (!oneFailure)
@@ -708,9 +708,9 @@ TEST(DescriptorBoundaryTest, ProcfsFactoryExhaustionRollsBackEachRole)
             epochs.Acquired(fd);
             return fd;
         });
-        EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+        EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) {
             epochs.Closed(fd);
-            return context.RealCloseFileDescriptor(fd);
+            return context.RealCloseNativeDescriptor(fd);
         });
         auto attempt = DescriptorTestAccess::ProcfsAccess(context);
         ASSERT_FALSE(attempt.HasValue());
@@ -752,9 +752,9 @@ TEST(DescriptorBoundaryTest, ProcfsRoleVerificationAndFinalBindingFailuresRollba
             }
             return ::fstatfs(fd, out);
         });
-        EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+        EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) {
             epochs.Closed(fd);
-            return context.RealCloseFileDescriptor(fd);
+            return context.RealCloseNativeDescriptor(fd);
         });
         auto failed = DescriptorTestAccess::ProcfsAccess(context);
         ASSERT_FALSE(failed.HasValue());
@@ -784,9 +784,9 @@ TEST(DescriptorBoundaryTest, ProcfsRoleVerificationAndFinalBindingFailuresRollba
             epochs.Acquired(fd);
             return fd;
         });
-        EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+        EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) {
             epochs.Closed(fd);
-            return context.RealCloseFileDescriptor(fd);
+            return context.RealCloseNativeDescriptor(fd);
         });
         auto failed = DescriptorTestAccess::ProcfsAccess(context);
         ASSERT_FALSE(failed.HasValue());
@@ -819,8 +819,8 @@ TEST(DescriptorBoundaryTest, ProcfsRejectsNonDirectoryOrWrongFilesystemForEveryR
                 epochs.Acquired(fd);
                 return fd;
             });
-            ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-                const int status = context.RealStatFileDescriptor(fd, metadata);
+            ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+                const int status = context.RealStatNativeDescriptor(fd, metadata);
                 if (!wrongFilesystem && epochs.LiveRole(fd, role) && status == 0)
                     metadata->st_mode = S_IFREG | 0400;
                 return status;
@@ -831,9 +831,9 @@ TEST(DescriptorBoundaryTest, ProcfsRejectsNonDirectoryOrWrongFilesystemForEveryR
                     filesystem->f_type = 0;
                 return status;
             });
-            EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+            EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) {
                 epochs.Closed(fd);
-                return context.RealCloseFileDescriptor(fd);
+                return context.RealCloseNativeDescriptor(fd);
             });
             auto opened = DescriptorTestAccess::ProcfsAccess(context);
             ASSERT_FALSE(opened.HasValue());
@@ -867,8 +867,8 @@ TEST(DescriptorBoundaryTest, ProcfsSelfPidMismatchAndFinalIdentityStatRollback)
             epochs.Acquired(fd);
             return fd;
         });
-        ON_CALL(context, StatFileDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
-            const int result = context.RealStatFileDescriptor(fd, metadata);
+        ON_CALL(context, StatNativeDescriptor(_, _)).WillByDefault([&](int fd, struct stat* metadata) {
+            const int result = context.RealStatNativeDescriptor(fd, metadata);
             if (epochs.LiveRole(fd, selectedEpoch) && result == 0 && ++observations == 2)
             {
                 if (finalStat)
@@ -880,9 +880,9 @@ TEST(DescriptorBoundaryTest, ProcfsSelfPidMismatchAndFinalIdentityStatRollback)
             }
             return result;
         });
-        EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) {
+        EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) {
             epochs.Closed(fd);
-            return context.RealCloseFileDescriptor(fd);
+            return context.RealCloseNativeDescriptor(fd);
         });
         auto opened = DescriptorTestAccess::ProcfsAccess(context);
         ASSERT_FALSE(opened.HasValue());
@@ -914,9 +914,9 @@ TEST(DescriptorBoundaryTest, ProcfsFailureClosesEveryAcquiredRoleOnceEvenWhenClo
         epochs.Acquired(fd);
         return fd;
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         epochs.Closed(fd);
-        auto status = context.RealCloseFileDescriptor(fd);
+        auto status = context.RealCloseNativeDescriptor(fd);
         if (!status)
             epochs.invalid = true;
         errno = EIO;
@@ -941,14 +941,14 @@ TEST(DescriptorBoundaryTest, MoveAssignmentReleasesOldOwnerExactlyOnce)
     Descriptor incoming = std::move(second).Value();
     const int oldFd = DescriptorTestAccess::ConsumedDescriptor(old);
     const int incomingFd = DescriptorTestAccess::ConsumedDescriptor(incoming);
-    EXPECT_CALL(context, CloseFileDescriptor(oldFd)).Times(1).WillOnce([&](int fd) { return context.RealCloseFileDescriptor(fd); });
+    EXPECT_CALL(context, CloseNativeDescriptor(oldFd)).Times(1).WillOnce([&](int fd) { return context.RealCloseNativeDescriptor(fd); });
     old = std::move(incoming);
     EXPECT_EQ(-1, DescriptorTestAccess::ConsumedDescriptor(incoming));
     EXPECT_EQ(incomingFd, DescriptorTestAccess::ConsumedDescriptor(old));
     auto& sameOwner = old;
     old = std::move(sameOwner);
     EXPECT_EQ(incomingFd, DescriptorTestAccess::ConsumedDescriptor(old));
-    EXPECT_CALL(context, CloseFileDescriptor(incomingFd)).Times(1).WillOnce([&](int fd) { return context.RealCloseFileDescriptor(fd); });
+    EXPECT_CALL(context, CloseNativeDescriptor(incomingFd)).Times(1).WillOnce([&](int fd) { return context.RealCloseNativeDescriptor(fd); });
     DescriptorTestAccess::Dispose(old);
 }
 
@@ -994,7 +994,7 @@ TEST(DescriptorBoundaryTest, ConsumedDescriptorDisposalIsSilent)
     Descriptor first = std::move(opened).Value();
     Descriptor owner(std::move(first));
     ASSERT_EQ(-1, DescriptorTestAccess::ConsumedDescriptor(first));
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(0);
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(0);
     DescriptorTestAccess::Dispose(first);
     EXPECT_TRUE(DescriptorTestAccess::CloseInternally(context, first));
     EXPECT_EQ(0, context.attempts);
@@ -1017,7 +1017,7 @@ TEST(DescriptorBoundaryTest, MovedFromProcfsSessionThrowsBeforeProfileAndAliasWo
         EXPECT_GE(DescriptorTestAccess::ConsumedProcfsRole(moved, index), 0);
     }
     EXPECT_CALL(context, OpenNativeAt(_, _, _)).Times(0);
-    EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(0);
+    EXPECT_CALL(context, StatNativeDescriptor(_, _)).Times(0);
     EXPECT_CALL(context, ChmodPinnedAlias(_, _, _)).Times(0);
     EXPECT_THROW((void)DescriptorTestAccess::OpenFdinfo(context, session, pin.Value()), std::logic_error);
     EXPECT_THROW((void)DescriptorTestAccess::OpenAlias(context, session, pin.Value(), Type::Directory), std::logic_error);
@@ -1048,8 +1048,8 @@ TEST(DescriptorBoundaryTest, CombinedInvalidOwnerInputsThrowBeforeProfilesAndPro
     ProcfsDescriptorAccess moved(std::move(access.Value()));
     EXPECT_CALL(context, OpenNativeAt(_, _, _)).Times(0);
     EXPECT_CALL(context, OpenNativePath(_, _)).Times(0);
-    EXPECT_CALL(context, StatFileDescriptor(_, _)).Times(0);
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(0);
+    EXPECT_CALL(context, StatNativeDescriptor(_, _)).Times(0);
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, _)).Times(0);
     EXPECT_CALL(context, NativeProcessId()).Times(0);
     EXPECT_CALL(context, NativeThreadId()).Times(0);
     EXPECT_THROW((void)DescriptorTestAccess::OpenAt(context, consumed, "child", static_cast<Profile>(255)), std::logic_error);
@@ -1076,9 +1076,9 @@ TEST(DescriptorBoundaryTest, ReadMountIdLoopFailsClosedOnZeroByteCapWithoutUnbou
     auto session = DescriptorTestAccess::ProcfsAccess(context);
     ASSERT_TRUE(session.HasValue());
     int fdinfoReads = 0;
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).WillRepeatedly([&](int fd, void* buffer, std::size_t size) {
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, _)).WillRepeatedly([&](int fd, void* buffer, std::size_t size) {
         ++fdinfoReads;
-        return context.RealReadFileDescriptor(fd, buffer, size);
+        return context.RealReadNativeDescriptor(fd, buffer, size);
     });
     auto rejected = DescriptorTestAccess::ReadMountId(session.Value(), pin.Value(), 0);
     ASSERT_FALSE(rejected.HasValue());
@@ -1122,11 +1122,11 @@ TEST(DescriptorBoundaryTest, ForeignOwnerRejectsEveryNativeBoundaryWithoutConsum
     Descriptor owner = std::move(opened).Value();
     const int fd = DescriptorTestAccess::ConsumedDescriptor(owner);
     EXPECT_CALL(caller, OpenNativeAt(_, _, _)).Times(0);
-    EXPECT_CALL(caller, StatFileDescriptor(_, _)).Times(0);
-    EXPECT_CALL(caller, ReadFileDescriptor(_, _, _)).Times(0);
+    EXPECT_CALL(caller, StatNativeDescriptor(_, _)).Times(0);
+    EXPECT_CALL(caller, ReadNativeDescriptor(_, _, _)).Times(0);
     EXPECT_CALL(caller, DuplicateDescriptor(_)).Times(0);
     EXPECT_CALL(caller, FdOpenDirectory(_)).Times(0);
-    EXPECT_CALL(caller, CloseFileDescriptor(_)).Times(0);
+    EXPECT_CALL(caller, CloseNativeDescriptor(_)).Times(0);
     struct stat metadata = {};
     EXPECT_EQ(EINVAL, DescriptorTestAccess::Duplicate(caller, owner).Error().code);
     EXPECT_EQ(EINVAL, DescriptorTestAccess::OpenAt(caller, owner, "child", Profile::PinChild).Error().code);
@@ -1167,9 +1167,9 @@ TEST(DescriptorBoundaryTest, ProcfsRoleReleaseReportsTwoDistinctFailuresAndStill
         epochs.Acquired(fd);
         return fd;
     });
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(7).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(7).WillRepeatedly([&](int fd) -> ComplianceEngine::Result<void> {
         epochs.Closed(fd);
-        auto status = context.RealCloseFileDescriptor(fd);
+        auto status = context.RealCloseNativeDescriptor(fd);
         if (!status)
             epochs.invalid = true;
         if (failedReports < 2)
@@ -1228,7 +1228,7 @@ TEST(DescriptorBoundaryTest, FailedDirectoryTransferKeepsOwnerAndPrimaryError)
     ASSERT_FALSE(failed.HasValue());
     EXPECT_EQ(ENOTDIR, failed.Error().code);
     EXPECT_EQ(fd, DescriptorTestAccess::ConsumedDescriptor(owner));
-    EXPECT_CALL(context, CloseFileDescriptor(fd)).Times(1).WillOnce([&](int value) { return context.RealCloseFileDescriptor(value); });
+    EXPECT_CALL(context, CloseNativeDescriptor(fd)).Times(1).WillOnce([&](int value) { return context.RealCloseNativeDescriptor(value); });
     DescriptorTestAccess::Dispose(owner);
     EXPECT_EQ(before, OpenDescriptors());
 }
@@ -1248,7 +1248,7 @@ TEST(DescriptorBoundaryTest, ConsumedDescriptorScopeDoesNotLogOrRetry)
     ASSERT_TRUE(opened.HasValue());
     Descriptor source = std::move(opened).Value();
     Descriptor live(std::move(source));
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(0);
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(0);
     DescriptorTestAccess::Dispose(source);
     DescriptorTestAccess::Dispose(source);
     EXPECT_TRUE(DescriptorTestAccess::CloseInternally(context, source));

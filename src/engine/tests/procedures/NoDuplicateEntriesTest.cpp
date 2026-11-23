@@ -47,7 +47,7 @@ protected:
         ASSERT_EQ(0, mkdir(mTempdir.c_str(), 0700));
         mIndicators.Push("EnsureNoDuplicateEntriesExist");
         // No test in this fixture constrains open/stat/identity seams; only
-        // OpenNativeAt/ReadFileDescriptor/CloseFileDescriptor get
+        // OpenNativeAt/ReadNativeDescriptor/CloseNativeDescriptor get
         // test-specific ON_CALL overrides in a few tests below, each paired
         // with its own later EXPECT_CALL that takes priority over this
         // catch-all.
@@ -318,20 +318,20 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, ReachedReadFailureRejectsPartialResult
     ASSERT_NE(nullptr, logHandle);
     mContext.SetLogHandle(logHandle);
     int reads = 0, closes = 0, readerFd = -1;
-    ON_CALL(mContext, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(mContext, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsData(fd, filename))
-            return mContext.RealReadFileDescriptor(fd, buffer, size);
+            return mContext.RealReadNativeDescriptor(fd, buffer, size);
         if (-1 == readerFd)
             readerFd = fd;
         else
             EXPECT_EQ(readerFd, fd);
         if (++reads == 1)
-            return mContext.RealReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 6));
+            return mContext.RealReadNativeDescriptor(fd, buffer, std::min<std::size_t>(size, 6));
         errno = EIO;
         return -1;
     });
-    ON_CALL(mContext, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
-        const auto nativeResult = mContext.RealCloseFileDescriptor(fd);
+    ON_CALL(mContext, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
+        const auto nativeResult = mContext.RealCloseNativeDescriptor(fd);
         if (fd != readerFd)
             return nativeResult;
         ++closes;
@@ -346,8 +346,8 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, ReachedReadFailureRejectsPartialResult
     // Newer than the fixture's catch-all; the exact read/close-count property
     // is already enforced below via the hand-counted reads/closes, not gMock
     // cardinality.
-    EXPECT_CALL(mContext, ReadFileDescriptor(_, _, _)).Times(testing::AnyNumber());
-    EXPECT_CALL(mContext, CloseFileDescriptor(_)).Times(testing::AnyNumber());
+    EXPECT_CALL(mContext, ReadNativeDescriptor(_, _, _)).Times(testing::AnyNumber());
+    EXPECT_CALL(mContext, CloseNativeDescriptor(_)).Times(testing::AnyNumber());
     NoDuplicateEntriesParams params;
     params.filename = filename;
     params.delimiter = ",";
@@ -414,9 +414,9 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, CloseFailurePreservesDuplicateVerdictA
     ASSERT_NE(nullptr, logHandle);
     mContext.SetLogHandle(logHandle);
     int closes = 0;
-    ON_CALL(mContext, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(mContext, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsData(fd, filename);
-        mContext.RealCloseFileDescriptor(fd);
+        mContext.RealCloseNativeDescriptor(fd);
         if (data)
         {
             ++closes;
@@ -428,7 +428,7 @@ TEST_F(EnsureNoDuplicateEntriesExistTest, CloseFailurePreservesDuplicateVerdictA
     // Newer than the fixture's catch-all; the exact close-count property is
     // already enforced below via the hand-counted `closes`, not gMock
     // cardinality.
-    EXPECT_CALL(mContext, CloseFileDescriptor(_)).Times(testing::AnyNumber());
+    EXPECT_CALL(mContext, CloseNativeDescriptor(_)).Times(testing::AnyNumber());
     NoDuplicateEntriesParams params;
     params.filename = filename;
     params.delimiter = ",";

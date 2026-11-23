@@ -30,10 +30,10 @@ static_assert(ComplianceEngine::Tests::DescriptorTestAccess::InternalCloseIsNoex
 static_assert(!noexcept(ComplianceEngine::Tests::DescriptorTestAccess::CloseOwnedDescriptor(std::declval<const ContextInterface&>(), std::declval<Descriptor&>())),
     "Checked test native access can reject a consumed owner with logic_error");
 static_assert(noexcept(std::declval<const MockContext&>().OpenNativePath("/", 0)), "Native open seam is nonthrowing");
-static_assert(noexcept(std::declval<const MockContext&>().ReadFileDescriptor(0, nullptr, 0)), "Native read seam is nonthrowing");
-static_assert(noexcept(std::declval<const MockContext&>().CloseFileDescriptor(0)), "Native close seam is nonthrowing");
+static_assert(noexcept(std::declval<const MockContext&>().ReadNativeDescriptor(0, nullptr, 0)), "Native read seam is nonthrowing");
+static_assert(noexcept(std::declval<const MockContext&>().CloseNativeDescriptor(0)), "Native close seam is nonthrowing");
 static_assert(noexcept(std::declval<const MockContext&>().CloseDirectory(nullptr)), "Native cursor close seam is nonthrowing");
-static_assert(std::is_same<decltype(std::declval<const MockContext&>().CloseFileDescriptor(0)), ComplianceEngine::Result<void>>::value,
+static_assert(std::is_same<decltype(std::declval<const MockContext&>().CloseNativeDescriptor(0)), ComplianceEngine::Result<void>>::value,
     "Native descriptor close carries typed success or error");
 static_assert(std::is_same<decltype(std::declval<const MockContext&>().CloseDirectory(nullptr)), ComplianceEngine::Result<void>>::value,
     "Native directory close carries typed success or error");
@@ -84,15 +84,15 @@ DENY_CONTEXT_CALL(ReserveManagedDescriptor, .ReserveManagedDescriptor())
 DENY_CONTEXT_CALL(ReleaseManagedDescriptor, .ReleaseManagedDescriptor())
 DENY_CONTEXT_CALL(OpenNativePath, .OpenNativePath("/", int{}))
 DENY_CONTEXT_CALL(OpenNativeAt, .OpenNativeAt(int{}, "child", int{}))
-DENY_CONTEXT_CALL(StatFileDescriptor, .StatFileDescriptor(int{}, std::declval<struct stat*>()))
+DENY_CONTEXT_CALL(StatNativeDescriptor, .StatNativeDescriptor(int{}, std::declval<struct stat*>()))
 DENY_CONTEXT_CALL(StatFilesystemDescriptor, .StatFilesystemDescriptor(int{}, std::declval<struct statfs*>()))
-DENY_CONTEXT_CALL(ReadFileDescriptor, .ReadFileDescriptor(int{}, std::declval<void*>(), std::size_t{}))
+DENY_CONTEXT_CALL(ReadNativeDescriptor, .ReadNativeDescriptor(int{}, std::declval<void*>(), std::size_t{}))
 DENY_CONTEXT_CALL(ReadLinkDescriptor, .ReadLinkDescriptor(int{}, std::declval<char*>(), std::size_t{}))
 DENY_CONTEXT_CALL(StatusFlagsDescriptor, .StatusFlagsDescriptor(int{}))
 DENY_CONTEXT_CALL(DescriptorFlagsDescriptor, .DescriptorFlagsDescriptor(int{}))
 DENY_CONTEXT_CALL(DuplicateDescriptor, .DuplicateDescriptor(int{}))
 DENY_CONTEXT_CALL(FdOpenDirectory, .FdOpenDirectory(int{}))
-DENY_CONTEXT_CALL(CloseFileDescriptor, .CloseFileDescriptor(int{}))
+DENY_CONTEXT_CALL(CloseNativeDescriptor, .CloseNativeDescriptor(int{}))
 DENY_CONTEXT_CALL(ChownPinnedFileDescriptor, .ChownPinnedFileDescriptor(int{}, uid_t{}, gid_t{}))
 DENY_CONTEXT_CALL(ChmodPinnedAlias, .ChmodPinnedAlias(int{}, "0", mode_t{}))
 DENY_CONTEXT_CALL(NativeProcessId, .NativeProcessId())

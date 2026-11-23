@@ -4,6 +4,7 @@
 #define COMPLIANCEENGINE_FILESYSTEM_PIN_HPP
 
 #include "Descriptor.hpp"
+#include "FilesystemType.hpp"
 #include "PrefixLimits.hpp"
 #include "ReadableFile.hpp"
 #include "Result.h"
@@ -33,11 +34,6 @@ namespace Detail
 class Pin;
 class ProcfsDescriptorAccess;
 } // namespace Detail
-enum class Type
-{
-    Directory,
-    RegularFile
-};
 // Non-const data members: provenance is sealed by the private constructor and
 // friendship below, not by const members (which would delete assignment and
 // force throwing copies on every move). Rule of zero: copies and moves stay

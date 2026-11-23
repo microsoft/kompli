@@ -3,9 +3,8 @@
 
 #include "Descriptor.hpp"
 
-#include "FTWDirectoryCursor.hpp"
 #include "FilesystemHelpers.hpp"
-#include "Pin.hpp" // Filesystem::Type (Directory/RegularFile): OpenAlias/OpenPinAlias mode selector.
+#include "FilesystemType.hpp" // Filesystem::Type (Directory/RegularFile): OpenAlias/OpenPinAlias mode selector.
 #include "ProcfsDescriptorAccess.hpp"
 
 #include <algorithm>
@@ -79,6 +78,10 @@ void Descriptor::ReleaseOwned() noexcept
         const OsConfigLogHandle log = context.GetLogHandle();
         OsConfigLogError(log, "Failed to close filesystem resource: %s%s", strerror(saved), EBADF == saved ? " (ownership bug)" : "");
     }
+}
+void Descriptor::RequireOwnership() const
+{
+    RequireOwned(mDescriptor);
 }
 } // namespace Detail
 } // namespace Filesystem
@@ -329,7 +332,7 @@ Result<Descriptor> ContextInterface::Duplicate(const Descriptor& source) const&
 int ContextInterface::StatFile(const Descriptor& owner, struct stat* metadata) const
 {
     CHECK_OWNER(owner, -1)
-    return StatFileDescriptor(Filesystem::Detail::RequireOwned(owner.mDescriptor), metadata);
+    return StatNativeDescriptor(Filesystem::Detail::RequireOwned(owner.mDescriptor), metadata);
 }
 int ContextInterface::StatFilesystem(const Descriptor& owner, struct statfs* metadata) const
 {
@@ -339,7 +342,7 @@ int ContextInterface::StatFilesystem(const Descriptor& owner, struct statfs* met
 ssize_t ContextInterface::ReadFile(const Descriptor& owner, void* buffer, std::size_t size) const
 {
     CHECK_OWNER(owner, -1)
-    return ReadFileDescriptor(Filesystem::Detail::RequireOwned(owner.mDescriptor), buffer, size);
+    return ReadNativeDescriptor(Filesystem::Detail::RequireOwned(owner.mDescriptor), buffer, size);
 }
 ssize_t ContextInterface::ReadLink(const Descriptor& owner, char* buffer, std::size_t size) const
 {
@@ -386,27 +389,7 @@ Result<void> ContextInterface::CloseOwnedDescriptor(Descriptor& owner) const noe
     const int fd = owner.mDescriptor;
     owner.mDescriptor = -1;
     ReleaseManagedDescriptor();
-    return CloseFileDescriptor(fd);
-}
-Result<void> ContextInterface::CloseOwnedDirectoryCursor(DIR* stream) const noexcept
-{
-    ReleaseManagedDescriptor();
-    return CloseDirectory(stream);
-}
-Result<Filesystem::FTW::Detail::DirectoryCursor> ContextInterface::OpenDirectoryCursor(Descriptor&& owner) const&
-{
-    Filesystem::Detail::RequireOwned(owner.mDescriptor);
-    if (&owner.mContext.get() != this)
-    {
-        return Error("Foreign directory stream descriptor", EINVAL);
-    }
-    DIR* stream = FdOpenDirectory(Filesystem::Detail::RequireOwned(owner.mDescriptor));
-    if (!stream)
-    {
-        return Error("Cannot open directory stream", errno ? errno : EIO);
-    }
-    owner.mDescriptor = -1;
-    return Filesystem::FTW::Detail::DirectoryCursor(*this, stream);
+    return CloseNativeDescriptor(fd);
 }
 #undef CHECK_OWNER
 

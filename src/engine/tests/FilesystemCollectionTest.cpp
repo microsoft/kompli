@@ -627,7 +627,7 @@ TEST(FilesystemCollectionTest, StopBeforeFirstPullReleasesUnyieldedFilePinOnce)
     });
     std::size_t failedFilePin = 0;
     bool injectFileCloseFailure = false;
-    ON_CALL(context, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) noexcept {
+    ON_CALL(context, CloseNativeDescriptor(testing::_)).WillByDefault([&](int descriptor) noexcept {
         std::size_t found = openedCount;
         for (std::size_t i = 0; i < openedCount; ++i)
             if (openedPins[i].live && openedPins[i].descriptor == descriptor)
@@ -734,7 +734,7 @@ TEST(FilesystemCollectionTest, StopAttemptsCursorAndPinsAndReportsEachFailureOnc
     });
     auto opened = Files(FilesystemCollectionRequest(tree.Path("root"), FilesystemRootKind::Directory), context);
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
-    ON_CALL(context, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
+    ON_CALL(context, CloseNativeDescriptor(testing::_)).WillByDefault([&](int descriptor) {
         ++pinCloses;
         const int result = close(descriptor);
         const int nativeCode = errno;
@@ -859,7 +859,7 @@ TEST(FilesystemCollectionTest, FailedNativeCursorCloseReleasesRangeWithoutRetryi
         }
         return stream;
     });
-    ON_CALL(context, CloseFileDescriptor(testing::_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(testing::_)).WillByDefault([&](int fd) {
         releasePin(fd);
         ++pinCloses;
         return ::close(fd) == 0 ? ComplianceEngine::Result<void>::Success() : ComplianceEngine::Result<void>(ComplianceEngine::Error(errno));
@@ -949,7 +949,7 @@ TEST(FilesystemCollectionTest, VisitorErrorOutranksPathPinCloseFailure)
     context.AllowIncidentalNativeAccess();
     bool failClose = false;
     std::size_t failedPins = 0;
-    ON_CALL(context, CloseFileDescriptor(testing::_)).WillByDefault([&](int descriptor) {
+    ON_CALL(context, CloseNativeDescriptor(testing::_)).WillByDefault([&](int descriptor) {
         const int result = close(descriptor);
         if (failClose && result == 0)
         {
@@ -1045,16 +1045,16 @@ TEST(FilesystemCollectionTest, MissingPolicyDoesNotSwallowPinnedChildInspectionF
     ASSERT_EQ(0, stat(tree.Path("root/item").c_str(), &expected));
     ::testing::StrictMock<MockContext> context;
     // No EXPECT_CALL in this test constrains any native seam; it only
-    // customizes StatFileDescriptor's default action via ON_CALL.
+    // customizes StatNativeDescriptor's default action via ON_CALL.
     context.AllowIncidentalNativeAccess();
-    ON_CALL(context, StatFileDescriptor(testing::_, testing::_)).WillByDefault([&context, expected](int descriptor, struct stat* metadata) {
+    ON_CALL(context, StatNativeDescriptor(testing::_, testing::_)).WillByDefault([&context, expected](int descriptor, struct stat* metadata) {
         struct stat actual = {};
         if ((0 == fstat(descriptor, &actual)) && (actual.st_dev == expected.st_dev) && (actual.st_ino == expected.st_ino))
         {
             errno = ENOENT;
             return -1;
         }
-        return context.RealStatFileDescriptor(descriptor, metadata);
+        return context.RealStatNativeDescriptor(descriptor, metadata);
     });
     FilesystemCollectionRequest request(tree.Path("root"), FilesystemRootKind::Directory);
     request.yieldType = FilesystemYieldType::RegularFiles;
@@ -1071,7 +1071,7 @@ TEST(FilesystemCollectionTest, RejectsInvalidAcquisitionRootsBeforeLookup)
     EXPECT_CALL(context, LstatPath(testing::_, testing::_)).Times(0);
     EXPECT_CALL(context, StatPath(testing::_, testing::_)).Times(0);
     EXPECT_CALL(context, OpenDirectory(testing::_)).Times(0);
-    EXPECT_CALL(context, StatFileDescriptor(testing::_, testing::_)).Times(0);
+    EXPECT_CALL(context, StatNativeDescriptor(testing::_, testing::_)).Times(0);
     const std::vector<std::string> roots = {"", ".", "..", "relative/root", std::string("/valid\0hidden", 13), std::string("relative\0hidden", 15)};
     for (const auto& root : roots)
     {
@@ -1400,8 +1400,8 @@ TEST(FilesystemCollectionTest, ContinuationCannotUnderstateAcquiredRootInspectio
     continuation.limits.fdinfoBytes = 1;
     EXPECT_CALL(context, OpenNativePath(testing::_, testing::_)).Times(0);
     EXPECT_CALL(context, OpenNativeAt(testing::_, testing::_, testing::_)).Times(0);
-    EXPECT_CALL(context, StatFileDescriptor(testing::_, testing::_)).Times(0);
-    EXPECT_CALL(context, ReadFileDescriptor(testing::_, testing::_, testing::_)).Times(0);
+    EXPECT_CALL(context, StatNativeDescriptor(testing::_, testing::_)).Times(0);
+    EXPECT_CALL(context, ReadNativeDescriptor(testing::_, testing::_, testing::_)).Times(0);
     EXPECT_CALL(context, FdOpenDirectory(testing::_)).Times(0);
     auto rejected = Files(std::move(accepted), request.rootPath, continuation);
     ASSERT_FALSE(rejected.HasValue());
@@ -2908,7 +2908,7 @@ TEST(FilesystemCollectionTest, ReplacingPinnedChildLinkKeepsAcceptedTargetIdenti
     int symlinkError = 0;
     const std::string aliasName = tree.Path("root/alias");
     const std::string oldAliasName = tree.Path("root/old-alias");
-    ON_CALL(context, StatFileDescriptor(testing::_, testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
+    ON_CALL(context, StatNativeDescriptor(testing::_, testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
         const int result = fstat(descriptor, metadata);
         if (!replaced && 0 == result && S_ISLNK(metadata->st_mode) && metadata->st_ino == original.st_ino && metadata->st_dev == original.st_dev)
         {
@@ -2960,7 +2960,7 @@ TEST(FilesystemCollectionTest, ReplacingPinnedRootLinkKeepsAcceptedTargetIdentit
     int symlinkError = 0;
     const std::string aliasName = tree.Path("alias");
     const std::string oldAliasName = tree.Path("old-alias");
-    ON_CALL(context, StatFileDescriptor(testing::_, testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
+    ON_CALL(context, StatNativeDescriptor(testing::_, testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
         const int result = fstat(descriptor, metadata);
         if (!replaced && result == 0 && S_ISLNK(metadata->st_mode) && metadata->st_ino == original.st_ino)
         {
@@ -3146,7 +3146,7 @@ TEST(FilesystemCollectionTest, RequiredStatFailurePropagatesItsOriginalCode)
     ::testing::StrictMock<MockContext> context;
     // No EXPECT_CALL in this test constrains any native seam.
     context.AllowIncidentalNativeAccess();
-    ON_CALL(context, StatFileDescriptor(testing::_, testing::_)).WillByDefault([](int, struct stat*) {
+    ON_CALL(context, StatNativeDescriptor(testing::_, testing::_)).WillByDefault([](int, struct stat*) {
         errno = EACCES;
         return -1;
     });
@@ -3260,8 +3260,8 @@ TEST(FilesystemCollectionTest, MountScopeFiltersBothLookupAndTargetFactsWithoutM
         std::size_t changed = 0;
         // Spoof ONLY the sealed context fdinfo read for this pinned object;
         // neither the namespace nor a production mount accessor is changed.
-        ON_CALL(context, ReadFileDescriptor(testing::_, testing::_, testing::_)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
-            const ssize_t bytes = context.RealReadFileDescriptor(fd, buffer, size);
+        ON_CALL(context, ReadNativeDescriptor(testing::_, testing::_, testing::_)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+            const ssize_t bytes = context.RealReadNativeDescriptor(fd, buffer, size);
             if (bytes <= 0)
                 return bytes;
             char fdinfo[64] = {};
@@ -3455,7 +3455,7 @@ TEST(FilesystemCollectionTest, FactorySeparatesAbsentRootFromInitializationFailu
     EXPECT_EQ(reached, readFailure->end());
 
     ON_CALL(context, ReadDirectory(testing::_)).WillByDefault([](DIR* stream) { return readdir(stream); });
-    ON_CALL(context, StatFileDescriptor(testing::_, testing::_)).WillByDefault([](int, struct stat*) {
+    ON_CALL(context, StatNativeDescriptor(testing::_, testing::_)).WillByDefault([](int, struct stat*) {
         errno = EIO;
         return -1;
     });
@@ -3463,8 +3463,8 @@ TEST(FilesystemCollectionTest, FactorySeparatesAbsentRootFromInitializationFailu
     ASSERT_FALSE(statFailure.HasValue());
     EXPECT_EQ(EIO, statFailure.Error().code);
 
-    ON_CALL(context, StatFileDescriptor(testing::_, testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
-        return context.RealStatFileDescriptor(descriptor, metadata);
+    ON_CALL(context, StatNativeDescriptor(testing::_, testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
+        return context.RealStatNativeDescriptor(descriptor, metadata);
     });
     ON_CALL(context, OpenNativeAt(testing::_, testing::_, testing::_)).WillByDefault([](int, const char*, int) {
         errno = EACCES;

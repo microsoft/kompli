@@ -4,8 +4,6 @@
 #ifndef COMPLIANCEENGINE_FILESYSTEM_PATH_LINK_ACCESS_HPP
 #define COMPLIANCEENGINE_FILESYSTEM_PATH_LINK_ACCESS_HPP
 
-#include "Descriptor.hpp"
-
 #include <cstddef>
 #include <string>
 

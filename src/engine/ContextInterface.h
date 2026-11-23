@@ -45,7 +45,7 @@ class DirectoryCursor;
 } // namespace FTW
 class Path;
 class ReadableFile;
-enum class Type; // Directory or RegularFile; full definition in filesystem/Pin.hpp.
+enum class Type; // Directory or RegularFile; full definition in filesystem/FilesystemType.hpp.
 } // namespace Filesystem
 // A single network interface as reported by the system: its name and the IFF_* flags
 // bitmask (see <net/if.h>). Produced by ContextInterface::GetNetworkInterfaces().
@@ -172,15 +172,15 @@ protected:
     // system-call simulation, never through an owner-access API.
     virtual int OpenNativePath(const char* path, int flags) const noexcept;
     virtual int OpenNativeAt(int directory, const char* path, int flags) const noexcept;
-    virtual int StatFileDescriptor(int descriptor, struct stat* metadata) const noexcept;
+    virtual int StatNativeDescriptor(int descriptor, struct stat* metadata) const noexcept;
     virtual int StatFilesystemDescriptor(int descriptor, struct statfs* metadata) const noexcept;
-    virtual ssize_t ReadFileDescriptor(int descriptor, void* buffer, std::size_t size) const noexcept;
+    virtual ssize_t ReadNativeDescriptor(int descriptor, void* buffer, std::size_t size) const noexcept;
     virtual ssize_t ReadLinkDescriptor(int descriptor, char* buffer, std::size_t size) const noexcept;
     virtual int StatusFlagsDescriptor(int descriptor) const noexcept;
     virtual int DescriptorFlagsDescriptor(int descriptor) const noexcept;
     virtual int DuplicateDescriptor(int descriptor) const noexcept;
     virtual DIR* FdOpenDirectory(int descriptor) const noexcept;
-    virtual Result<void> CloseFileDescriptor(int descriptor) const noexcept;
+    virtual Result<void> CloseNativeDescriptor(int descriptor) const noexcept;
     virtual int ChownPinnedFileDescriptor(int descriptor, uid_t owner, gid_t group) const noexcept;
     virtual int ChmodPinnedAlias(int procfsDirectory, const char* decimalAlias, mode_t mode) const noexcept;
     virtual pid_t NativeProcessId() const noexcept;

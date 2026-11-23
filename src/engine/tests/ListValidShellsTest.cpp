@@ -38,7 +38,7 @@ protected:
     void SetUp() override
     {
         // No test in this fixture constrains open/stat/identity seams; only
-        // ReadFileDescriptor/CloseFileDescriptor get test-specific ON_CALL
+        // ReadNativeDescriptor/CloseNativeDescriptor get test-specific ON_CALL
         // overrides below, each paired with its own later EXPECT_CALL that
         // takes priority over this catch-all.
         context.AllowIncidentalNativeAccess();
@@ -111,17 +111,17 @@ TEST_F(ValidShellsTest, ReachedReadErrorTakesPrecedenceOverCloseError)
 {
     SetShells("/bin/bash\n/bin/zsh\n");
     int reads = 0, closes = 0;
-    ON_CALL(context, ReadFileDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
+    ON_CALL(context, ReadNativeDescriptor(_, _, _)).WillByDefault([&](int fd, void* buffer, std::size_t size) -> ssize_t {
         if (!IsData(fd))
-            return context.RealReadFileDescriptor(fd, buffer, size);
+            return context.RealReadNativeDescriptor(fd, buffer, size);
         if (++reads == 1)
-            return context.RealReadFileDescriptor(fd, buffer, std::min<std::size_t>(size, 10));
+            return context.RealReadNativeDescriptor(fd, buffer, std::min<std::size_t>(size, 10));
         errno = EIO;
         return -1;
     });
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsData(fd);
-        context.RealCloseFileDescriptor(fd);
+        context.RealCloseNativeDescriptor(fd);
         if (data)
         {
             ++closes;
@@ -135,8 +135,8 @@ TEST_F(ValidShellsTest, ReachedReadErrorTakesPrecedenceOverCloseError)
     // property under test (2 reads then an IO error, 1 close attempt) is
     // already enforced below via the hand-counted reads/closes, not via
     // gMock cardinality.
-    EXPECT_CALL(context, ReadFileDescriptor(_, _, _)).Times(AnyNumber());
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(AnyNumber());
+    EXPECT_CALL(context, ReadNativeDescriptor(_, _, _)).Times(AnyNumber());
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(AnyNumber());
     auto failed = ListValidShells(context);
     ASSERT_FALSE(failed.HasValue());
     EXPECT_EQ(EIO, failed.Error().code);
@@ -153,9 +153,9 @@ TEST_F(ValidShellsTest, CloseFailureAfterEofPreservesCompletedSetAndLogsOnce)
     ASSERT_NE(nullptr, logHandle);
     context.SetLogHandle(logHandle);
     int closes = 0;
-    ON_CALL(context, CloseFileDescriptor(_)).WillByDefault([&](int fd) {
+    ON_CALL(context, CloseNativeDescriptor(_)).WillByDefault([&](int fd) {
         const bool data = IsData(fd);
-        context.RealCloseFileDescriptor(fd);
+        context.RealCloseNativeDescriptor(fd);
         if (data)
         {
             ++closes;
@@ -167,7 +167,7 @@ TEST_F(ValidShellsTest, CloseFailureAfterEofPreservesCompletedSetAndLogsOnce)
     // Newer than the fixture's catch-all; the exact close-count property is
     // already enforced below via the hand-counted `closes`, not gMock
     // cardinality.
-    EXPECT_CALL(context, CloseFileDescriptor(_)).Times(AnyNumber());
+    EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(AnyNumber());
     auto shells = ListValidShells(context);
     CloseLog(&logHandle);
     context.SetLogHandle(nullptr);

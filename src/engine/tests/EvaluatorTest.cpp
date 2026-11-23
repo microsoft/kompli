@@ -1192,8 +1192,8 @@ TEST_F(UserDotFileRangeTest, LeafReplacementAfterAcquisitionKeepsAuditOnThePinne
     });
     int observations = 0;
     bool replaced = false;
-    ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
-        const int result = context.RealStatFileDescriptor(descriptor, metadata);
+    ON_CALL(context, StatNativeDescriptor(::testing::_, ::testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
+        const int result = context.RealStatNativeDescriptor(descriptor, metadata);
         if ((0 == result) && (original.st_dev == metadata->st_dev) && (original.st_ino == metadata->st_ino) && (2 == ++observations))
         {
             replaced = (0 == rename(target.c_str(), held.c_str()));
@@ -1253,7 +1253,7 @@ TEST_F(UserDotFileRangeTest, MissingRootsAreCompliantAndFactoryFailuresPropagate
     ASSERT_EQ(0, stat(home.c_str(), &expectedHome));
     // Fail at the actual accepted-root acquisition seam, not while reading
     // /etc/shells (which also inspects a descriptor before traversal starts).
-    ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([this, expectedHome](int descriptor, struct stat* metadata) {
+    ON_CALL(context, StatNativeDescriptor(::testing::_, ::testing::_)).WillByDefault([this, expectedHome](int descriptor, struct stat* metadata) {
         struct stat acquired = {};
         if ((0 == ::fstat(descriptor, &acquired)) && (acquired.st_dev == expectedHome.st_dev) && (acquired.st_ino == expectedHome.st_ino) &&
             S_ISDIR(acquired.st_mode))
@@ -1261,13 +1261,13 @@ TEST_F(UserDotFileRangeTest, MissingRootsAreCompliantAndFactoryFailuresPropagate
             errno = EACCES;
             return -1;
         }
-        return context.RealStatFileDescriptor(descriptor, metadata);
+        return context.RealStatNativeDescriptor(descriptor, metadata);
     });
     const auto result = Run(User("fixture", home));
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EACCES, result.Error().code);
-    ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([this](int descriptor, struct stat* metadata) {
-        return context.RealStatFileDescriptor(descriptor, metadata);
+    ON_CALL(context, StatNativeDescriptor(::testing::_, ::testing::_)).WillByDefault([this](int descriptor, struct stat* metadata) {
+        return context.RealStatNativeDescriptor(descriptor, metadata);
     });
     ON_CALL(context, ReadDirectory(::testing::_)).WillByDefault([](DIR*) -> struct dirent* {
         errno = EACCES;

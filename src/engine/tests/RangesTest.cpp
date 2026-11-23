@@ -9,7 +9,6 @@
 #include <iterator>
 #include <list>
 #include <ranges/Count.hpp>
-#include <ranges/PathComponents.hpp>
 #include <ranges/Range.hpp>
 #include <ranges/Unique.hpp>
 #include <set>
@@ -94,62 +93,6 @@ VariableResolution::ObjectCollection Collection()
     return collection;
 }
 } // namespace
-
-TEST(PathComponentsTest, EmptyAndRootOnlyPathsYieldNoComponents)
-{
-    const std::string empty;
-    const std::string root = "/";
-    const std::string separators = "////";
-    EXPECT_EQ(Ranges::PathComponents(empty).begin(), Ranges::PathComponents(empty).end());
-    EXPECT_EQ(Ranges::PathComponents(root).begin(), Ranges::PathComponents(root).end());
-    EXPECT_EQ(Ranges::PathComponents(separators).begin(), Ranges::PathComponents(separators).end());
-}
-
-TEST(PathComponentsTest, SkipsSeparatorsAndCopiesComponentBytes)
-{
-    const std::string path = "//alpha///./../b//";
-    // Include the embedded NUL in the spelling; splitting does not validate it.
-    std::string binary = path + std::string("d\0e//", 5);
-    using Iterator = Ranges::PathComponents::Iterator;
-    static_assert(std::is_same<std::iterator_traits<Iterator>::value_type, std::string>::value, "Components are owning strings");
-    static_assert(std::is_same<decltype(*std::declval<Iterator>()), std::string>::value, "Dereferencing returns a string value");
-    std::vector<std::string> parts;
-    for (const auto& part : Ranges::PathComponents(binary))
-        parts.push_back(part);
-    ASSERT_EQ(5U, parts.size());
-    EXPECT_EQ("alpha", parts[0]);
-    EXPECT_EQ(".", parts[1]);
-    EXPECT_EQ("..", parts[2]);
-    EXPECT_EQ("b", parts[3]);
-    EXPECT_EQ(std::string("d\0e", 3), parts[4]);
-    binary.assign("changed");
-    EXPECT_EQ("alpha", parts[0]);
-    EXPECT_EQ(std::string("d\0e", 3), parts[4]);
-}
-
-TEST(PathComponentsTest, RelativeAndOffsetIterationCanIdentifyLastComponent)
-{
-    const std::string relative = "one//two/";
-    const Ranges::PathComponents components(relative);
-    auto current = components.begin();
-    ASSERT_NE(current, components.end());
-    const std::string first = *current;
-    EXPECT_EQ("one", first);
-    auto next = current;
-    ++next;
-    ASSERT_NE(next, components.end());
-    EXPECT_EQ("two", *next);
-    EXPECT_EQ("one", first);
-    ++next;
-    EXPECT_EQ(next, components.end());
-
-    const std::string absolute = "/root///child/leaf";
-    std::vector<std::string> tail;
-    for (const auto& part : Ranges::PathComponents(absolute, 6))
-        tail.push_back(part);
-    EXPECT_EQ((std::vector<std::string>{"child", "leaf"}), tail);
-    static_assert(!std::is_constructible<Ranges::PathComponents, std::string&&>::value, "A temporary string cannot back the range");
-}
 
 TEST(RangesTest, VectorRangeYieldsResultElements)
 {

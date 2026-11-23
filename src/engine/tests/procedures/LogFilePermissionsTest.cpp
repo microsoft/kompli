@@ -186,14 +186,14 @@ TEST_F(LogFileRangeTest, FactoryFailuresPropagateForAuditAndRemediation)
     });
     struct stat expected = {};
     ASSERT_EQ(0, stat(testDir.c_str(), &expected));
-    ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([this, expected](int descriptor, struct stat* metadata) {
+    ON_CALL(context, StatNativeDescriptor(::testing::_, ::testing::_)).WillByDefault([this, expected](int descriptor, struct stat* metadata) {
         struct stat actual = {};
         if ((0 == fstat(descriptor, &actual)) && (actual.st_dev == expected.st_dev) && (actual.st_ino == expected.st_ino))
         {
             errno = EACCES;
             return -1;
         }
-        return context.RealStatFileDescriptor(descriptor, metadata);
+        return context.RealStatNativeDescriptor(descriptor, metadata);
     });
     for (bool remediate : {false, true})
     {
@@ -387,7 +387,7 @@ TEST_F(LogFileRangeTest, TM12UnlinkAfterAcquisitionStillRefusesViaAcquisitionTim
     // directory entry away right after acquisition.
     bool sawAcquisitionStat = false;
     bool unlinkedInside = false;
-    ON_CALL(context, StatFileDescriptor(::testing::_, ::testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
+    ON_CALL(context, StatNativeDescriptor(::testing::_, ::testing::_)).WillByDefault([&](int descriptor, struct stat* metadata) {
         struct stat actual = {};
         if (!unlinkedInside && 0 == fstat(descriptor, &actual) && actual.st_dev == target.st_dev && actual.st_ino == target.st_ino)
         {
@@ -401,7 +401,7 @@ TEST_F(LogFileRangeTest, TM12UnlinkAfterAcquisitionStillRefusesViaAcquisitionTim
                 EXPECT_EQ(0, unlink(linked.c_str()));
             }
         }
-        return context.RealStatFileDescriptor(descriptor, metadata);
+        return context.RealStatNativeDescriptor(descriptor, metadata);
     });
 
     EXPECT_CALL(context, ChownPinnedFileDescriptor(::testing::_, ::testing::_, ::testing::_)).Times(0);
