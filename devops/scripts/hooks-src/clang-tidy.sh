@@ -7,8 +7,11 @@
 # fails if any file was modified or if clang-tidy reported an error.
 #
 # Files checked:
+#   src/{engine,benchmarkio,kompli,telemetry}/**/*.{h,hpp,c,cpp}
+#   src/tools/lua-evaluator/**/*.{h,hpp,c,cpp}
 #   src/modules/complianceengine/src/**/*.{h,hpp,c,cpp}
-#   src/common/telemetry/**/*.{h,hpp,c,cpp}
+# Excluded:
+#   src/engine/tests/**/*.{h,hpp,c,cpp}
 
 set -euo pipefail
 
@@ -17,9 +20,17 @@ readonly REPO_ROOT="$(env -u GIT_DIR git -C "$HOOK_DIR" rev-parse --show-topleve
 # shellcheck source=common.sh
 source "$HOOK_DIR/common.sh"
 
-readonly PATTERN='^(src/modules/complianceengine/src|src/common/telemetry)/.*\.(h|hpp|c|cpp)$'
+readonly PATTERN='^src/(engine|benchmarkio|kompli|tools/lua-evaluator|telemetry|modules/complianceengine/src)/.*\.(h|hpp|c|cpp)$'
+readonly EXCLUDE='^src/engine/tests/'
 
-mapfile -t FILES < <(filter_files "$PATTERN" "$@")
+mapfile -t _MATCHED < <(filter_files "$PATTERN" "$@")
+
+FILES=()
+for f in "${_MATCHED[@]+"${_MATCHED[@]}"}"; do
+    rel="${f#"$REPO_ROOT/"}"
+    [[ "$rel" =~ $EXCLUDE ]] || FILES+=("$f")
+done
+
 [[ ${#FILES[@]} -eq 0 ]] && exit 0
 
 printf '    %d file(s) to check\n' "${#FILES[@]}"

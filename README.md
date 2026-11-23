@@ -42,6 +42,8 @@ pip3 install pre_commit && python3 -m pre_commit install
 
 cmake >= 3.21 is required. vcpkg is used for additional dependencies (googletest, parson) and is bootstrapped automatically.
 
+A C++11 compiler and standard library with working `std::regex` support are required; the legacy POSIX regex fallback is no longer provided.
+
 ### Build
 
 ```bash
@@ -50,6 +52,16 @@ cmake -S src -B build \
     -DBUILD_TELEMETRY=OFF \
     -DBUILD_TESTS=ON
 cmake --build build
+```
+
+By default, CMake copies and bootstraps `external/vcpkg` in
+`build/vcpkg_root`. To use a shared copy instead, configure a fresh build directory:
+
+```bash
+cmake -S src -B build-shared \
+    -DVCPKG_ROOT_DIR="$PWD/shared-vcpkg" \
+    -DBUILD_TELEMETRY=OFF \
+    -DBUILD_TESTS=ON
 ```
 
 To build the release artifact only:
@@ -72,7 +84,7 @@ cd build && ctest
 
 ## Configuration
 
-ComplianceEngine is configured via `/etc/osconfig/osconfig.json`:
+ComplianceEngine is configured via `/etc/kompli/kompli.json`:
 
 ```json
 {
@@ -84,7 +96,7 @@ ComplianceEngine is configured via `/etc/osconfig/osconfig.json`:
 
 ### Distribution override
 
-To override automatic OS detection (useful for testing), create `/etc/osconfig/system_id.override`:
+To override automatic OS detection (useful for testing), create `/etc/kompli/system_id.override`:
 
 ```
 OS="Linux" ARCH="x86_64" DISTRO="ubuntu" VERSION="24.04"

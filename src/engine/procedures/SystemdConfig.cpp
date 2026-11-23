@@ -1,0 +1,465 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+#include <AtomicFile.h>
+#include <StringTools.h>
+#include <SystemdConfig.h>
+#include <TypedComparison.h>
+#include <algorithm>
+#include <cerrno>
+#include <cstdlib>
+#include <fts.h>
+#include <iostream>
+#include <regex>
+#include <string>
+#include <sys/stat.h>
+#include <sys/types.h>
+
+using ComplianceEngine::Optional;
+
+namespace ComplianceEngine
+{
+
+namespace
+{
+// Maps (block, parameter) -> (value, sourceFile)
+typedef std::map<std::pair<std::string, std::string>, std::pair<std::string, std::string>> SystemdConfigMap_t;
+
+Result<TypedComparisonOperation> MapNumericComparison(SystemdConfigValueOperator operation)
+{
+    switch (operation)
+    {
+        case SystemdConfigValueOperator::LessThan:
+            return TypedComparisonOperation::LessThan;
+        case SystemdConfigValueOperator::LessOrEqual:
+            return TypedComparisonOperation::LessOrEqual;
+        case SystemdConfigValueOperator::GreaterThan:
+            return TypedComparisonOperation::GreaterThan;
+        case SystemdConfigValueOperator::GreaterOrEqual:
+            return TypedComparisonOperation::GreaterOrEqual;
+        case SystemdConfigValueOperator::Equal:
+            break;
+    }
+    return Error("Unsupported numeric comparison operation " + std::to_string(static_cast<int>(operation)), EINVAL);
+}
+
+Result<bool> GetSystemdConfig(SystemdConfigMap_t& config, const std::string& filename, ContextInterface& context)
+{
+    auto escapedFilename = EscapeForShell(filename);
+    auto result = context.ExecuteCommand("/usr/bin/systemd-analyze cat-config \"" + escapedFilename + "\"");
+    if (!result.HasValue())
+    {
+        OsConfigLogError(context.GetLogHandle(), "Failed to execute systemd-analyze command: %s", result.Error().message.c_str());
+        return result.Error();
+    }
+    std::istringstream stream(result.Value());
+    std::string line;
+    std::string currentConfig = "<UNKNOWN>";
+    std::string currentBlock;
+    while (std::getline(stream, line))
+    {
+        line.erase(0, line.find_first_not_of(" \t\r\n"));
+        line.erase(line.find_last_not_of(" \t\r\n") + 1);
+        if (line.empty())
+        {
+            continue;
+        }
+
+        if ('#' == line[0])
+        {
+            if ((line.size() > strlen("# .conf")) && ('#' == line[0]) && (".conf" == line.substr(line.size() - strlen(".conf"))))
+            {
+                currentConfig = line.substr(2);
+            }
+            continue;
+        }
+        if (line.front() == '[' && line.back() == ']')
+        {
+            currentBlock = line;
+            continue;
+        }
+        size_t eqSign = line.find('=');
+        if (eqSign == std::string::npos)
+        {
+            OsConfigLogError(context.GetLogHandle(), "Invalid line in systemd config: %s", line.c_str());
+            continue;
+        }
+        std::string key = line.substr(0, eqSign);
+        std::string value = line.substr(eqSign + 1);
+        config[std::make_pair(currentBlock, key)] = std::make_pair(value, currentConfig);
+    }
+
+    return true;
+}
+
+Result<std::string> GetSystemdConfigRemediationValue(const SystemdConfigValueParams& params)
+{
+    if (!params.file.HasValue() || params.dir.HasValue())
+    {
+        return Error("SystemdConfigValue remediation requires one config file below /etc/systemd", ENOTSUP);
+    }
+    const std::string& file = params.file.Value();
+    if (file.compare(0, strlen("/etc/systemd/"), "/etc/systemd/") != 0 || file.find("/../") != std::string::npos ||
+        (file.size() >= 3 && file.compare(file.size() - 3, 3, "/..") == 0))
+    {
+        return Error("SystemdConfigValue remediation requires one config file below /etc/systemd", ENOTSUP);
+    }
+    if (!params.block.HasValue() || params.block->empty() || params.block->find_first_of("[]\r\n") != std::string::npos)
+    {
+        return Error("SystemdConfigValue remediation requires one valid config block", ENOTSUP);
+    }
+    if (params.parameter.empty() || params.parameter.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-") != std::string::npos)
+    {
+        return Error("Invalid systemd config parameter", EINVAL);
+    }
+    if (params.valueRegex.HasValue() || !params.value.HasValue() || !params.op.HasValue() || params.op.Value() != SystemdConfigValueOperator::Equal)
+    {
+        return Error("SystemdConfigValue remediation requires an exact equality value", ENOTSUP);
+    }
+    if (params.value->find('\0') != std::string::npos || params.value->find_first_of("\r\n") != std::string::npos)
+    {
+        return Error("Invalid systemd config value", EINVAL);
+    }
+    return params.value.Value();
+}
+
+std::string ReplaceSystemdConfigValue(const std::string& contents, const std::string& block, const std::string& parameter, const std::string& value)
+{
+    const std::string targetBlock = "[" + block + "]";
+    const std::string lineEnding = contents.find("\r\n") == std::string::npos ? "\n" : "\r\n";
+    size_t replacementStart = std::string::npos;
+    size_t replacementEnd = std::string::npos;
+    size_t insertionPosition = std::string::npos;
+    bool inTargetBlock = false;
+    bool foundTargetBlock = false;
+
+    size_t lineStart = 0;
+    while (lineStart <= contents.size())
+    {
+        const size_t newline = contents.find('\n', lineStart);
+        size_t lineEnd = newline == std::string::npos ? contents.size() : newline;
+        if (lineEnd > lineStart && contents[lineEnd - 1] == '\r')
+        {
+            lineEnd--;
+        }
+
+        const std::string trimmed = TrimWhiteSpaces(contents.substr(lineStart, lineEnd - lineStart));
+        if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']')
+        {
+            if (inTargetBlock)
+            {
+                insertionPosition = lineStart;
+            }
+            inTargetBlock = trimmed == targetBlock;
+            foundTargetBlock = foundTargetBlock || inTargetBlock;
+        }
+        else if (inTargetBlock && !trimmed.empty() && trimmed.front() != '#' && trimmed.front() != ';')
+        {
+            const size_t equals = contents.find('=', lineStart);
+            if (equals != std::string::npos && equals < lineEnd)
+            {
+                const std::string key = TrimWhiteSpaces(contents.substr(lineStart, equals - lineStart));
+                if (key == parameter)
+                {
+                    replacementStart = equals + 1;
+                    replacementEnd = lineEnd;
+                }
+            }
+        }
+
+        if (newline == std::string::npos)
+        {
+            if (inTargetBlock)
+            {
+                insertionPosition = contents.size();
+            }
+            break;
+        }
+        lineStart = newline + 1;
+    }
+
+    std::string updated = contents;
+    if (replacementStart != std::string::npos)
+    {
+        updated.replace(replacementStart, replacementEnd - replacementStart, value);
+        return updated;
+    }
+
+    if (foundTargetBlock)
+    {
+        std::string setting = parameter + "=" + value + lineEnding;
+        if (insertionPosition > 0 && contents[insertionPosition - 1] != '\n')
+        {
+            setting.insert(0, lineEnding);
+        }
+        updated.insert(insertionPosition, setting);
+        return updated;
+    }
+
+    if (!updated.empty() && updated.back() != '\n')
+    {
+        updated += lineEnding;
+    }
+    updated += targetBlock + lineEnding + parameter + "=" + value + lineEnding;
+    return updated;
+}
+} // namespace
+
+Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
+{
+    auto log = context.GetLogHandle();
+
+    if (!params.dir.HasValue() && !params.file.HasValue())
+    {
+        OsConfigLogError(log, "Error: SystemdConfigValue: neither 'file' nor 'dir' argument is provided");
+        return Error("Neither 'file' nor 'dir' argument is provided");
+    }
+    if (params.dir.HasValue() && params.file.HasValue())
+    {
+        OsConfigLogError(log, "Error: SystemdConfigValue: both 'file' and 'dir' arguments are provided, only one is allowed");
+        return Error("Both 'file' and 'dir' arguments are provided, only one is allowed");
+    }
+    if (params.valueRegex.HasValue() && params.value.HasValue())
+    {
+        OsConfigLogError(log, "Error: SystemdConfigValue: both 'value' and 'valueRegex' are provided, only one is allowed");
+        return Error("Both 'value' and 'valueRegex' are provided, only one is allowed");
+    }
+    if (!params.valueRegex.HasValue() && !params.value.HasValue())
+    {
+        OsConfigLogError(log, "Error: SystemdConfigValue: 'value' (or 'valueRegex') must be provided");
+        return Error("'value' (or 'valueRegex') must be provided");
+    }
+    if (params.op.HasValue() && !params.value.HasValue())
+    {
+        OsConfigLogError(log, "Error: SystemdConfigValue: 'op' requires 'value' (not 'valueRegex')");
+        return Error("'op' requires 'value' (not 'valueRegex')");
+    }
+
+    SystemdConfigMap_t config;
+    if (params.file.HasValue())
+    {
+        OsConfigLogDebug(log, "Getting systemd config for file '%s'", params.file->c_str());
+        auto result = GetSystemdConfig(config, params.file.Value(), context);
+        if (!result.HasValue())
+        {
+            OsConfigLogError(log, "Failed to get systemd config for file '%s' - %s", params.file->c_str(), result.Error().message.c_str());
+            return result.Error();
+        }
+    }
+    else
+    {
+        OsConfigLogDebug(log, "Getting systemd config for directory '%s'", params.dir->c_str());
+        char* paths[] = {const_cast<char*>(params.dir->c_str()), nullptr};
+        FTS* file_system = fts_open(paths, FTS_NOCHDIR | FTS_PHYSICAL, nullptr);
+        if (!file_system)
+        {
+            OsConfigLogError(log, "Failed to open directory '%s' with fts", params.dir->c_str());
+            return Error("Failed to open directory '" + params.dir.Value() + "'");
+        }
+
+        FTSENT* node = nullptr;
+        while ((node = fts_read(file_system)) != nullptr)
+        {
+            if (node->fts_info == FTS_F)
+            {
+                static const std::string suffix = ".conf";
+                static const size_t suffixLength = suffix.length();
+                std::string filePath = node->fts_path;
+                if (filePath.size() >= suffixLength && filePath.substr(filePath.size() - suffixLength) == suffix)
+                {
+                    OsConfigLogDebug(log, "Getting systemd config for file '%s' in directory '%s'", filePath.c_str(), params.dir->c_str());
+                    auto result = GetSystemdConfig(config, filePath, context);
+                    if (!result.HasValue())
+                    {
+                        OsConfigLogError(log, "Failed to get systemd config for file '%s' - %s", filePath.c_str(), result.Error().message.c_str());
+                    }
+                    else
+                    {
+                        OsConfigLogDebug(log, "Successfully got systemd config for file '%s'", filePath.c_str());
+                    }
+                }
+            }
+        }
+        fts_close(file_system);
+    }
+
+    SystemdConfigMap_t::const_iterator paramIt = config.end();
+    if (params.block.HasValue())
+    {
+        auto block = params.block.Value();
+        block = "[" + block + "]";
+        paramIt = config.find(std::make_pair(block, params.parameter));
+    }
+    else
+    {
+        for (auto it = config.begin(); it != config.end(); ++it)
+        {
+            if (it->first.second == params.parameter)
+            {
+                paramIt = it;
+                break;
+            }
+        }
+    }
+
+    if (paramIt == config.end())
+    {
+
+        assert(params.passOnNotFound.HasValue());
+        if (params.passOnNotFound.Value())
+        {
+            OsConfigLogInfo(log, "Parameter '%s' not found but Compliant due to passOnNotFound==true", params.parameter.c_str());
+            return indicators.Compliant("Parameter '" + params.parameter + "' not found but Compliant due to passOnNotFound==true");
+        }
+        if (params.block.HasValue())
+        {
+            auto block = params.block.Value();
+            block = "[" + block + "]";
+            OsConfigLogInfo(log, "Parameter '%s' not found in block '%s'", params.parameter.c_str(), block.c_str());
+            return indicators.NonCompliant("Parameter '" + params.parameter + "' not found in block '" + block + "'");
+        }
+        else
+        {
+            OsConfigLogInfo(log, "Parameter '%s' not found", params.parameter.c_str());
+            return indicators.NonCompliant("Parameter '" + params.parameter + "' not found");
+        }
+    }
+
+    const std::string& actualValue = paramIt->second.first;
+    const std::string& sourceFile = paramIt->second.second;
+
+    OsConfigLogDebug(log, "Parameter '%s' found in file '%s' with value '%s'", params.parameter.c_str(), sourceFile.c_str(), actualValue.c_str());
+
+    if (params.valueRegex.HasValue())
+    {
+        if (!std::regex_match(actualValue, params.valueRegex.Value()))
+        {
+            OsConfigLogInfo(log, "Parameter '%s' in file '%s' does not match regex", params.parameter.c_str(), sourceFile.c_str());
+            return indicators.NonCompliant("Parameter '" + params.parameter + "' value '" + actualValue + "' in file '" + sourceFile +
+                                           "' does not match regex");
+        }
+        else
+        {
+            return indicators.Compliant("Parameter '" + params.parameter + "' found in file '" + sourceFile + "' with value '" + actualValue + "'");
+        }
+    }
+    else if (params.value.HasValue() && !params.op.HasValue())
+    {
+        // value without op: treat value as regex pattern
+        std::regex valueAsRegex(params.value.Value());
+        if (!std::regex_match(actualValue, valueAsRegex))
+        {
+            OsConfigLogInfo(log, "Parameter '%s' in file '%s' does not match regex", params.parameter.c_str(), sourceFile.c_str());
+            return indicators.NonCompliant("Parameter '" + params.parameter + "' value '" + actualValue + "' in file '" + sourceFile +
+                                           "' does not match regex");
+        }
+        else
+        {
+            return indicators.Compliant("Parameter '" + params.parameter + "' found in file '" + sourceFile + "' with value '" + actualValue + "'");
+        }
+    }
+    else
+    {
+        // Operator + value comparison
+        bool comparisonResult = false;
+        const std::string& expectedValue = params.value.Value();
+        SystemdConfigValueOperator op = params.op.Value();
+
+        if (op == SystemdConfigValueOperator::Equal)
+        {
+            auto result = CompareTyped(actualValue, expectedValue, TypedComparisonOperation::Equal);
+            if (!result.HasValue())
+            {
+                return result.Error();
+            }
+            comparisonResult = result.Value();
+        }
+        else
+        {
+            auto mapped = MapNumericComparison(op);
+            if (!mapped.HasValue())
+            {
+                return mapped.Error();
+            }
+
+            // Numerical comparison for lt, le, gt, ge
+            char* endActual = nullptr;
+            char* endExpected = nullptr;
+            long actualNum = strtol(actualValue.c_str(), &endActual, 10);
+            long expectedNum = strtol(expectedValue.c_str(), &endExpected, 10);
+
+            if (endActual == actualValue.c_str() || endExpected == expectedValue.c_str())
+            {
+                OsConfigLogError(log, "Failed to convert values to numbers for comparison: actual='%s', expected='%s'", actualValue.c_str(),
+                    expectedValue.c_str());
+                return Error("Failed to convert values to numbers for comparison: actual='" + actualValue + "', expected='" + expectedValue + "'");
+            }
+
+            auto result = CompareTyped(actualNum, expectedNum, mapped.Value());
+            if (!result.HasValue())
+            {
+                return result.Error();
+            }
+            comparisonResult = result.Value();
+        }
+
+        if (comparisonResult)
+        {
+            return indicators.Compliant("Parameter '" + params.parameter + "' found in file '" + sourceFile + "' with value '" + actualValue + "'");
+        }
+        else
+        {
+            return indicators.NonCompliant("Parameter '" + params.parameter + "' value '" + actualValue + "' in file '" + sourceFile +
+                                           "' does not satisfy the comparison");
+        }
+    }
+}
+
+Result<Status> RemediateSystemdConfigValue(const SystemdConfigValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
+{
+    auto desired = GetSystemdConfigRemediationValue(params);
+    if (!desired.HasValue())
+    {
+        return desired.Error();
+    }
+
+    auto audit = AuditSystemdConfigValue(params, indicators, context);
+    if (!audit.HasValue() || audit.Value() == Status::Compliant)
+    {
+        return audit;
+    }
+
+    const std::string configPath = context.GetSpecialFilePath(params.file.Value());
+    auto original = context.GetFileContents(configPath);
+    if (!original.HasValue())
+    {
+        return original.Error();
+    }
+    const std::string updated = ReplaceSystemdConfigValue(original.Value(), params.block.Value(), params.parameter, desired.Value());
+    if (updated == original.Value())
+    {
+        return Error("SystemdConfigValue remediation produced no change", EINVAL);
+    }
+
+    auto replaced = ReplaceFileContentsAtomic(configPath, updated);
+    if (!replaced.HasValue())
+    {
+        return replaced.Error();
+    }
+
+    auto postAudit = AuditSystemdConfigValue(params, indicators, context);
+    if (postAudit.HasValue() && postAudit.Value() == Status::Compliant)
+    {
+        return postAudit;
+    }
+
+    auto rollback = ReplaceFileContentsAtomic(configPath, original.Value());
+    if (!rollback.HasValue())
+    {
+        const std::string reason = postAudit.HasValue() ? "Systemd config remained noncompliant" : postAudit.Error().message;
+        return Error(reason + "; rollback failed: " + rollback.Error().message, rollback.Error().code);
+    }
+    return postAudit;
+}
+
+} // namespace ComplianceEngine

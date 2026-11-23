@@ -1,0 +1,669 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
+#include <JUnitRenderer.hpp>
+#include <StringTools.h>
+#include <TagLimits.hpp>
+#include <algorithm>
+#include <cerrno>
+#include <cstdint>
+#include <parson.h>
+#include <pugixml.hpp>
+#include <sstream>
+#include <streambuf>
+#include <string>
+#include <utility>
+
+namespace ComplianceEngine
+{
+namespace Kompli
+{
+using std::string;
+
+namespace
+{
+constexpr size_t kMaxJUnitBytes = static_cast<size_t>(16) * 1024 * 1024;
+
+// Parson validates the object but accepts trailing input. Locate its end without
+// treating braces in strings as structure; only JSON whitespace may follow.
+bool HasTrailingObjectData(const string& json)
+{
+    size_t depth = 0;
+    bool inString = false;
+    for (size_t i = json.find('{'); i < json.size(); ++i)
+    {
+        const char ch = json[i];
+        if (inString)
+        {
+            if (ch == '\\')
+            {
+                ++i;
+            }
+            else if (ch == '"')
+            {
+                inString = false;
+            }
+        }
+        else if (ch == '"')
+        {
+            inString = true;
+        }
+        else if (ch == '{')
+        {
+            ++depth;
+        }
+        else if (ch == '}' && --depth == 0)
+        {
+            return json.find_first_not_of(" \t\r\n", i + 1) != string::npos;
+        }
+    }
+    return true;
+}
+
+class BoundedXmlBuffer : public std::streambuf
+{
+public:
+    explicit BoundedXmlBuffer(size_t limit)
+        : mLimit(limit)
+    {
+    }
+
+    const string& Value() const
+    {
+        return mValue;
+    }
+
+protected:
+    std::streamsize xsputn(const char* data, std::streamsize count) override
+    {
+        if (count < 0 || static_cast<size_t>(count) > mLimit - mValue.size())
+        {
+            return 0;
+        }
+        mValue.append(data, static_cast<size_t>(count));
+        return count;
+    }
+
+    int_type overflow(int_type ch) override
+    {
+        if (traits_type::eq_int_type(ch, traits_type::eof()))
+        {
+            return traits_type::not_eof(ch);
+        }
+        if (mValue.size() == mLimit)
+        {
+            return traits_type::eof();
+        }
+        mValue.push_back(traits_type::to_char_type(ch));
+        return ch;
+    }
+
+private:
+    size_t mLimit;
+    string mValue;
+};
+
+// Charge a lower bound on each node's serialized bytes before inserting it.
+// Every element/attribute has fixed XML syntax and a name; validated values
+// cannot get shorter when escaped in UTF-8. This bounds DOM construction
+// proportionally to the 16 MiB output cap without rejecting compact XML just
+// because pugixml's per-node allocation exceeds its serialized representation.
+// The one fixed-size declaration is excluded; BoundedXmlWriter independently
+// enforces the exact serialized size, including the declaration and escaping.
+class XmlBudget
+{
+public:
+    bool Add(size_t bytes)
+    {
+        if (bytes > kMaxJUnitBytes - mUsed)
+        {
+            return false;
+        }
+        mUsed += bytes;
+        return true;
+    }
+
+private:
+    size_t mUsed = 0;
+};
+
+class BoundedXmlWriter : public pugi::xml_writer
+{
+public:
+    explicit BoundedXmlWriter(size_t limit)
+        : mBuffer(limit)
+    {
+    }
+
+    void write(const void* data, size_t size) override
+    {
+        if (mValid && mBuffer.sputn(static_cast<const char*>(data), static_cast<std::streamsize>(size)) != static_cast<std::streamsize>(size))
+        {
+            mValid = false;
+        }
+    }
+
+    bool Valid() const
+    {
+        return mValid;
+    }
+
+    const string& Value() const
+    {
+        return mBuffer.Value();
+    }
+
+private:
+    BoundedXmlBuffer mBuffer;
+    bool mValid = true;
+};
+
+bool HasValidXmlCharacters(const string& xml)
+{
+    for (size_t i = 0; i < xml.size();)
+    {
+        const auto first = static_cast<unsigned char>(xml[i]);
+        std::uint32_t codePoint = 0;
+        size_t length = 1;
+        if (0x80 > first)
+        {
+            codePoint = first;
+        }
+        else if ((0xC2 <= first) && (0xDF >= first))
+        {
+            codePoint = first & 0x1F;
+            length = 2;
+        }
+        else if ((0xE0 <= first) && (0xEF >= first))
+        {
+            codePoint = first & 0x0F;
+            length = 3;
+        }
+        else if ((0xF0 <= first) && (0xF4 >= first))
+        {
+            codePoint = first & 0x07;
+            length = 4;
+        }
+        else
+        {
+            return false;
+        }
+        if (length > xml.size() - i)
+        {
+            return false;
+        }
+        for (size_t j = 1; j < length; ++j)
+        {
+            const auto next = static_cast<unsigned char>(xml[i + j]);
+            if (0x80 != (next & 0xC0))
+            {
+                return false;
+            }
+            codePoint = (codePoint << 6) | (next & 0x3F);
+        }
+        if (((2 == length) && (0x80 > codePoint)) || ((3 == length) && (0x800 > codePoint)) || ((4 == length) && (0x10000 > codePoint)) ||
+            ((0xD800 <= codePoint) && (0xDFFF >= codePoint)) || (0x10FFFF < codePoint) ||
+            ((0x09 != codePoint) && (0x0A != codePoint) && (0x0D != codePoint) && (0x20 > codePoint)) || ((0xFFFE <= codePoint) && (0xFFFF >= codePoint)))
+        {
+            return false;
+        }
+        i += length;
+    }
+    return true;
+}
+
+Result<pugi::xml_node> AddElement(pugi::xml_node parent, const char* name, XmlBudget& budget)
+{
+    // At least <name/> even when there are no children.
+    if (!budget.Add(3 + std::char_traits<char>::length(name)))
+    {
+        return Error("JUnit result exceeds the maximum output size", EFBIG);
+    }
+    auto node = parent.append_child(name);
+    if (!node)
+    {
+        return Error("Failed to allocate JUnit XML element", ENOMEM);
+    }
+    return node;
+}
+
+Result<bool> AddAttribute(pugi::xml_node node, const char* name, const string& value, XmlBudget& budget)
+{
+    if (!HasValidXmlCharacters(value))
+    {
+        return Error("Canonical result contains invalid XML 1.0 characters or UTF-8", EINVAL);
+    }
+    // At least: space + name + =" + value + ".
+    if (!budget.Add(4 + std::char_traits<char>::length(name)) || !budget.Add(value.size()))
+    {
+        return Error("JUnit result exceeds the maximum output size", EFBIG);
+    }
+    auto attribute = node.append_attribute(name);
+    if (!attribute || !attribute.set_value(value.c_str()))
+    {
+        return Error("Failed to allocate JUnit XML attribute", ENOMEM);
+    }
+    return true;
+}
+
+Result<bool> AddText(pugi::xml_node node, string value, XmlBudget& budget)
+{
+    // Retain the legacy policy: illegal ASCII controls in report bodies are
+    // spaces, while invalid Unicode and all illegal attribute data are errors.
+    for (char& ch : value)
+    {
+        if (static_cast<unsigned char>(ch) < 0x20 && ch != '\t' && ch != '\n' && ch != '\r')
+        {
+            ch = ' ';
+        }
+    }
+    if (!HasValidXmlCharacters(value))
+    {
+        return Error("Canonical result contains invalid XML 1.0 characters or UTF-8", EINVAL);
+    }
+    if (!budget.Add(value.size()))
+    {
+        return Error("JUnit result exceeds the maximum output size", EFBIG);
+    }
+    auto text = node.append_child(pugi::node_pcdata);
+    if (!text || !text.set_value(value.c_str()))
+    {
+        return Error("Failed to allocate JUnit XML text", ENOMEM);
+    }
+    return true;
+}
+
+// Recursively renders an indicators array into the readable indented style used
+// by tests/reporting/junit.py: "{indent*depth}  - {label} [{status}]". A node's
+// label is its message (leaf) or its procedure (branch); children are rendered
+// one level deeper.
+//
+// Recursion is bounded to guard against pathologically deep (or maliciously
+// crafted) indicator trees causing stack exhaustion; nodes below the limit are
+// silently dropped from the rendered output.
+constexpr size_t cMaxIndicatorDepth = 16;
+
+void AppendIndicators(const JSON_Array* indicators, size_t depth, std::ostream& body)
+{
+    if (nullptr == indicators || depth >= cMaxIndicatorDepth)
+    {
+        return;
+    }
+    const size_t count = json_array_get_count(indicators);
+    for (size_t i = 0; i < count; ++i)
+    {
+        const JSON_Object* node = json_array_get_object(indicators, i);
+        if (nullptr == node)
+        {
+            continue;
+        }
+        string label = StringOrEmpty(json_object_get_string(node, "message"));
+        if (label.empty())
+        {
+            label = StringOrEmpty(json_object_get_string(node, "procedure"));
+        }
+        const string status = StringOrEmpty(json_object_get_string(node, "status"));
+        body << string(depth * 2, ' ') << "  - " << label;
+        if (!status.empty())
+        {
+            body << " [" << status << "]";
+        }
+        body << "\n";
+        AppendIndicators(json_object_get_array(node, "indicators"), depth + 1, body);
+    }
+}
+
+// Builds the human-readable failure body for a rule: the engine's `ruleName`,
+// a Parameters section (present when the canonical JSON carries per-rule
+// parameters) followed by an indented Indicators tree.
+Result<string> BuildBody(const JSON_Object* rule)
+{
+    BoundedXmlBuffer buffer(kMaxJUnitBytes);
+    std::ostream body(&buffer);
+    body << "Rule: " << StringOrEmpty(json_object_get_string(rule, "ruleName")) << "\n\n";
+
+    const JSON_Object* parameters = json_object_get_object(rule, "parameters");
+    body << "Parameters:\n";
+    if (nullptr != parameters)
+    {
+        const size_t count = json_object_get_count(parameters);
+        for (size_t i = 0; i < count; ++i)
+        {
+            const string key = StringOrEmpty(json_object_get_name(parameters, i));
+            const JSON_Value* value = json_object_get_value_at(parameters, i);
+            string valueStr = StringOrEmpty(json_value_get_string(value));
+            if (valueStr.empty() && nullptr != value && json_value_get_type(value) != JSONString)
+            {
+                char* serialized = json_serialize_to_string(value);
+                if (nullptr == serialized)
+                {
+                    return Error("Failed to serialize JUnit parameter", ENOMEM);
+                }
+                // Deep-copy before freeing parson's buffer.
+                valueStr = std::string(serialized);
+                json_free_serialized_string(serialized);
+            }
+            body << "  - " << key << ": " << valueStr << "\n";
+        }
+    }
+
+    body << "\nIndicators:\n";
+    AppendIndicators(json_object_get_array(rule, "indicators"), 0, body);
+    if (!body)
+    {
+        return Error("JUnit result exceeds the maximum output size", EFBIG);
+    }
+    return buffer.Value();
+}
+
+// Renders a rule's `tags` array as a <tags> block.
+Result<bool> BuildTags(const JSON_Object* rule, pugi::xml_node testcase, XmlBudget& budget)
+{
+    const JSON_Value* tagsValue = json_object_get_value(rule, "tags");
+    if (nullptr == tagsValue)
+    {
+        return false;
+    }
+    const JSON_Array* tags = json_value_get_array(tagsValue);
+    if (nullptr == tags)
+    {
+        return Error("Canonical result JSON rule has a non-array 'tags' field", EINVAL);
+    }
+    if (0 == json_array_get_count(tags))
+    {
+        return false;
+    }
+    auto tagsNode = AddElement(testcase, "tags", budget);
+    if (!tagsNode.HasValue())
+    {
+        return tagsNode.Error();
+    }
+    const size_t count = json_array_get_count(tags);
+    for (size_t i = 0; i < count; ++i)
+    {
+        const char* tag = json_array_get_string(tags, i);
+        if (nullptr == tag)
+        {
+            return Error("Canonical result JSON rule has a non-string tag", EINVAL);
+        }
+        const size_t length = json_array_get_string_len(tags, i);
+        if (ComplianceEngine::BenchmarkDefinition::kMaxTagBytes < length)
+        {
+            return Error("Canonical result JSON rule has a tag exceeding " + std::to_string(ComplianceEngine::BenchmarkDefinition::kMaxTagBytes) +
+                             " bytes",
+                E2BIG);
+        }
+        const string value(tag, length);
+        if (string::npos != value.find('\0'))
+        {
+            return Error("Canonical result JSON rule has a tag with an embedded NUL", EINVAL);
+        }
+        const auto colon = value.find(':');
+        if (string::npos == colon || colon == 0 || colon + 1 == value.size() ||
+            !std::all_of(value.begin(), value.begin() + colon, [](char ch) { return ('a' <= ch && ch <= 'z') || ('0' <= ch && ch <= '9') || ch == '-'; }))
+        {
+            return Error("Canonical result JSON rule has an invalid 'axis:value' tag", EINVAL);
+        }
+        auto tagNode = AddElement(tagsNode.Value(), "tag", budget);
+        if (!tagNode.HasValue())
+        {
+            return tagNode.Error();
+        }
+        auto attribute = AddAttribute(tagNode.Value(), "value", value, budget);
+        if (!attribute.HasValue())
+        {
+            return attribute.Error();
+        }
+    }
+    return true;
+}
+
+Result<string> TestcaseClassname(const JSON_Object* rule, const string& id)
+{
+    const JSON_Value* benchmarkValue = json_object_get_value(rule, "benchmark");
+    if (nullptr == benchmarkValue)
+    {
+        return id;
+    }
+    const JSON_Object* benchmark = json_value_get_object(benchmarkValue);
+    if (nullptr == benchmark)
+    {
+        return Error("Canonical result JSON rule has invalid 'benchmark' value", EINVAL);
+    }
+    string classname;
+    for (const char* key : {"framework", "distribution", "distributionVersion", "benchmarkVersion"})
+    {
+        const JSON_Value* value = json_object_get_value(benchmark, key);
+        if (nullptr == value || JSONString != json_value_get_type(value))
+        {
+            return Error("Canonical result JSON rule has invalid benchmark field '" + string(key) + "'", EINVAL);
+        }
+        const string component(json_value_get_string(value), json_value_get_string_len(value));
+        if (component.empty() || string::npos != component.find('\0'))
+        {
+            return Error("Canonical result JSON rule has empty or NUL-containing benchmark field '" + string(key) + "'", EINVAL);
+        }
+        classname += std::to_string(component.size()) + ":" + component;
+    }
+    return classname + std::to_string(id.size()) + ":" + id;
+}
+} // anonymous namespace
+
+Result<string> RenderJUnit(const string& canonicalJson, const string& suiteName)
+{
+    if (canonicalJson.find('\0') != string::npos)
+    {
+        return Error("Canonical result JSON contains a NUL byte", EINVAL);
+    }
+    JSON_Value* root = json_parse_string(canonicalJson.c_str());
+    if (nullptr == root)
+    {
+        return Error("Failed to parse canonical result JSON", EINVAL);
+    }
+    // Own the parsed document for the duration of this function.
+    struct RootGuard
+    {
+        JSON_Value* v;
+        ~RootGuard()
+        {
+            json_value_free(v);
+        }
+    } guard{root};
+
+    const JSON_Object* rootObject = json_value_get_object(root);
+    if (nullptr == rootObject)
+    {
+        return Error("Canonical result JSON is not an object", EINVAL);
+    }
+    if (HasTrailingObjectData(canonicalJson))
+    {
+        return Error("Canonical result JSON contains trailing data", EINVAL);
+    }
+    const JSON_Array* rules = json_object_get_array(rootObject, "rules");
+    if (nullptr == rules)
+    {
+        return Error("Canonical result JSON has no 'rules' array", EINVAL);
+    }
+
+    const size_t ruleCount = json_array_get_count(rules);
+    size_t failureCount = 0;
+    size_t skippedCount = 0;
+    XmlBudget budget;
+    pugi::xml_document document;
+    auto declaration = document.append_child(pugi::node_declaration);
+    if (!declaration || !declaration.append_attribute("version").set_value("1.0") || !declaration.append_attribute("encoding").set_value("UTF-8"))
+    {
+        return Error("Failed to allocate JUnit XML declaration", ENOMEM);
+    }
+    auto suites = AddElement(document, "testsuites", budget);
+    if (!suites.HasValue())
+    {
+        return suites.Error();
+    }
+    auto suite = AddElement(suites.Value(), "testsuite", budget);
+    if (!suite.HasValue())
+    {
+        return suite.Error();
+    }
+    auto suiteAttribute = AddAttribute(suite.Value(), "name", suiteName, budget);
+    if (!suiteAttribute.HasValue())
+    {
+        return suiteAttribute.Error();
+    }
+    for (size_t i = 0; i < ruleCount; ++i)
+    {
+        const JSON_Object* rule = json_array_get_object(rules, i);
+        if (nullptr == rule)
+        {
+            return Error("Canonical result JSON 'rules' entry is not an object", EINVAL);
+        }
+        const JSON_Value* idValue = json_object_get_value(rule, "id");
+        if (nullptr == idValue || JSONString != json_value_get_type(idValue))
+        {
+            return Error("Canonical result JSON rule has no string 'id'", EINVAL);
+        }
+        const string id(json_value_get_string(idValue), json_value_get_string_len(idValue));
+        if (id.empty())
+        {
+            return Error("Canonical result JSON rule has an empty 'id'", EINVAL);
+        }
+        if (string::npos != id.find('\0'))
+        {
+            return Error("Canonical result JSON rule has an embedded NUL in its testcase classname", EINVAL);
+        }
+        const JSON_Value* titleValue = json_object_get_value(rule, "title");
+        if (nullptr != titleValue && JSONString != json_value_get_type(titleValue))
+        {
+            return Error("Canonical result JSON rule has a non-string 'title'", EINVAL);
+        }
+        const JSON_Value* nameValue = (nullptr != titleValue) ? titleValue : json_object_get_value(rule, "ruleName");
+        if (nullptr == nameValue || JSONString != json_value_get_type(nameValue))
+        {
+            return Error("Canonical result JSON rule has neither a string 'title' nor a string 'ruleName'", EINVAL);
+        }
+        const string title(json_value_get_string(nameValue), json_value_get_string_len(nameValue));
+        if (string::npos != title.find('\0'))
+        {
+            return Error("Canonical result JSON rule has an embedded NUL in its testcase name", EINVAL);
+        }
+        const JSON_Value* statusValue = json_object_get_value(rule, "status");
+        if (nullptr == statusValue || JSONString != json_value_get_type(statusValue))
+        {
+            return Error("Canonical result JSON rule has no string 'status'", EINVAL);
+        }
+        const string status(json_value_get_string(statusValue), json_value_get_string_len(statusValue));
+        if (string::npos != status.find('\0'))
+        {
+            return Error("Canonical result JSON rule has an embedded NUL in its status", EINVAL);
+        }
+        auto classname = TestcaseClassname(rule, id);
+        if (!classname.HasValue())
+        {
+            return classname.Error();
+        }
+
+        // Guard against schema drift / upstream bugs: an unrecognised or missing
+        // status must not be silently rendered as a passing test case.
+        if (status != "Compliant" && status != "NonCompliant" && status != "NotApplicable" && status != "Skipped")
+        {
+            return Error("Canonical result JSON rule has invalid 'status' value: '" + status + "'", EINVAL);
+        }
+
+        auto testcase = AddElement(suite.Value(), "testcase", budget);
+        if (!testcase.HasValue())
+        {
+            return testcase.Error();
+        }
+        auto classAttribute = AddAttribute(testcase.Value(), "classname", classname.Value(), budget);
+        if (!classAttribute.HasValue())
+        {
+            return classAttribute.Error();
+        }
+        auto nameAttribute = AddAttribute(testcase.Value(), "name", title, budget);
+        if (!nameAttribute.HasValue())
+        {
+            return nameAttribute.Error();
+        }
+        auto hasTags = BuildTags(rule, testcase.Value(), budget);
+        if (!hasTags.HasValue())
+        {
+            return hasTags.Error();
+        }
+        if (status == "NonCompliant")
+        {
+            ++failureCount;
+            auto body = BuildBody(rule);
+            if (!body.HasValue())
+            {
+                return body.Error();
+            }
+            auto failure = AddElement(testcase.Value(), "failure", budget);
+            if (!failure.HasValue())
+            {
+                return failure.Error();
+            }
+            auto message = AddAttribute(failure.Value(), "message", "Rule is non-compliant", budget);
+            if (!message.HasValue())
+            {
+                return message.Error();
+            }
+            auto type = AddAttribute(failure.Value(), "type", "NonCompliant", budget);
+            if (!type.HasValue())
+            {
+                return type.Error();
+            }
+            auto text = AddText(failure.Value(), std::move(body.Value()), budget);
+            if (!text.HasValue())
+            {
+                return text.Error();
+            }
+        }
+        else if (status == "NotApplicable" || status == "Skipped")
+        {
+            // Neither a pass nor a failure; JUnit models both as a skipped test case.
+            ++skippedCount;
+            const string message = (status == "NotApplicable") ? "Rule is not applicable" : "Rule was skipped";
+            auto body = BuildBody(rule);
+            if (!body.HasValue())
+            {
+                return body.Error();
+            }
+            auto skipped = AddElement(testcase.Value(), "skipped", budget);
+            if (!skipped.HasValue())
+            {
+                return skipped.Error();
+            }
+            auto attribute = AddAttribute(skipped.Value(), "message", message, budget);
+            if (!attribute.HasValue())
+            {
+                return attribute.Error();
+            }
+            auto text = AddText(skipped.Value(), std::move(body.Value()), budget);
+            if (!text.HasValue())
+            {
+                return text.Error();
+            }
+        }
+    }
+
+    for (const auto& count : {std::make_pair("tests", ruleCount), std::make_pair("failures", failureCount), std::make_pair("skipped", skippedCount)})
+    {
+        auto attribute = AddAttribute(suite.Value(), count.first, std::to_string(count.second), budget);
+        if (!attribute.HasValue())
+        {
+            return attribute.Error();
+        }
+    }
+    BoundedXmlWriter writer(kMaxJUnitBytes);
+    // format_raw avoids inserting whitespace into failure/skipped mixed content;
+    // pugixml escapes attribute TAB/LF/CR as character references by default.
+    document.save(writer, "", pugi::format_raw, pugi::encoding_utf8);
+    if (!writer.Valid())
+    {
+        return Error("JUnit result exceeds the maximum output size", EFBIG);
+    }
+    return writer.Value();
+}
+
+} // namespace Kompli
+} // namespace ComplianceEngine

@@ -111,6 +111,9 @@ practice, but kompli intends to support user-authored custom rule sets too,
 which can't be guaranteed unique against anything else on the system.
 See "Multiple definition files in one `plan`" below — each block is still
 independently scoped to its own file; there is no cross-file rule identity.
+`title` is display data and may repeat within a file; it is printed verbatim,
+including an existing `id` prefix. Select rules by `id`, never by `title`
+or the non-unique procedure-dispatch `ruleName`.
 
 ### `kompli plan <file>`
 
@@ -121,7 +124,8 @@ Generates a plan: **every** rule in `<file>` is seeded at `mode: audit`
 keeping `enforce` in the plan contract even though `run` can't actually
 execute it yet — see §2's `enforce` note). **Output default:**
 standard output, same as `render`; `-o/--output
-<path>` writes to a file instead.
+<path>` writes to a file instead. `--pin=<caret|tilde|exact>` selects
+one content-version constraint for all input definitions (default: `caret`).
 
 **Toggle semantics**: applying `--audit=X` when `X` is already
 `audit` in the plan is a no-op; it only modifies `X` if the plan currently
@@ -145,6 +149,8 @@ the command line produce **one** plan with one `benchmarks[]` entry per file:
     {
       "file": "ubuntu24.04.benchmark.json",
       "name": "ubuntu24.04",     // from the definition's metadata.name
+      "version": "1.0.0",       // from the definition's spec.version
+      "versionConstraint": "^1.0.0",
       "rules": {
         "1.1.1.1": { "mode": "audit", "parameters": { "PKG_NAME": "cramfs" } },
         "1.1.2": { "mode": "remediate", "parameters": {} }
@@ -153,6 +159,14 @@ the command line produce **one** plan with one `benchmarks[]` entry per file:
   ]
 }
 ```
+
+Each entry records the definition's `spec.version` as `version` (`x.y.z`).
+`--pin` sets every entry's `versionConstraint`: `caret` (default) writes
+`^x.y.z` (same major), `tilde` writes `~x.y.z` (same major.minor), and
+`exact` writes `x.y.z`. The `version` field is unchanged by `--pin`.
+Before evaluating any rules, `run` checks each definition's current version
+against its constraint: compatible updates run and are logged; an incompatible
+version is a hard error. Review a new plan before widening a pin.
 
 Each `rules` map is keyed by `id` — now just the opaque remainder,
 not the full `/<framework>/.../...` path, since the file-level prefix

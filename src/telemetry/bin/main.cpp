@@ -1,0 +1,69 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+#include "main.h"
+
+#include <Logging.h>
+#include <Telemetry.hpp>
+#include <cassert>
+#include <string>
+
+static OsConfigLogHandle g_log;
+static const char* g_logFile = "/var/log/kompli/telemetry.log";
+static const char* g_rolledLogFile = "/var/log/kompli/telemetry.bak";
+
+void __attribute__((constructor)) Init(void)
+{
+    g_log = OpenLog(g_logFile, g_rolledLogFile);
+#if defined(DEBUG) || defined(_DEBUG) || !defined(NDEBUG)
+    SetLoggingLevel(LoggingLevelDebug);
+#endif
+    assert(NULL != g_log);
+}
+
+void __attribute__((destructor)) Destroy(void)
+{
+    CloseLog(&g_log);
+}
+
+int main(int argc, char* argv[])
+{
+    try
+    {
+        CommandLineArgs args;
+        if (!ParseCommandLineArgs(argc, argv, args, g_log))
+        {
+            OsConfigLogError(g_log, "Error: Failed to parse command line arguments.");
+            return 1;
+        }
+
+        std::string init_message = "Initializing telemetry with verbose=" + std::string(args.verbose ? "true" : "false");
+        init_message += " and validation=" + std::string(args.no_validation ? "false" : "true");
+        init_message += " and teardown_time=" + std::to_string(args.teardown_time.count()) + "s";
+        OsConfigLogInfo(g_log, "%s", init_message.c_str());
+
+        OsConfigLogInfo(g_log, "Telemetry initializing...");
+        std::string cacheFilePath(Telemetry::TelemetryManager::TELEMETRY_CACHE_FILE_NAME);
+        Telemetry::TelemetryManager telemetryManager(cacheFilePath, args.verbose, args.teardown_time, !args.no_validation, g_log);
+
+        (void)(telemetryManager.ProcessJsonFile(args.filepath));
+        OsConfigLogInfo(g_log, "Processed telemetry JSON file: %s", args.filepath.c_str());
+
+        if (std::remove(args.filepath.c_str()) != 0)
+        {
+            OsConfigLogError(g_log, "Warning: Failed to delete JSON file: %s", args.filepath.c_str());
+        }
+    }
+    catch (const std::exception& e)
+    {
+        OsConfigLogError(g_log, "Error: Telemetry operation failed: %s", e.what());
+        return 1;
+    }
+    catch (...)
+    {
+        OsConfigLogError(g_log, "Error: Telemetry operation failed with unknown exception");
+        return 1;
+    }
+
+    return 0;
+}

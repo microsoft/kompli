@@ -190,7 +190,7 @@ Apart from that there are style rules that can't be expressed in clang-format bu
 # Error Handling
 - For C, return integer status codes for functions that can fail, typically using standard errno values, and 0 for success
 - For C++ using complex/optional error types is recommended
-- `Result<T>`, `Result<void>` and `Optional<T>` (`src/modules/complianceengine/src/lib/Result.h`,
+- `Result<T>`, `Result<void>` and `Optional<T>` (`src/engine/Result.h`,
   `Optional.h`) and `Variant<...>` (`Variant.hpp`) are the engine's value
   wrappers for fallible and optional/sum-typed returns; prefer them over
   inventing a new error or optional-value shape:

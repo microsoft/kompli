@@ -15,7 +15,7 @@ Kompli design principles are the following:
 - Simple and focused on what is truly needed.
 - Not permanently tied to any management authority.
 
-The main way to extend kompli is by developing new [procedures](../src/modules/complianceengine/src/lib/procedures/).
+The main way to extend kompli is by developing new [procedures](../src/engine/procedures/).
 
 # 2. Overall kompli Architecture
 
@@ -47,7 +47,7 @@ src/
     fuzzer/             ComplianceEngine libFuzzer target
 ```
 
-The internal [login.defs parser](../src/modules/complianceengine/src/lib/parsers/LoginDefs.h)
+The internal [login.defs parser](../src/engine/parsers/LoginDefs.hpp)
 is part of `complianceenginelib`, not a procedure or a generated interface.
 It parses supplied bytes and a logical source identity without opening files,
 returning ordered records, raw spans and located diagnostics. Exact-key
@@ -84,6 +84,10 @@ stable `ruleId` for external correlation. Framework is required and
 participates in identity, but it does not select parsing or execution behavior;
 all frameworks use the same definition shape. The Machine Configuration path
 continues to carry the same tuple plus its rule section in each payload key.
+The human-readable `title` is preserved verbatim (including any existing
+`id` prefix) and need not be unique. `ruleName` dispatches the engine procedure
+and is not a rule identity or uniqueness guarantee; distinct rules remain
+distinguished by `id` within their benchmark.
 
 ### 2.2.1. Ephemeral CLI state
 
@@ -327,7 +331,7 @@ Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns 
 
 ## 5.2. Filesystem acquisition
 
-The engine's filesystem code (`src/modules/complianceengine/src/lib/filesystem/`)
+The engine's filesystem code (`src/engine/filesystem/`)
 gives procedures a single, pin-based way to look up, read and change files and
 directories, instead of operating on pathnames directly. It is used by the
 log-file, SSH-key and generic file-permissions procedures and by every
@@ -495,6 +499,22 @@ expansion during XML escaping.
 - The process umask is tightened to at least `S_IRWXG | S_IRWXO` at startup (preserving any stricter inherited mask), restricting file-creation permissions.
 - The positional benchmark-definition filename is checked for path traversal and a writable parent directory, then opened with `O_NOFOLLOW`, before it is read.
 - The `--log-file` path is validated to refuse symlinks and attacker-writable locations before the log handle is opened.
+
+### Log and telemetry paths
+
+Telemetry-enabled MC shell packages include the executable `kompliTelemetry`
+beside `libOsConfigResource.so`. The adapter invokes this helper on unload;
+downstream benchmark packages must preserve it when present.
+
+The MC adapter writes `/var/log/kompli/kompli.log`, and the telemetry helper
+writes `/var/log/kompli/telemetry.log`. The `/var/log/kompli/` directory is
+created if needed. Each log rotates to the same basename with a `.bak`
+extension. The standalone ComplianceEngine module does not write a log file.
+The CLI continues to log to stderr unless `--log-file` is supplied.
+
+Telemetry-enabled builds use `/var/lib/kompli/telemetry.events.json` for the
+event file and `/var/lib/kompli/telemetry.cache.db` for the telemetry cache.
+Existing logs and telemetry data under the old OSConfig paths are not migrated.
 
 # 6. kompli Universal Native Resource Provider (NRP)
 

@@ -1,0 +1,676 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+//
+// kompli
+//
+// This tool runs as root on Linux endpoints to perform CIS benchmark audit and
+// remediation. Its trust boundary, input-hardening posture, and known
+// limitations are documented in THREAT_MODEL.md (in this directory). Keep that
+// document in sync when the input format or the hardening changes.
+
+#include "BenchmarkDefinition.hpp"
+#include "BenchmarkFormatter.hpp"
+#include "CliOptions.hpp"
+#include "InputSecurity.hpp"
+#include "JUnitRenderer.hpp"
+#include "Plan.hpp"
+#include "TextRenderers.hpp"
+
+#include <CliContext.h>
+#include <CommonContext.h>
+#include <DirTools.h>
+#include <DistributionInfo.h>
+#include <Engine.h>
+#include <Logging.h>
+#include <Optional.h>
+#include <Telemetry.h>
+#include <algorithm>
+#include <cassert>
+#include <cerrno>
+#include <chrono>
+#include <cstring>
+#include <fcntl.h>
+#include <fstream>
+#include <getopt.h>
+#include <iostream>
+#include <memory>
+#include <stdio.h>
+#include <string>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <utility>
+#include <vector>
+#include <version.h>
+
+using ComplianceEngine::Action;
+using ComplianceEngine::BenchmarkInfo;
+using ComplianceEngine::CombineAllOf;
+using ComplianceEngine::DistributionInfo;
+using ComplianceEngine::Engine;
+using ComplianceEngine::Error;
+using ComplianceEngine::Optional;
+using ComplianceEngine::PayloadFormatter;
+using ComplianceEngine::Result;
+using ComplianceEngine::Status;
+using ComplianceEngine::TelemetryEvent;
+using ComplianceEngine::TelemetryEventType;
+using ComplianceEngine::BenchmarkDefinition::BenchmarkDocument;
+using ComplianceEngine::BenchmarkDefinition::ParseFile;
+using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
+using ComplianceEngine::BenchmarkIO::RefuseUnsafeLogFile;
+using ComplianceEngine::Cli::Context;
+using ComplianceEngine::Kompli::ApplyParameterOverrides;
+using ComplianceEngine::Kompli::CheckUniqueBenchmarkFiles;
+using ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities;
+using ComplianceEngine::Kompli::Command;
+using ComplianceEngine::Kompli::Format;
+using ComplianceEngine::Kompli::GeneratePlan;
+using ComplianceEngine::Kompli::Options;
+using ComplianceEngine::Kompli::ParseCommandLine;
+using ComplianceEngine::Kompli::ParsePlanFile;
+using ComplianceEngine::Kompli::Plan;
+using ComplianceEngine::Kompli::PrintHelp;
+using ComplianceEngine::Kompli::RenderJUnit;
+using ComplianceEngine::Kompli::RenderText;
+using ComplianceEngine::Kompli::TextStyle;
+using ComplianceEngine::Kompli::ToggleMode;
+using ComplianceEngine::Kompli::ValidatePlanForRun;
+using ComplianceEngine::Kompli::WritePlanFile;
+using std::string;
+
+#ifdef BUILD_TELEMETRY
+static constexpr const char* telemetry_log_dir = "/var/lib/kompli/";
+static constexpr const char* telemetry_log_file = "telemetry.events.json";
+#endif
+namespace
+{
+// Upper bound on a canonical result JSON fed to `render`. Generous (results for
+// a full benchmark are well under this) but bounds memory for a hostile input.
+constexpr std::size_t kMaxResultJsonBytes = static_cast<std::size_t>(256) * 1024 * 1024;
+
+// Reads an entire stream into a string, refusing inputs larger than the cap.
+Result<string> ReadAllBounded(std::istream& stream, std::size_t cap)
+{
+    string content;
+    char buffer[64 * 1024];
+    while (stream.read(buffer, sizeof(buffer)) || stream.gcount() > 0)
+    {
+        content.append(buffer, static_cast<std::size_t>(stream.gcount()));
+        if (content.size() > cap)
+        {
+            return Error("Input exceeds the maximum allowed size", EFBIG);
+        }
+    }
+    if (stream.bad())
+    {
+        return Error("Failed to read input", EIO);
+    }
+    return content;
+}
+
+// Renders a canonical result JSON (read from stdin or a file) into the format
+// selected on the `render` subcommand. Runs without root and touches no system
+// state, so it needs none of the definition input hardening `run` applies.
+int RunRender(const Options& options)
+{
+    Result<string> jsonResult = Error("uninitialized");
+    if (options.input.empty() || options.input == "-")
+    {
+        jsonResult = ReadAllBounded(std::cin, kMaxResultJsonBytes);
+    }
+    else
+    {
+        std::ifstream file(options.input, std::ios::binary);
+        if (!file.is_open())
+        {
+            std::cerr << "Error: failed to open input file '" << options.input << "'." << std::endl;
+            return 1;
+        }
+        jsonResult = ReadAllBounded(file, kMaxResultJsonBytes);
+    }
+    if (!jsonResult.HasValue())
+    {
+        std::cerr << "Error: " << jsonResult.Error().message << std::endl;
+        return 1;
+    }
+
+    const string suiteName = options.suiteName.HasValue() ? options.suiteName.Value() : string("compliance");
+
+    // The parser defaults the format to Junit when none is supplied.
+    const Format format = options.format.HasValue() ? options.format.Value() : Format::Junit;
+    Result<string> rendered = Error("uninitialized");
+    switch (format)
+    {
+        case Format::Junit:
+            rendered = RenderJUnit(jsonResult.Value(), suiteName);
+            break;
+        case Format::NestedList:
+            rendered = RenderText(jsonResult.Value(), TextStyle::NestedList);
+            break;
+        case Format::CompactList:
+            rendered = RenderText(jsonResult.Value(), TextStyle::CompactList);
+            break;
+        case Format::Debug:
+            rendered = RenderText(jsonResult.Value(), TextStyle::Debug);
+            break;
+    }
+    if (!rendered.HasValue())
+    {
+        std::cerr << "Error: " << rendered.Error().message << std::endl;
+        return 1;
+    }
+    std::cout << rendered.Value();
+    return 0;
+}
+
+// Generates a plan (see docs/CLI.md) for `options.input` (the benchmark file)
+// and writes it to `options.output` or stdout. Runs without root: it only
+// reads the benchmark file and hashes it, it evaluates nothing.
+int RunPlan(const Options& options)
+{
+    auto planResult = GeneratePlan(options.inputs, options.toggles, options.paramOverrides, nullptr, options.pin);
+    if (!planResult.HasValue())
+    {
+        std::cerr << "Error: " << planResult.Error().message << std::endl;
+        return 1;
+    }
+
+    if (options.output.HasValue())
+    {
+        auto writeError = WritePlanFile(options.output.Value(), planResult.Value());
+        if (writeError.HasValue())
+        {
+            std::cerr << "Error: " << writeError.Value().message << std::endl;
+            return 1;
+        }
+    }
+    else
+    {
+        std::cout << planResult.Value();
+    }
+    return 0;
+}
+
+// Enumerates `options.input`'s rules (id, title) to stdout, one per line,
+// in document order (docs/CLI.md section 2). Runs without root: it only
+// reads and parses the benchmark file, same posture as `plan`/`render`. The
+// per-rule detail view (parameters and defaults) described in docs/CLI.md
+// isn't implemented yet - it needs BenchmarkIO::Resource to parse
+// parameterMetadata first (tracked as the Parametrization gap).
+int RunList(const Options& options)
+{
+    auto docResult = ParseFile(options.input, nullptr);
+    if (!docResult.HasValue())
+    {
+        std::cerr << "Error: " << docResult.Error().message << std::endl;
+        return 1;
+    }
+    for (const auto& resource : docResult.Value().resources)
+    {
+        std::cout << resource.id << '\t' << resource.resourceID << '\n';
+    }
+    return 0;
+}
+} // anonymous namespace
+
+int main(int argc, char* argv[])
+{
+#ifdef BUILD_TELEMETRY
+    auto benchmarkRunCreatedAt = std::chrono::system_clock::now();
+    auto benchmarkRunBeginAt = std::chrono::steady_clock::now();
+#endif
+    // Ensure file-creation permissions are at least as restrictive as 0077
+    // without overriding a stricter inherited mask.
+    ::umask(::umask(0) | S_IRWXG | S_IRWXO);
+
+    const auto optionsResult = ParseCommandLine(argc, argv);
+    if (!optionsResult.HasValue())
+    {
+        std::cerr << "Error: " << optionsResult.Error().message << std::endl;
+        PrintHelp(argv[0]);
+        return 1;
+    }
+
+    const auto& options = optionsResult.Value();
+    if (Command::Help == options.command)
+    {
+        PrintHelp(argv[0]);
+        return 0;
+    }
+
+    if (Command::Version == options.command)
+    {
+        std::cout << "kompli\nVersion: " << KOMPLI_VERSION << "\n";
+        return 0;
+    }
+
+    // `render` is a pure, root-free transformation of a canonical result JSON;
+    // it needs neither the engine nor the definition input path, so dispatch it early.
+    if (Command::Render == options.command)
+    {
+        return RunRender(options);
+    }
+
+    // `plan` is a pure, root-free transformation of a benchmark-definition file
+    // (read + hash only); it needs neither the engine nor a log file, so
+    // dispatch it early, same as `render`.
+    if (Command::Plan == options.command)
+    {
+        return RunPlan(options);
+    }
+
+    // `list` is likewise a pure, root-free read of a benchmark-definition file.
+    if (Command::List == options.command)
+    {
+        return RunList(options);
+    }
+
+    // `run` resolves and validates its plan file before anything else needs a
+    // log handle or the engine, so do that first and carry the parsed plan
+    // (and the benchmark file path it points at) forward. `run` is the only
+    // command reaching this point (help/version/render/plan/list all
+    // dispatch and return above), so parsing it is unconditional.
+    auto planResult = ParsePlanFile(options.input, nullptr);
+    if (!planResult.HasValue())
+    {
+        std::cerr << "Error: failed to parse plan file: " << planResult.Error().message << std::endl;
+        return 1;
+    }
+    Plan plan = std::move(planResult.Value());
+
+    std::vector<string> benchmarkFiles;
+    benchmarkFiles.reserve(plan.benchmarks.size());
+    for (const auto& benchmark : plan.benchmarks)
+    {
+        benchmarkFiles.push_back(benchmark.file);
+    }
+    auto duplicateFileError = CheckUniqueBenchmarkFiles(benchmarkFiles);
+    if (duplicateFileError.HasValue())
+    {
+        std::cerr << "Error: refusing to run plan: " << duplicateFileError.Value().message << std::endl;
+        return 1;
+    }
+
+    // Reject a plan whose blocks don't all resolve to distinct benchmark
+    // identities, before evaluating any rule (fail fast) - two blocks
+    // pointing at files that share a (framework, distribution,
+    // distributionVersion, benchmarkVersion) tuple are ambiguous, not a
+    // case to silently pick one and continue (docs/CLI.md section 8.1).
+    // This re-reads each benchmark file up front (a nullptr log handle is
+    // fine here, same as ParsePlanFile above); the per-block loop below
+    // parses it again once log handle / applicability checks are ready.
+    std::vector<BenchmarkDocument> documents;
+    documents.reserve(plan.benchmarks.size());
+    std::vector<std::pair<string, BenchmarkInfo>> identities;
+    identities.reserve(plan.benchmarks.size());
+    for (const auto& benchmark : plan.benchmarks)
+    {
+        auto identityDocResult = ParseFile(benchmark.file, nullptr);
+        if (!identityDocResult.HasValue())
+        {
+            std::cerr << "Error: failed to parse benchmark definition input: " << identityDocResult.Error().message << std::endl;
+            return 1;
+        }
+        identities.emplace_back(benchmark.file, identityDocResult.Value().benchmarkInfo);
+        auto duplicateIdentityError = CheckUniqueBenchmarkIdentities(identities);
+        if (duplicateIdentityError.HasValue())
+        {
+            std::cerr << "Error: refusing to run plan: " << duplicateIdentityError.Value().message << std::endl;
+            return 1;
+        }
+        documents.push_back(std::move(identityDocResult.Value()));
+    }
+
+    if (options.logFile.HasValue())
+    {
+        if (options.logFile->empty() || RefuseUnsafeLogFile(options.logFile.Value(), nullptr))
+        {
+            std::cerr << "Error: refusing to use unsafe log file path." << std::endl;
+            return 1;
+        }
+    }
+
+    std::unique_ptr<OsConfigLog, void (*)(OsConfigLog*)> logHandle(options.logFile.HasValue() ? OpenLog(options.logFile->c_str(), nullptr) : nullptr,
+        [](OsConfigLog* h) {
+            OsConfigLogHandle tmp = h;
+            CloseLog(&tmp);
+        });
+    if (logHandle)
+    {
+        SetConsoleLoggingEnabled(false);
+    }
+
+    if (options.verbose)
+    {
+        SetLoggingLevel(LoggingLevel::LoggingLevelInformational);
+        OsConfigLogInfo(logHandle.get(), "Verbose logging enabled");
+    }
+
+    if (options.debug)
+    {
+        SetLoggingLevel(LoggingLevel::LoggingLevelDebug);
+        OsConfigLogInfo(logHandle.get(), "Debug logging enabled");
+    }
+
+    int telemetry_fd = -1;
+#ifdef BUILD_TELEMETRY
+    if (options.telemetryEnabled)
+    {
+        std::string telemetry_log_path(telemetry_log_dir);
+        if (!ComplianceEngine::MkdirRecursive(telemetry_log_path, 0700))
+        {
+            OsConfigLogError(logHandle.get(), "Failed to create telemetry directory %s: %d", telemetry_log_path.c_str(), errno);
+        }
+        else
+        {
+            auto telemetry_file = telemetry_log_path + std::string(telemetry_log_file);
+            telemetry_fd = open(telemetry_file.c_str(), O_CREAT | O_APPEND | O_NOFOLLOW | O_WRONLY, 0600);
+            if (0 > telemetry_fd)
+            {
+                OsConfigLogError(logHandle.get(), "Failed to open telemetry file  %s: %d", telemetry_file.c_str(), errno);
+            }
+            else if (0 != fchmod(telemetry_fd, 0600))
+            {
+                OsConfigLogError(logHandle.get(), "Failed to set telemetry file permissions %s: %d", telemetry_file.c_str(), errno);
+                close(telemetry_fd);
+                telemetry_fd = -1;
+            }
+        }
+    }
+#endif // BUILD_TELEMETRY
+
+    auto contextResult = Context::Make(logHandle.get(), telemetry_fd);
+    if (!contextResult.HasValue())
+    {
+        OsConfigLogError(logHandle.get(), "Failed to create CLI context: %s", contextResult.Error().message.c_str());
+        return 1;
+    }
+    auto context = std::move(contextResult).Value();
+    // The Engine takes ownership of a PayloadFormatter and uses it polymorphically
+    // to render each rule's indicators. Pass the JSON one explicitly: the
+    // constructor's default is a DebugFormatter, whose text output could not be
+    // embedded as the canonical result's indicators array.
+    Engine engine(std::move(context), std::unique_ptr<PayloadFormatter>(new ComplianceEngine::JsonFormatter()));
+
+    // Determine the OS this tool is running on so rules that target a different
+    // distribution/version can be skipped. LoadDistributionInfo prefers the
+    // operator-supplied override file and falls back to /etc/os-release. If the
+    // OS cannot be identified (e.g. an unmapped distribution ID and no override
+    // file), abort rather than silently running rules meant for another system.
+    auto distributionInfoError = engine.LoadDistributionInfo();
+    if (distributionInfoError)
+    {
+        OsConfigLogError(logHandle.get(), "Failed to determine system distribution: %s", distributionInfoError.Value().message.c_str());
+        OsConfigLogError(logHandle.get(), "To specify the OS identity explicitly, place an override in the '%s' file", DistributionInfo::cDefaultOverrideFilePath);
+        return 1;
+    }
+
+    // `run` always emits the canonical JSON. The benchmark formatter builds
+    // the result envelope; the engine is separately given a JSON payload
+    // formatter (at its construction, above) to render each rule's
+    // indicators. Presentation is the `render` subcommand's job.
+    const auto& distributionInfo = engine.GetDistributionInfo().Value();
+    auto validationError = ValidatePlanForRun(plan, documents, distributionInfo);
+    if (validationError.HasValue())
+    {
+        OsConfigLogError(logHandle.get(), "Refusing to run plan: %s", validationError.Value().message.c_str());
+        return 1;
+    }
+    for (std::size_t index = 0; index < plan.benchmarks.size(); ++index)
+    {
+        if (CompareContentVersion(plan.benchmarks[index].version, documents[index].version) != 0)
+        {
+            OsConfigLogInfo(logHandle.get(), "Using compatible benchmark definition '%s' version %s (planned at %s)", plan.benchmarks[index].file.c_str(),
+                ContentVersionToString(documents[index].version).c_str(), ContentVersionToString(plan.benchmarks[index].version).c_str());
+        }
+    }
+
+    auto formatterResult = BenchmarkFormatter::Begin(distributionInfo);
+    if (!formatterResult.HasValue())
+    {
+        OsConfigLogError(logHandle.get(), "Failed to begin formatted output: %s", formatterResult.Error().message.c_str());
+        return 1;
+    }
+    auto& benchmarkFormatter = formatterResult.Value();
+
+    auto status = Status::Compliant;
+    bool hasError = false;
+    // Rules that were evaluated. The Compliant seed is the CombineAllOf
+    // identity; when nothing runs it would misreport a benchmark that
+    // checked nothing, so a terminal override maps that case to
+    // NotApplicable below.
+    size_t evaluatedRules = 0;
+    // `run` processes every benchmark entry in the plan (a plan can mix rules
+    // from multiple files, e.g. from two different frameworks), each
+    // independently applicability-checked, accumulating into one combined
+    // result. Content-drift protection between plan and run is out of
+    // kompli's scope (ADR-0008) - not a byte-hash pin here.
+    for (size_t b = 0; b < plan.benchmarks.size(); ++b)
+    {
+        const auto& doc = documents[b];
+
+        for (const auto& entry : doc.resources)
+        {
+            // The mode is looked up per rule in this benchmark entry, keyed
+            // by id - a rule the plan doesn't mention is one the plan author
+            // deliberately left out, skip it entirely rather than guessing a
+            // mode.
+            const auto& rules = plan.benchmarks[b].rules;
+            const auto it = rules.find(entry.id);
+            if (it == rules.end())
+            {
+                OsConfigLogDebug(logHandle.get(), "Skipping entry %s: not present in the plan", entry.resourceID.c_str());
+                auto skipError = benchmarkFormatter.AddSkippedEntry(entry, {});
+                if (skipError)
+                {
+                    OsConfigLogError(logHandle.get(), "Failed to add skipped entry to JSON formatter: %s", skipError.Value().message.c_str());
+                    if (!options.continueOnError)
+                    {
+                        return 1;
+                    }
+                    hasError = true;
+                }
+                continue;
+            }
+            const ToggleMode mode = it->second.mode;
+            // The plan's pre-filled/overridden parameter values for this rule
+            // (docs/CLI.md "Parametrization"), threaded into the procedure below.
+            std::string procedure = entry.procedure;
+            if (!it->second.parameters.empty())
+            {
+                auto overrideResult = ApplyParameterOverrides(entry.procedure, it->second.parameters);
+                if (!overrideResult.HasValue())
+                {
+                    OsConfigLogError(logHandle.get(), "Failed to apply plan parameters for %s: %s", entry.resourceID.c_str(),
+                        overrideResult.Error().message.c_str());
+                    if (!options.continueOnError)
+                    {
+                        return 1;
+                    }
+                    hasError = true;
+                    continue;
+                }
+                procedure = std::move(overrideResult.Value());
+            }
+
+            // Reserved modes do not evaluate a rule.
+            if (mode != ToggleMode::Enforce)
+            {
+                ++evaluatedRules;
+            }
+
+            // Per-rule action for the result JSON (docs/CLI.md section 3): `run`
+            // can mix audit/remediate across rules, so this is derived from each
+            // rule's own resolved mode rather than a single result-wide value.
+            const Action ruleAction = (ToggleMode::Remediate == mode) ? Action::Remediate : Action::Audit;
+
+            auto procedureResult = engine.MmiSet((string("procedure") + entry.ruleName).c_str(), procedure);
+            if (!procedureResult.HasValue())
+            {
+                OsConfigLogError(logHandle.get(), "Failed to set procedure: %s", procedureResult.Error().message.c_str());
+                if (!options.continueOnError)
+                {
+                    return 1;
+                }
+                hasError = true;
+                continue;
+            }
+
+            switch (mode)
+            {
+                case ToggleMode::Audit: {
+                    if (entry.hasInitAudit)
+                    {
+                        // If the producer flagged InitObject support but supplied no
+                        // desired value, fall back to an empty JSON object so we
+                        // don't deref an empty Optional.
+                        const string initPayload = entry.payload.HasValue() ? entry.payload.Value() : string("{}");
+                        auto result = engine.MmiSet((string("init") + entry.ruleName).c_str(), initPayload);
+                        if (!result.HasValue())
+                        {
+                            OsConfigLogError(logHandle.get(), "Failed to init audit: %s", result.Error().message.c_str());
+                            if (!options.continueOnError)
+                            {
+                                return 1;
+                            }
+                            hasError = true;
+                            continue;
+                        }
+                    }
+
+                    auto ruleName = string("audit") + entry.ruleName;
+                    auto result = engine.MmiGet(ruleName.c_str());
+                    if (!result.HasValue())
+                    {
+                        OsConfigLogError(logHandle.get(), "Failed to perform audit: %s", result.Error().message.c_str());
+                        if (!options.continueOnError)
+                        {
+                            return 1;
+                        }
+                        hasError = true;
+                        continue;
+                    }
+
+                    auto error = benchmarkFormatter.AddEntry(entry, result.Value().status, result.Value().payload, engine.GetParameters(entry.ruleName), ruleAction);
+                    if (error)
+                    {
+                        OsConfigLogError(logHandle.get(), "Failed to add entry to JSON formatter: %s", error.Value().message.c_str());
+                        if (!options.continueOnError)
+                        {
+                            return 1;
+                        }
+                        hasError = true;
+                        continue;
+                    }
+
+                    // Aggregate the overall benchmark status the same way the engine
+                    // aggregates an allOf (CombineAllOf): NonCompliant dominates,
+                    // NotApplicable is sticky, otherwise Compliant.
+                    status = CombineAllOf(status, result.Value().status);
+
+                    break;
+                }
+
+                case ToggleMode::Remediate: {
+                    // Benchmark definitions carry no desired value (modelled here as
+                    // an absent payload); fall back to an empty JSON object so
+                    // remediation can still run, mirroring the audit-init path above.
+                    const string remediatePayload = entry.payload.HasValue() ? entry.payload.Value() : string("{}");
+                    auto ruleName = string("remediate") + entry.ruleName;
+                    auto result = engine.MmiSet(ruleName.c_str(), remediatePayload);
+                    if (!result.HasValue())
+                    {
+                        OsConfigLogError(logHandle.get(), "Failed to remediate: %s", result.Error().message.c_str());
+                        if (!options.continueOnError)
+                        {
+                            return 1;
+                        }
+                        hasError = true;
+                        continue;
+                    }
+
+                    auto error = benchmarkFormatter.AddEntry(entry, result.Value(), "[]", engine.GetParameters(entry.ruleName), ruleAction);
+                    if (error)
+                    {
+                        OsConfigLogError(logHandle.get(), "Failed to add entry to JSON formatter: %s", error.Value().message.c_str());
+                        if (!options.continueOnError)
+                        {
+                            return 1;
+                        }
+                        hasError = true;
+                        continue;
+                    }
+
+                    // Same allOf aggregation as the audit path.
+                    status = CombineAllOf(status, result.Value());
+
+                    break;
+                }
+
+                case ToggleMode::Enforce: {
+                    // Reserved: `enforce` is accepted and recorded by `plan` (see
+                    // docs/CLI.md) but nothing can execute it yet - active,
+                    // kernel-level enforcement is a separate, not-yet-designed
+                    // mechanism. Fail the rule rather than silently skipping or
+                    // misreporting it as audited/remediated.
+                    OsConfigLogError(logHandle.get(), "Rule %s is set to 'enforce', which is not implemented yet; no result was produced for it.",
+                        entry.resourceID.c_str());
+                    if (!options.continueOnError)
+                    {
+                        return 1;
+                    }
+                    hasError = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // A benchmark that evaluated no rules (a plan with an empty rules map for
+    // this file) checked nothing; report NotApplicable rather than a
+    // misleading Compliant. This is a terminal override, deliberately not
+    // folded through CombineAllOf, whose NotApplicable is absorbing and would
+    // otherwise poison any non-empty run if used as the seed.
+    if (0 == evaluatedRules)
+    {
+        status = Status::NotApplicable;
+    }
+
+    auto result = std::move(benchmarkFormatter).Finish(status);
+
+#ifdef BUILD_TELEMETRY
+    if (options.telemetryEnabled)
+    {
+        auto benchmarkRunCompletedAt = std::chrono::steady_clock::now();
+        auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(benchmarkRunCompletedAt - benchmarkRunBeginAt).count();
+        auto event = TelemetryEvent(TelemetryEventType::BenchmarkRun, "ComplianceEngineSession");
+        const auto& distributionInfo = engine.GetDistributionInfo();
+        if (!distributionInfo.HasValue())
+        {
+            const auto& error = distributionInfo.Error();
+            OsConfigLogError(logHandle.get(), "Failed to add distribution information to telemetry: %s (error code: %d)", error.message.c_str(), error.code);
+            event.Add("Distribution", error.message);
+        }
+        else
+        {
+            event.Add("OsType", std::to_string(distributionInfo.Value().osType));
+            event.Add("architecture", std::to_string(distributionInfo.Value().architecture));
+            event.Add("Distribution", std::to_string(distributionInfo.Value().distribution));
+            event.Add("DistributionVersion", distributionInfo.Value().version);
+        }
+        event.Add("ComplianceEngineVersion", KOMPLI_VERSION);
+        LogCreatedTelemetryEvent(event, engine.GetTelemetry(), logHandle.get(), durationUs, benchmarkRunCreatedAt);
+    }
+#endif // BUILD_TELEMETRY
+
+    if (!result.HasValue())
+    {
+        OsConfigLogError(logHandle.get(), "Failed to finish formatted output: %s", result.Error().message.c_str());
+        return 1;
+    }
+
+    std::cout << result.Value() << "\n";
+    return hasError ? 1 : 0;
+}
