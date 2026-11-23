@@ -271,7 +271,7 @@ Example:
 {"CommandRunner":{"commandArguments":{"commandId":"726","arguments":"ls", "action":4}}, "Settings":{"deviceHealthTelemetryConfiguration":2, "deliveryOptimizationPolicies":{"percentageDownloadThrottle":90,"cacheHostSource":2, "cacheHost":"Test cache host","cacheHostFallback":2021}}}
 ```
 
-The [MIM JSON Schema](../src/modules/schema/mim.schema.json) describes this
+The [RC/DC JSON Schema](../src/modules/schema/rcdc.schema.json) describes this
 payload format.
 
 ## 4.3. Orchestrator
@@ -288,7 +288,10 @@ kompli provides a Logging library component that makes it easy for all kompli co
 
 The kompli core (`src/engine/`) evaluates rules using recursive JSON payloads with logical combinators (`allOf`, `anyOf`, `not`), built-in C++ procedures, and Lua scripts. It is linked into a dynamically loaded shared object (`.so`) exposing a single MIM component: `Compliance`; the MC adapter (`src/adapters/mc/complianceengine/`) is a separate component.
 
-The MIM definition is at `src/modules/schema/mim.schema.json`.
+The MIM definition is at
+[src/modules/mim/complianceengine.json](../src/modules/mim/complianceengine.json)
+and is validated by the
+[MIM JSON Schema](../src/modules/schema/mim.schema.json).
 
 ### Procedure entries (`procedure{RuleName}`)
 

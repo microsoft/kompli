@@ -37,7 +37,7 @@ their relationships and the [CLI contract](cli.md) for commands and formats.
 | <a id="mof"></a>**MOF** | Managed Object Format resource description consumed by the GC worker. Its resource fields are not interchangeable with native benchmark JSON. |
 | <a id="mmi"></a>**MMI** | Management Module Interface: the C interface and object-name dispatch used by the engine's callers in this source version. It is an interface boundary, not another name for the kompli core. |
 | <a id="mpi"></a>**MPI** | Management Platform Interface: the retained client transport used by the MC adapter's fallback path. It is distinct from an in-process engine call. |
-| <a id="mim"></a>**MIM** | Management Information Model describing the interface's components and objects. A model instance is distinct from the JSON Schema that describes its format. |
+| <a id="mim"></a>**MIM** | Module Interface Model describing the interface's components and objects. A model instance is distinct from the JSON Schema that describes its format. |
 
 For exact data shapes, use the [benchmark schema](../src/engine/benchmark.schema.json),
 [result schema](../src/kompli/kompli-result.schema.json) and
