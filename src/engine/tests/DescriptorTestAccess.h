@@ -6,8 +6,6 @@
 
 #include <ContextInterface.h>
 #include <filesystem/Descriptor.hpp>
-#include <filesystem/FTWDirectoryCursor.hpp>
-#include <filesystem/Pin.hpp>
 #include <filesystem/ProcfsDescriptorAccess.hpp>
 #include <stdexcept>
 #include <type_traits>
@@ -18,11 +16,13 @@ namespace ComplianceEngine
 namespace Tests
 {
 // Defined only in tests. Production has no public bridge to typed operations.
+// The directory-cursor adapter lives separately in DirectoryCursorTestAccess.h
+// (C4): this class stays C1 (Descriptor/ProcfsDescriptorAccess only) and
+// includes no Pin/Path/FTW header.
 class DescriptorTestAccess
 {
     using Descriptor = Filesystem::Detail::Descriptor;
     using Procfs = Filesystem::Detail::ProcfsDescriptorAccess;
-    using Cursor = Filesystem::FTW::Detail::DirectoryCursor;
     using Profile = ContextInterface::OpenProfile;
 
     // Friend-context SFINAE for retained-context constructors/factories that
@@ -150,11 +150,6 @@ public:
     {
         return context.ChmodAlias(procfs, owner, mode);
     }
-    static Result<Cursor> OpenDirectoryCursor(const ContextInterface& context, Descriptor&& owner)
-    {
-        return context.OpenDirectoryCursor(std::move(owner));
-    }
-    static Result<Cursor> OpenDirectoryCursor(const ContextInterface&&, Descriptor&&) = delete;
     // This test-only native-access adapter is checked; internal disposal is not.
     static Result<void> CloseOwnedDescriptor(const ContextInterface& context, Descriptor& owner)
     {

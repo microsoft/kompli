@@ -9,7 +9,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <filesystem/Descriptor.hpp>
-#include <filesystem/Pin.hpp>
+#include <filesystem/FilesystemType.hpp>
 #include <filesystem/ProcfsDescriptorAccess.hpp>
 #include <fstream>
 #include <functional>
@@ -115,7 +115,6 @@ OWNER_FACTORY_CONTRACT(Fdinfo, .OpenFdinfo(std::declval<const ProcfsDescriptorAc
 OWNER_FACTORY_CONTRACT(Alias, .OpenAlias(std::declval<const ProcfsDescriptorAccess&>(), std::declval<const Descriptor&>(), Type::RegularFile));
 OWNER_FACTORY_CONTRACT(PinAlias, .OpenPinAlias(std::declval<const ProcfsDescriptorAccess&>(), std::declval<const Descriptor&>(), Type::RegularFile));
 OWNER_FACTORY_CONTRACT(Duplicate, .Duplicate(std::declval<const Descriptor&>()));
-OWNER_FACTORY_CONTRACT(Cursor, .OpenDirectoryCursor(std::declval<Descriptor&&>()));
 #undef OWNER_FACTORY_CONTRACT
 
 #define REJECT_EPHEMERAL_DIAGNOSTIC(name, expression)                                                                                                  \
@@ -461,62 +460,6 @@ TEST(DescriptorBoundaryTest, NarrowTestAllowanceHonorsLiveOwnersAndCannotRaisePr
         held.push_back(std::move(opened).Value());
     }
     EXPECT_EQ(EMFILE, DescriptorTestAccess::OpenAbsolutePin(context, "/").Error().code);
-}
-
-TEST(DescriptorBoundaryTest, ConsumedOwnersThrowBeforeEveryNativeAccess)
-{
-    NiceMock<MockContext> context;
-    auto opened = DescriptorTestAccess::OpenAbsolutePin(context, "/proc");
-    ASSERT_TRUE(opened.HasValue());
-    Descriptor owner = std::move(opened).Value();
-    Descriptor current(std::move(owner));
-    ASSERT_EQ(-1, DescriptorTestAccess::ConsumedDescriptor(owner));
-    auto session = DescriptorTestAccess::ProcfsAccess(context);
-    ASSERT_TRUE(session.HasValue()) << session.Error().message;
-    auto reject = [&](const std::function<void()>& operation) {
-        try
-        {
-            operation();
-            FAIL() << "consumed descriptor unexpectedly accessed";
-        }
-        catch (const std::logic_error& error)
-        {
-            EXPECT_NE(std::string::npos, std::string(error.what()).find("use after move"));
-        }
-    };
-    EXPECT_CALL(context, OpenNativeAt(_, _, _)).Times(0);
-    EXPECT_CALL(context, DuplicateDescriptor(_)).Times(0);
-    EXPECT_CALL(context, StatNativeDescriptor(_, _)).Times(0);
-    EXPECT_CALL(context, StatFilesystemDescriptor(_, _)).Times(0);
-    EXPECT_CALL(context, ReadNativeDescriptor(_, _, _)).Times(0);
-    EXPECT_CALL(context, ReadLinkDescriptor(_, _, _)).Times(0);
-    EXPECT_CALL(context, StatusFlagsDescriptor(_)).Times(0);
-    EXPECT_CALL(context, DescriptorFlagsDescriptor(_)).Times(0);
-    EXPECT_CALL(context, ChownPinnedFileDescriptor(_, _, _)).Times(0);
-    EXPECT_CALL(context, ChmodPinnedAlias(_, _, _)).Times(0);
-    EXPECT_CALL(context, FdOpenDirectory(_)).Times(0);
-    struct stat metadata = {};
-    struct statfs filesystem = {};
-    char buffer[32] = {};
-    reject([&] { (void)DescriptorTestAccess::OpenAt(context, owner, "child", Profile::PinChild); });
-    reject([&] { (void)DescriptorTestAccess::OpenFdinfo(context, session.Value(), owner); });
-    reject([&] { (void)DescriptorTestAccess::OpenAlias(context, session.Value(), owner, Type::Directory); });
-    reject([&] { (void)DescriptorTestAccess::OpenPinAlias(context, session.Value(), owner, Type::Directory); });
-    reject([&] { (void)DescriptorTestAccess::Duplicate(context, owner); });
-    reject([&] { (void)DescriptorTestAccess::StatFile(context, owner, &metadata); });
-    reject([&] { (void)DescriptorTestAccess::StatFilesystem(context, owner, &filesystem); });
-    reject([&] { (void)DescriptorTestAccess::ReadFile(context, owner, buffer, sizeof(buffer)); });
-    reject([&] { (void)DescriptorTestAccess::ReadLink(context, owner, buffer, sizeof(buffer)); });
-    reject([&] { (void)DescriptorTestAccess::StatusFlags(context, owner); });
-    reject([&] { (void)DescriptorTestAccess::DescriptorFlags(context, owner); });
-    reject([&] { (void)DescriptorTestAccess::ChownPinned(context, owner, ::getuid(), ::getgid()); });
-    reject([&] { (void)DescriptorTestAccess::ChmodAlias(context, session.Value(), owner, 0700); });
-    reject([&] { (void)DescriptorTestAccess::OpenDirectoryCursor(context, std::move(owner)); });
-    reject([&] { (void)DescriptorTestAccess::ReadMountId(session.Value(), owner, 4096); });
-    reject([&] { (void)DescriptorTestAccess::CloseOwnedDescriptor(context, owner); });
-    EXPECT_TRUE(DescriptorTestAccess::CloseInternally(context, owner));
-    EXPECT_EQ(-1, DescriptorTestAccess::ConsumedDescriptor(owner));
-    DescriptorTestAccess::Dispose(current);
 }
 
 TEST(DescriptorBoundaryTest, MovedSessionRolesRemainOwnedUntilLastOwnerDies)
@@ -1111,42 +1054,6 @@ TEST(DescriptorBoundaryTest, ProcfsRoleBindsTaskAndRejectsCrossContextTargets)
     testing::Mock::VerifyAndClearExpectations(&context);
 }
 
-// ADR-0044 replaces the former empty Descriptor/EBADF branch with a consumed
-// owner; the foreign-context rejection remains an independent authority check.
-TEST(DescriptorBoundaryTest, ForeignOwnerRejectsEveryNativeBoundaryWithoutConsumingIt)
-{
-    NiceMock<MockContext> caller;
-    NiceMock<MockContext> foreign;
-    auto opened = DescriptorTestAccess::OpenAbsolutePin(foreign, "/proc");
-    ASSERT_TRUE(opened.HasValue());
-    Descriptor owner = std::move(opened).Value();
-    const int fd = DescriptorTestAccess::ConsumedDescriptor(owner);
-    EXPECT_CALL(caller, OpenNativeAt(_, _, _)).Times(0);
-    EXPECT_CALL(caller, StatNativeDescriptor(_, _)).Times(0);
-    EXPECT_CALL(caller, ReadNativeDescriptor(_, _, _)).Times(0);
-    EXPECT_CALL(caller, DuplicateDescriptor(_)).Times(0);
-    EXPECT_CALL(caller, FdOpenDirectory(_)).Times(0);
-    EXPECT_CALL(caller, CloseNativeDescriptor(_)).Times(0);
-    struct stat metadata = {};
-    EXPECT_EQ(EINVAL, DescriptorTestAccess::Duplicate(caller, owner).Error().code);
-    EXPECT_EQ(EINVAL, DescriptorTestAccess::OpenAt(caller, owner, "child", Profile::PinChild).Error().code);
-    EXPECT_EQ(EINVAL, DescriptorTestAccess::OpenDirectoryCursor(caller, std::move(owner)).Error().code);
-    errno = 0;
-    EXPECT_EQ(-1, DescriptorTestAccess::StatFile(caller, owner, &metadata));
-    EXPECT_EQ(EINVAL, errno);
-    errno = 0;
-    EXPECT_EQ(-1, DescriptorTestAccess::ReadFile(caller, owner, nullptr, 0));
-    EXPECT_EQ(EINVAL, errno);
-    errno = 0;
-    const auto rejectedClose = DescriptorTestAccess::CloseOwnedDescriptor(caller, owner);
-    ASSERT_FALSE(rejectedClose.HasValue());
-    EXPECT_EQ(EINVAL, rejectedClose.Error().code);
-    EXPECT_EQ(fd, DescriptorTestAccess::ConsumedDescriptor(owner));
-    ASSERT_TRUE(testing::Mock::VerifyAndClearExpectations(&caller));
-    EXPECT_TRUE(DescriptorTestAccess::CloseOwnedDescriptor(foreign, owner));
-    EXPECT_EQ(-1, DescriptorTestAccess::ConsumedDescriptor(owner));
-}
-
 TEST(DescriptorBoundaryTest, ProcfsRoleReleaseReportsTwoDistinctFailuresAndStillClosesAllSeven)
 {
     NiceMock<MockContext> context;
@@ -1201,36 +1108,6 @@ TEST(DescriptorBoundaryTest, ProcfsRoleReleaseReportsTwoDistinctFailuresAndStill
         ASSERT_NE(std::string::npos, first);
         EXPECT_EQ(std::string::npos, text.find(entry, first + entry.size()));
     }
-}
-
-TEST(DescriptorBoundaryTest, FailedDirectoryTransferKeepsOwnerAndPrimaryError)
-{
-    NiceMock<MockContext> context;
-    const auto before = OpenDescriptors();
-    auto pinned = DescriptorTestAccess::OpenAbsolutePin(context, context.GetTempdirPath().c_str());
-    auto procfs = DescriptorTestAccess::ProcfsAccess(context);
-    ASSERT_TRUE(pinned.HasValue());
-    ASSERT_TRUE(procfs.HasValue());
-    auto active = DescriptorTestAccess::OpenAlias(context, procfs.Value(), pinned.Value(), Type::Directory);
-    ASSERT_TRUE(active.HasValue()) << active.Error().message;
-    auto duplicate = DescriptorTestAccess::Duplicate(context, active.Value());
-    ASSERT_TRUE(duplicate.HasValue());
-    DescriptorTestAccess::Dispose(active.Value());
-    procfs = ComplianceEngine::Error("Release procfs roles", EINVAL);
-    DescriptorTestAccess::Dispose(pinned.Value());
-    Descriptor owner = std::move(duplicate).Value();
-    const int fd = DescriptorTestAccess::ConsumedDescriptor(owner);
-    EXPECT_CALL(context, FdOpenDirectory(fd)).Times(1).WillOnce([](int) -> DIR* {
-        errno = ENOTDIR;
-        return nullptr;
-    });
-    auto failed = DescriptorTestAccess::OpenDirectoryCursor(context, std::move(owner));
-    ASSERT_FALSE(failed.HasValue());
-    EXPECT_EQ(ENOTDIR, failed.Error().code);
-    EXPECT_EQ(fd, DescriptorTestAccess::ConsumedDescriptor(owner));
-    EXPECT_CALL(context, CloseNativeDescriptor(fd)).Times(1).WillOnce([&](int value) { return context.RealCloseNativeDescriptor(value); });
-    DescriptorTestAccess::Dispose(owner);
-    EXPECT_EQ(before, OpenDescriptors());
 }
 
 TEST(DescriptorBoundaryTest, ConsumedDescriptorScopeDoesNotLogOrRetry)

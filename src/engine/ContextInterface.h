@@ -25,8 +25,9 @@ namespace ComplianceEngine
 class ContextInterface;
 namespace Tests
 {
-class DescriptorTestAccess; // defined only in the test target
-}
+class DescriptorTestAccess;      // defined only in the test target
+class DirectoryCursorTestAccess; // defined only in the test target
+} // namespace Tests
 namespace Filesystem
 {
 namespace Detail
@@ -194,6 +195,7 @@ private:
     friend class Filesystem::ReadableFile;
     friend class Filesystem::FTW::Detail::DirectoryCursor;
     friend class Tests::DescriptorTestAccess;
+    friend class Tests::DirectoryCursorTestAccess;
 
     // The only followed bootstrap link is /proc/self, reached from the
     // helper's verified procfs pin; generic OpenAt cannot request it.

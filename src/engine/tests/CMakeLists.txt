@@ -227,10 +227,16 @@ add_executable(complianceenginetests
     EvaluatorTest.cpp
     FileObjectCollectorTest.cpp
     DescriptorBoundaryTest.cpp
+    DirectoryCursorBoundaryTest.cpp
     DescriptorAccessCompileTest.cpp
+    PinAccessCompileTest.cpp
+    PathAccessCompileTest.cpp
+    FTWAccessCompileTest.cpp
     LinesRangeTest.cpp
     FilesystemCollectionTest.cpp
     PathTest.cpp
+    PathTraversalTest.cpp
+    PinTest.cpp
     ReadableFileTest.cpp
     FilesystemScannerTest.cpp
     JsonWrapperTest.cpp
