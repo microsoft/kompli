@@ -12,6 +12,7 @@ set(PROCEDURES
     procedures/AideAttributesTest.cpp
     procedures/AksCommandTest.cpp
     procedures/AuditdRulesTest.cpp
+    procedures/AuditdWatchTest.cpp
     procedures/NoShellAccountsLockedTest.cpp
     procedures/ApparmorProfileStateTest.cpp
     procedures/DconfValueTest.cpp
@@ -35,10 +36,12 @@ set(PROCEDURES
     procedures/NoDuplicateEntriesTest.cpp
     procedures/NoWorldWritableFilesTest.cpp
     procedures/PasswordChangeDateTest.cpp
+    procedures/PasswordPolicyOptionTest.cpp
     procedures/NoUnownedFilesTest.cpp
     procedures/RootPathSecurityTest.cpp
     procedures/SshKeyPermissionsTest.cpp
     procedures/SshdOptionTest.cpp
+    procedures/SshdOptionRemediationTest.cpp
     procedures/SysctlValueTest.cpp
     procedures/SystemAccountShellTest.cpp
     procedures/UniqueUserIdTest.cpp

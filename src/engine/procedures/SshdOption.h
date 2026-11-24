@@ -61,9 +61,13 @@ struct SshdOptionParams
 
     /// Read extra configuration files in sysconfig and crypto policies
     Optional<bool> readExtraConfigs = false;
+
+    /// Explicit literal remediation target. Absent targets remain audit-only.
+    Optional<std::string> remediationValue;
 };
 
 Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
+Result<Status> RemediateSshdOption(const SshdOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
 
 } // namespace Kompli
 #endif // KOMPLI_PROCEDURES_SSHD_OPTION_H

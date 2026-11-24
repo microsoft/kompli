@@ -29,6 +29,29 @@ protected:
     Kompli::DebugFormatter mFormatter;
 };
 
+TEST_F(EvaluatorTest, SceRemediationRemainsUnsupported)
+{
+    const auto& actions = Evaluator::mProcedureMap.at("SCE");
+    ASSERT_TRUE(actions.audit);
+    ASSERT_TRUE(actions.remediate);
+
+    EXPECT_CALL(mContext, ExecuteCommand(testing::_)).Times(0);
+    EXPECT_CALL(mContext, GetFileContents(testing::_)).Times(0);
+    for (const char* payload : {
+             R"({"SCE":{"scriptName":"sce/example.sh"}})",
+             R"({"SCE":{"scriptName":"sce/example.sh","environment":"EXAMPLE=value"}})",
+         })
+    {
+        SCOPED_TRACE(payload);
+        auto json = JsonWrapper::FromString(payload);
+        ASSERT_TRUE(json.HasValue());
+        Evaluator evaluator("test", json_value_get_object(json->get()), mParameters, mContext);
+        const auto result = evaluator.ExecuteRemediation();
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(Status::NonCompliant, result.Value());
+    }
+}
+
 TEST_F(EvaluatorTest, UserDotFileRemediationIsDisabledWithoutChangingFiles)
 {
     const auto& actions = Evaluator::mProcedureMap.at("UserDotFilePermissions");

@@ -165,6 +165,9 @@
           "$ref": "procedures/AuditdRules.schema.json#/definitions/audit"
         },
         {
+          "$ref": "procedures/AuditdWatch.schema.json#/definitions/audit"
+        },
+        {
           "$ref": "procedures/BenchmarkSettings.schema.json#/definitions/audit"
         },
         {
@@ -246,6 +249,9 @@
           "$ref": "procedures/PasswordChangeDate.schema.json#/definitions/audit"
         },
         {
+          "$ref": "procedures/PasswordPolicyOption.schema.json#/definitions/audit"
+        },
+        {
           "$ref": "procedures/RootPathSecurity.schema.json#/definitions/audit"
         },
         {
@@ -314,6 +320,9 @@
         },
         {
           "$ref": "procedures/AuditdRules.schema.json#/definitions/remediation"
+        },
+        {
+          "$ref": "procedures/AuditdWatch.schema.json#/definitions/remediation"
         },
         {
           "$ref": "procedures/BenchmarkSettings.schema.json#/definitions/remediation"
@@ -395,6 +404,9 @@
         },
         {
           "$ref": "procedures/PasswordChangeDate.schema.json#/definitions/remediation"
+        },
+        {
+          "$ref": "procedures/PasswordPolicyOption.schema.json#/definitions/remediation"
         },
         {
           "$ref": "procedures/RootPathSecurity.schema.json#/definitions/remediation"

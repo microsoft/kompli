@@ -305,6 +305,144 @@ Desired objects (`MmiSet`). The value is a human-readable, space-separated key-v
 
 Desired objects (`MmiSet`). Same key-value format as init entries. Triggers execution of the remediation procedure for the rule with the supplied parameter values.
 
+A rule without a `remediate` object is audit-only: the request evaluates its
+`audit` tree in audit mode and reports the result without changing the system.
+Inside a `remediate` tree, procedures without a remediation handler and anything
+under `not` are audited. `SCE` has an explicit remediation stub that always
+reports non-compliance without executing a script.
+
+`SysctlValue` remediation accepts a literal value, optionally surrounded by
+`^` and `$`. With `runtimeOnly: true` it updates only the selected `/proc/sys`
+entry. Otherwise it also atomically maintains
+`/etc/sysctl.d/99-zz-kompli-<sysctlName>.conf`; persistent names must use dotted
+notation. The name sorts after stock late files such as `99-sysctl.conf` (the
+`/etc/sysctl.conf` link) and `99-cloudimg-*.conf`, so the managed value wins
+over them. The configuration directory must already exist. Other administrator
+files and unrelated runtime keys are not changed. The handler verifies the
+existing runtime-and-persistence audit and rolls back both changes if writing
+or verification fails, including when a later-precedence file overrides the
+managed setting. Missing runtime keys remain not applicable. Regex alternatives
+are audit-only: the handler does not guess which acceptable value to select.
+
+On older systemd versions without `systemd-sysctl --cat-config`, the persistence
+audit reads the selected `.conf` files directly. It preserves directory priority,
+basename masking, lexical filename ordering, and `/dev/null` masks. Legacy
+`sysctl.conf` is read only when a selected sysctl.d symlink includes it. Other
+command failures and unreadable configuration sources remain explicit errors.
+
+`PasswordPolicyOption` accepts explicit allowlisted targets for existing
+`/etc/security/{pwquality,faillock,pwhistory}.conf` files. Numeric settings are
+range-checked; boolean flags use the value `"true"` and are written as bare
+options. It atomically updates all occurrences of the selected option while
+preserving other settings, comments, and file metadata, verifies its own audit,
+and restores the original file if verification fails. No reload is needed.
+The main pwquality configuration takes precedence over its drop-ins; this
+writer does not change drop-ins. The original benchmark audit can still reject
+conflicting drop-ins, which must be resolved separately.
+
+Without `integratePam`, the handler requires an existing configuration file and
+PAM module reference, including read-only authselect targets. It parses Linux-PAM
+continuations and refuses conflicting inline values, custom configuration paths,
+and unsafe configuration targets without changing authentication stacks.
+
+The explicit string flag `"integratePam": "true"` enables vendor-managed
+integration for installed modules. Authselect systems retain their selected
+providers/features; unselected EL systems can adopt a custom profile copied from
+their actual PAM and NSS configuration. When the selection is already a
+`custom/kompli-preserved-*` profile, later options update its templates in place
+(restored on rollback) instead of creating another copy. Debian/Ubuntu use `pam-auth-update`
+profiles, including managed faillock preauth/failure/account-reset boundaries.
+SUSE password history uses inspected `pam-config` state. Provider or NSS drift,
+administrator overrides, unsupported control flow, and vendor command failures
+refuse integration and trigger transaction rollback. Existing stronger policy
+values are retained. Inline-only history modules receive effective PAM arguments
+instead of an ignored configuration file.
+
+Validated faillock integration establishes its configured tally directory using
+scoped systemd-tmpfiles metadata, preserving existing administrator metadata.
+Validated history integration initializes a missing default `opasswd` database
+with root-only permissions and SELinux labeling where applicable; existing
+history records remain untouched. Unverified custom databases, missing modules,
+unsupported SUSE hooks, and unmanaged activation paths remain explicit refusals.
+No existing passwords are changed. Successful configuration validation does not
+replace real service authentication, lockout, and password-change testing.
+Before enabling password-quality enforcement, provision and verify the vendor
+CrackLib dictionary as well as the PAM module. Minimal Debian/Ubuntu images can
+have `libpam-pwquality` installed without the recommended dictionary packages;
+enforcement then rejects password changes with an error loading the dictionary.
+Install `cracklib-runtime` and a vendor word list such as `wamerican`, and verify
+real password changes rather than disabling dictionary checks.
+
+`AuditdRules` reports malformed search, exclusion, and required-option regexes
+as evaluation errors, not as noncompliance. Legacy distinct-option source
+patterns must be lowered to supported regex syntax during payload generation.
+
+`AuditdWatch` remediates only an explicit literal path and permission set.
+The target and `/etc/audit/rules.d` must already exist, auditing must be enabled
+with a running daemon, and changes require mutable kernel audit state. The
+effective `auditd.service` must either have a single `ExecStartPost` command
+invoking `/sbin/augenrules --load` or `/usr/sbin/augenrules --load`, or explicitly
+require/want the vendor `augenrules.service` or `audit-rules.service`. A vendor
+loader must be a loaded oneshot, ordered after auditd, with that same single
+`augenrules --load` command. Ambiguous or other startup arrangements are refused,
+not inferred. These checks do not execute the loader. An already-compliant
+immutable system is left untouched.
+
+The handler creates a mode-0600
+`70-kompli-watch-<hex-path>-<permissions>.rules` source when no matching source
+exists and adds only the selected runtime watch, using the reserved
+`kompli_watch` key. It reuses matching administrator watches without changing
+them. Different permissions, syscall-form equivalents, audit suppression,
+scoped deletion, and disabled-audit directives require administrator review.
+Unreadable or unsafe source files are errors. Permissions must be a nonempty
+subset in `rwxa` order; paths are limited to 96 safe literal characters.
+
+It does not create missing watch targets, compile or overwrite `audit.rules`,
+restart auditd, invoke a global rule load/flush, or set immutable mode.
+Verification checks runtime and persistent sources. Failure removes only a
+newly added owned watch and a newly created unchanged managed file; rollback
+failures and concurrent changes are reported explicitly. Existing rules and
+other successfully remediated leaves are not part of a global transaction.
+
+Generated payloads guard optional `/etc/pam.conf` and `/etc/gshadow` watches with
+audit-only file-absence branches, in both audit and remediation. An absent
+optional file skips only its watch without creating PAM configuration or a
+group-password database; existing files still require their watches. The native writer itself retains
+its existing-target requirement.
+
+### Explicit SSH option remediation
+
+`SshdOption` remains audit-only unless `remediationValue` supplies an explicit
+literal target. The first slice supports `maxauthtries`, `logingracetime`,
+`maxstartups` (`10:30:60`), `disableforwarding`, `permitrootlogin`,
+`gssapiauthentication`, `clientaliveinterval`, and `clientalivecountmax`.
+Boolean targets only harden the setting; numeric targets have bounded positive
+ranges. The target must satisfy the original audit predicate, including customer
+overrides, before any write. Values are never inferred from regular expressions.
+
+Already-compliant rules and stricter compliant numeric values are not changed.
+For a required change, the main
+configuration must be a regular, non-hardlinked file. All includes are inspected
+with bounded traversal; conditional `Match` blocks, quoted include paths,
+continued lines, custom startup options, and nonstandard/inactive services are
+refused for administrator review. Existing `Match` semantics are not rewritten.
+The writer prepends an explicit global setting before includes when the
+effective value needs changing. It replaces only selected global declarations
+whose own value fails the audit predicate in the main file and included files,
+preserving declarations the audit accepts (for example a customer-allowed
+`prohibit-password`), unrelated content, comments, and metadata. This also
+handles a compliant effective boolean whose ignored contradictory declarations
+still fail the complete benchmark audit. Every changed source must be regular
+and non-hardlinked.
+
+The original configuration and then the candidate are checked with `sshd -t`;
+the candidate's effective value is checked through the existing audit before
+reloading the active standard `ssh.service` or `sshd.service`. Reload retains
+existing sessions. Validation failures restore all modified sources without reload.
+A failed reload restores all sources and reloads the original configuration. Rollback never
+overwrites a concurrent content change; rollback/recovery failures are errors.
+No user/group allowlists or cryptographic policy are generated.
+
 ### Audit entries (`audit{RuleName}`)
 
 Reported objects (`MmiGet`). Triggers execution of the audit procedure. Returns a string that begins with `PASS` on success or contains a descriptive log on failure.

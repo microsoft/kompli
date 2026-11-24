@@ -20,6 +20,9 @@ const char* Bindings<ApparmorProfileStateParams>::names[] = {"enforce"};
 // AuditdRules.h:22
 const char* Bindings<AuditdRulesParams>::names[] = {"searchItem", "excludeOption", "requiredOptions"};
 
+// AuditdWatch.h:19
+const char* Bindings<AuditdWatchParams>::names[] = {"path", "permissions"};
+
 // CommandOutputMatch.h:43
 const char* Bindings<CommandOutputMatchParams>::names[] = {"command", "awk", "pattern", "type"};
 
@@ -77,6 +80,9 @@ const char* Bindings<NoShellAccountsLockedParams>::names[] = {"excludeUsers", "s
 // PackageInstalled.h:34
 const char* Bindings<PackageInstalledParams>::names[] = {"packageName", "minPackageVersion", "packageManager"};
 
+// PasswordPolicyOption.h:26
+const char* Bindings<PasswordPolicyOptionParams>::names[] = {"policy", "option", "value", "integratePam"};
+
 // SCE.h:18
 const char* Bindings<SCEParams>::names[] = {"scriptName", "environment"};
 
@@ -86,8 +92,8 @@ const char* Bindings<ShadowFieldParams>::names[] = {"username", "usernameOperati
 // SshKeyPermissions.h:24
 const char* Bindings<SshKeyPermissionsParams>::names[] = {"type"};
 
-// SshdOption.h:64
-const char* Bindings<SshdOptionParams>::names[] = {"option", "value", "op", "mode", "readExtraConfigs"};
+// SshdOption.h:67
+const char* Bindings<SshdOptionParams>::names[] = {"option", "value", "op", "mode", "readExtraConfigs", "remediationValue"};
 
 // SysctlValue.h:25
 const char* Bindings<SysctlValueParams>::names[] = {"sysctlName", "value", "runtimeOnly"};
@@ -125,6 +131,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"AuditNotApplicable", {MakeHandler(AuditAuditNotApplicable), nullptr}},
     {"AuditSuccess", {MakeHandler(AuditAuditSuccess), nullptr}},
     {"AuditdRules", {MakeHandler(AuditAuditdRules), nullptr}},
+    {"AuditdWatch", {MakeHandler(AuditAuditdWatch), MakeHandler(RemediateAuditdWatch)}},
     {"CommandOutputMatch", {MakeHandler(AuditCommandOutputMatch), nullptr}},
     {"DconfValue", {MakeHandler(AuditDconfValue), MakeHandler(RemediateDconfValue)}},
     {"DefaultUmask", {MakeHandler(AuditDefaultUmask), MakeHandler(RemediateDefaultUmask)}},
@@ -153,6 +160,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"PackageInstalled", {MakeHandler(AuditPackageInstalled), nullptr}},
     {"PasswdGroupsExist", {MakeHandler(AuditPasswdGroupsExist), MakeHandler(RemediatePasswdGroupsExist)}},
     {"PasswordChangeDate", {MakeHandler(AuditPasswordChangeDate), nullptr}},
+    {"PasswordPolicyOption", {MakeHandler(AuditPasswordPolicyOption), MakeHandler(RemediatePasswordPolicyOption)}},
     {"RemediationFailure", {nullptr, MakeHandler(RemediateRemediationFailure)}},
     {"RemediationNotApplicable", {nullptr, MakeHandler(RemediateRemediationNotApplicable)}},
     {"RemediationParametrized", {nullptr, MakeHandler(RemediateRemediationParametrized)}},
@@ -163,7 +171,7 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"ShadowField", {MakeHandler(AuditShadowField), nullptr}},
     {"ShellTimeout", {MakeHandler(AuditShellTimeout), MakeHandler(RemediateShellTimeout)}},
     {"SshKeyPermissions", {MakeHandler(AuditSshKeyPermissions), MakeHandler(RemediateSshKeyPermissions)}},
-    {"SshdOption", {MakeHandler(AuditSshdOption), nullptr}},
+    {"SshdOption", {MakeHandler(AuditSshdOption), MakeHandler(RemediateSshdOption)}},
     {"SysctlValue", {MakeHandler(AuditSysctlValue), MakeHandler(RemediateSysctlValue)}},
     {"SystemAccountShell", {MakeHandler(AuditSystemAccountShell), nullptr}},
     {"SystemdConfigValue", {MakeHandler(AuditSystemdConfigValue), MakeHandler(RemediateSystemdConfigValue)}},

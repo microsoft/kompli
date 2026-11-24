@@ -1,11 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#include <AtomicFile.h>
 #include <StringTools.h>
 #include <SysctlValue.h>
 #include <algorithm>
+#include <dirent.h>
 #include <fcntl.h>
 #include <fstream>
+#include <map>
+#include <memory>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -124,6 +128,71 @@ static Optional<Error> WriteRuntimeSysctl(const std::string& path, const std::st
     return {};
 }
 
+static Result<std::string> ReadLegacySysctlConfigurations(ContextInterface& context)
+{
+    std::map<std::string, std::string> files;
+    for (const auto& location : {"/etc/sysctl.d", "/run/sysctl.d", "/usr/local/lib/sysctl.d", "/usr/lib/sysctl.d", "/lib/sysctl.d"})
+    {
+        const auto directory = context.GetSpecialFilePath(location);
+        std::unique_ptr<DIR, int (*)(DIR*)> entries(opendir(directory.c_str()), closedir);
+        if (!entries)
+        {
+            if (errno == ENOENT)
+            {
+                continue;
+            }
+            return Error("Cannot enumerate sysctl configuration directory: " + directory, errno);
+        }
+        while (true)
+        {
+            errno = 0;
+            const auto entry = readdir(entries.get());
+            if (!entry)
+            {
+                if (errno != 0)
+                {
+                    return Error("Cannot read sysctl configuration directory: " + directory, errno);
+                }
+                break;
+            }
+            const std::string name = entry->d_name;
+            if (name.size() > 5 && name.compare(name.size() - 5, 5, ".conf") == 0)
+            {
+                files.emplace(name, directory + "/" + name);
+            }
+        }
+    }
+    std::string result;
+    struct stat nullMetadata;
+    if (stat("/dev/null", &nullMetadata) != 0)
+    {
+        return Error("Cannot inspect sysctl null-mask target", errno);
+    }
+    for (const auto& file : files)
+    {
+        struct stat metadata;
+        if (stat(file.second.c_str(), &metadata) != 0)
+        {
+            return Error("Cannot inspect sysctl configuration: " + file.second, errno);
+        }
+        if (metadata.st_dev == nullMetadata.st_dev && metadata.st_ino == nullMetadata.st_ino)
+        {
+            continue;
+        }
+        if (!S_ISREG(metadata.st_mode))
+        {
+            return Error("Sysctl configuration source must be a regular file: " + file.second, EINVAL);
+        }
+        auto contents = context.GetFileContents(file.second);
+        if (!contents.HasValue())
+        {
+            return contents.Error();
+        }
+        result += "# " + file.second + "\n" + contents.Value() + "\n";
+    }
+    return result;
+}
+
 Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
     assert(params.runtimeOnly.HasValue());
@@ -205,8 +274,19 @@ Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree&
     auto execResult = context.ExecuteCommand(systemdSysctl);
     if (!execResult.HasValue())
     {
-        OsConfigLogError(log, "Failed to execute systemd-sysctl command");
-        return execResult.Error();
+        const auto& message = execResult.Error().message;
+        if (message.find("--cat-config") == std::string::npos ||
+            (message.find("unrecognized option") == std::string::npos && message.find("unknown option") == std::string::npos))
+        {
+            OsConfigLogError(log, "Failed to execute systemd-sysctl command");
+            return execResult.Error();
+        }
+        OsConfigLogInfo(log, "systemd-sysctl lacks --cat-config; reading configuration files with directory and filename precedence");
+        execResult = ReadLegacySysctlConfigurations(context);
+        if (!execResult.HasValue())
+        {
+            return execResult.Error();
+        }
     }
 
     std::istringstream configurations(execResult.Value());
@@ -359,10 +439,6 @@ Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree&
 
 Result<Status> RemediateSysctlValue(const SysctlValueParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
-    if (!params.runtimeOnly.HasValue() || !params.runtimeOnly.Value())
-    {
-        return Error("Sysctl remediation currently supports runtime-only policies", ENOTSUP);
-    }
     if (!IsValidSysctlName(params.sysctlName))
     {
         return Error("Invalid sysctl name: " + params.sysctlName, EINVAL);
@@ -371,6 +447,15 @@ Result<Status> RemediateSysctlValue(const SysctlValueParams& params, IndicatorsT
     if (!desired.HasValue())
     {
         return desired.Error();
+    }
+    const bool persistent = !params.runtimeOnly.ValueOr(false);
+    if (persistent)
+    {
+        static const std::regex persistentName("^[a-zA-Z0-9_]+(\\.[a-zA-Z0-9_-]+)+$");
+        if (!std::regex_match(params.sysctlName, persistentName) || desired->find_first_of("#;") != std::string::npos)
+        {
+            return Error("Persistent sysctl remediation requires a dotted name and a literal value without comment delimiters", ENOTSUP);
+        }
     }
 
     auto audit = AuditSysctlValue(params, indicators, context);
@@ -388,22 +473,104 @@ Result<Status> RemediateSysctlValue(const SysctlValueParams& params, IndicatorsT
         return original.Error();
     }
 
-    auto writeError = WriteRuntimeSysctl(runtimePath, desired.Value());
-    if (writeError.HasValue())
+    const std::string configPath = persistent ? context.GetSpecialFilePath("/etc/sysctl.d/99-zz-kompli-" + params.sysctlName + ".conf") : std::string();
+    bool configExists = false;
+    std::string originalConfig;
+    std::string candidateConfig;
+    struct stat candidateMetadata = {};
+    struct stat createdMetadata = {};
+    if (persistent)
     {
-        return writeError.Value();
+        struct stat metadata;
+        configExists = lstat(configPath.c_str(), &metadata) == 0;
+        if (!configExists && errno != ENOENT)
+        {
+            const int status = errno;
+            return Error("Failed to inspect managed sysctl configuration: " + std::string(strerror(status)), status);
+        }
+        if (configExists)
+        {
+            if (!S_ISREG(metadata.st_mode) || metadata.st_nlink != 1)
+            {
+                return Error("Managed sysctl configuration must be a regular, non-hardlinked file", EINVAL);
+            }
+            auto contents = context.GetFileContents(configPath);
+            if (!contents.HasValue())
+            {
+                return contents.Error();
+            }
+            originalConfig = contents.Value();
+        }
+        candidateConfig = "# Managed by kompli\n" + params.sysctlName + " = " + desired.Value() + "\n";
+        auto written = configExists ? ReplaceFileContentsAtomic(configPath, candidateConfig, &candidateMetadata) :
+                                      CreateFileContentsAtomic(configPath, candidateConfig, 0644, &createdMetadata);
+        if (!written.HasValue())
+        {
+            return written.Error();
+        }
     }
-    auto postAudit = AuditSysctlValue(params, indicators, context);
+
+    const bool runtimeChanged = TrimWhiteSpaces(original.Value()) != desired.Value();
+    auto apply = [&]() -> Result<Status> {
+        if (runtimeChanged)
+        {
+            auto error = WriteRuntimeSysctl(runtimePath, desired.Value());
+            if (error.HasValue())
+            {
+                return error.Value();
+            }
+        }
+        return AuditSysctlValue(params, indicators, context);
+    };
+    auto postAudit = apply();
     if (postAudit.HasValue() && postAudit.Value() == Status::Compliant)
     {
         return postAudit;
     }
 
-    auto rollbackError = WriteRuntimeSysctl(runtimePath, original.Value());
-    if (rollbackError.HasValue())
+    std::string rollbackErrors;
+    if (runtimeChanged)
     {
-        const std::string reason = postAudit.HasValue() ? "Runtime sysctl remained noncompliant" : postAudit.Error().message;
-        return Error(reason + "; rollback failed: " + rollbackError->message, rollbackError->code);
+        auto error = WriteRuntimeSysctl(runtimePath, original.Value());
+        if (error.HasValue())
+        {
+            rollbackErrors += "runtime: " + error->message;
+        }
+    }
+    if (persistent)
+    {
+        if (configExists)
+        {
+            auto restored = ReplaceFileContentsAtomicIfUnchanged(configPath, originalConfig, candidateMetadata, candidateConfig);
+            if (!restored.HasValue())
+            {
+                if (restored.Error().code == EAGAIN)
+                {
+                    rollbackErrors += "; managed configuration changed before rollback";
+                }
+                else
+                {
+                    rollbackErrors += "; configuration: " + restored.Error().message;
+                }
+            }
+        }
+        else
+        {
+            struct stat current;
+            if (lstat(configPath.c_str(), &current) != 0 || current.st_dev != createdMetadata.st_dev || current.st_ino != createdMetadata.st_ino)
+            {
+                rollbackErrors += "; managed configuration changed before rollback";
+            }
+            else if (unlink(configPath.c_str()) != 0)
+            {
+                rollbackErrors += "; failed to remove managed configuration: " + std::string(strerror(errno));
+            }
+        }
+    }
+    if (!rollbackErrors.empty())
+    {
+        const std::string reason = postAudit.HasValue() ? "Sysctl remained noncompliant" : postAudit.Error().message;
+        return Error(reason + "; rollback failed: " + rollbackErrors, EIO);
     }
     return postAudit;
 }

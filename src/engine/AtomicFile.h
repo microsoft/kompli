@@ -13,7 +13,9 @@
 namespace Kompli
 {
 Result<bool> CreateFileContentsAtomic(const std::string& path, const std::string& contents, mode_t mode, struct stat* created = nullptr);
-Result<bool> ReplaceFileContentsAtomic(const std::string& path, const std::string& contents);
+Result<bool> ReplaceFileContentsAtomic(const std::string& path, const std::string& contents, struct stat* replaced = nullptr);
+Result<bool> ReplaceFileContentsAtomicIfUnchanged(const std::string& path, const std::string& contents, const struct stat& expectedMetadata,
+    const std::string& expectedContents);
 } // namespace Kompli
 
 #endif // KOMPLI_ATOMIC_FILE_H

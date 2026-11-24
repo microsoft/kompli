@@ -3,6 +3,7 @@
 
 #include "StringTools.h"
 
+#include <AtomicFile.h>
 #include <ProcedureMap.h> // Adds std::to_string() for enum classes
 #include <SshdOption.h>
 #include <TypedComparison.h>
@@ -10,9 +11,13 @@
 #include <cstdlib>
 #include <fnmatch.h>
 #include <fts.h>
+#include <functional>
+#include <glob.h>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
+#include <sys/stat.h>
 #include <vector>
 
 namespace Kompli
@@ -500,6 +505,474 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
         }
     }
     return indicators.Compliant("All options are compliant");
+}
+
+namespace
+{
+Result<bool> CheckSshdSources(const std::string& path, ContextInterface& context, std::map<std::string, std::string>& sources)
+{
+    if (sources.size() >= 64 || sources.count(path))
+    {
+        return Error("SSH configuration includes are recursive or exceed 64 files; no changes made", ENOTSUP);
+    }
+    auto contents = context.GetFileContents(path);
+    if (!contents.HasValue())
+    {
+        return contents.Error();
+    }
+    if (contents.Value().size() > 1024 * 1024)
+    {
+        return Error("SSH configuration source exceeds 1 MiB; no changes made", ENOTSUP);
+    }
+    sources.emplace(path, contents.Value());
+    std::istringstream lines(contents.Value());
+    std::string line;
+    while (std::getline(lines, line))
+    {
+        line = TrimWhiteSpaces(line.substr(0, line.find('#')));
+        if (line.empty())
+        {
+            continue;
+        }
+        if (line.back() == '\\' || line.find('\0') != std::string::npos)
+        {
+            return Error("Unsupported SSH configuration line; no changes made", ENOTSUP);
+        }
+        const auto separator = line.find_first_of(" \t=");
+        const auto directive = ToLower(line.substr(0, separator));
+        if (directive == "match")
+        {
+            return Error("Conditional SSH Match configurations require review; no changes made", ENOTSUP);
+        }
+        if (directive != "include")
+        {
+            continue;
+        }
+        const auto arguments = line.find_first_not_of(" \t=", separator);
+        if (arguments == std::string::npos)
+        {
+            return Error("SSH Include requires a path; no changes made", EINVAL);
+        }
+        std::istringstream words(line.substr(arguments));
+        std::string pattern;
+        while (words >> pattern)
+        {
+            if (pattern.find_first_of("'\"\\") != std::string::npos)
+            {
+                return Error("Quoted SSH Include paths require review; no changes made", ENOTSUP);
+            }
+            if (pattern.front() != '/')
+            {
+                pattern = "/etc/ssh/" + pattern;
+            }
+            pattern = context.GetSpecialFilePath(pattern);
+            glob_t matches{};
+            // Like sshd, a missing Include directory matches nothing; other read errors abort.
+            const auto code = glob(
+                pattern.c_str(), 0, [](const char*, int error) { return (error == ENOENT || error == ENOTDIR) ? 0 : 1; }, &matches);
+            if (code != 0 && code != GLOB_NOMATCH)
+            {
+                globfree(&matches);
+                return Error("Cannot enumerate SSH Include: " + pattern, EIO);
+            }
+            for (size_t i = 0; i < matches.gl_pathc; ++i)
+            {
+                auto checked = CheckSshdSources(matches.gl_pathv[i], context, sources);
+                if (!checked.HasValue())
+                {
+                    globfree(&matches);
+                    return checked.Error();
+                }
+            }
+            globfree(&matches);
+        }
+    }
+    return true;
+}
+
+std::string DeclaredSshdValue(const std::string& line, size_t keywordEnd)
+{
+    if (keywordEnd == std::string::npos)
+    {
+        return "";
+    }
+    auto value = line.substr(keywordEnd, line.find('#', keywordEnd) - keywordEnd);
+    const auto start = value.find_first_not_of(" \t=");
+    value = start == std::string::npos ? "" : TrimWhiteSpaces(value.substr(start));
+    if (value.size() >= 2 && value.front() == '"' && value.back() == '"')
+    {
+        value = value.substr(1, value.size() - 2);
+    }
+    return ToLower(value);
+}
+
+Result<std::string> UpdateSshdGlobals(const std::string& contents, const SshdOptionParams& params, const std::function<Result<bool>(const std::string&)>& satisfiesAudit)
+{
+    std::string updated;
+    size_t start = 0;
+    while (start < contents.size())
+    {
+        const auto newline = contents.find('\n', start);
+        auto line = contents.substr(start, newline == std::string::npos ? newline : newline - start);
+        const auto first = line.find_first_not_of(" \t");
+        if (first != std::string::npos)
+        {
+            const auto end = line.find_first_of(" \t=", first);
+            const auto keyword = line.substr(first, end == std::string::npos ? end : end - first);
+            if (ToLower(keyword) == params.option.items.front())
+            {
+                // Declarations that already satisfy the audit are never rewritten.
+                auto satisfied = satisfiesAudit(DeclaredSshdValue(line, end));
+                if (!satisfied.HasValue())
+                {
+                    return satisfied.Error();
+                }
+                if (!satisfied.Value())
+                {
+                    const auto comment = line.find('#', first);
+                    line = line.substr(0, first) + keyword + " " + params.remediationValue.Value() +
+                           (comment == std::string::npos ? "" : " " + line.substr(comment));
+                }
+            }
+        }
+        updated += line;
+        if (newline == std::string::npos)
+        {
+            break;
+        }
+        updated += '\n';
+        start = newline + 1;
+    }
+    return updated;
+}
+
+Result<std::string> SshdReloadService(ContextInterface& context)
+{
+    for (const auto& file : {"/etc/default/ssh", "/etc/sysconfig/sshd"})
+    {
+        const auto path = context.GetSpecialFilePath(file);
+        struct stat metadata;
+        if (lstat(path.c_str(), &metadata) != 0)
+        {
+            if (errno == ENOENT)
+            {
+                continue;
+            }
+            return Error("Cannot inspect SSH environment file: " + path, errno);
+        }
+        auto contents = context.GetFileContents(path);
+        if (!contents.HasValue())
+        {
+            return contents.Error();
+        }
+        std::istringstream lines(contents.Value());
+        std::string line;
+        while (std::getline(lines, line))
+        {
+            line = TrimWhiteSpaces(line.substr(0, line.find('#')));
+            if (line.find("SSHD_OPTS") == std::string::npos && line.find("OPTIONS") == std::string::npos)
+            {
+                continue;
+            }
+            const auto equals = line.find('=');
+            const auto name = TrimWhiteSpaces(line.substr(0, equals));
+            const auto value = equals == std::string::npos ? line : TrimWhiteSpaces(line.substr(equals + 1));
+            if ((name != "SSHD_OPTS" && name != "OPTIONS") || (value != "" && value != "\"\"" && value != "''"))
+            {
+                return Error("Custom SSH startup options require review; no changes made", ENOTSUP);
+            }
+        }
+    }
+    for (const std::string service : {"sshd.service", "ssh.service"})
+    {
+        auto state = context.ExecuteCommand("systemctl show " + service + " --property=LoadState --property=ActiveState");
+        if (!state.HasValue())
+        {
+            return state.Error();
+        }
+        if (state.Value().find("LoadState=loaded\n") == std::string::npos || state.Value().find("ActiveState=active\n") == std::string::npos)
+        {
+            continue;
+        }
+        auto startup = context.ExecuteCommand("systemctl show " + service + " --property=ExecStart --value");
+        if (!startup.HasValue())
+        {
+            return startup.Error();
+        }
+        const auto argvStart = startup.Value().find("argv[]=");
+        const auto argv =
+            argvStart == std::string::npos ? "" : TrimWhiteSpaces(startup.Value().substr(argvStart + 7, startup.Value().find(';', argvStart) - argvStart - 7));
+        const std::set<std::string> standardArguments = {
+            "/usr/sbin/sshd -D", "/usr/sbin/sshd -D $SSHD_OPTS", "/usr/sbin/sshd -D $OPTIONS", "/usr/sbin/sshd -D $OPTIONS $CRYPTO_POLICY"};
+        if (startup.Value().find("path=/usr/sbin/sshd ;") == std::string::npos || !standardArguments.count(argv))
+        {
+            return Error("Nonstandard SSH service startup requires review; no changes made", ENOTSUP);
+        }
+        return service;
+    }
+    return Error("No active standard SSH service found; no changes made", ENOTSUP);
+}
+
+Result<std::vector<std::regex>> CompileSshdAuditPatterns(const SshdOptionParams& params)
+{
+    std::vector<std::regex> patterns;
+    if (params.op.Value() == SshdOptionOperation::Regex || params.op.Value() == SshdOptionOperation::Match || params.op.Value() == SshdOptionOperation::NotMatch)
+    {
+        std::istringstream values(params.value);
+        std::string value;
+        try
+        {
+            if (params.op.Value() == SshdOptionOperation::Regex)
+            {
+                patterns.emplace_back(params.value, std::regex_constants::icase);
+            }
+            else
+            {
+                while (std::getline(values, value, ','))
+                {
+                    patterns.emplace_back(value, std::regex_constants::icase);
+                }
+            }
+        }
+        catch (const std::regex_error& error)
+        {
+            return Error("Invalid SSH audit pattern: " + std::string(error.what()), EINVAL);
+        }
+    }
+    return patterns;
+}
+
+// Evaluates a single literal value against the configured audit without
+// recording indicators for the rule.
+Result<bool> SatisfiesSshdAudit(const SshdOptionParams& params, const std::vector<std::regex>& patterns, const std::string& value)
+{
+    IndicatorsTree scratch;
+    scratch.Push("SshdOption");
+    const auto& option = params.option.items.front();
+    auto result = EvaluateSshdOption({{option, value}}, option, params.value, std::to_string(params.op.Value()), patterns, {}, scratch);
+    if (!result.HasValue())
+    {
+        return result.Error();
+    }
+    return result.Value() == Status::Compliant;
+}
+
+Result<bool> ValidateSshdTarget(const SshdOptionParams& params)
+{
+    if (params.option.items.size() != 1)
+    {
+        return Error("SSH remediation requires exactly one option", EINVAL);
+    }
+    const auto& option = params.option.items.front();
+    const auto& target = params.remediationValue.Value();
+    const std::set<std::string> booleans = {"disableforwarding", "permitrootlogin", "gssapiauthentication"};
+    const std::map<std::string, unsigned long> limits = {{"maxauthtries", 64}, {"logingracetime", 600}, {"clientaliveinterval", 3600}, {"clientalivecountmax", 10}};
+    if (booleans.count(option))
+    {
+        if (target != (option == "disableforwarding" ? "yes" : "no"))
+        {
+            return Error("Unsupported SSH boolean remediation target", EINVAL);
+        }
+    }
+    else if (limits.count(option))
+    {
+        if (!std::regex_match(target, std::regex("[1-9][0-9]{0,3}")) || std::stoul(target) > limits.at(option))
+        {
+            return Error("SSH numeric remediation target is outside the supported range", EINVAL);
+        }
+    }
+    else if (option != "maxstartups" || target != "10:30:60")
+    {
+        return Error("Unsupported SSH option or explicit target", ENOTSUP);
+    }
+    auto patterns = CompileSshdAuditPatterns(params);
+    if (!patterns.HasValue())
+    {
+        return patterns.Error();
+    }
+    auto accepted = SatisfiesSshdAudit(params, patterns.Value(), target);
+    if (!accepted.HasValue())
+    {
+        return accepted.Error();
+    }
+    if (!accepted.Value())
+    {
+        return Error("Explicit SSH remediation target does not satisfy the configured audit; no changes made", ENOTSUP);
+    }
+    return true;
+}
+} // namespace
+
+Result<Status> RemediateSshdOption(const SshdOptionParams& params, IndicatorsTree& indicators, ContextInterface& context)
+{
+    if (!params.remediationValue.HasValue() || params.mode.Value() != SshdOptionMode::Regular)
+    {
+        return AuditSshdOption(params, indicators, context);
+    }
+    auto valid = ValidateSshdTarget(params);
+    if (!valid.HasValue())
+    {
+        return valid.Error();
+    }
+    auto patterns = CompileSshdAuditPatterns(params);
+    if (!patterns.HasValue())
+    {
+        return patterns.Error();
+    }
+    const auto satisfiesAudit = [&](const std::string& value) { return SatisfiesSshdAudit(params, patterns.Value(), value); };
+    auto before = AuditSshdOption(params, indicators, context);
+    if (!before.HasValue())
+    {
+        return before;
+    }
+    const auto& option = params.option.items.front();
+    if (before.Value() == Status::Compliant && option != "permitrootlogin" && option != "gssapiauthentication" && option != "disableforwarding")
+    {
+        return before;
+    }
+    const auto path = context.GetSpecialFilePath("/etc/ssh/sshd_config");
+    struct stat metadata;
+    if (lstat(path.c_str(), &metadata) != 0)
+    {
+        return Error("Cannot inspect SSH configuration: " + path, errno);
+    }
+    if (!S_ISREG(metadata.st_mode) || metadata.st_nlink != 1)
+    {
+        return Error("SSH configuration must be regular and non-hardlinked", EINVAL);
+    }
+    std::map<std::string, std::string> sources;
+    auto inspected = CheckSshdSources(path, context, sources);
+    if (!inspected.HasValue())
+    {
+        return inspected.Error();
+    }
+    struct Change
+    {
+        std::string path;
+        std::string original;
+        std::string updated;
+    };
+    std::vector<Change> changes;
+    for (const auto& source : sources)
+    {
+        auto globals = UpdateSshdGlobals(source.second, params, satisfiesAudit);
+        if (!globals.HasValue())
+        {
+            return globals.Error();
+        }
+        auto updated = globals.Value();
+        if (source.first == path && before.Value() != Status::Compliant)
+        {
+            updated = "# kompli: explicit global SSH option\n" + params.option.items.front() + " " + params.remediationValue.Value() + "\n" + updated;
+        }
+        if (updated != source.second)
+        {
+            if (lstat(source.first.c_str(), &metadata) != 0)
+            {
+                return Error("Cannot inspect SSH configuration source: " + source.first, errno);
+            }
+            if (!S_ISREG(metadata.st_mode) || metadata.st_nlink != 1)
+            {
+                return Error("Changed SSH sources must be regular and non-hardlinked: " + source.first, EINVAL);
+            }
+            changes.push_back({source.first, source.second, std::move(updated)});
+        }
+    }
+    if (changes.empty() && before.Value() == Status::Compliant)
+    {
+        return indicators.Compliant("SSH effective value and global declarations already satisfy the explicit target");
+    }
+    auto service = SshdReloadService(context);
+    if (!service.HasValue())
+    {
+        return service.Error();
+    }
+    auto syntax = context.ExecuteCommand("sshd -t");
+    if (!syntax.HasValue())
+    {
+        return syntax.Error();
+    }
+    bool reloadAttempted = false;
+    size_t attempted = 0;
+    const auto rollback = [&](const Error& failure) -> Result<Status> {
+        std::string rollbackErrors;
+        for (size_t i = attempted; i > 0; --i)
+        {
+            const auto& change = changes[i - 1];
+            auto latest = context.GetFileContents(change.path);
+            if (!latest.HasValue() || (latest.Value() != change.updated && latest.Value() != change.original))
+            {
+                rollbackErrors += "; rollback refused: SSH configuration changed concurrently: " + change.path;
+                continue;
+            }
+            if (latest.Value() == change.original)
+            {
+                continue;
+            }
+            auto restored = ReplaceFileContentsAtomic(change.path, change.original);
+            if (!restored.HasValue())
+            {
+                rollbackErrors += "; SSH configuration rollback failed: " + restored.Error().message;
+            }
+        }
+        if (!rollbackErrors.empty())
+        {
+            return Error(failure.message + rollbackErrors, EIO);
+        }
+        if (reloadAttempted)
+        {
+            auto checked = context.ExecuteCommand("sshd -t");
+            if (!checked.HasValue())
+            {
+                return Error(failure.message + "; restored SSH configuration validation failed: " + checked.Error().message, checked.Error().code);
+            }
+            auto recovered = context.ExecuteCommand("systemctl reload " + service.Value());
+            if (!recovered.HasValue())
+            {
+                return Error(failure.message + "; SSH reload recovery failed: " + recovered.Error().message, recovered.Error().code);
+            }
+        }
+        return failure;
+    };
+    for (const auto& change : changes)
+    {
+        auto current = context.GetFileContents(change.path);
+        if (!current.HasValue())
+        {
+            return rollback(current.Error());
+        }
+        if (current.Value() != change.original)
+        {
+            return rollback(Error("SSH configuration changed concurrently before write: " + change.path, EBUSY));
+        }
+        ++attempted;
+        auto written = ReplaceFileContentsAtomic(change.path, change.updated);
+        if (!written.HasValue())
+        {
+            return rollback(written.Error());
+        }
+    }
+    syntax = context.ExecuteCommand("sshd -t");
+    if (!syntax.HasValue())
+    {
+        return rollback(syntax.Error());
+    }
+    auto verified = AuditSshdOption(params, indicators, context);
+    if (!verified.HasValue())
+    {
+        return rollback(verified.Error());
+    }
+    if (verified.Value() != Status::Compliant)
+    {
+        return rollback(Error("Effective SSH configuration did not satisfy the audit", EIO));
+    }
+    reloadAttempted = true;
+    auto reloaded = context.ExecuteCommand("systemctl reload " + service.Value());
+    if (!reloaded.HasValue())
+    {
+        return rollback(reloaded.Error());
+    }
+    return indicators.Compliant("Validated and reloaded the explicit global SSH option; existing sessions are retained");
 }
 
 } // namespace Kompli

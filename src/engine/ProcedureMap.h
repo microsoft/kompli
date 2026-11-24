@@ -9,6 +9,7 @@
 #include <AksCommand.h>
 #include <ApparmorProfileState.h>
 #include <AuditdRules.h>
+#include <AuditdWatch.h>
 #include <BenchmarkSettings.h>
 #include <CommandOutputMatch.h>
 #include <DconfValue.h>
@@ -36,6 +37,7 @@
 #include <PackageInstalled.h>
 #include <PasswdGroupsExist.h>
 #include <PasswordChangeDate.h>
+#include <PasswordPolicyOption.h>
 #include <RootPathSecurity.h>
 #include <SCE.h>
 #include <ShadowField.h>
@@ -348,6 +350,16 @@ struct Bindings<AuditdRulesParams>
     static constexpr auto members = std::make_tuple(&T::searchItem, &T::excludeOption, &T::requiredOptions);
 };
 
+// Defines the bindings for the AuditdWatchParams structure.
+template <>
+struct Bindings<AuditdWatchParams>
+{
+    using T = AuditdWatchParams;
+    static constexpr size_t size = 2;
+    static const char* names[];
+    static constexpr auto members = std::make_tuple(&T::path, &T::permissions);
+};
+
 // Defines the bindings for the CommandOutputMatchParams structure.
 template <>
 struct Bindings<CommandOutputMatchParams>
@@ -538,6 +550,16 @@ struct Bindings<PackageInstalledParams>
     static constexpr auto members = std::make_tuple(&T::packageName, &T::minPackageVersion, &T::packageManager);
 };
 
+// Defines the bindings for the PasswordPolicyOptionParams structure.
+template <>
+struct Bindings<PasswordPolicyOptionParams>
+{
+    using T = PasswordPolicyOptionParams;
+    static constexpr size_t size = 4;
+    static const char* names[];
+    static constexpr auto members = std::make_tuple(&T::policy, &T::option, &T::value, &T::integratePam);
+};
+
 // Defines the bindings for the SCEParams structure.
 template <>
 struct Bindings<SCEParams>
@@ -573,9 +595,9 @@ template <>
 struct Bindings<SshdOptionParams>
 {
     using T = SshdOptionParams;
-    static constexpr size_t size = 5;
+    static constexpr size_t size = 6;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::option, &T::value, &T::op, &T::mode, &T::readExtraConfigs);
+    static constexpr auto members = std::make_tuple(&T::option, &T::value, &T::op, &T::mode, &T::readExtraConfigs, &T::remediationValue);
 };
 
 // Defines the bindings for the SysctlValueParams structure.

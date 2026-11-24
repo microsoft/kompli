@@ -57,4 +57,8 @@ RUN --network=none --mount=type=bind,source=src,target=/source/src \
         -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON -DBUILD_TELEMETRY=OFF && \
     cmake --build /tmp/kompli-offline/build --parallel "$(nproc)" && \
     rm -rf /tmp/kompli-offline
+RUN command -v cmake && \
+    cmake --version && \
+    ls -l /usr/local/bin/cmake && \
+    ls -l /usr/bin/cmake
 WORKDIR /kompli

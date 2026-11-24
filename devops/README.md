@@ -16,12 +16,19 @@ This folder contains the artifacts and scripts used by our engineering systems (
   - `terraform` - terraform modules for provisioning Azure resources for E2E tests
 - `rpm` - RPM packaging scripts
 
+## Development container
+
+The [development container](../.devcontainer/devcontainer.json) includes Azure CLI
+and its `azure-devops` extension for inspecting Azure Pipelines. After changing
+the configuration, run **Dev Containers: Rebuild Container** in VS Code. Verify
+the installation with `az --version` and `az extension show --name azure-devops`.
+Authenticate with `az login` before accessing private builds.
+
 ## Updating build containers used for CI builds
 All build containers use a two-stage CMake source build:
 
-1. `ARG CMAKE_VERSION=v3.30.1` selects the bootstrap CMake tag. This version
-   supports the system OpenSSL 1.1 development libraries on Oracle Linux 8,
-   RHEL 8, and Ubuntu 20.04.
+1. `ARG CMAKE_VERSION=v3.30.1` selects the bootstrap CMake. This version
+   supports system OpenSSL 1.1 on Oracle Linux 8, RHEL 8, and Ubuntu 20.04.
 2. The bootstrap CMake installs the dependencies from
    [`src/vcpkg.json`](../src/vcpkg.json), including OpenSSL 3.6 or newer. vcpkg
    acquires Ninja first, then uses the bootstrap tools without downloading a
@@ -36,8 +43,9 @@ All build containers use a two-stage CMake source build:
    and populate the binary cache used by subsequent offline project builds.
 
 Both CMake builds verify the installed `cmake`, `ctest`, and `cpack` versions.
-`--build-arg CMAKE_VERSION=v3.30.1` can override the bootstrap tag only; the
-final version always follows vcpkg's tool metadata. Build images from the repository root
+`--build-arg CMAKE_VERSION=v3.30.1` overrides the bootstrap tag only; the final
+version follows vcpkg's tool metadata and must satisfy the project's
+`cmake_minimum_required`. Build images from the repository root
 with Podman (or Docker with BuildKit enabled) and the vcpkg submodule initialized,
 for example:
 

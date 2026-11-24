@@ -297,21 +297,30 @@ Result<Status> Engine::ExecuteRemediation(const std::string& ruleName, const std
         return Error("Out-of-order operation: procedure must be set first", EINVAL);
     }
     auto& procedure = it->second;
-    auto remediation = procedure.Remediation();
-    if (nullptr == remediation)
-    {
-        OsConfigLogInfo(Log(), "No 'remediate' object found, falling back to 'audit' object for remediation");
-        remediation = procedure.Audit();
-    }
-    if (nullptr == remediation)
-    {
-        return Error("Failed to get 'remediate' or 'audit' object");
-    }
-
     auto error = procedure.UpdateUserParameters(payload);
     if (error)
     {
         return error.Value();
+    }
+
+    auto remediation = procedure.Remediation();
+    if (nullptr == remediation)
+    {
+        // A rule without a 'remediate' object is audit-only. Evaluating its audit
+        // tree in remediation mode would run every handler it references.
+        OsConfigLogInfo(Log(), "No 'remediate' object found, rule '%s' is audit-only", ruleName.c_str());
+        if (nullptr == procedure.Audit())
+        {
+            return Error("Failed to get 'remediate' or 'audit' object");
+        }
+        Evaluator evaluator(ruleName, procedure.Audit(), procedure.Parameters(), *mContext);
+        Result<AuditResult> audit = RunWithTelemetry(TelemetryEvent(TelemetryEventType::Remediation, ruleName), mContext->GetTelemetry(), Log(),
+            [&]() { return evaluator.ExecuteAudit(*mFormatter); });
+        if (!audit.HasValue())
+        {
+            return audit.Error();
+        }
+        return audit->status;
     }
 
     Evaluator evaluator(ruleName, remediation, procedure.Parameters(), *mContext);

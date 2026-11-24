@@ -29,7 +29,7 @@
                 },
                 "runtimeOnly": {
                   "type": "string",
-                  "description": "When false (default), also validates stored sysctl configuration files"
+                  "description": "When false (default), also audits and remediates persistent sysctl configuration"
                 }
               }
             }
@@ -65,7 +65,7 @@
                 },
                 "runtimeOnly": {
                   "type": "string",
-                  "description": "When false (default), also validates stored sysctl configuration files"
+                  "description": "When false (default), also audits and remediates persistent sysctl configuration"
                 }
               }
             }

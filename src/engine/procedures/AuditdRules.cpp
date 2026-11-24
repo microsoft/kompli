@@ -206,7 +206,7 @@ bool IsDifferentRuleVariant(const std::string& rule, const std::vector<std::pair
     return false;
 }
 
-Status CheckRuleInList(const std::vector<std::string>& rules, const std::string& searchItem, const Optional<std::regex>& excludeRegex,
+Result<Status> CheckRuleInList(const std::vector<std::string>& rules, const std::string& searchItem, const Optional<std::regex>& excludeRegex,
     const std::vector<std::pair<std::regex, std::string>>& requiredRegexes, ContextInterface& context, IndicatorsTree& indicators)
 {
     std::regex searchItemRegex;
@@ -218,7 +218,7 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
     catch (const std::regex_error& e)
     {
         OsConfigLogError(context.GetLogHandle(), "Invalid searchItem regex: %s", e.what());
-        return indicators.NonCompliant("Invalid searchItem regex: " + std::string(e.what()));
+        return Error("Invalid searchItem regex: " + std::string(e.what()), EINVAL);
     }
     std::vector<std::string> incompleteRules;
     for (const auto& rule : rules)
@@ -271,6 +271,15 @@ Status CheckRuleInList(const std::vector<std::string>& rules, const std::string&
 
 Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
+    try
+    {
+        static_cast<void>(std::regex(params.searchItem));
+    }
+    catch (const std::regex_error& e)
+    {
+        OsConfigLogError(context.GetLogHandle(), "Invalid searchItem regex: %s", e.what());
+        return Error("Invalid searchItem regex: " + std::string(e.what()), EINVAL);
+    }
     Optional<std::regex> excludeOption;
     if (params.excludeOption.HasValue() && !params.excludeOption.Value().empty())
     {
@@ -345,12 +354,12 @@ Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree&
         {
             std::string searchItem = "-S ([^[:space:]]+,)*" + syscall + "(,[^[:space:]]+)*([[:space:]]|$)";
             auto runningResult = CheckRuleInList(runningRules, searchItem, excludeOption, requiredOptions, context, indicators);
-            if (runningResult != Status::Compliant)
+            if (!runningResult.HasValue() || runningResult.Value() != Status::Compliant)
             {
                 return runningResult;
             }
             auto fileResult = CheckRuleInList(filesRules, searchItem, excludeOption, requiredOptions, context, indicators);
-            if (fileResult != Status::Compliant)
+            if (!fileResult.HasValue() || fileResult.Value() != Status::Compliant)
             {
                 return fileResult;
             }
@@ -366,12 +375,12 @@ Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree&
         }
         std::string searchItem = "-w " + logfileResult.Value();
         auto runningResult = CheckRuleInList(runningRules, searchItem, excludeOption, requiredOptions, context, indicators);
-        if (runningResult != Status::Compliant)
+        if (!runningResult.HasValue() || runningResult.Value() != Status::Compliant)
         {
             return runningResult;
         }
         auto fileResult = CheckRuleInList(filesRules, searchItem, excludeOption, requiredOptions, context, indicators);
-        if (fileResult != Status::Compliant)
+        if (!fileResult.HasValue() || fileResult.Value() != Status::Compliant)
         {
             return fileResult;
         }
@@ -384,12 +393,12 @@ Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree&
     else
     {
         auto runningResult = CheckRuleInList(runningRules, params.searchItem, excludeOption, requiredOptions, context, indicators);
-        if (runningResult != Status::Compliant)
+        if (!runningResult.HasValue() || runningResult.Value() != Status::Compliant)
         {
             return runningResult;
         }
         auto fileResult = CheckRuleInList(filesRules, params.searchItem, excludeOption, requiredOptions, context, indicators);
-        if (fileResult != Status::Compliant)
+        if (!fileResult.HasValue() || fileResult.Value() != Status::Compliant)
         {
             return fileResult;
         }
