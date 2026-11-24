@@ -173,6 +173,13 @@ private:
     }
 
 public:
+    // Known exception-safety gap, to be fixed in a follow-up: both assignment
+    // operators publish the source tag before placement-constructing the
+    // payload. If the T or Error copy/move constructor throws, this Result
+    // keeps a Value/Error tag over storage that holds no live object, and its
+    // destructor then destroys unconstructed storage. The fix is to keep the
+    // tag Empty until construction succeeds. Constructors are not affected:
+    // a throwing constructor never runs ~Result.
     Result& operator=(const Result& other)
     {
         if (this == &other)
