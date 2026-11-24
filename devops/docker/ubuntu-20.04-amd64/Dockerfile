@@ -36,7 +36,7 @@ RUN apt-get update && apt-get install -y dotnet-sdk-5.0
 WORKDIR /git
 
 # Initial CMake version needed for vcpkg boostrap
-ARG CMAKE_VERSION=v4.4.2
+ARG CMAKE_VERSION=v3.30.1
 COPY devops/scripts/install-container-cmake.sh /usr/local/bin/install-container-cmake
 RUN bash /usr/local/bin/install-container-cmake "$CMAKE_VERSION" /usr/local
 

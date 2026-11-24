@@ -27,23 +27,25 @@ Authenticate with `az login` before accessing private builds.
 ## Updating build containers used for CI builds
 All build containers use a two-stage CMake source build:
 
-1. `ARG CMAKE_VERSION=v4.4.2` selects the CMake tag installed in the image.
+1. `ARG CMAKE_VERSION=v3.30.1` selects the bootstrap CMake. This version
+   supports system OpenSSL 1.1 on Oracle Linux 8, RHEL 8, and Ubuntu 20.04.
 2. The bootstrap CMake installs the dependencies from
    [`src/vcpkg.json`](../src/vcpkg.json), including OpenSSL 3.6 or newer. vcpkg
    acquires Ninja first, then uses the bootstrap tools without downloading a
    newer CMake binary.
-3. The same CMake version is rebuilt from source against the static OpenSSL libraries installed by
+3. The final CMake version is selected from the Linux amd64 entry in
+   [`external/vcpkg/scripts/vcpkg-tools.json`](../external/vcpkg/scripts/vcpkg-tools.json)
+   and built from source against the static OpenSSL libraries installed by
    vcpkg. Static linking keeps the final tools usable after the temporary
    dependency installation is removed. Headers, libraries, and pkg-config
    metadata all come from that same OpenSSL prefix.
-4. The manifest is installed again using vcpkg's normal tool selection to refresh
-   package ABIs and populate the binary cache used by subsequent offline project
-   builds. vcpkg may acquire a private CMake for dependencies, but it does not
-   replace the image's CMake in `/usr/local`.
+4. The manifest is installed again with the final CMake to refresh package ABIs
+   and populate the binary cache used by subsequent offline project builds.
 
 Both CMake builds verify the installed `cmake`, `ctest`, and `cpack` versions.
-`--build-arg CMAKE_VERSION=v4.4.2` selects both the bootstrap and final versions;
-the version must satisfy the project's `cmake_minimum_required`. Build images from the repository root
+`--build-arg CMAKE_VERSION=v3.30.1` overrides the bootstrap tag only; the final
+version follows vcpkg's tool metadata and must satisfy the project's
+`cmake_minimum_required`. Build images from the repository root
 with Podman (or Docker with BuildKit enabled) and the vcpkg submodule initialized,
 for example:
 

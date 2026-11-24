@@ -1512,14 +1512,35 @@ TEST_F(PasswordPolicyOptionTest, RealFaillockThresholdAndSuccessfulAccountReset)
         GTEST_SKIP() << "Isolated root-account faillock test requires root";
     }
     auto library = std::unique_ptr<void, int (*)(void*)>(dlopen("libpam.so.0", RTLD_NOW), dlclose);
-    ASSERT_NE(nullptr, library.get());
+    if (!library)
+    {
+        GTEST_SKIP() << "libpam is not installed";
+    }
     using Start = int (*)(const char*, const char*, const void*, const char*, void**);
     using Operation = int (*)(void*, int);
     const auto start = reinterpret_cast<Start>(dlsym(library.get(), "pam_start_confdir"));
     const auto authenticate = reinterpret_cast<Operation>(dlsym(library.get(), "pam_authenticate"));
     const auto account = reinterpret_cast<Operation>(dlsym(library.get(), "pam_acct_mgmt"));
     const auto end = reinterpret_cast<Operation>(dlsym(library.get(), "pam_end"));
-    ASSERT_NE(nullptr, start);
+    if (!start || !authenticate || !account || !end)
+    {
+        GTEST_SKIP() << "libpam does not support isolated PAM dispatch";
+    }
+    const char* moduleDirectories[] = {"/lib/security/", "/lib64/security/", "/lib/x86_64-linux-gnu/security/", "/usr/lib/security/",
+        "/usr/lib64/security/", "/usr/lib/x86_64-linux-gnu/security/"};
+    bool hasFaillock = false;
+    for (const auto* directory : moduleDirectories)
+    {
+        if (access((std::string(directory) + "pam_faillock.so").c_str(), R_OK) == 0)
+        {
+            hasFaillock = true;
+            break;
+        }
+    }
+    if (!hasFaillock)
+    {
+        GTEST_SKIP() << "System pam_faillock module is unavailable";
+    }
     const auto tally = context.GetTempdirPath() + "/isolated-tally";
     ASSERT_EQ(0, mkdir(tally.c_str(), 0700));
     const auto settings = context.MakeTempfile("deny = 3\nunlock_time = 0\neven_deny_root\nroot_unlock_time = 0\ndir = " + tally + "\n");
@@ -1575,12 +1596,21 @@ TEST_F(PasswordPolicyOptionTest, RealHistoryAndWeakQualityInIsolatedFilesystem)
         GTEST_SKIP() << "Isolated synthetic passwd/shadow tests require chroot privilege";
     }
     auto library = std::unique_ptr<void, int (*)(void*)>(dlopen("libpam.so.0", RTLD_NOW | RTLD_GLOBAL), dlclose);
-    ASSERT_NE(nullptr, library.get());
+    if (!library)
+    {
+        GTEST_SKIP() << "libpam is not installed";
+    }
     auto cryptLibrary = std::unique_ptr<void, int (*)(void*)>(dlopen("libcrypt.so.1", RTLD_NOW | RTLD_GLOBAL), dlclose);
-    ASSERT_NE(nullptr, cryptLibrary.get());
+    if (!cryptLibrary)
+    {
+        GTEST_SKIP() << "libcrypt is not installed";
+    }
     using Crypt = char* (*)(const char*, const char*);
     const auto crypt = reinterpret_cast<Crypt>(dlsym(cryptLibrary.get(), "crypt"));
-    ASSERT_NE(nullptr, crypt);
+    if (!crypt)
+    {
+        GTEST_SKIP() << "libcrypt does not provide crypt";
+    }
     const std::string oldHash = crypt("HistoryOld_A91!_unique", "$6$kompliunit$");
     const auto fixture = context.GetTempdirPath() + "/synthetic-system";
     ASSERT_EQ(0, mkdir(fixture.c_str(), 0700));
@@ -1604,7 +1634,7 @@ TEST_F(PasswordPolicyOptionTest, RealHistoryAndWeakQualityInIsolatedFilesystem)
         "int pam_sm_chauthtok(void *p, int flags, int argc, const char **argv) {\n"
         " return (flags & 0x2000) && argc == 1 ? pam_set_item(p, 6, argv[0]) : 0; }\n");
     const auto compiled = fixture + "/token.so";
-    const auto command = "clang -x c -shared -fPIC '" + source + "' -o '" + compiled + "'";
+    const auto command = "cc -x c -shared -fPIC '" + source + "' -o '" + compiled + "'";
     ASSERT_EQ(0, system(command.c_str()));
     const auto copy = [&](const std::string& sourcePath, const std::string& name) {
         std::ifstream input(sourcePath, std::ios::binary);
@@ -1638,7 +1668,10 @@ TEST_F(PasswordPolicyOptionTest, RealHistoryAndWeakQualityInIsolatedFilesystem)
     const auto start = reinterpret_cast<Start>(dlsym(library.get(), "pam_start_confdir"));
     const auto password = reinterpret_cast<Operation>(dlsym(library.get(), "pam_chauthtok"));
     const auto end = reinterpret_cast<Operation>(dlsym(library.get(), "pam_end"));
-    ASSERT_NE(nullptr, start);
+    if (!start || !password || !end)
+    {
+        GTEST_SKIP() << "libpam does not support isolated password dispatch";
+    }
     for (const auto& scenario : std::vector<std::pair<std::string, bool>>{
              {"history-old", false}, {"history-retained", false}, {"history-new", true}, {"quality-weak", false}, {"quality-strong", true}})
     {
