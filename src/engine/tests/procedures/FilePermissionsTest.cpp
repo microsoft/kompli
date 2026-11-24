@@ -1861,7 +1861,7 @@ TEST_F(EnsureFilePermissionsTest, NumericOwnershipRejectsInvalidCombinationsAndR
     EXPECT_EQ(remediation.Error().code, ENOTSUP);
 }
 
-// TM-12, by-name route: unlike EnsureFilePermissionsTest above, this fixture
+// By-name route: unlike EnsureFilePermissionsTest above, this fixture
 // never skips without root. Its files are owned by the test user, and every
 // rule below avoids an owner requirement (or names the current user), so
 // only the mode is non-compliant -- the by-name route's open()/fstat()/
@@ -1882,7 +1882,7 @@ protected:
     }
 };
 
-// TM-12 (red first): a configured path that is a hard link to a second file
+// Red first: a configured path that is a hard link to a second file
 // must be refused, and both names keep their original mode.
 TEST_F(EnsureFilePermissionsUnprivilegedTest, TM12HardLinkedConfiguredPathRefusesModeChange)
 {
@@ -1907,7 +1907,7 @@ TEST_F(EnsureFilePermissionsUnprivilegedTest, TM12HardLinkedConfiguredPathRefuse
     EXPECT_EQ(0777u, static_cast<unsigned>(secondAfter.st_mode & 0777));
 }
 
-// TM-12 (red first): FilePermissionsCollection over a directory holding one
+// Red first: FilePermissionsCollection over a directory holding one
 // hard-linked and one ordinary non-compliant file remediates the ordinary
 // file, refuses the hard-linked one, and reports NonCompliant overall.
 TEST_F(EnsureFilePermissionsUnprivilegedTest, TM12FilePermissionsCollectionRefusesHardLinkedFileButRemediatesOrdinary)

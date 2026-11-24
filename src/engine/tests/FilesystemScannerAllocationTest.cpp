@@ -137,7 +137,7 @@ void operator delete[](void* ptr, std::size_t) noexcept
     std::free(ptr);
 }
 
-// TM-11: an exception escaping the forked scanner grandchild must never resume host
+// An exception escaping the forked scanner grandchild must never resume host
 // (caller/engine) code. This executable holds only this case, so the replaced global
 // operators and the sticky injector cannot affect any other test.
 //

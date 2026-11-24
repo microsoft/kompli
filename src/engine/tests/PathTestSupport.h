@@ -159,7 +159,7 @@ inline Result<Filesystem::Path> SelectAcceptedPath(const ContextInterface& conte
     return accepted;
 }
 
-// TM-9: physical root, barrier, and inverse are acquisition properties,
+// Physical root, barrier, and inverse are acquisition properties,
 // never a lexical normalization of names or an open-by-name replay.
 inline Result<Filesystem::Path::Step> SelectStep(const Filesystem::Path& path, const std::string& name, Filesystem::Path::Policy policy)
 {

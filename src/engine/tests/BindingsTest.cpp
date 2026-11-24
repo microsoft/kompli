@@ -221,7 +221,7 @@ TEST_F(BindingsTest, OctalModeKeepsLeadingWhitespaceAndPositiveSign)
     }
 }
 
-// TM-6: reject values below zero and mode_t overflow before narrowing.
+// Reject values below zero and mode_t overflow before narrowing.
 TEST_F(BindingsTest, OctalModeRejectsNegativeValues)
 {
     for (const string input : {"-1", "\t-0755"})

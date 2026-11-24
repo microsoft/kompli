@@ -35,7 +35,7 @@ using ComplianceEngine::Status;
 
 namespace
 {
-// TM-12 test helper: acquires a live pin for a regular-file child of
+// Test helper: acquires a live pin for a regular-file child of
 // `directory` directly through the pinned filesystem route, bypassing
 // LogFilePermissions' own hardcoded log-file owner rules. This lets a test
 // construct FilePermissionsParams with an achievable (unprivileged) owner
@@ -339,7 +339,7 @@ TEST_F(LogFileRangeTest, RootDirectoryLinkIsFollowedAndDepthThirtyThreeErrors)
     EXPECT_EQ(EMFILE, tooDeep.Error().code);
 }
 
-// TM-12: a hard link inside the scanned tree to a file outside it is an
+// A hard link inside the scanned tree to a file outside it is an
 // ordinary directory entry; Path confinement and sealed descriptor authority
 // accept it by design (no symlink is followed and no name leaves the
 // barrier). Remediation must refuse to mutate the held pin rather than
@@ -366,7 +366,7 @@ TEST_F(LogFileRangeTest, TM12HardLinkedFileWithinScannedTreeRefusesMutation)
     EXPECT_EQ(0777, after.st_mode & 0777);
 }
 
-// TM-12: an unlink of the inside name between acquisition and the fresh
+// An unlink of the inside name between acquisition and the fresh
 // pre-mutation check must not defeat the refusal. A fresh-only check would
 // be fooled here (by the time any fresh stat runs, only the outside name
 // remains, showing one link); the acquisition-time count, recorded once by
@@ -415,7 +415,7 @@ TEST_F(LogFileRangeTest, TM12UnlinkAfterAcquisitionStillRefusesViaAcquisitionTim
     EXPECT_NE(0, access(linked.c_str(), F_OK));
 }
 
-// TM-12: ownership and mode are separate mutation steps, each preceded by
+// Ownership and mode are separate mutation steps, each preceded by
 // its own fresh check. A link added between them (simulated here right as
 // ownership "succeeds") must make the mode step refuse after ownership has
 // already changed; the verdict is NonCompliant, not Compliant -- the
@@ -457,7 +457,7 @@ TEST_F(LogFileRangeTest, TM12LinkAddedBetweenOwnershipAndModeStagesRefusesModeAf
     EXPECT_EQ(0777, after.st_mode & 0777);
 }
 
-// TM-12 green-baseline control: a hard-linked file that already satisfies
+// Green-baseline control: a hard-linked file that already satisfies
 // the rule must stay Compliant, with no mutation attempt at all. This uses
 // the pinned route directly (bypassing LogFilePermissions' hardcoded
 // root-owned pattern rules) so full compliance is achievable without
@@ -956,7 +956,7 @@ TEST_F(EnsureLogfileAccessTest, RemediateIgnoresSpecialFiles)
     EXPECT_TRUE(S_ISDIR(dirStat.st_mode));
 }
 
-// TM-12 root-gated real control: with a hard link to the scanned file from
+// Root-gated real control: with a hard link to the scanned file from
 // outside the tree, remediation must leave the real file's owner and mode
 // untouched; once the outside link is removed, the same file (same inside
 // name) is remediated normally.

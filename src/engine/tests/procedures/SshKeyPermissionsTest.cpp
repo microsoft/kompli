@@ -33,7 +33,7 @@ static const char kPrivateKeyHeader[] = "-----BEGIN OPENSSH PRIVATE KEY-----\n";
 
 namespace
 {
-// TM-12 test helper: acquires a live pin for a regular-file child of
+// Test helper: acquires a live pin for a regular-file child of
 // `directory` directly through the pinned filesystem route, bypassing
 // SshKeyPermissions' own hardcoded root-owned rules. This lets a test
 // construct FilePermissionsParams with an achievable (unprivileged) owner
@@ -410,7 +410,7 @@ TEST(SshKeyRangeTest, RootSymlinkIsFollowedButInteriorDirectorySymlinkIsNot)
     EXPECT_EQ(Status::Compliant, result.Value());
 }
 
-// TM-12: a hard link inside the scanned SSH key tree to a file outside it
+// A hard link inside the scanned SSH key tree to a file outside it
 // is an ordinary directory entry; Path confinement and sealed descriptor
 // authority accept it by design. Remediation must refuse to mutate the
 // held pin rather than following the link to the outside inode. The
@@ -447,7 +447,7 @@ TEST(SshKeyRangeTest, TM12HardLinkedKeyWithinScannedTreeRefusesMutation)
     EXPECT_EQ(0777, after.st_mode & 0777);
 }
 
-// TM-12: an unlink of the inside name between acquisition and the fresh
+// An unlink of the inside name between acquisition and the fresh
 // pre-mutation check must not defeat the refusal. A fresh-only check would
 // be fooled here (by the time any fresh stat runs, only the outside name
 // remains, showing one link); the acquisition-time count, recorded once by
@@ -501,7 +501,7 @@ TEST(SshKeyRangeTest, TM12UnlinkAfterAcquisitionStillRefusesViaAcquisitionTimeLi
     EXPECT_TRUE(unlinkedInside);
 }
 
-// TM-12: ownership and mode are separate mutation steps, each preceded by
+// Ownership and mode are separate mutation steps, each preceded by
 // its own fresh check. A link added between them (simulated here right as
 // ownership "succeeds") must make the mode step refuse after ownership has
 // already changed; the verdict is NonCompliant, not Compliant -- the
@@ -553,7 +553,7 @@ TEST(SshKeyRangeTest, TM12LinkAddedBetweenOwnershipAndModeStagesRefusesModeAfter
     EXPECT_EQ(0777, after.st_mode & 0777);
 }
 
-// TM-12 green-baseline control: a hard-linked file that already satisfies
+// Green-baseline control: a hard-linked file that already satisfies
 // the rule must stay Compliant, with no mutation attempt at all. This uses
 // the pinned route directly (bypassing SshKeyPermissions' hardcoded
 // root-owned rules) so full compliance is achievable without privilege: the
@@ -810,7 +810,7 @@ TEST_F(EnsureSshKeyPermsTest, PrivateKeyRemediation)
     CheckPinnedKeyReadCount();
 }
 
-// TM-12 root-gated real control: with a hard link to the key from outside
+// Root-gated real control: with a hard link to the key from outside
 // the scanned tree, remediation must leave the real file's mode untouched
 // (ownership is already root:root in this fixture); once the outside link
 // is removed, the same key (same inside name) is remediated normally.

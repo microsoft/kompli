@@ -446,7 +446,7 @@ int main(int argc, char* argv[])
     // from multiple files, e.g. from two different frameworks), each
     // independently applicability-checked, accumulating into one combined
     // result. Content-drift protection between plan and run is out of
-    // kompli's scope (ADR-0008) - not a byte-hash pin here.
+    // kompli's scope - not a byte-hash pin here.
     for (size_t b = 0; b < plan.benchmarks.size(); ++b)
     {
         const auto& doc = documents[b];

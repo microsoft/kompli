@@ -242,7 +242,7 @@ protected:
 
     Result<AuditResult> Evaluate(int groupId)
     {
-        // Mirror the M-14 YAML's two-child audit with a private config path.
+        // Mirror the audit-log-group rule's two-child audit with a private config path.
         const auto serialized =
             R"({"allOf":[{"FileRegexMatch":{"path":")" + context.GetTempdirPath() +
             R"(","filenamePattern":"auditd\\.conf","matchPattern":"^\\s*log_group\\s*=\\s*(\\S+)\\s*(?:#.*)?$","statePattern":"^root$","allMatches":"True"}},{"Lua":{"script":""}}]})";

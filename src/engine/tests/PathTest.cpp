@@ -120,7 +120,7 @@ int MountSetupFailure(const char* operation)
     return 1;
 }
 
-// TM-9: the mount baseline is the frozen leaf, not the process-root pin.
+// The mount baseline is the frozen leaf, not the process-root pin.
 void CheckRealBindMounts(const NiceMock<MockContext>& context, const std::string& accepted)
 {
     auto opened = SelectAcceptedPath(context, accepted, CrossMountPathPolicy(), ResolverLimits{});
@@ -1563,7 +1563,7 @@ TEST_F(PathAliasTest, BarrierRejectsParentExcursionEvenWhenLinkReturnsToSameDire
     EXPECT_FALSE(path.Apply(std::move(old.Value())).HasValue());
     EXPECT_EQ(root + "/bob", PathTestAccess::ToString(path));
     EXPECT_EQ(depth, path.Size());
-    // TM-9: absolute spelling equality does not authorize a parent crossing.
+    // Absolute spelling equality does not authorize a parent crossing.
 }
 
 TEST_F(PathAliasTest, SingleChildInputRejectsTraversalAndDoesNotMutate)

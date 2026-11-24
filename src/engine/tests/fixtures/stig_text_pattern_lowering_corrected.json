@@ -6,7 +6,7 @@
     "test": "oval:mil.disa.stig.ind:tst:23823300"
   },
   "capture": {
-    "captureId": "M-55-corrected",
+    "captureId": "corrected",
     "augmentation": "none",
     "augmentationEngineRevision": "5ea5c4d96a7b358d8ecf6b1d2368e3f09b64e990",
     "parsePySha256": "4e8afd8228df381ae52fc3b2dda10ce5b6dca7a435666616000cc0f2d7ba7229",

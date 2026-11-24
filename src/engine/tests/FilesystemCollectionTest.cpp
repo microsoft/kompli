@@ -1701,7 +1701,7 @@ TEST(FilesystemCollectionTest, TM9NestedBarrierRejectsRelativeAbsoluteAndPrefixE
         request.scope = FilesystemScope::All;
         request.childDirectoryLinkAction = SymlinkPolicy::Follow;
         request.childFileLinkAction = SymlinkPolicy::Follow;
-        // TM-9: CrossMounts/All is a mount choice, never permission to exit
+        // CrossMounts/All is a mount choice, never permission to exit
         // the automatically frozen selected start (including a prefix twin).
         const auto denied = CollectFilesystem(request);
         ASSERT_FALSE(denied.HasValue());
@@ -1726,7 +1726,7 @@ TEST(FilesystemCollectionTest, TM9RejectsLeaveAndReenterInsteadOfLexicallyNormal
         FilesystemCollectionRequest request(root, FilesystemRootKind::Directory);
         request.scope = FilesystemScope::All;
         request.childFileLinkAction = SymlinkPolicy::Follow;
-        // TM-9: resolution must not cross the barrier and return to it.
+        // Resolution must not cross the barrier and return to it.
         const auto denied = CollectFilesystem(request);
         ASSERT_FALSE(denied.HasValue());
         EXPECT_EQ(EXDEV, denied.Error().code);

@@ -96,7 +96,7 @@ TEST(StigTextPatternLoweringPayloadTest, ActualCaptureHasDistinctProvenanceAndCo
 
     const auto* capture = json_object_get_object(root, "capture");
     ASSERT_NE(nullptr, capture);
-    EXPECT_STREQ("M-55-corrected", json_object_get_string(capture, "captureId"));
+    EXPECT_STREQ("corrected", json_object_get_string(capture, "captureId"));
     EXPECT_STREQ("none", json_object_get_string(capture, "augmentation"));
     EXPECT_STREQ("5ea5c4d96a7b358d8ecf6b1d2368e3f09b64e990", json_object_get_string(capture, "augmentationEngineRevision"));
     EXPECT_STREQ("4e8afd8228df381ae52fc3b2dda10ce5b6dca7a435666616000cc0f2d7ba7229", json_object_get_string(capture, "parsePySha256"));

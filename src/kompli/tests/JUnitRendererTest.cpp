@@ -409,7 +409,7 @@ TEST(JUnitRendererTest, AbsentTagsOmitTagsBlock)
 
 TEST(JUnitRendererTest, RejectsMalformedTagsWithoutMisreportingThem)
 {
-    // TM-17: malformed result tags cannot become a passing-looking JUnit report.
+    // Malformed result tags cannot become a passing-looking JUnit report.
     EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":null}]})", "s").HasValue());
     EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":"level:l1"}]})", "s").HasValue());
     EXPECT_FALSE(RenderJUnit(R"({"rules":[{"id":"1","title":"R","status":"Compliant","tags":["level:l1",42]}]})", "s").HasValue());

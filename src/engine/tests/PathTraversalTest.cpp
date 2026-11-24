@@ -352,7 +352,7 @@ TEST_F(PathAliasTest, DirectoryCursorOutlivesRetiredSourcePin)
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
-// TM-9: mirrors the production consumer pattern
+// Mirrors the production consumer pattern
 // (LogFilePermissions.cpp, SshKeyPermissions.cpp, UserDotFilePermissions.cpp)
 // `FTW::Files(As<Path>(std::move(root).Value()), ...)`. `Result<T>::Value() &&`
 // (Result.h) returns the payload *by value*, so extracting the Path this way
