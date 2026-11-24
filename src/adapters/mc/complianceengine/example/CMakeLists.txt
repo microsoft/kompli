@@ -14,8 +14,8 @@ add_custom_target(kompli-mc-example-stage
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/ComplianceEngineExample.metaconfig.json" ${PROJECT_BINARY_DIR}/Staging/
 #    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_BINARY_DIR}/ComplianceEngineExample.mof" ${PROJECT_BINARY_DIR}/Staging/
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_SOURCE_DIR}/ComplianceEngineExample.mof" ${PROJECT_BINARY_DIR}/Staging/
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:kompli-mc-adapter> ${PROJECT_BINARY_DIR}/Staging/Modules/DscNativeResources/OsConfigResource/libOsConfigResource.so
-    DEPENDS kompli-mc-adapter ComplianceEngineExample.mof)
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:OsConfigResourceComplianceEngine> ${PROJECT_BINARY_DIR}/Staging/Modules/DscNativeResources/OsConfigResource/libOsConfigResource.so
+    DEPENDS OsConfigResourceComplianceEngine ComplianceEngineExample.mof)
 
 add_custom_target(kompli-mc-example-zip ALL
     BYPRODUCTS ${KompliRootBinaryDir}/ComplianceEngineExample.zip
