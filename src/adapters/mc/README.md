@@ -1,6 +1,11 @@
-# Kompli Universal Native Resource Provider (NRP) for Azure Automanage Machine Configuration (MC)
+# kompli Universal Native Resource Provider (NRP) for Azure Automanage Machine Configuration (MC)
 
 ## 1. About Machine Configuration
+
+The [MC adapter](../../../docs/glossary.md#mc-adapter) connects the
+[kompli core](../../../docs/glossary.md#engine) to the
+[GC worker](../../../docs/glossary.md#gc-worker) as a
+[native resource provider](../../../docs/glossary.md#nrp).
 
 Read about Azure Automanage Machine Configuration (formerly called Azure Policy Guest Configuration) at [learn.microsoft.com/machine-configuration](https://learn.microsoft.com/en-us/azure/governance/machine-configuration/).
 

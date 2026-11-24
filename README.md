@@ -1,32 +1,37 @@
-# Kompli
+# kompli
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/microsoft/kompli/badge)](https://scorecard.dev/viewer/?uri=github.com/microsoft/kompli)
 
-Kompli is a Linux security compliance engine for evaluating and remediating system configuration against industry benchmarks (CIS, STIG, etc.). It is derived from the [Azure OSConfig](https://github.com/Azure/azure-osconfig) project, retaining only the ComplianceEngine module and its direct dependencies.
+kompli is a Linux security compliance engine for evaluating and remediating system configuration against industry benchmarks (CIS, STIG, etc.). It is derived from the [Azure OSConfig](https://github.com/Azure/azure-osconfig) project, with its [kompli core](docs/glossary.md#engine) in [`src/engine/`](src/engine/), a local CLI and a separate Machine Configuration adapter.
+
+See the [glossary](docs/glossary.md) for project and interface terminology.
 
 ## History
 
-This codebase originates from **Azure OSConfig** — a modular security configuration stack for Linux Edge devices developed by Microsoft, supporting multi-authority device management over Azure IoT Hub, GitOps, and local management. OSConfig consisted of a platform daemon, a PnP/MC adapter layer, and a set of management modules (CommandRunner, SecurityBaseline, DeviceInfo, Networking, Firewall, and others).
+This codebase originates from **Azure OSConfig** — a modular security configuration stack for Linux Edge devices developed by Microsoft, supporting multi-authority device management over Azure IoT Hub and local management. OSConfig consisted of a platform daemon, a PnP/MC adapter layer, and a set of management modules (CommandRunner, SecurityBaseline, DeviceInfo, Networking, Firewall, and others).
 
-Kompli strips OSConfig down to a single module: **ComplianceEngine** (`src/modules/complianceengine/`). The MC (Machine Configuration) adapter, mpiclient, logging, telemetry, parson, and commonutils libraries are retained as they form the direct dependency chain of ComplianceEngine. Everything else — the platform daemon, PnP adapter, ASB/SSH adapters, and all non-CE modules — has been removed.
+kompli focuses on the project core and its execution entry points rather
+than the original platform's full management stack. The MC (Machine
+Configuration) adapter, shared utilities, logging, JSON support and optional
+telemetry support the core.
 
 ## Structure
 
 ```
 src/
-├── adapters/mc/complianceengine/   MC adapter for ComplianceEngine
+├── adapters/mc/complianceengine/   MC adapter for the engine
 ├── common/
 │   ├── commonutils/                Shared C utilities (pruned to CE dependencies)
 │   ├── logging/                    Logging library
 │   ├── mpiclient/                  MPI client (socket communication)
-│   ├── parson/                     JSON library
-│   └── telemetry/                  Telemetry library
-└── modules/complianceengine/       ComplianceEngine module
-    ├── src/lib/                    Core engine, procedures, Lua evaluator
-    ├── src/benchmarkio/            Benchmark-definition parsing + input-file security
-    ├── src/kompli/                 kompli CLI tool
-    └── tests/                      GTest suite
+│   └── parson/                     JSON library
+├── engine/                         Core engine, procedures, Lua evaluator
+│   └── tests/                      GTest suite
+├── benchmarkio/                    Benchmark-definition parsing + input-file security
+├── kompli/                         kompli CLI tool
+├── tools/lua-evaluator/            Lua evaluator tool
+└── telemetry/                      Telemetry library
 ```
 
 ## Getting started
@@ -84,7 +89,7 @@ cd build && ctest
 
 ## Configuration
 
-ComplianceEngine is configured via `/etc/kompli/kompli.json`:
+The engine is configured via `/etc/kompli/kompli.json`:
 
 ```json
 {

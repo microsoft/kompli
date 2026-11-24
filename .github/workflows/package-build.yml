@@ -116,8 +116,6 @@ jobs:
                 -Dhsm_type_symm_key=ON
                 -DCOMPILE_WITH_STRICTNESS=ON
                 -DBUILD_TESTS=OFF
-                -DBUILD_MODULETEST=OFF
-                -DBUILD_SAMPLES=OFF
                 -Duse_default_uuid=ON
                 -DBUILD_ADAPTERS=ON
                 -DBUILD_FUZZER=ON
@@ -130,8 +128,6 @@ jobs:
                 -Dhsm_type_symm_key=ON
                 -DCOMPILE_WITH_STRICTNESS=ON
                 -DBUILD_TESTS=OFF
-                -DBUILD_MODULETEST=ON
-                -DBUILD_SAMPLES=OFF
                 -Duse_default_uuid=ON
                 -DBUILD_ADAPTERS=ON
               )

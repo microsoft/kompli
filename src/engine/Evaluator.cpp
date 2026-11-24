@@ -6,7 +6,6 @@
 #include "JsonWrapper.h"
 #include "Logging.h"
 #include "LuaEvaluator.h"
-#include "Reasons.h"
 #include "Result.h"
 
 #include <cassert>
