@@ -61,7 +61,7 @@ the SystemAccountShell lookup no longer matches key substrings. When supplied
 bytes retain an embedded NUL in a selected record, callers reject it before
 assessment. The existing `CommonContext` acquisition can truncate at NUL
 before `LoginDefsOption` or `GetUidMin` sees the bytes; fixing that reader
-remains M-38 work, so this is not an end-to-end NUL guarantee.
+remains future work, so this is not an end-to-end NUL guarantee.
 `SystemAccountShell` bounds its existing direct file read and checks completion
 before parsing; generic reader replacement remains separate. The parser
 rejects exhausted byte, line, record or diagnostic
