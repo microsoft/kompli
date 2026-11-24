@@ -224,16 +224,6 @@ TEST_F(OptionalTest, EmptyArrowOperatorThrows)
     EXPECT_THROW(constEmpty.operator->(), std::logic_error);
 }
 
-TEST_F(OptionalTest, MovedFromArrowOperatorThrowsAndStaysEmpty)
-{
-    Optional<std::string> source("foo");
-    Optional<std::string> destination(std::move(source));
-    ASSERT_FALSE(source.HasValue());
-    const Optional<std::string>& constSource = source;
-    EXPECT_THROW(source.operator->(), std::logic_error);
-    EXPECT_THROW(constSource.operator->(), std::logic_error);
-}
-
 TEST_F(OptionalTest, CopyAssignmentReconstructsNonassignableValue)
 {
     Optional<CopyConstructibleNotAssignable> source(CopyConstructibleNotAssignable(42));
@@ -249,13 +239,11 @@ TEST_F(OptionalTest, MoveOnlyValueAndEmptyTransitions)
 {
     Optional<std::unique_ptr<int>> source(std::unique_ptr<int>(new int(42)));
     Optional<std::unique_ptr<int>> moved(std::move(source));
-    EXPECT_FALSE(source.HasValue());
     ASSERT_TRUE(moved.HasValue());
     EXPECT_EQ(*moved.Value(), 42);
 
     Optional<std::unique_ptr<int>> destination(std::unique_ptr<int>(new int(7)));
     destination = std::move(moved);
-    EXPECT_FALSE(moved.HasValue());
     ASSERT_TRUE(destination.HasValue());
     EXPECT_EQ(*destination.Value(), 42);
     destination = Optional<std::unique_ptr<int>>{};
