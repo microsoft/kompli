@@ -1,7 +1,9 @@
 # kompli CLI contract
 
 This document defines the commands, arguments, options, exit behavior, and
-on-disk formats exposed by the `kompli` CLI.
+on-disk formats exposed by the [kompli CLI](glossary.md#kompli-cli).
+The [glossary](glossary.md) distinguishes definitions, plans, procedures and
+the different result forms.
 
 ## 1. Command overview
 
@@ -66,7 +68,7 @@ see §2.
 argument (the benchmark-definition file for `plan`/`list`, the plan file for
 `run`); a missing path or `-` is a hard error — stdin is deliberately
 unsupported for definitions (see the input-hardening posture in
-`src/modules/complianceengine/src/kompli/THREAT_MODEL.md`). `render` is a
+`src/kompli/THREAT_MODEL.md`). `render` is a
 root-free, pure transformation and does accept stdin.
 
 There is no whole-file, single-mode command — `plan`+`run` (§2) is the only
@@ -124,7 +126,8 @@ Generates a plan: **every** rule in `<file>` is seeded at `mode: audit`
 keeping `enforce` in the plan contract even though `run` can't actually
 execute it yet — see §2's `enforce` note). **Output default:**
 standard output, same as `render`; `-o/--output
-<path>` writes to a file instead.
+<path>` writes to a file instead. `--pin=<caret|tilde|exact>` selects
+one content-version constraint for all input definitions (default: `caret`).
 
 **Toggle semantics**: applying `--audit=X` when `X` is already
 `audit` in the plan is a no-op; it only modifies `X` if the plan currently
@@ -148,6 +151,8 @@ the command line produce **one** plan with one `benchmarks[]` entry per file:
     {
       "file": "ubuntu24.04.benchmark.json",
       "name": "ubuntu24.04",     // from the definition's metadata.name
+      "version": "1.0.0",       // from the definition's spec.version
+      "versionConstraint": "^1.0.0",
       "rules": {
         "1.1.1.1": { "mode": "audit", "parameters": { "PKG_NAME": "cramfs" } },
         "1.1.2": { "mode": "remediate", "parameters": {} }
@@ -156,6 +161,14 @@ the command line produce **one** plan with one `benchmarks[]` entry per file:
   ]
 }
 ```
+
+Each entry records the definition's `spec.version` as `version` (`x.y.z`).
+`--pin` sets every entry's `versionConstraint`: `caret` (default) writes
+`^x.y.z` (same major), `tilde` writes `~x.y.z` (same major.minor), and
+`exact` writes `x.y.z`. The `version` field is unchanged by `--pin`.
+Before evaluating any rules, `run` checks each definition's current version
+against its constraint: compatible updates run and are logged; an incompatible
+version is a hard error. Review a new plan before widening a pin.
 
 Each `rules` map is keyed by `id` — now just the opaque remainder,
 not the full `/<framework>/.../...` path, since the file-level prefix
@@ -323,7 +336,7 @@ is out of scope here.
 A rule reference (`id`, which plan/run key on, and which is
 kompli's *sole* per-rule identifier) must be unambiguous within one file for any of the above to safely rely on
 it. `BenchmarkDefinition::ParseString`/`ParseFile`
-(`src/modules/complianceengine/src/benchmarkio/BenchmarkDefinition.hpp`) must
+(`src/benchmarkio/BenchmarkDefinition.hpp`) must
 **reject** a document with a duplicate `id` across its rules, checked as each
 rule is parsed.
 

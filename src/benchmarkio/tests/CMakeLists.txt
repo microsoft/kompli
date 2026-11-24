@@ -10,7 +10,7 @@ add_executable(benchmarkio-tests
 )
 
 target_include_directories(benchmarkio-tests PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../tests
+    ${CMAKE_SOURCE_DIR}/engine/tests
 )
 
 target_link_libraries(benchmarkio-tests
