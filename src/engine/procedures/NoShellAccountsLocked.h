@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_NO_SHELL_ACCOUNTS_LOCKED_H
-#define COMPLIANCEENGINE_PROCEDURES_NO_SHELL_ACCOUNTS_LOCKED_H
+#ifndef KOMPLI_PROCEDURES_NO_SHELL_ACCOUNTS_LOCKED_H
+#define KOMPLI_PROCEDURES_NO_SHELL_ACCOUNTS_LOCKED_H
 
 #include <Evaluator.h>
 #include <Separated.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 struct NoShellAccountsLockedParams
@@ -21,5 +21,5 @@ struct NoShellAccountsLockedParams
 };
 
 Result<Status> AuditNoShellAccountsLocked(const NoShellAccountsLockedParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_NO_SHELL_ACCOUNTS_LOCKED_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_NO_SHELL_ACCOUNTS_LOCKED_H

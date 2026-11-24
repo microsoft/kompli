@@ -13,7 +13,7 @@
 #include <string>
 #include <sys/stat.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // TODO(wpk) std::regex::multiline is only supported in C++17.
 static bool MultilineRegexSearch(const std::string& str, const std::regex& pattern)
@@ -258,4 +258,4 @@ Result<Status> IsKernelModuleBlocked(std::string moduleName, bool requireMask, I
     return indicators.Compliant("Module " + moduleName + " is disabled");
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_SSHD_OPTION_H
-#define COMPLIANCEENGINE_PROCEDURES_SSHD_OPTION_H
+#ifndef KOMPLI_PROCEDURES_SSHD_OPTION_H
+#define KOMPLI_PROCEDURES_SSHD_OPTION_H
 
 #include <Evaluator.h>
 #include <Separated.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class SshdOptionOperation
 {
@@ -69,5 +69,5 @@ struct SshdOptionParams
 Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateSshdOption(const SshdOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
 
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_SSHD_OPTION_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_SSHD_OPTION_H

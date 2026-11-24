@@ -10,7 +10,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -218,4 +218,4 @@ Result<Status> RemediateKernelModuleUnavailable(const KernelModuleUnavailablePar
     return postAudit;
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

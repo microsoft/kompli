@@ -19,7 +19,7 @@
 #include <sys/stat.h>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -406,4 +406,4 @@ Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree&
     }
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

@@ -10,7 +10,7 @@
 #include <set>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditNoDuplicateEntries(const NoDuplicateEntriesParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -77,4 +77,4 @@ Result<Status> AuditNoDuplicateEntries(const NoDuplicateEntriesParams& params, I
 
     return indicators.Compliant(std::string("No duplicate ") + entries + " found in " + params.filename);
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

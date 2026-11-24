@@ -3,7 +3,7 @@
 
 #include <UsersIterator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 UsersRange::UsersRange(FILE* stream, OsConfigLogHandle logHandle) noexcept
     : ReentrantIteratorRange<UsersIterator, UsersRange>(stream, logHandle)
@@ -27,4 +27,4 @@ Result<UsersRange> UsersRange::Make(std::string path, OsConfigLogHandle logHandl
 
     return UsersRange(stream, logHandle);
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

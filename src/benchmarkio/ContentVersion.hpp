@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCE_ENGINE_BENCHMARKIO_CONTENT_VERSION_HPP
-#define COMPLIANCE_ENGINE_BENCHMARKIO_CONTENT_VERSION_HPP
+#ifndef KOMPLI_BENCHMARKIO_CONTENT_VERSION_HPP
+#define KOMPLI_BENCHMARKIO_CONTENT_VERSION_HPP
 
 #include <Result.h>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // A definition's content version, not its apiVersion or upstream
 // benchmarkVersion. Decimal components stay strings so comparison does not
@@ -22,6 +22,6 @@ struct ContentVersion
 Result<ContentVersion> ParseContentVersion(const std::string& text);
 int CompareContentVersion(const ContentVersion& left, const ContentVersion& right);
 std::string ContentVersionToString(const ContentVersion& version);
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCE_ENGINE_BENCHMARKIO_CONTENT_VERSION_HPP
+#endif // KOMPLI_BENCHMARKIO_CONTENT_VERSION_HPP

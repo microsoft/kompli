@@ -15,12 +15,12 @@
 #include <unistd.h>
 #include <vector>
 
-using ComplianceEngine::AuditWirelessDisabled;
-using ComplianceEngine::CompactListFormatter;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditWirelessDisabled;
+using Kompli::CompactListFormatter;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::Result;
+using Kompli::Status;
 
 namespace
 {

@@ -3,7 +3,7 @@
 #include <CommonUtils.h>
 #include <SCE.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditSCE(const SCEParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -18,4 +18,4 @@ Result<Status> RemediateSCE(const SCEParams& params, IndicatorsTree& indicators,
     const auto env = params.environment.ValueOr(std::string());
     return indicators.NonCompliant(std::string("SCE scripts are not supported yet (path: '") + params.scriptName + "', env: '" + env + "')");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

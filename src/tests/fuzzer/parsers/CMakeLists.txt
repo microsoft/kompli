@@ -3,7 +3,7 @@
 
 add_executable(login-defs-parser-fuzzer LoginDefsTarget.cpp)
 target_link_libraries(login-defs-parser-fuzzer PRIVATE
-    complianceenginelib
+    kompli-engine
     commonutils
     $<$<BOOL:${BUILD_TELEMETRY}>:telemetry-interface>
 )

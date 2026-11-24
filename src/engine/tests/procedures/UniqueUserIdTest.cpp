@@ -8,14 +8,14 @@
 #include <UniqueUserId.h>
 #include <fstream>
 
-using ComplianceEngine::AuditUniqueUserId;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::NestedListFormatter;
-using ComplianceEngine::Optional;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
-using ComplianceEngine::UniqueUserIdParams;
+using Kompli::AuditUniqueUserId;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::NestedListFormatter;
+using Kompli::Optional;
+using Kompli::Result;
+using Kompli::Status;
+using Kompli::UniqueUserIdParams;
 using std::map;
 using std::string;
 

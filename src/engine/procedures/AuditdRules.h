@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_AUDITD_RULES_H
-#define COMPLIANCEENGINE_PROCEDURES_AUDITD_RULES_H
+#ifndef KOMPLI_PROCEDURES_AUDITD_RULES_H
+#define KOMPLI_PROCEDURES_AUDITD_RULES_H
 
 #include <Evaluator.h>
 #include <Separated.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct AuditdRulesParams
 {
@@ -22,5 +22,5 @@ struct AuditdRulesParams
 };
 
 Result<Status> AuditAuditdRules(const AuditdRulesParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_AUDITD_RULES_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_AUDITD_RULES_H

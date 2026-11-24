@@ -11,7 +11,7 @@
 #include <grp.h>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 class GroupsRange;
 class GroupsIterator : public ReentrantIterator<struct group, GroupsRange>
@@ -31,6 +31,6 @@ public:
     static Result<GroupsRange> Make(OsConfigLogHandle logHandle);
     static Result<GroupsRange> Make(std::string path, OsConfigLogHandle logHandle);
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCE_GROUPS_ITERATOR_H

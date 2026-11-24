@@ -20,7 +20,7 @@
 #include <sys/stat.h>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -975,4 +975,4 @@ Result<Status> RemediateSshdOption(const SshdOptionParams& params, IndicatorsTre
     return indicators.Compliant("Validated and reloaded the explicit global SSH option; existing sessions are retained");
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

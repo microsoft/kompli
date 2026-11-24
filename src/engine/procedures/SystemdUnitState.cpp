@@ -11,9 +11,9 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-using ComplianceEngine::Optional;
+using Kompli::Optional;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 // Documentation for dbus {ActiveState, SubState, LoadState, UnitFileState} possible values and meaning
@@ -165,4 +165,4 @@ Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, Indic
     return Status::Compliant;
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

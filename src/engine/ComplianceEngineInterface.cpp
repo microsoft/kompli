@@ -32,12 +32,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-using ComplianceEngine::BenchmarkInfo;
-using ComplianceEngine::DistributionInfo;
-using ComplianceEngine::Engine;
-using ComplianceEngine::GetComplianceEngineDirectory;
-using ComplianceEngine::JsonWrapper;
-using ComplianceEngine::Status;
+using Kompli::BenchmarkInfo;
+using Kompli::DistributionInfo;
+using Kompli::Engine;
+using Kompli::GetComplianceEngineDirectory;
+using Kompli::JsonWrapper;
+using Kompli::Status;
 
 namespace
 {
@@ -76,7 +76,7 @@ int OpenTelemetryFile()
 {
     std::string telemetry_log_path(telemetry_log_dir);
 
-    if (!ComplianceEngine::MkdirRecursive(telemetry_log_path, 0700))
+    if (!Kompli::MkdirRecursive(telemetry_log_path, 0700))
     {
         OsConfigLogError(g_log, "Failed to create telemetry directory %s: %d", telemetry_log_path.c_str(), errno);
         return -1;
@@ -165,7 +165,7 @@ void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
     auto* engine = reinterpret_cast<Engine*>(clientSession);
     auto benchmarkRunCompletedAt = std::chrono::steady_clock::now();
     auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(benchmarkRunCompletedAt - g_benchmarkRunBeginAt).count();
-    auto event = ComplianceEngine::TelemetryEvent(ComplianceEngine::TelemetryEventType::BenchmarkRun, "ComplianceEngineSession");
+    auto event = Kompli::TelemetryEvent(Kompli::TelemetryEventType::BenchmarkRun, "ComplianceEngineSession");
     const auto& distributionInfo = engine->GetDistributionInfo();
     if (!distributionInfo.HasValue())
     {
@@ -182,7 +182,7 @@ void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
     }
 
     event.Add("ComplianceEngineVersion", KOMPLI_VERSION);
-    ComplianceEngine::LogCreatedTelemetryEvent(event, engine->GetTelemetry(), g_log, durationUs, g_benchmarkRunCreatedAt);
+    Kompli::LogCreatedTelemetryEvent(event, engine->GetTelemetry(), g_log, durationUs, g_benchmarkRunCreatedAt);
     engine->GetTelemetry().CloseFileDescriptor();
     auto moduleDirectory = GetComplianceEngineDirectory();
     if (moduleDirectory.HasValue())
@@ -218,27 +218,27 @@ MMI_HANDLE ComplianceEngineMmiOpen(const char* clientName, const unsigned int ma
     telemetry_fd = OpenTelemetryFile();
 #endif // BUILD_TELEMETRY
 
-    auto context = std::unique_ptr<ComplianceEngine::GuestConfigurationContext>(new ComplianceEngine::GuestConfigurationContext(g_log, telemetry_fd));
+    auto context = std::unique_ptr<Kompli::GuestConfigurationContext>(new Kompli::GuestConfigurationContext(g_log, telemetry_fd));
     if (nullptr == context)
     {
         OsConfigLogError(g_log, "ComplianceEngineMmiOpen(%s, %u): failed to create context", clientName, maxPayloadSizeBytes);
         return nullptr;
     }
-    std::unique_ptr<ComplianceEngine::PayloadFormatter> formatter;
+    std::unique_ptr<Kompli::PayloadFormatter> formatter;
     if (!strcmp(clientName, cModuleTestClientName))
     {
         OsConfigLogInfo(g_log, "ComplianceEngineMmiOpen(%s) using DebugFormatter", clientName);
-        formatter.reset(new ComplianceEngine::DebugFormatter());
+        formatter.reset(new Kompli::DebugFormatter());
     }
     else if (!strcmp(clientName, cNRPClientName))
     {
         OsConfigLogInfo(g_log, "ComplianceEngineMmiOpen(%s) using NestedListFormatter", clientName);
-        formatter.reset(new ComplianceEngine::NestedListFormatter());
+        formatter.reset(new Kompli::NestedListFormatter());
     }
     else
     {
         OsConfigLogInfo(g_log, "ComplianceEngineMmiOpen(%s) using JsonFormatter", clientName);
-        formatter.reset(new ComplianceEngine::JsonFormatter());
+        formatter.reset(new Kompli::JsonFormatter());
     }
 
     auto* engine = new Engine(std::move(context), std::move(formatter));
@@ -318,7 +318,7 @@ int ComplianceEngineMmiGet(MMI_HANDLE clientSession, const char* componentName, 
             {
                 OsConfigLogError(engine.Log(), "ComplianceEngineMmiGet failed with a non-critical error: %s (errno: %d)",
                     result.Error().message.c_str(), result.Error().code);
-                result = ComplianceEngine::AuditResult(Status::NonCompliant, "Audit failed with a non-critical error: " + result.Error().message);
+                result = Kompli::AuditResult(Status::NonCompliant, "Audit failed with a non-critical error: " + result.Error().message);
             }
         }
 

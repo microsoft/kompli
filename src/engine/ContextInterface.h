@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_CONTEXTINTERFACE_H
-#define COMPLIANCEENGINE_CONTEXTINTERFACE_H
+#ifndef KOMPLI_CONTEXTINTERFACE_H
+#define KOMPLI_CONTEXTINTERFACE_H
 
 #include "FilesystemScanner.h"
 #include "Logging.h"
@@ -16,7 +16,7 @@
 #include <sys/types.h>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // A single network interface as reported by the system: its name and the IFF_* flags
 // bitmask (see <net/if.h>). Produced by ContextInterface::GetNetworkInterfaces().
@@ -75,5 +75,5 @@ public:
 private:
     std::map<std::string, std::string> mBenchmarkSettings;
 };
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_CONTEXT_H
+} // namespace Kompli
+#endif // KOMPLI_CONTEXTINTERFACE_H

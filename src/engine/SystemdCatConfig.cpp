@@ -4,7 +4,7 @@
 #include <StringTools.h>
 #include <SystemdCatConfig.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<std::string> SystemdCatConfig(const std::string& filename, ContextInterface& context)
 {
@@ -18,4 +18,4 @@ Result<std::string> SystemdCatConfig(const std::string& filename, ContextInterfa
 
     return result.Value();
 }
-}; // namespace ComplianceEngine
+}; // namespace Kompli

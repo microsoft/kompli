@@ -13,13 +13,13 @@
 #include <unistd.h>
 #include <vector>
 
-using ComplianceEngine::AuditKernelModuleUnavailable;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::KernelModuleUnavailableParams;
-using ComplianceEngine::RemediateKernelModuleUnavailable;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditKernelModuleUnavailable;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::KernelModuleUnavailableParams;
+using Kompli::RemediateKernelModuleUnavailable;
+using Kompli::Result;
+using Kompli::Status;
 
 // Test module directory layouts now created in a temporary directory using MockContext::SetSpecialFilePath
 // find* outputs removed due to refactor away from executing find command.

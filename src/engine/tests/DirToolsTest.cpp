@@ -30,7 +30,7 @@ TEST_F(MkdirRecursiveTest, AppliesModeToNewFinalDirectory)
 {
     const std::string finalDirectory = mContext.GetTempdirPath() + "/parent/final";
 
-    ASSERT_TRUE(ComplianceEngine::MkdirRecursive(finalDirectory, 0700));
+    ASSERT_TRUE(Kompli::MkdirRecursive(finalDirectory, 0700));
     EXPECT_EQ(0700, GetMode(finalDirectory));
 }
 
@@ -40,7 +40,7 @@ TEST_F(MkdirRecursiveTest, CorrectsModeOfExistingFinalDirectory)
     ASSERT_EQ(0, ::mkdir(finalDirectory.c_str(), 0755));
     ASSERT_EQ(0, ::chmod(finalDirectory.c_str(), 0755));
 
-    ASSERT_TRUE(ComplianceEngine::MkdirRecursive(finalDirectory, 0700));
+    ASSERT_TRUE(Kompli::MkdirRecursive(finalDirectory, 0700));
     EXPECT_EQ(0700, GetMode(finalDirectory));
 }
 
@@ -48,7 +48,7 @@ TEST_F(MkdirRecursiveTest, HandlesRepeatedAndTrailingSlashes)
 {
     const std::string finalDirectory = mContext.GetTempdirPath() + "//parent///final/";
 
-    ASSERT_TRUE(ComplianceEngine::MkdirRecursive(finalDirectory, 0700));
+    ASSERT_TRUE(Kompli::MkdirRecursive(finalDirectory, 0700));
     EXPECT_EQ(0700, GetMode(finalDirectory));
 }
 
@@ -56,8 +56,8 @@ TEST_F(MkdirRecursiveTest, RejectsDotAndDotDotComponents)
 {
     const std::string baseDirectory = mContext.GetTempdirPath();
 
-    EXPECT_FALSE(ComplianceEngine::MkdirRecursive(baseDirectory + "/./dot", 0700));
-    EXPECT_FALSE(ComplianceEngine::MkdirRecursive(baseDirectory + "/parent/../dotdot", 0700));
+    EXPECT_FALSE(Kompli::MkdirRecursive(baseDirectory + "/./dot", 0700));
+    EXPECT_FALSE(Kompli::MkdirRecursive(baseDirectory + "/parent/../dotdot", 0700));
     EXPECT_NE(0, ::access((baseDirectory + "/dot").c_str(), F_OK));
     EXPECT_NE(0, ::access((baseDirectory + "/dotdot").c_str(), F_OK));
 }
@@ -70,7 +70,7 @@ TEST_F(MkdirRecursiveTest, RejectsSymlinkComponents)
     ASSERT_EQ(0, ::mkdir(targetDirectory.c_str(), 0700));
     ASSERT_EQ(0, ::symlink(targetDirectory.c_str(), linkPath.c_str()));
 
-    EXPECT_FALSE(ComplianceEngine::MkdirRecursive(linkPath + "/created", 0700));
+    EXPECT_FALSE(Kompli::MkdirRecursive(linkPath + "/created", 0700));
     EXPECT_NE(0, ::access((targetDirectory + "/created").c_str(), F_OK));
 }
 
@@ -82,5 +82,5 @@ TEST_F(MkdirRecursiveTest, RejectsExistingFile)
     ASSERT_GE(fileDescriptor, 0);
     ASSERT_EQ(0, ::close(fileDescriptor));
 
-    EXPECT_FALSE(ComplianceEngine::MkdirRecursive(filePath, 0700));
+    EXPECT_FALSE(Kompli::MkdirRecursive(filePath, 0700));
 }

@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_GSETTINGS_VALUE_H
-#define COMPLIANCEENGINE_PROCEDURES_GSETTINGS_VALUE_H
+#ifndef KOMPLI_PROCEDURES_GSETTINGS_VALUE_H
+#define KOMPLI_PROCEDURES_GSETTINGS_VALUE_H
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class GsettingsKeyType
 {
@@ -57,5 +57,5 @@ struct GsettingsValueParams
 
 Result<Status> AuditGsettingsValue(const GsettingsValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateGsettingsValue(const GsettingsValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_GSETTINGS_VALUE_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_GSETTINGS_VALUE_H

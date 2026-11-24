@@ -6,7 +6,7 @@
 #include <cerrno>
 #include <parsers/LoginDefs.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<uid_t> GetUidMin(ContextInterface& context)
 {
@@ -37,4 +37,4 @@ Result<uid_t> GetUidMin(ContextInterface& context, const Result<std::string>& lo
     }
     return parsed.Value().uidMin.Value();
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

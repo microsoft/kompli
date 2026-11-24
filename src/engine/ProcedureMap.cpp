@@ -6,7 +6,7 @@
 #include <Bindings.h>
 #include <RevertMap.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // AideAttributes.h:18
 const char* Bindings<AideAttributesParams>::names[] = {"configPath", "filename", "attributes"};
@@ -185,14 +185,14 @@ const ProcedureMap Evaluator::mProcedureMap = {
     {"WirelessDisabled", {MakeHandler(AuditWirelessDisabled), nullptr}},
     {"XdmcpDisabled", {MakeHandler(AuditXdmcpDisabled), MakeHandler(RemediateXdmcpDisabled)}},
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 namespace std
 {
-string to_string(const ComplianceEngine::AksCommandOperation value) noexcept(false)
+string to_string(const Kompli::AksCommandOperation value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::AksCommandOperation>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::AksCommandOperation>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -201,10 +201,10 @@ string to_string(const ComplianceEngine::AksCommandOperation value) noexcept(fal
     return it->second;
 }
 
-string to_string(const ComplianceEngine::Behavior value) noexcept(false)
+string to_string(const Kompli::Behavior value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::Behavior>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::Behavior>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -213,10 +213,10 @@ string to_string(const ComplianceEngine::Behavior value) noexcept(false)
     return it->second;
 }
 
-string to_string(const ComplianceEngine::RegexType value) noexcept(false)
+string to_string(const Kompli::RegexType value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::RegexType>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::RegexType>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -225,10 +225,10 @@ string to_string(const ComplianceEngine::RegexType value) noexcept(false)
     return it->second;
 }
 
-string to_string(const ComplianceEngine::DconfOperation value) noexcept(false)
+string to_string(const Kompli::DconfOperation value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::DconfOperation>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::DconfOperation>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -237,10 +237,10 @@ string to_string(const ComplianceEngine::DconfOperation value) noexcept(false)
     return it->second;
 }
 
-string to_string(const ComplianceEngine::Operation value) noexcept(false)
+string to_string(const Kompli::Operation value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::Operation>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::Operation>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -249,10 +249,10 @@ string to_string(const ComplianceEngine::Operation value) noexcept(false)
     return it->second;
 }
 
-string to_string(const ComplianceEngine::IgnoreCase value) noexcept(false)
+string to_string(const Kompli::IgnoreCase value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::IgnoreCase>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::IgnoreCase>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -261,10 +261,10 @@ string to_string(const ComplianceEngine::IgnoreCase value) noexcept(false)
     return it->second;
 }
 
-string to_string(const ComplianceEngine::GsettingsKeyType value) noexcept(false)
+string to_string(const Kompli::GsettingsKeyType value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::GsettingsKeyType>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::GsettingsKeyType>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -273,10 +273,10 @@ string to_string(const ComplianceEngine::GsettingsKeyType value) noexcept(false)
     return it->second;
 }
 
-string to_string(const ComplianceEngine::GsettingsOperationType value) noexcept(false)
+string to_string(const Kompli::GsettingsOperationType value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::GsettingsOperationType>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::GsettingsOperationType>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -285,10 +285,10 @@ string to_string(const ComplianceEngine::GsettingsOperationType value) noexcept(
     return it->second;
 }
 
-string to_string(const ComplianceEngine::MtaConfigurationVersion value) noexcept(false)
+string to_string(const Kompli::MtaConfigurationVersion value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::MtaConfigurationVersion>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::MtaConfigurationVersion>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -297,10 +297,10 @@ string to_string(const ComplianceEngine::MtaConfigurationVersion value) noexcept
     return it->second;
 }
 
-string to_string(const ComplianceEngine::InterfaceFlag value) noexcept(false)
+string to_string(const Kompli::InterfaceFlag value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::InterfaceFlag>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::InterfaceFlag>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -309,10 +309,10 @@ string to_string(const ComplianceEngine::InterfaceFlag value) noexcept(false)
     return it->second;
 }
 
-string to_string(const ComplianceEngine::PackageManagerType value) noexcept(false)
+string to_string(const Kompli::PackageManagerType value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::PackageManagerType>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::PackageManagerType>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -321,10 +321,10 @@ string to_string(const ComplianceEngine::PackageManagerType value) noexcept(fals
     return it->second;
 }
 
-string to_string(const ComplianceEngine::ComparisonOperation value) noexcept(false)
+string to_string(const Kompli::ComparisonOperation value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::ComparisonOperation>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::ComparisonOperation>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -333,10 +333,10 @@ string to_string(const ComplianceEngine::ComparisonOperation value) noexcept(fal
     return it->second;
 }
 
-string to_string(const ComplianceEngine::Field value) noexcept(false)
+string to_string(const Kompli::Field value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::Field>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::Field>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -345,10 +345,10 @@ string to_string(const ComplianceEngine::Field value) noexcept(false)
     return it->second;
 }
 
-string to_string(const ComplianceEngine::SshKeyType value) noexcept(false)
+string to_string(const Kompli::SshKeyType value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::SshKeyType>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::SshKeyType>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -357,10 +357,10 @@ string to_string(const ComplianceEngine::SshKeyType value) noexcept(false)
     return it->second;
 }
 
-string to_string(const ComplianceEngine::SshdOptionOperation value) noexcept(false)
+string to_string(const Kompli::SshdOptionOperation value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::SshdOptionOperation>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::SshdOptionOperation>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -369,10 +369,10 @@ string to_string(const ComplianceEngine::SshdOptionOperation value) noexcept(fal
     return it->second;
 }
 
-string to_string(const ComplianceEngine::SshdOptionMode value) noexcept(false)
+string to_string(const Kompli::SshdOptionMode value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::SshdOptionMode>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::SshdOptionMode>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {
@@ -381,10 +381,10 @@ string to_string(const ComplianceEngine::SshdOptionMode value) noexcept(false)
     return it->second;
 }
 
-string to_string(const ComplianceEngine::SystemdConfigValueOperator value) noexcept(false)
+string to_string(const Kompli::SystemdConfigValueOperator value) noexcept(false)
 {
-    const auto& map = ComplianceEngine::MapEnum<ComplianceEngine::SystemdConfigValueOperator>();
-    static const auto revmap = ComplianceEngine::RevertMap(map);
+    const auto& map = Kompli::MapEnum<Kompli::SystemdConfigValueOperator>();
+    static const auto revmap = Kompli::RevertMap(map);
     const auto it = revmap.find(value);
     if (revmap.end() == it)
     {

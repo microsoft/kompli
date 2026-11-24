@@ -4,7 +4,7 @@
 #include <ResultEvidence.h>
 #include <cerrno>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -132,4 +132,4 @@ Result<StateSatisfaction> SelectedItemsEvidence::AllSelectedItemsSatisfied() con
     }
     return state.Value();
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

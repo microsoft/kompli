@@ -1,14 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_TYPED_COMPARISON_H
-#define COMPLIANCEENGINE_TYPED_COMPARISON_H
+#ifndef KOMPLI_TYPED_COMPARISON_H
+#define KOMPLI_TYPED_COMPARISON_H
 
 #include <Result.h>
 #include <cerrno>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class TypedComparisonOperation
 {
@@ -40,6 +40,6 @@ Result<bool> CompareTyped(const T& lhs, const T& rhs, TypedComparisonOperation o
     }
     return Error("Unsupported typed comparison operation " + std::to_string(static_cast<int>(operation)), EINVAL);
 }
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_TYPED_COMPARISON_H
+#endif // KOMPLI_TYPED_COMPARISON_H

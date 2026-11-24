@@ -1,14 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_SYSCTL_VALUE_H
-#define COMPLIANCEENGINE_PROCEDURES_SYSCTL_VALUE_H
+#ifndef KOMPLI_PROCEDURES_SYSCTL_VALUE_H
+#define KOMPLI_PROCEDURES_SYSCTL_VALUE_H
 
 #include <Evaluator.h>
 #include <Optional.h>
 #include <Pattern.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct SysctlValueParams
 {
@@ -26,5 +26,5 @@ struct SysctlValueParams
 
 Result<Status> AuditSysctlValue(const SysctlValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateSysctlValue(const SysctlValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_SYSCTL_VALUE_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_SYSCTL_VALUE_H

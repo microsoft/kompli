@@ -8,7 +8,7 @@
 
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<std::string> Base64Decode(const std::string& input);
 }

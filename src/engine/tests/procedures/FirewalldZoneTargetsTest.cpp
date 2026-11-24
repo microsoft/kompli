@@ -8,11 +8,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-using ComplianceEngine::AuditFirewalldZoneTargets;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditFirewalldZoneTargets;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::Result;
+using Kompli::Status;
 using ::testing::Return;
 
 class EnsureFirewalldActiveZoneTargetsTest : public ::testing::Test

@@ -16,7 +16,7 @@
 #include <set>
 #include <sys/stat.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 static constexpr int maxUnowned = 3;
 
@@ -95,4 +95,4 @@ Result<Status> AuditNoUnownedFiles(IndicatorsTree& indicators, ContextInterface&
     return indicators.Compliant("All files owned by known users");
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

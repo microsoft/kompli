@@ -17,7 +17,7 @@
 
 namespace
 {
-using namespace ComplianceEngine;
+using namespace Kompli;
 
 class NumericFileGroupTest : public ::testing::Test
 {

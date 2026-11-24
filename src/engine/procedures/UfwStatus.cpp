@@ -9,7 +9,7 @@
 #include <regex>
 #include <sstream>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditUfwStatus(const UfwStatusParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -44,4 +44,4 @@ Result<Status> AuditUfwStatus(const UfwStatusParams& params, IndicatorsTree& ind
         return indicators.Compliant("Searched value found in UFW output");
     }
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

@@ -1,13 +1,13 @@
-#ifndef COMPLIANCEENGINE_DIRTOOLS_H
-#define COMPLIANCEENGINE_DIRTOOLS_H
+#ifndef KOMPLI_DIRTOOLS_H
+#define KOMPLI_DIRTOOLS_H
 
 #include <string>
 #include <sys/stat.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 bool MkdirRecursive(const std::string& path, mode_t mode = 0700);
 
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_DIRTOOLS_H
+} // namespace Kompli
+#endif // KOMPLI_DIRTOOLS_H

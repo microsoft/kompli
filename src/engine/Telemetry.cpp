@@ -17,21 +17,21 @@
 namespace std
 {
 
-std::string to_string(const ComplianceEngine::TelemetryEventType type)
+std::string to_string(const Kompli::TelemetryEventType type)
 {
     switch (type)
     {
-        case ComplianceEngine::TelemetryEventType::Audit:
+        case Kompli::TelemetryEventType::Audit:
             return std::string("audit");
-        case ComplianceEngine::TelemetryEventType::Remediation:
+        case Kompli::TelemetryEventType::Remediation:
             return std::string("remediation");
-        case ComplianceEngine::TelemetryEventType::BenchmarkRun:
+        case Kompli::TelemetryEventType::BenchmarkRun:
             return std::string("benchmarkRun");
     }
     return "unknown";
 }
 } // namespace std
-namespace ComplianceEngine
+namespace Kompli
 {
 
 TelemetryInterface::~TelemetryInterface() = default;
@@ -140,4 +140,4 @@ void Telemetry::LogEvent(const TelemetryEvent& event, int64_t durationUs, const 
 }
 
 #endif // BUILD_TELEMETRY
-} // namespace ComplianceEngine
+} // namespace Kompli

@@ -15,15 +15,15 @@
 #include <unistd.h>
 #include <vector>
 
-using ComplianceEngine::AuditSysctlValue;
-using ComplianceEngine::CompactListFormatter;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Pattern;
-using ComplianceEngine::RemediateSysctlValue;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
-using ComplianceEngine::SysctlValueParams;
+using Kompli::AuditSysctlValue;
+using Kompli::CompactListFormatter;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::Pattern;
+using Kompli::RemediateSysctlValue;
+using Kompli::Result;
+using Kompli::Status;
+using Kompli::SysctlValueParams;
 using ::testing::Return;
 
 static const std::string systemdSysctlCat = "/lib/systemd/systemd-sysctl --cat-config";

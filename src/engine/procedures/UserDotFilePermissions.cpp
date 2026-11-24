@@ -15,7 +15,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 using std::map;
 using std::string;
@@ -153,4 +153,4 @@ Result<Status> RemediateUserDotFilePermissions(IndicatorsTree&, ContextInterface
     return Error("UserDotFilePermissions remediation is disabled", ENOTSUP);
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

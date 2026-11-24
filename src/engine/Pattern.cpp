@@ -3,11 +3,11 @@
 
 #include <Pattern.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Pattern::Pattern(const std::string& pattern) noexcept(false)
     : mPattern(pattern),
       mRegex(pattern)
 {
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

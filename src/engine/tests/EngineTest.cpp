@@ -9,21 +9,21 @@
 
 #include <gtest/gtest.h>
 
-using ComplianceEngine::action_func_t;
-using ComplianceEngine::CombineAllOf;
-using ComplianceEngine::DebugFormatter;
-using ComplianceEngine::Engine;
-using ComplianceEngine::Error;
-using ComplianceEngine::JsonWrapper;
-using ComplianceEngine::PayloadFormatter;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::action_func_t;
+using Kompli::CombineAllOf;
+using Kompli::DebugFormatter;
+using Kompli::Engine;
+using Kompli::Error;
+using Kompli::JsonWrapper;
+using Kompli::PayloadFormatter;
+using Kompli::Result;
+using Kompli::Status;
 
 class EngineTest : public ::testing::Test
 {
 public:
     EngineTest()
-        : mEngine(std::unique_ptr<ComplianceEngine::ContextInterface>(new MockContext), std::unique_ptr<PayloadFormatter>(new DebugFormatter()))
+        : mEngine(std::unique_ptr<Kompli::ContextInterface>(new MockContext), std::unique_ptr<PayloadFormatter>(new DebugFormatter()))
     {
     }
 

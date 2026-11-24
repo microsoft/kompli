@@ -12,9 +12,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-using ComplianceEngine::AuditNoUnownedFiles;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Status;
+using Kompli::AuditNoUnownedFiles;
+using Kompli::IndicatorsTree;
+using Kompli::Status;
 
 class EnsureNoUnownedTest : public ::testing::Test
 {

@@ -7,7 +7,7 @@
 #include <limits>
 #include <stdexcept>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 // Security: Escapes characters that have special meaning inside double-quoted shell strings.
@@ -136,4 +136,4 @@ Result<unsigned int> TryStringToUint(const std::string& str, int base)
         return Error("Integer value out of range: " + str, ERANGE);
     }
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

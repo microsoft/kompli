@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 //
-#ifndef COMPLIANCEENGINE_LUAEVALUATOR_H
-#define COMPLIANCEENGINE_LUAEVALUATOR_H
+#ifndef KOMPLI_LUAEVALUATOR_H
+#define KOMPLI_LUAEVALUATOR_H
 
 #include "ContextInterface.h"
 #include "Evaluator.h"
@@ -14,7 +14,7 @@
 
 struct lua_State;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 using std::map;
@@ -76,6 +76,6 @@ private:
     static int LuaProcedureWrapper(lua_State* L);
 };
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_LUAEVALUATOR_H
+#endif // KOMPLI_LUAEVALUATOR_H

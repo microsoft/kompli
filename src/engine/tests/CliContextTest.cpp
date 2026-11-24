@@ -11,9 +11,9 @@
 
 namespace
 {
-std::unique_ptr<ComplianceEngine::Cli::Context> MakeContext()
+std::unique_ptr<Kompli::Cli::Context> MakeContext()
 {
-    auto result = ComplianceEngine::Cli::Context::Make(nullptr);
+    auto result = Kompli::Cli::Context::Make(nullptr);
     if (!result.HasValue())
     {
         ADD_FAILURE() << result.Error().message;
@@ -43,7 +43,7 @@ TEST_F(ContextTest, DirectoryHasCorrectPrefix)
     const std::string statePath = ctx->GetStatePath();
     const auto separator = statePath.find_last_of('/');
     ASSERT_NE(std::string::npos, separator);
-    auto parent = ComplianceEngine::Detail::GetTemporaryDirectoryParent();
+    auto parent = Kompli::Detail::GetTemporaryDirectoryParent();
     ASSERT_TRUE(parent.HasValue()) << parent.Error().message;
     struct stat configuredParent;
     struct stat actualParent;

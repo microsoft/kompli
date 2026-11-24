@@ -16,7 +16,7 @@
 #include <string>
 #include <sys/stat.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -240,4 +240,4 @@ Result<Status> RemediateLogFilePermissions(const LogFilePermissionsParams& param
     }
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

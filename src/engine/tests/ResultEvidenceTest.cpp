@@ -10,18 +10,18 @@
 #include <stdexcept>
 #include <utility>
 
-using ComplianceEngine::CompletedItemEvidence;
-using ComplianceEngine::CreditEvidenceKind;
-using ComplianceEngine::CreditRootLocation;
-using ComplianceEngine::Error;
-using ComplianceEngine::PasswordCreditAssessment;
-using ComplianceEngine::PasswordCreditItem;
-using ComplianceEngine::PasswordCreditRoot;
-using ComplianceEngine::Result;
-using ComplianceEngine::SelectedItemComparisonEvidence;
-using ComplianceEngine::SelectedItemsEvidence;
-using ComplianceEngine::StateSatisfaction;
-using ComplianceEngine::Status;
+using Kompli::CompletedItemEvidence;
+using Kompli::CreditEvidenceKind;
+using Kompli::CreditRootLocation;
+using Kompli::Error;
+using Kompli::PasswordCreditAssessment;
+using Kompli::PasswordCreditItem;
+using Kompli::PasswordCreditRoot;
+using Kompli::Result;
+using Kompli::SelectedItemComparisonEvidence;
+using Kompli::SelectedItemsEvidence;
+using Kompli::StateSatisfaction;
+using Kompli::Status;
 
 namespace
 {
@@ -38,7 +38,7 @@ PasswordCreditAssessment FailedRoot(const char* message, int code, std::vector<s
 
 Result<Status> Evaluate(const PasswordCreditAssessment& main, const PasswordCreditAssessment& dropIn, std::vector<std::string>& diagnostics)
 {
-    return ComplianceEngine::EvaluatePasswordCreditUnion(main, dropIn, [&](CreditRootLocation root, CreditEvidenceKind kind, const std::string& identity) {
+    return Kompli::EvaluatePasswordCreditUnion(main, dropIn, [&](CreditRootLocation root, CreditEvidenceKind kind, const std::string& identity) {
         const auto location = root == CreditRootLocation::Main ? "main:" : "drop-in:";
         const auto type = kind == CreditEvidenceKind::Selected ? "selected:" : kind == CreditEvidenceKind::Excluded ? "excluded:" : "observed:";
         diagnostics.push_back(std::string(location) + type + identity);
@@ -599,7 +599,7 @@ TEST(ResultEvidenceTest, InvalidAbsenceAndMissingReporterAreErrors)
     const auto stopped = Evaluate(empty, stoppedWithoutReason, diagnostics);
     ASSERT_FALSE(stopped.HasValue());
     EXPECT_NE(std::string::npos, stopped.Error().message.find("lacks a reason"));
-    const auto missingReporter = ComplianceEngine::EvaluatePasswordCreditUnion(empty, empty, {});
+    const auto missingReporter = Kompli::EvaluatePasswordCreditUnion(empty, empty, {});
     ASSERT_FALSE(missingReporter.HasValue());
     EXPECT_EQ(EINVAL, missingReporter.Error().code);
 }
@@ -609,13 +609,13 @@ TEST(ResultEvidenceTest, ReporterExceptionsAreErrorsWithoutMaskingAssessmentErro
     const auto throwingReporter = [](CreditRootLocation, CreditEvidenceKind, const std::string&) { throw std::runtime_error("report failed"); };
     const auto passing = Root(PasswordCreditRoot::Outcome::Complete, {Credit("credit", -1)});
     const auto empty = Root(PasswordCreditRoot::Outcome::Complete);
-    const auto reportFailure = ComplianceEngine::EvaluatePasswordCreditUnion(passing, empty, throwingReporter);
+    const auto reportFailure = Kompli::EvaluatePasswordCreditUnion(passing, empty, throwingReporter);
     ASSERT_FALSE(reportFailure.HasValue());
     EXPECT_EQ(EIO, reportFailure.Error().code);
     EXPECT_NE(std::string::npos, reportFailure.Error().message.find("reporter"));
 
     const auto failed = FailedRoot("read failed", EACCES, {"observed-before-error"});
-    const auto assessmentFailure = ComplianceEngine::EvaluatePasswordCreditUnion(failed, passing, throwingReporter);
+    const auto assessmentFailure = Kompli::EvaluatePasswordCreditUnion(failed, passing, throwingReporter);
     ASSERT_FALSE(assessmentFailure.HasValue());
     EXPECT_EQ(EACCES, assessmentFailure.Error().code);
     EXPECT_EQ("read failed", assessmentFailure.Error().message);
@@ -679,12 +679,11 @@ TEST(ResultEvidenceTest, ProducerBudgetErrorSurvivesIncrementalReporting)
     const auto passing = Root(PasswordCreditRoot::Outcome::Complete, {Credit("previous", -1)});
     const auto exhausted = FailedRoot("Retained path budget exhausted", E2BIG, {"last-observed"});
     size_t reported = 0;
-    const auto result =
-        ComplianceEngine::EvaluatePasswordCreditUnion(passing, exhausted, [&](CreditRootLocation root, CreditEvidenceKind kind, const std::string& identity) {
-            EXPECT_TRUE(((root == CreditRootLocation::Main) && (kind == CreditEvidenceKind::Selected) && (identity == "previous")) ||
-                        ((root == CreditRootLocation::DropIn) && (kind == CreditEvidenceKind::Observed) && (identity == "last-observed")));
-            ++reported;
-        });
+    const auto result = Kompli::EvaluatePasswordCreditUnion(passing, exhausted, [&](CreditRootLocation root, CreditEvidenceKind kind, const std::string& identity) {
+        EXPECT_TRUE(((root == CreditRootLocation::Main) && (kind == CreditEvidenceKind::Selected) && (identity == "previous")) ||
+                    ((root == CreditRootLocation::DropIn) && (kind == CreditEvidenceKind::Observed) && (identity == "last-observed")));
+        ++reported;
+    });
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);
     EXPECT_EQ("Retained path budget exhausted", result.Error().message);

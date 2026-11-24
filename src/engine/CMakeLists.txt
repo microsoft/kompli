@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-project(complianceenginelib)
+project(kompli-engine)
 if (CMAKE_COMPILER_IS_GNUCC AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 7.0)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wshadow=local")
 endif()
@@ -158,7 +158,7 @@ add_custom_command(
     COMMENT "Generating compliance engine interface (ProcedureMap.h/cpp)"
     VERBATIM)
 
-add_custom_target(complianceengineschema_prep
+add_custom_target(kompli-engine-schema-prep
     SOURCES ${SCHEMAS}
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/schema
@@ -167,14 +167,14 @@ add_custom_target(complianceengineschema_prep
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/benchmark.schema.json ${CMAKE_CURRENT_BINARY_DIR}/schema
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${SCHEMAS} ${CMAKE_CURRENT_BINARY_DIR}/schema/procedures)
 
-add_custom_target(complianceengineschema
+add_custom_target(kompli-engine-schema
     BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/ComplianceEngineSchema.zip
     COMMAND ${CMAKE_COMMAND} -E tar "cvf" ${CMAKE_CURRENT_BINARY_DIR}/ComplianceEngineSchema.zip . --format=zip
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/schema
-    DEPENDS complianceengineschema_prep)
-set_property(TARGET complianceengineschema PROPERTY OUTPUT ComplianceEngineSchema.zip)
+    DEPENDS kompli-engine-schema-prep)
+set_property(TARGET kompli-engine-schema PROPERTY OUTPUT ComplianceEngineSchema.zip)
 
-add_library(complianceenginelib STATIC
+add_library(kompli-engine STATIC
     AtomicFile.cpp
     Base64.cpp
     BenchmarkInfo.cpp
@@ -217,16 +217,16 @@ add_library(complianceenginelib STATIC
     ${PROCEDURES}
     )
 
-set_property(TARGET complianceenginelib PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET kompli-engine PROPERTY POSITION_INDEPENDENT_CODE ON)
 
-target_link_libraries(complianceenginelib PRIVATE
+target_link_libraries(kompli-engine PRIVATE
     logging
     commonutils
     parsonlib
     ${LUA_CPP_TARGET}
     )
 
-target_include_directories(complianceenginelib PUBLIC
+target_include_directories(kompli-engine PUBLIC
     ${MODULES_INC_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${LUA_INCLUDE_DIR}

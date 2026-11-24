@@ -12,12 +12,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-using ComplianceEngine::AuditNoDuplicateEntries;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::NoDuplicateEntriesParams;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditNoDuplicateEntries;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::NoDuplicateEntriesParams;
+using Kompli::Result;
+using Kompli::Status;
 using std::map;
 using std::string;
 using ::testing::Return;

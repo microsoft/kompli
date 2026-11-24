@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_EVALUATOR_H
-#define COMPLIANCEENGINE_EVALUATOR_H
+#ifndef KOMPLI_EVALUATOR_H
+#define KOMPLI_EVALUATOR_H
 
 #include "ContextInterface.h"
 #include "Indicators.h"
@@ -18,7 +18,7 @@
 struct json_object_t;
 struct json_value_t;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 // Define Action enum outside of class for forward declarations
@@ -150,6 +150,6 @@ private:
     std::unique_ptr<LuaEvaluator> mLuaEvaluator;
 };
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_EVALUATOR_H
+#endif // KOMPLI_EVALUATOR_H

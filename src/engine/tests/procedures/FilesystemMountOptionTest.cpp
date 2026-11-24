@@ -13,13 +13,13 @@
 #include <string>
 #include <unistd.h>
 
-using ComplianceEngine::AuditFilesystemMountOption;
-using ComplianceEngine::Error;
-using ComplianceEngine::FilesystemMountOptionParams;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::RemediateFilesystemMountOption;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditFilesystemMountOption;
+using Kompli::Error;
+using Kompli::FilesystemMountOptionParams;
+using Kompli::IndicatorsTree;
+using Kompli::RemediateFilesystemMountOption;
+using Kompli::Result;
+using Kompli::Status;
 using ::testing::Return;
 
 class EnsureFilesystemOptionTest : public ::testing::Test

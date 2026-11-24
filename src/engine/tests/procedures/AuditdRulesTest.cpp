@@ -13,12 +13,12 @@
 #include <unistd.h>
 #include <vector>
 
-using ComplianceEngine::AuditAuditdRules;
-using ComplianceEngine::AuditdRulesParams;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditAuditdRules;
+using Kompli::AuditdRulesParams;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::Result;
+using Kompli::Status;
 using ::testing::Return;
 
 class AuditdRulesCheckTest : public ::testing::Test
@@ -203,7 +203,7 @@ TEST_F(AuditdRulesCheckTest, SyscallFieldLayoutUsesRuntimeUidMin)
 TEST_F(AuditdRulesCheckTest, OversizedLoginDefsDoesNotUseDefaultUidMin)
 {
     std::string loginDefs = "UID_MIN 500\n";
-    loginDefs.resize(ComplianceEngine::LoginDefs::MaxBytes + 1, '#');
+    loginDefs.resize(Kompli::LoginDefs::MaxBytes + 1, '#');
     EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(Return(Result<std::string>(loginDefs)));
 
     const std::string directory = MakeTempDir();

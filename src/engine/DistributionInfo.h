@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_DISTRIBUTION_INFO_H
-#define COMPLIANCEENGINE_DISTRIBUTION_INFO_H
+#ifndef KOMPLI_DISTRIBUTION_INFO_H
+#define KOMPLI_DISTRIBUTION_INFO_H
 
 #include <Result.h>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // Defines operating system type, e.g., Linux, Windows
 enum class OSType
@@ -61,13 +61,13 @@ struct DistributionInfo
     static Result<LinuxDistribution> ParseLinuxDistribution(const std::string& distributionStr);
 };
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 namespace std
 {
-std::string to_string(ComplianceEngine::LinuxDistribution distribution) noexcept(false);           // NOLINT(*-identifier-naming)
-std::string to_string(ComplianceEngine::OSType osType) noexcept(false);                            // NOLINT(*-identifier-naming)
-std::string to_string(ComplianceEngine::Architecture architecture) noexcept(false);                // NOLINT(*-identifier-naming)
-std::string to_string(const ComplianceEngine::DistributionInfo& distributionInfo) noexcept(false); // NOLINT(*-identifier-naming)
+std::string to_string(Kompli::LinuxDistribution distribution) noexcept(false);           // NOLINT(*-identifier-naming)
+std::string to_string(Kompli::OSType osType) noexcept(false);                            // NOLINT(*-identifier-naming)
+std::string to_string(Kompli::Architecture architecture) noexcept(false);                // NOLINT(*-identifier-naming)
+std::string to_string(const Kompli::DistributionInfo& distributionInfo) noexcept(false); // NOLINT(*-identifier-naming)
 } // namespace std
-#endif // COMPLIANCEENGINE_DISTRIBUTION_INFO_H
+#endif // KOMPLI_DISTRIBUTION_INFO_H

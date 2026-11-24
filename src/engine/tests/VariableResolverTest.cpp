@@ -11,11 +11,11 @@
 #include <string>
 #include <vector>
 
-using ComplianceEngine::Error;
-using ComplianceEngine::Result;
-using ComplianceEngine::TypedComparisonOperation;
-namespace VariableResolution = ComplianceEngine::VariableResolution;
-namespace Ranges = ComplianceEngine::Ranges;
+using Kompli::Error;
+using Kompli::Result;
+using Kompli::TypedComparisonOperation;
+namespace VariableResolution = Kompli::VariableResolution;
+namespace Ranges = Kompli::Ranges;
 
 namespace
 {
@@ -99,7 +99,7 @@ TEST(VariableResolver, UniqueCountUsesAcceptedTypedComparison)
     EXPECT_EQ((std::vector<std::string>{"1.1.1.1", "8.8.8.8"}), unique);
     const auto count = Ranges::Count(Ranges::Range(unique));
     ASSERT_TRUE(count.HasValue());
-    auto result = ComplianceEngine::CompareTyped(count.Value(), std::size_t{2}, TypedComparisonOperation::GreaterOrEqual);
+    auto result = Kompli::CompareTyped(count.Value(), std::size_t{2}, TypedComparisonOperation::GreaterOrEqual);
     ASSERT_TRUE(result.HasValue());
     EXPECT_TRUE(result.Value());
     EXPECT_EQ(3U, Ranges::Count(Ranges::Range(nameservers)).Value());

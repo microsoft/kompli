@@ -9,7 +9,7 @@
 #include <set>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // NOTE: This procedure has no dedicated unit test. AuditPasswdGroupsExist enumerates the live
 // account and group databases directly through the NSS entry points (setpwent/getpwent,
@@ -76,4 +76,4 @@ Result<Status> RemediatePasswdGroupsExist(IndicatorsTree& indicators, ContextInt
 
     return indicators.NonCompliant("Manual remediation is required to ensure all groups from /etc/passwd exist in /etc/group");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

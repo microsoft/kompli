@@ -20,16 +20,16 @@
 #include <utility>
 #include <vector>
 
-using ComplianceEngine::AuditSystemdUnitState;
-using ComplianceEngine::CompactListFormatter;
-using ComplianceEngine::Error;
-using ComplianceEngine::Evaluator;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::JsonWrapper;
-using ComplianceEngine::Pattern;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
-using ComplianceEngine::SystemdUnitStateParams;
+using Kompli::AuditSystemdUnitState;
+using Kompli::CompactListFormatter;
+using Kompli::Error;
+using Kompli::Evaluator;
+using Kompli::IndicatorsTree;
+using Kompli::JsonWrapper;
+using Kompli::Pattern;
+using Kompli::Result;
+using Kompli::Status;
+using Kompli::SystemdUnitStateParams;
 
 class SystemdUnitStateTest : public ::testing::Test
 {
@@ -461,16 +461,16 @@ TEST_F(SystemdUnitStateTest, CommandErrorCannotPass)
 TEST_F(SystemdUnitStateTest, SubStateBindingValidatesArguments)
 {
     std::map<std::string, std::string> args = {{"unitName", "auditd.service"}, {"subState", "running"}};
-    auto parsed = ComplianceEngine::BindingsImpl::ParseArguments<SystemdUnitStateParams>(args);
+    auto parsed = Kompli::BindingsImpl::ParseArguments<SystemdUnitStateParams>(args);
     ASSERT_TRUE(parsed.HasValue());
     ASSERT_TRUE(parsed.Value().subState.HasValue());
     EXPECT_TRUE(std::regex_match("running", parsed.Value().subState->GetRegex()));
 
     args["subState"] = "[";
-    EXPECT_FALSE(ComplianceEngine::BindingsImpl::ParseArguments<SystemdUnitStateParams>(args).HasValue());
+    EXPECT_FALSE(Kompli::BindingsImpl::ParseArguments<SystemdUnitStateParams>(args).HasValue());
     args["subState"] = "running";
     args["unknown"] = "anything";
-    EXPECT_FALSE(ComplianceEngine::BindingsImpl::ParseArguments<SystemdUnitStateParams>(args).HasValue());
+    EXPECT_FALSE(Kompli::BindingsImpl::ParseArguments<SystemdUnitStateParams>(args).HasValue());
 }
 
 TEST_F(SystemdUnitStateTest, EmptyUnitFileStateIsAnOrdinaryMismatch)
@@ -514,7 +514,7 @@ TEST_F(SystemdUnitStateTest, OtherEmptyPropertiesRemainErrors)
     for (const auto& testCase : cases)
     {
         const std::map<std::string, std::string> args = {{"unitName", "auditd.service"}, {testCase.field, "expected"}};
-        auto params = ComplianceEngine::BindingsImpl::ParseArguments<SystemdUnitStateParams>(args);
+        auto params = Kompli::BindingsImpl::ParseArguments<SystemdUnitStateParams>(args);
         ASSERT_TRUE(params.HasValue()) << testCase.field;
         EXPECT_CALL(mContext, ExecuteCommand("systemctl show -p " + std::string(testCase.property) + " \"auditd.service\""))
             .WillOnce(::testing::Return(Result<std::string>(std::string(testCase.property) + "=\n")));
@@ -534,12 +534,12 @@ TEST_F(SystemdUnitStateTest, EmptyUnitFileStateDoesNotHideIncompleteResponseUnde
     {
         EXPECT_CALL(mContext, ExecuteCommand(command)).WillOnce(::testing::Return(Result<std::string>(output)));
         Evaluator evaluator("CIS systemd service check", json_value_get_object(json->get()), {}, mContext);
-        auto result = evaluator.ExecuteAudit(ComplianceEngine::DebugFormatter{});
+        auto result = evaluator.ExecuteAudit(Kompli::DebugFormatter{});
         EXPECT_FALSE(result.HasValue()) << output;
     }
     EXPECT_CALL(mContext, ExecuteCommand(command)).WillOnce(::testing::Return(Result<std::string>("UnitFileState=\nActiveState=active\n")));
     Evaluator evaluator("CIS systemd service check", json_value_get_object(json->get()), {}, mContext);
-    auto result = evaluator.ExecuteAudit(ComplianceEngine::DebugFormatter{});
+    auto result = evaluator.ExecuteAudit(Kompli::DebugFormatter{});
     ASSERT_TRUE(result.HasValue());
     EXPECT_EQ(result.Value().status, Status::Compliant);
 }
@@ -574,7 +574,7 @@ TEST_F(SystemdUnitStateTest, NegatedCisPredicateDoesNotAcceptInvalidOutput)
     {
         EXPECT_CALL(mContext, ExecuteCommand(command)).WillOnce(::testing::Return(Result<std::string>(testCase.output)));
         Evaluator evaluator("CIS systemd service check", json_value_get_object(json->get()), {}, mContext);
-        auto result = evaluator.ExecuteAudit(ComplianceEngine::DebugFormatter{});
+        auto result = evaluator.ExecuteAudit(Kompli::DebugFormatter{});
         if (testCase.valid)
         {
             ASSERT_TRUE(result.HasValue()) << testCase.output;
@@ -615,7 +615,7 @@ TEST_F(SystemdUnitStateTest, NegatedMultiPropertyMismatchRequiresCompleteOutput)
     {
         EXPECT_CALL(mContext, ExecuteCommand(command)).WillOnce(::testing::Return(Result<std::string>(testCase.output)));
         Evaluator evaluator("negated auditd state", json_value_get_object(json->get()), {}, mContext);
-        auto result = evaluator.ExecuteAudit(ComplianceEngine::DebugFormatter{});
+        auto result = evaluator.ExecuteAudit(Kompli::DebugFormatter{});
         if (testCase.valid)
         {
             ASSERT_TRUE(result.HasValue()) << testCase.output;
@@ -637,7 +637,7 @@ TEST_F(SystemdUnitStateTest, NegatedCisPredicateDoesNotAcceptCommandError)
     EXPECT_CALL(mContext, ExecuteCommand("systemctl show -p UnitFileState \"isc-dhcp-server.service\""))
         .WillOnce(::testing::Return(Result<std::string>(Error("Unit not found", 1))));
     Evaluator evaluator("CIS systemd service check", json_value_get_object(json->get()), {}, mContext);
-    auto result = evaluator.ExecuteAudit(ComplianceEngine::DebugFormatter{});
+    auto result = evaluator.ExecuteAudit(Kompli::DebugFormatter{});
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(result.Error().code, 1);
 }

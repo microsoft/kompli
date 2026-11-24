@@ -16,7 +16,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // Valid sysctl names contain only alphanumeric characters, dots, underscores, hyphens, and forward slashes.
 // Forward slashes are valid in some sysctl naming conventions (e.g., fs.binfmt_misc.python3/10).
@@ -574,4 +574,4 @@ Result<Status> RemediateSysctlValue(const SysctlValueParams& params, IndicatorsT
     }
     return postAudit;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

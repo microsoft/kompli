@@ -15,11 +15,11 @@
 #include <type_traits>
 #include <vector>
 
-using ComplianceEngine::Error;
-using ComplianceEngine::Optional;
-using ComplianceEngine::Result;
-namespace Ranges = ComplianceEngine::Ranges;
-namespace VariableResolution = ComplianceEngine::VariableResolution;
+using Kompli::Error;
+using Kompli::Optional;
+using Kompli::Result;
+namespace Ranges = Kompli::Ranges;
+namespace VariableResolution = Kompli::VariableResolution;
 
 namespace
 {

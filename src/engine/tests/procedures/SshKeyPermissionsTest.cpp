@@ -12,12 +12,12 @@
 #include <sstream>
 #include <sys/stat.h>
 
-using ComplianceEngine::AuditSshKeyPermissions;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::RemediateSshKeyPermissions;
-using ComplianceEngine::SshKeyPermissionsParams;
-using ComplianceEngine::SshKeyType;
-using ComplianceEngine::Status;
+using Kompli::AuditSshKeyPermissions;
+using Kompli::IndicatorsTree;
+using Kompli::RemediateSshKeyPermissions;
+using Kompli::SshKeyPermissionsParams;
+using Kompli::SshKeyType;
+using Kompli::Status;
 
 static const char kPublicKeySample[] = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyMaterial user@example\n";
 static const char kPrivateKeyHeader[] = "-----BEGIN OPENSSH PRIVATE KEY-----\n";
@@ -42,7 +42,7 @@ protected:
         mContext.SetSpecialFilePath("/etc/ssh", mSshDir);
         using ::testing::Invoke;
         // Generic default: return file contents if exists, else empty string.
-        ON_CALL(mContext, GetFileContents(::testing::_)).WillByDefault(Invoke([&](const std::string& path) -> ComplianceEngine::Result<std::string> {
+        ON_CALL(mContext, GetFileContents(::testing::_)).WillByDefault(Invoke([&](const std::string& path) -> Kompli::Result<std::string> {
             std::string physical = path;
             if (physical.rfind("/etc/ssh/", 0) == 0)
             {
@@ -67,7 +67,7 @@ TEST_F(EnsureSshKeyPermsTest, PublicKeyCompliant)
         std::ofstream f(keyPath);
         f << kPublicKeySample;
     }
-    EXPECT_CALL(mContext, GetFileContents(keyPath)).WillOnce(::testing::Return(ComplianceEngine::Result<std::string>(kPublicKeySample)));
+    EXPECT_CALL(mContext, GetFileContents(keyPath)).WillOnce(::testing::Return(Kompli::Result<std::string>(kPublicKeySample)));
     chmod(keyPath.c_str(), (0644 & ~0133));
     SshKeyPermissionsParams params;
     params.type = SshKeyType::Public;
@@ -84,7 +84,7 @@ TEST_F(EnsureSshKeyPermsTest, PublicKeyNonCompliantBitMask)
         std::ofstream f(keyPath);
         f << kPublicKeySample;
     }
-    EXPECT_CALL(mContext, GetFileContents(keyPath)).WillOnce(::testing::Return(ComplianceEngine::Result<std::string>(kPublicKeySample)));
+    EXPECT_CALL(mContext, GetFileContents(keyPath)).WillOnce(::testing::Return(Kompli::Result<std::string>(kPublicKeySample)));
     chmod(keyPath.c_str(), 0644 | 0020); // forbidden group write bit
     SshKeyPermissionsParams params;
     params.type = SshKeyType::Public;
@@ -100,7 +100,7 @@ TEST_F(EnsureSshKeyPermsTest, PrivateKeyCompliant)
         std::ofstream f(keyPath);
         f << kPrivateKeyHeader << "...payload...\n";
     }
-    EXPECT_CALL(mContext, GetFileContents(keyPath)).WillOnce(::testing::Return(ComplianceEngine::Result<std::string>(std::string(kPrivateKeyHeader) + "...payload...\n")));
+    EXPECT_CALL(mContext, GetFileContents(keyPath)).WillOnce(::testing::Return(Kompli::Result<std::string>(std::string(kPrivateKeyHeader) + "...payload...\n")));
     chmod(keyPath.c_str(), 0600);
     SshKeyPermissionsParams params;
     params.type = SshKeyType::Private;
@@ -116,7 +116,7 @@ TEST_F(EnsureSshKeyPermsTest, PrivateKeyRemediation)
         std::ofstream f(keyPath);
         f << kPrivateKeyHeader << "...payload...\n";
     }
-    EXPECT_CALL(mContext, GetFileContents(keyPath)).WillRepeatedly(::testing::Return(ComplianceEngine::Result<std::string>(std::string(kPrivateKeyHeader) + "...payload...\n")));
+    EXPECT_CALL(mContext, GetFileContents(keyPath)).WillRepeatedly(::testing::Return(Kompli::Result<std::string>(std::string(kPrivateKeyHeader) + "...payload...\n")));
     chmod(keyPath.c_str(), 0777); // bad perms
     SshKeyPermissionsParams params;
     params.type = SshKeyType::Private;
