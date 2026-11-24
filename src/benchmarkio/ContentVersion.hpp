@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCE_ENGINE_BENCHMARKIO_CONTENT_VERSION_HPP
-#define COMPLIANCE_ENGINE_BENCHMARKIO_CONTENT_VERSION_HPP
+#ifndef KOMPLI_BENCHMARKIO_CONTENT_VERSION_HPP
+#define KOMPLI_BENCHMARKIO_CONTENT_VERSION_HPP
 
 #include <Result.h>
 #include <string>
@@ -24,4 +24,4 @@ int CompareContentVersion(const ContentVersion& left, const ContentVersion& righ
 std::string ContentVersionToString(const ContentVersion& version);
 } // namespace Kompli
 
-#endif // COMPLIANCE_ENGINE_BENCHMARKIO_CONTENT_VERSION_HPP
+#endif // KOMPLI_BENCHMARKIO_CONTENT_VERSION_HPP

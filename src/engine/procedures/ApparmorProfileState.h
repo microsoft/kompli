@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_APPARMOR_PROFILE_STATE_H
-#define COMPLIANCEENGINE_PROCEDURES_APPARMOR_PROFILE_STATE_H
+#ifndef KOMPLI_PROCEDURES_APPARMOR_PROFILE_STATE_H
+#define KOMPLI_PROCEDURES_APPARMOR_PROFILE_STATE_H
 
 #include <Evaluator.h>
 
@@ -16,4 +16,4 @@ struct ApparmorProfileStateParams
 
 Result<Status> AuditApparmorProfileState(const ApparmorProfileStateParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_PROCEDURES_APPARMOR_PROFILE_STATE_H
+#endif // KOMPLI_PROCEDURES_APPARMOR_PROFILE_STATE_H

@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_BENCHMARK_INFO_H
-#define COMPLIANCEENGINE_BENCHMARK_INFO_H
+#ifndef KOMPLI_BENCHMARK_INFO_H
+#define KOMPLI_BENCHMARK_INFO_H
 
 #include <DistributionInfo.h>
 #include <Result.h>
@@ -87,4 +87,4 @@ namespace std
 std::string to_string(const Kompli::BenchmarkInfo& benchmarkInfo); // NOLINT(*-identifier-naming)
 } // namespace std
 
-#endif // COMPLIANCEENGINE_BENCHMARK_INFO_H
+#endif // KOMPLI_BENCHMARK_INFO_H

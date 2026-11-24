@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_FILESYSTEM_MOUNT_OPTION_H
-#define COMPLIANCEENGINE_PROCEDURES_FILESYSTEM_MOUNT_OPTION_H
+#ifndef KOMPLI_PROCEDURES_FILESYSTEM_MOUNT_OPTION_H
+#define KOMPLI_PROCEDURES_FILESYSTEM_MOUNT_OPTION_H
 
 #include <Evaluator.h>
 #include <Separated.h>
@@ -30,4 +30,4 @@ struct FilesystemMountOptionParams
 Result<Status> AuditFilesystemMountOption(const FilesystemMountOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateFilesystemMountOption(const FilesystemMountOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_PROCEDURES_FILESYSTEM_MOUNT_OPTION_H
+#endif // KOMPLI_PROCEDURES_FILESYSTEM_MOUNT_OPTION_H

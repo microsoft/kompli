@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PARSERS_NAMESERVER_SELECTION_H
-#define COMPLIANCEENGINE_PARSERS_NAMESERVER_SELECTION_H
+#ifndef KOMPLI_PARSERS_NAMESERVER_SELECTION_H
+#define KOMPLI_PARSERS_NAMESERVER_SELECTION_H
 
 #include <Result.h>
 #include <cstddef>
@@ -40,4 +40,4 @@ Result<Document> FindNameserverCaptures(std::string bytes, std::string source, c
 } // namespace NameserverSelection
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_PARSERS_NAMESERVER_SELECTION_H
+#endif // KOMPLI_PARSERS_NAMESERVER_SELECTION_H

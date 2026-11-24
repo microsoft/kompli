@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_NETWORK_INTERFACE_FLAG_H
-#define COMPLIANCEENGINE_PROCEDURES_NETWORK_INTERFACE_FLAG_H
+#ifndef KOMPLI_PROCEDURES_NETWORK_INTERFACE_FLAG_H
+#define KOMPLI_PROCEDURES_NETWORK_INTERFACE_FLAG_H
 
 #include <Evaluator.h>
 #include <Optional.h>
@@ -83,4 +83,4 @@ struct NetworkInterfaceFlagParams
 // composed under `not` to assert a flag (e.g. PROMISC) is NOT set on any interface.
 Result<Status> AuditNetworkInterfaceFlag(const NetworkInterfaceFlagParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_PROCEDURES_NETWORK_INTERFACE_FLAG_H
+#endif // KOMPLI_PROCEDURES_NETWORK_INTERFACE_FLAG_H

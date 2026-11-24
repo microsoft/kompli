@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_ENGINE_H
-#define COMPLIANCEENGINE_ENGINE_H
+#ifndef KOMPLI_ENGINE_H
+#define KOMPLI_ENGINE_H
 
 #include "ContextInterface.h"
 #include "DistributionInfo.h"
@@ -67,4 +67,4 @@ public:
 };
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_ENGINE_H
+#endif // KOMPLI_ENGINE_H

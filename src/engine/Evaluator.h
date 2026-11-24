@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_EVALUATOR_H
-#define COMPLIANCEENGINE_EVALUATOR_H
+#ifndef KOMPLI_EVALUATOR_H
+#define KOMPLI_EVALUATOR_H
 
 #include "ContextInterface.h"
 #include "Indicators.h"
@@ -152,4 +152,4 @@ private:
 
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_EVALUATOR_H
+#endif // KOMPLI_EVALUATOR_H

@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_COMMAND_OUTPUT_MATCH_H
-#define COMPLIANCEENGINE_PROCEDURES_COMMAND_OUTPUT_MATCH_H
+#ifndef KOMPLI_PROCEDURES_COMMAND_OUTPUT_MATCH_H
+#define KOMPLI_PROCEDURES_COMMAND_OUTPUT_MATCH_H
 
 #include <Evaluator.h>
 
@@ -44,4 +44,4 @@ struct CommandOutputMatchParams
 
 Result<Status> AuditCommandOutputMatch(const CommandOutputMatchParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_PROCEDURES_COMMAND_OUTPUT_MATCH_H
+#endif // KOMPLI_PROCEDURES_COMMAND_OUTPUT_MATCH_H

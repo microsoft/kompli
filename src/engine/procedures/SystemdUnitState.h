@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_SYSTEMD_UNIT_STATE_H
-#define COMPLIANCEENGINE_PROCEDURES_SYSTEMD_UNIT_STATE_H
+#ifndef KOMPLI_PROCEDURES_SYSTEMD_UNIT_STATE_H
+#define KOMPLI_PROCEDURES_SYSTEMD_UNIT_STATE_H
 
 #include <Evaluator.h>
 #include <Pattern.h>
@@ -32,4 +32,4 @@ struct SystemdUnitStateParams
 
 Result<Status> AuditSystemdUnitState(const SystemdUnitStateParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_PROCEDURES_SYSTEMD_UNIT_STATE_H
+#endif // KOMPLI_PROCEDURES_SYSTEMD_UNIT_STATE_H

@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_SYSTEMD_CONFIG_H
-#define COMPLIANCEENGINE_PROCEDURES_SYSTEMD_CONFIG_H
+#ifndef KOMPLI_PROCEDURES_SYSTEMD_CONFIG_H
+#define KOMPLI_PROCEDURES_SYSTEMD_CONFIG_H
 
 #include <Evaluator.h>
 #include <regex>
@@ -57,4 +57,4 @@ struct SystemdConfigValueParams
 Result<Status> AuditSystemdConfigValue(const SystemdConfigValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateSystemdConfigValue(const SystemdConfigValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_PROCEDURES_SYSTEMD_CONFIG_H
+#endif // KOMPLI_PROCEDURES_SYSTEMD_CONFIG_H

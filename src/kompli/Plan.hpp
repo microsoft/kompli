@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-#ifndef COMPLIANCE_ENGINE_CLI_PLAN_HPP
-#define COMPLIANCE_ENGINE_CLI_PLAN_HPP
+#ifndef KOMPLI_CLI_PLAN_HPP
+#define KOMPLI_CLI_PLAN_HPP
 
 #include <BenchmarkDefinition.hpp>
 #include <BenchmarkInfo.h>
@@ -126,4 +126,4 @@ Optional<Error> CheckUniqueBenchmarkIdentities(const std::vector<std::pair<std::
 
 } // namespace Cli
 } // namespace Kompli
-#endif // COMPLIANCE_ENGINE_CLI_PLAN_HPP
+#endif // KOMPLI_CLI_PLAN_HPP

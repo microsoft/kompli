@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_BINDINGS_H
-#define COMPLIANCEENGINE_BINDINGS_H
+#ifndef KOMPLI_BINDINGS_H
+#define KOMPLI_BINDINGS_H
 
 #include <BindingParsers.h>
 #include <CommonUtils.h>
@@ -310,4 +310,4 @@ inline BindingsImpl::RawParameterProcedureHandler MakeHandler(Result<Status> (*f
 }
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_BINDINGS_H
+#endif // KOMPLI_BINDINGS_H

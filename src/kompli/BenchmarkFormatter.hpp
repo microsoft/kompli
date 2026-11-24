@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 //
-#ifndef COMPLIANCE_ENGINE_BENCHMARK_FORMATTER_HPP
-#define COMPLIANCE_ENGINE_BENCHMARK_FORMATTER_HPP
+#ifndef KOMPLI_BENCHMARK_FORMATTER_HPP
+#define KOMPLI_BENCHMARK_FORMATTER_HPP
 
 #include <DistributionInfo.h>
 #include <Evaluator.h>
@@ -53,4 +53,4 @@ private:
 };
 } // namespace BenchmarkFormatters
 } // namespace Kompli
-#endif // COMPLIANCE_ENGINE_BENCHMARK_FORMATTER_HPP
+#endif // KOMPLI_BENCHMARK_FORMATTER_HPP

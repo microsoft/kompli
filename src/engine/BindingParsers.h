@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_BINDING_PARSERS_H
-#define COMPLIANCEENGINE_BINDING_PARSERS_H
+#ifndef KOMPLI_BINDING_PARSERS_H
+#define KOMPLI_BINDING_PARSERS_H
 
 #include <Pattern.h>
 #include <Result.h>
@@ -43,4 +43,4 @@ template <>
 Result<mode_t> Parse<mode_t>(const std::string& input);
 } // namespace BindingParsers
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_BINDING_PARSERS_H
+#endif // KOMPLI_BINDING_PARSERS_H

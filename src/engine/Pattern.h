@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PATTERN_H
-#define COMPLIANCEENGINE_PATTERN_H
+#ifndef KOMPLI_PATTERN_H
+#define KOMPLI_PATTERN_H
 
 #include <Result.h>
 #include <regex>
@@ -86,4 +86,4 @@ inline string to_string(const Kompli::Pattern& pattern) // NOLINT(*-identifier-n
     return pattern.GetPattern();
 }
 } // namespace std
-#endif // COMPLIANCEENGINE_PATTERN_H
+#endif // KOMPLI_PATTERN_H

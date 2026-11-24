@@ -374,8 +374,8 @@ def generate_procedure_map_header(model: Model, filename: str):
         f.write("// Licensed under the MIT License.\n")
         f.write("\n")
         f.write("// This file is auto-generated. Do not edit manually.\n")
-        f.write("#ifndef COMPLIANCEENGINE_PROCEDURE_MAP_H\n")
-        f.write("#define COMPLIANCEENGINE_PROCEDURE_MAP_H\n")
+        f.write("#ifndef KOMPLI_PROCEDURE_MAP_H\n")
+        f.write("#define KOMPLI_PROCEDURE_MAP_H\n")
         f.write("\n")
         for line in sorted(includes):
             f.write(line)
@@ -422,7 +422,7 @@ def generate_procedure_map_header(model: Model, filename: str):
             f.write(f"string to_string(Kompli::{name} value) noexcept(false); // NOLINT(*-identifier-naming)\n")
             f.write("\n")
         f.write("} // namespace std\n")
-        f.write("#endif // COMPLIANCEENGINE_PROCEDURE_MAP_H\n")
+        f.write("#endif // KOMPLI_PROCEDURE_MAP_H\n")
 
 def generate_procedure_map_impl(model: Model, filename: str):
     """Generate an implementation file for the procedure map."""

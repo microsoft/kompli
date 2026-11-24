@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_FIREWALLD_ZONE_TARGETS_H
-#define COMPLIANCEENGINE_PROCEDURES_FIREWALLD_ZONE_TARGETS_H
+#ifndef KOMPLI_PROCEDURES_FIREWALLD_ZONE_TARGETS_H
+#define KOMPLI_PROCEDURES_FIREWALLD_ZONE_TARGETS_H
 
 #include <Evaluator.h>
 
@@ -10,4 +10,4 @@ namespace Kompli
 {
 Result<Status> AuditFirewalldZoneTargets(IndicatorsTree& indicators, ContextInterface& context);
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_PROCEDURES_FIREWALLD_ZONE_TARGETS_H
+#endif // KOMPLI_PROCEDURES_FIREWALLD_ZONE_TARGETS_H

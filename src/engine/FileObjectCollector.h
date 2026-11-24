@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_FILE_OBJECT_COLLECTOR_H
-#define COMPLIANCEENGINE_FILE_OBJECT_COLLECTOR_H
+#ifndef KOMPLI_FILE_OBJECT_COLLECTOR_H
+#define KOMPLI_FILE_OBJECT_COLLECTOR_H
 
 #include <Result.h>
 #include <VariableResolver.h>
@@ -33,4 +33,4 @@ struct FileCollectionPolicy
 Result<VariableResolution::ObjectCollection> CollectNameserverObject(const ContextInterface& context, const std::string& path, FileCollectionPolicy policy = {});
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_FILE_OBJECT_COLLECTOR_H
+#endif // KOMPLI_FILE_OBJECT_COLLECTOR_H

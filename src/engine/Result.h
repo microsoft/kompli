@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_RESULT_H
-#define COMPLIANCEENGINE_RESULT_H
+#ifndef KOMPLI_RESULT_H
+#define KOMPLI_RESULT_H
 
 #include "TypeTraits.h"
 
@@ -297,4 +297,4 @@ private:
 };
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_RESULT_H
+#endif // KOMPLI_RESULT_H

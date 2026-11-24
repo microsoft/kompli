@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_SSH_KEY_PERMISSIONS_H
-#define COMPLIANCEENGINE_PROCEDURES_SSH_KEY_PERMISSIONS_H
+#ifndef KOMPLI_PROCEDURES_SSH_KEY_PERMISSIONS_H
+#define KOMPLI_PROCEDURES_SSH_KEY_PERMISSIONS_H
 
 #include <Evaluator.h>
 namespace Kompli
@@ -27,4 +27,4 @@ Result<Status> AuditSshKeyPermissions(const SshKeyPermissionsParams& params, Ind
 Result<Status> RemediateSshKeyPermissions(const SshKeyPermissionsParams& params, IndicatorsTree& indicators, ContextInterface& context);
 
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_PROCEDURES_SSH_KEY_PERMISSIONS_H
+#endif // KOMPLI_PROCEDURES_SSH_KEY_PERMISSIONS_H

@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_RESULT_EVIDENCE_H
-#define COMPLIANCEENGINE_RESULT_EVIDENCE_H
+#ifndef KOMPLI_RESULT_EVIDENCE_H
+#define KOMPLI_RESULT_EVIDENCE_H
 
 #include <MmiResults.h>
 #include <Result.h>
@@ -63,4 +63,4 @@ private:
 };
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_RESULT_EVIDENCE_H
+#endif // KOMPLI_RESULT_EVIDENCE_H

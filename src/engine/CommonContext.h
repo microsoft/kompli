@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_COMMONCONTEXT_H
-#define COMPLIANCEENGINE_COMMONCONTEXT_H
+#ifndef KOMPLI_COMMONCONTEXT_H
+#define KOMPLI_COMMONCONTEXT_H
 
 #include "ContextInterface.h"
 #include "Logging.h"
@@ -71,4 +71,4 @@ private:
     FilesystemScanner mFsScanner;
 };
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_COMMONCONTEXT_H
+#endif // KOMPLI_COMMONCONTEXT_H

@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_UNIQUE_USER_ID_H
-#define COMPLIANCEENGINE_PROCEDURES_UNIQUE_USER_ID_H
+#ifndef KOMPLI_PROCEDURES_UNIQUE_USER_ID_H
+#define KOMPLI_PROCEDURES_UNIQUE_USER_ID_H
 
 #include <Evaluator.h>
 
@@ -24,4 +24,4 @@ struct UniqueUserIdParams
 
 Result<Status> AuditUniqueUserId(const UniqueUserIdParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_PROCEDURES_UNIQUE_USER_ID_H
+#endif // KOMPLI_PROCEDURES_UNIQUE_USER_ID_H

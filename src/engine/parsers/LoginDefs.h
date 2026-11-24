@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PARSERS_LOGIN_DEFS_H
-#define COMPLIANCEENGINE_PARSERS_LOGIN_DEFS_H
+#ifndef KOMPLI_PARSERS_LOGIN_DEFS_H
+#define KOMPLI_PARSERS_LOGIN_DEFS_H
 
 #include <Logging.h>
 #include <Optional.h>
@@ -50,4 +50,4 @@ Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle 
 } // namespace LoginDefs
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_PARSERS_LOGIN_DEFS_H
+#endif // KOMPLI_PARSERS_LOGIN_DEFS_H

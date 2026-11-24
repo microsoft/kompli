@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_CONTEXTINTERFACE_H
-#define COMPLIANCEENGINE_CONTEXTINTERFACE_H
+#ifndef KOMPLI_CONTEXTINTERFACE_H
+#define KOMPLI_CONTEXTINTERFACE_H
 
 #include "FilesystemScanner.h"
 #include "Logging.h"
@@ -76,4 +76,4 @@ private:
     std::map<std::string, std::string> mBenchmarkSettings;
 };
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_CONTEXT_H
+#endif // KOMPLI_CONTEXTINTERFACE_H

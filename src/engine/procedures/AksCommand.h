@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_AKS_COMMAND_H
-#define COMPLIANCEENGINE_PROCEDURES_AKS_COMMAND_H
+#ifndef KOMPLI_PROCEDURES_AKS_COMMAND_H
+#define KOMPLI_PROCEDURES_AKS_COMMAND_H
 
 #include <Evaluator.h>
 
@@ -38,4 +38,4 @@ struct AksCommandParams
 
 Result<Status> AuditAksCommand(const AksCommandParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_PROCEDURES_AKS_COMMAND_H
+#endif // KOMPLI_PROCEDURES_AKS_COMMAND_H

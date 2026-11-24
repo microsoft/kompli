@@ -2,8 +2,8 @@
 // Licensed under the MIT License.
 
 // This file is auto-generated. Do not edit manually.
-#ifndef COMPLIANCEENGINE_PROCEDURE_MAP_H
-#define COMPLIANCEENGINE_PROCEDURE_MAP_H
+#ifndef KOMPLI_PROCEDURE_MAP_H
+#define KOMPLI_PROCEDURE_MAP_H
 
 #include <AideAttributes.h>
 #include <AksCommand.h>
@@ -724,4 +724,4 @@ string to_string(Kompli::SshdOptionMode value) noexcept(false); // NOLINT(*-iden
 string to_string(Kompli::SystemdConfigValueOperator value) noexcept(false); // NOLINT(*-identifier-naming)
 
 } // namespace std
-#endif // COMPLIANCEENGINE_PROCEDURE_MAP_H
+#endif // KOMPLI_PROCEDURE_MAP_H

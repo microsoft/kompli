@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_INDICATORS_H
-#define COMPLIANCEENGINE_INDICATORS_H
+#ifndef KOMPLI_INDICATORS_H
+#define KOMPLI_INDICATORS_H
 
 #include "Logging.h"
 #include "MmiResults.h"
@@ -97,4 +97,4 @@ private:
 
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_INDICATORS_H
+#endif // KOMPLI_INDICATORS_H

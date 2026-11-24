@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_JSON_WRAPPER_H
-#define COMPLIANCEENGINE_JSON_WRAPPER_H
+#ifndef KOMPLI_JSON_WRAPPER_H
+#define KOMPLI_JSON_WRAPPER_H
 
 #include <Result.h>
 #include <memory>
@@ -47,4 +47,4 @@ private:
 };
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_JSON_WRAPPER_H
+#endif // KOMPLI_JSON_WRAPPER_H

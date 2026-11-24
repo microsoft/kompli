@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_GUESTCONFIGURATIONCONTEXT_H
-#define COMPLIANCEENGINE_GUESTCONFIGURATIONCONTEXT_H
+#ifndef KOMPLI_GUESTCONFIGURATIONCONTEXT_H
+#define KOMPLI_GUESTCONFIGURATIONCONTEXT_H
 
 #include "CommonContext.h"
 #include "Logging.h"
@@ -23,4 +23,4 @@ private:
 };
 
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_GUESTCONFIGURATIONCONTEXT_H
+#endif // KOMPLI_GUESTCONFIGURATIONCONTEXT_H

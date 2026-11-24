@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_MMI_RESULTS_H
-#define COMPLIANCEENGINE_MMI_RESULTS_H
+#ifndef KOMPLI_MMI_RESULTS_H
+#define KOMPLI_MMI_RESULTS_H
 
 #include <string>
 
@@ -63,4 +63,4 @@ inline std::string to_string(Kompli::Status status) // NOLINT(*-identifier-namin
 }
 } // namespace std
 
-#endif // COMPLIANCEENGINE_MMI_RESULTS_H
+#endif // KOMPLI_MMI_RESULTS_H

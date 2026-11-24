@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_SEPARATED_H
-#define COMPLIANCEENGINE_SEPARATED_H
+#ifndef KOMPLI_SEPARATED_H
+#define KOMPLI_SEPARATED_H
 
 #include <BindingParsers.h>
 #include <initializer_list>
@@ -73,4 +73,4 @@ struct Separated
     }
 };
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_SEPARATED_H
+#endif // KOMPLI_SEPARATED_H

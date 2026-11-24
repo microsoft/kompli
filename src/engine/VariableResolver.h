@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_VARIABLE_RESOLVER_H
-#define COMPLIANCEENGINE_VARIABLE_RESOLVER_H
+#ifndef KOMPLI_VARIABLE_RESOLVER_H
+#define KOMPLI_VARIABLE_RESOLVER_H
 
 #include <Result.h>
 #include <TypedComparison.h>
@@ -190,4 +190,4 @@ inline Result<std::vector<std::string>> Split(const std::vector<std::string>& va
 } // namespace VariableResolution
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_VARIABLE_RESOLVER_H
+#endif // KOMPLI_VARIABLE_RESOLVER_H

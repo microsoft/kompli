@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCE_ENGINE_CLI_TEXT_RENDERERS_HPP
-#define COMPLIANCE_ENGINE_CLI_TEXT_RENDERERS_HPP
+#ifndef KOMPLI_CLI_TEXT_RENDERERS_HPP
+#define KOMPLI_CLI_TEXT_RENDERERS_HPP
 
 #include <Result.h>
 #include <string>
@@ -28,4 +28,4 @@ Result<std::string> RenderText(const std::string& canonicalJson, TextStyle style
 } // namespace Cli
 } // namespace Kompli
 
-#endif // COMPLIANCE_ENGINE_CLI_TEXT_RENDERERS_HPP
+#endif // KOMPLI_CLI_TEXT_RENDERERS_HPP

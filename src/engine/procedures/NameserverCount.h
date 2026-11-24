@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_NAMESERVER_COUNT_H
-#define COMPLIANCEENGINE_PROCEDURES_NAMESERVER_COUNT_H
+#ifndef KOMPLI_PROCEDURES_NAMESERVER_COUNT_H
+#define KOMPLI_PROCEDURES_NAMESERVER_COUNT_H
 
 #include <Evaluator.h>
 
@@ -18,4 +18,4 @@ struct NameserverCountParams
 Result<Status> AuditNameserverCount(const NameserverCountParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_PROCEDURES_NAMESERVER_COUNT_H
+#endif // KOMPLI_PROCEDURES_NAMESERVER_COUNT_H

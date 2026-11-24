@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_TYPE_TRAITS_H
-#define COMPLIANCEENGINE_TYPE_TRAITS_H
+#ifndef KOMPLI_TYPE_TRAITS_H
+#define KOMPLI_TYPE_TRAITS_H
 
 #include <type_traits>
 
@@ -27,4 +27,4 @@ constexpr bool NoexceptDestructible() noexcept
 }
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_TYPE_TRAITS_H
+#endif // KOMPLI_TYPE_TRAITS_H

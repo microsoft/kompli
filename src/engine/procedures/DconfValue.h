@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_DCONF_VALUE_H
-#define COMPLIANCEENGINE_PROCEDURES_DCONF_VALUE_H
+#ifndef KOMPLI_PROCEDURES_DCONF_VALUE_H
+#define KOMPLI_PROCEDURES_DCONF_VALUE_H
 
 #include <Evaluator.h>
 
@@ -33,4 +33,4 @@ struct DconfValueParams
 Result<Status> AuditDconfValue(const DconfValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateDconfValue(const DconfValueParams& params, IndicatorsTree& indicators, ContextInterface& context);
 } // namespace Kompli
-#endif // COMPLIANCEENGINE_PROCEDURES_DCONF_VALUE_H
+#endif // KOMPLI_PROCEDURES_DCONF_VALUE_H

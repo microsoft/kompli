@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PASSWORD_CREDIT_UNION_EVIDENCE_H
-#define COMPLIANCEENGINE_PASSWORD_CREDIT_UNION_EVIDENCE_H
+#ifndef KOMPLI_PASSWORD_CREDIT_UNION_EVIDENCE_H
+#define KOMPLI_PASSWORD_CREDIT_UNION_EVIDENCE_H
 
 #include <MmiResults.h>
 #include <Optional.h>
@@ -76,4 +76,4 @@ Result<Status> EvaluatePasswordCreditUnion(const PasswordCreditAssessment& mainR
     const CreditDiagnosticReporter& reportDiagnostic);
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_PASSWORD_CREDIT_UNION_EVIDENCE_H
+#endif // KOMPLI_PASSWORD_CREDIT_UNION_EVIDENCE_H

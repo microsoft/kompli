@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCE_ENGINE_BENCHMARKIO_INPUT_SECURITY_HPP
-#define COMPLIANCE_ENGINE_BENCHMARKIO_INPUT_SECURITY_HPP
+#ifndef KOMPLI_BENCHMARKIO_INPUT_SECURITY_HPP
+#define KOMPLI_BENCHMARKIO_INPUT_SECURITY_HPP
 
 #include <Logging.h>
 #include <Result.h>
@@ -73,4 +73,4 @@ bool RefuseUnsafeLogFile(const std::string& path, OsConfigLogHandle logHandle);
 } // namespace BenchmarkIO
 } // namespace Kompli
 
-#endif // COMPLIANCE_ENGINE_BENCHMARKIO_INPUT_SECURITY_HPP
+#endif // KOMPLI_BENCHMARKIO_INPUT_SECURITY_HPP

@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_RANGES_VIEW_HPP
-#define COMPLIANCEENGINE_RANGES_VIEW_HPP
+#ifndef KOMPLI_RANGES_VIEW_HPP
+#define KOMPLI_RANGES_VIEW_HPP
 
 #include <Optional.h>
 #include <Result.h>
@@ -139,4 +139,4 @@ private:
 } // namespace Ranges
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_RANGES_VIEW_HPP
+#endif // KOMPLI_RANGES_VIEW_HPP

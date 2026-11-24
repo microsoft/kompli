@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_RANGES_RANGE_HPP
-#define COMPLIANCEENGINE_RANGES_RANGE_HPP
+#ifndef KOMPLI_RANGES_RANGE_HPP
+#define KOMPLI_RANGES_RANGE_HPP
 
 #include "View.hpp"
 
@@ -149,4 +149,4 @@ View<Detail::CollectionSource<std::vector<T>>> Range(std::initializer_list<T> va
 } // namespace Ranges
 } // namespace Kompli
 
-#endif // COMPLIANCEENGINE_RANGES_RANGE_HPP
+#endif // KOMPLI_RANGES_RANGE_HPP

@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_DISTRIBUTION_INFO_H
-#define COMPLIANCEENGINE_DISTRIBUTION_INFO_H
+#ifndef KOMPLI_DISTRIBUTION_INFO_H
+#define KOMPLI_DISTRIBUTION_INFO_H
 
 #include <Result.h>
 #include <string>
@@ -70,4 +70,4 @@ std::string to_string(Kompli::OSType osType) noexcept(false);                   
 std::string to_string(Kompli::Architecture architecture) noexcept(false);                // NOLINT(*-identifier-naming)
 std::string to_string(const Kompli::DistributionInfo& distributionInfo) noexcept(false); // NOLINT(*-identifier-naming)
 } // namespace std
-#endif // COMPLIANCEENGINE_DISTRIBUTION_INFO_H
+#endif // KOMPLI_DISTRIBUTION_INFO_H

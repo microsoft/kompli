@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_CETELEMETRY_H
-#define COMPLIANCEENGINE_CETELEMETRY_H
+#ifndef KOMPLI_CETELEMETRY_H
+#define KOMPLI_CETELEMETRY_H
 
 #include "Logging.h"
 #include "Result.h"
@@ -238,4 +238,4 @@ namespace std
 {
 std::string to_string(const Kompli::TelemetryEventType type); // NOLINT(*-identifier-naming)
 } // namespace std
-#endif // COMPLIANCEENGINE_CETELEMETRY_H
+#endif // KOMPLI_CETELEMETRY_H
