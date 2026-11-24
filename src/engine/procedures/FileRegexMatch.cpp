@@ -56,8 +56,9 @@ Result<long long> ParseInteger(const std::string& text)
 // syntax Options for matchPattern and statePattern respectively
 using MatchStateSyntaxOptions = std::pair<syntax_option_type, syntax_option_type>;
 
-// The producer is below, outside the anonymous namespace, so M-82 can feed
-// acquired content without changing selection or source evidence semantics.
+// The producer is below, outside the anonymous namespace, so a later
+// content-acquisition caller can feed acquired content without changing
+// selection or source evidence semantics.
 } // anonymous namespace
 
 Result<bool> EvaluateFileRegexContent(std::istream& input, const std::string& filename, const std::string& matchPattern, const regex& matchRegex,

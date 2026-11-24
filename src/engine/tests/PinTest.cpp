@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// C2 (Pin layer): Pin/Metadata/ReadableFile runtime coverage (U1 b,
-// m98-design.md section 6). C2 has no production caller of its own (every
-// pathname consumer needs Path -- see m98-design.md section 6a), so this
-// suite acquires Pins directly through the test-only PinTestAccess bridge
-// (filesystem/Pin.hpp's PinProcessRoot/AcquirePinnedObject), never through
-// Path. Includes stay C1/C2 (plus MockContext.h/gtest/gmock/std) so this
-// file never depends on Path/FTW.
+// Pin layer: Pin/Metadata/ReadableFile runtime coverage. The Pin layer
+// has no production caller of its own (every pathname consumer needs
+// Path), so this suite acquires Pins directly through the test-only
+// PinTestAccess bridge (filesystem/Pin.hpp's
+// PinProcessRoot/AcquirePinnedObject), never through Path. Includes stay
+// Descriptor/Pin layer (plus MockContext.h/gtest/gmock/std) so this file
+// never depends on Path/FTW.
 
 #include <ContextInterface.h>
 #include <DescriptorTestAccess.h>
@@ -43,10 +43,10 @@ using testing::Return;
 using testing::StrEq;
 using testing::StrictMock;
 
-// Small, C1-only readlink probe identical in spirit to the C3
-// PathTestSupport.h's DescriptorTarget, but not shared with it: a C2 file
-// must not depend on a C3 header (see AGENTS.md "one file, one layer"), and
-// this is the only file at this layer that needs it.
+// Small, Descriptor-layer-only readlink probe identical in spirit to the
+// Path-layer PathTestSupport.h's DescriptorTarget, but not shared with it:
+// a Pin-layer file must not depend on a Path-layer header, and this is the
+// only file at this layer that needs it.
 std::string FileDescriptorTarget(int descriptor)
 {
     const std::string alias = "/proc/self/fd/" + std::to_string(descriptor);
@@ -258,10 +258,11 @@ TEST_F(PinTest, SetOwnershipAndSetModeDispatchThroughPinnedNativeSeams)
 }
 
 // (f) A moved-from Pin throws std::logic_error before any native dispatch
-// (ADR-0048-style consumed-owner rejection, inherited from the Descriptor
-// it wraps). Metadata() is deliberately not checked here: it only returns
-// the already-held mMetadata copy and never touches the native descriptor,
-// so it is not part of this contract.
+// (a consumed-owner rejection, inherited from the Descriptor it wraps:
+// moved-from state is consumed and every state-reading operation checks
+// liveness first). Metadata() is deliberately not checked here: it only
+// returns the already-held mMetadata copy and never touches the native
+// descriptor, so it is not part of this contract.
 TEST_F(PinTest, MovedFromPinThrowsBeforeNativeDispatch)
 {
     auto root = AcquireRootPin();
@@ -311,23 +312,39 @@ TEST_F(PinTest, MovedFromReadableFileReturnsClosedErrorBeforeNativeDispatch)
 }
 
 // (g) Close happens exactly once, with no retry, even when the native close
-// itself fails (AGENTS.md "Filesystem and descriptor code": never retry a
-// failed close).
+// itself fails: filesystem and descriptor code must never retry a failed
+// close.
 TEST_F(PinTest, CloseHappensExactlyOnceWithNoRetry)
 {
     auto root = AcquireRootPin();
     ASSERT_TRUE(root.HasValue()) << root.Error().message;
+    int closeAttempts = 0;
     {
         const std::string file = context.MakeTempfile("close-once");
         auto pin = AcquireFilePin(root.Value(), file);
         ASSERT_TRUE(pin.HasValue()) << pin.Error().message;
-        // RetiresOnSaturation(): once this expectation is used for the file
-        // pin's single close, it steps aside so root's own close (at function
-        // exit, via AcquireRootPin's AllowIncidentalNativeAccess) falls
-        // through to the earlier catch-all instead of over-saturating this
-        // exact-once expectation -- a retry would do the latter instead.
-        EXPECT_CALL(context, CloseNativeDescriptor(_)).Times(1).WillOnce(Return(ComplianceEngine::Error(EIO))).RetiresOnSaturation();
+        const int fileDescriptor = PinTestAccess::NativeDescriptor(pin.Value());
+        // The matcher is this exact fd, not `_`, so root's own close (at
+        // function exit, via AcquireRootPin's AllowIncidentalNativeAccess)
+        // never reaches this expectation -- it matches the separate
+        // catch-all instead. AnyNumber() (no RetiresOnSaturation) means a
+        // second close of this same fd, i.e. a retry, lands on this same
+        // expectation too rather than quietly falling through to that
+        // catch-all, so closeAttempts below counts every close this fd
+        // actually sees. Every invocation reports EIO (the native close
+        // keeps failing), but only the first one really ::close()s the fd,
+        // so the real descriptor is not leaked regardless of how many
+        // times this is called.
+        EXPECT_CALL(context, CloseNativeDescriptor(fileDescriptor)).Times(AnyNumber()).WillRepeatedly([&closeAttempts](int descriptor) {
+            if (0 == closeAttempts++)
+                ::close(descriptor);
+            return ComplianceEngine::Error(EIO);
+        });
         // `pin` destructs at the end of this scope.
     }
+    // A retrying implementation would call CloseNativeDescriptor(fileDescriptor)
+    // a second time, bumping closeAttempts to 2 and failing this assertion;
+    // closing exactly once leaves it at exactly 1.
+    EXPECT_EQ(1, closeAttempts);
 }
 } // namespace

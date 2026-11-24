@@ -147,10 +147,10 @@ public:
             : mData(std::move(data))
         {
         }
-        // Checked moved-from guard, ADR-0048 Decision 2: every state-reading
-        // operation calls this first, before any other validation or native
-        // dispatch, so a moved-from Step diagnoses deterministically instead
-        // of reading retired state.
+        // Checked moved-from guard: every state-reading operation calls
+        // this first, before any other validation or native dispatch, so
+        // a moved-from Step throws std::logic_error deterministically
+        // instead of reading retired state.
         void RequireLive() const;
         std::shared_ptr<const Data> mData;
         friend class Path;
@@ -191,9 +191,9 @@ private:
     std::string LookupName() const;
     std::string ToString() const;
     friend class ::ComplianceEngine::Tests::PathTestAccess;
-    // Checked moved-from guard, ADR-0048 Decision 2: every state-reading
-    // operation calls this first, before any other validation or native
-    // dispatch, so a moved-from Path diagnoses deterministically instead of
+    // Checked moved-from guard: every state-reading operation calls this
+    // first, before any other validation or native dispatch, so a
+    // moved-from Path throws std::logic_error deterministically instead of
     // reading retired state.
     void RequireLive() const;
     struct State;

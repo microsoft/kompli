@@ -5,6 +5,7 @@
 #define COMPLIANCEENGINE_TESTS_PIN_TEST_ACCESS_H
 
 #include <ContextInterface.h>
+#include <DescriptorTestAccess.h>
 #include <cerrno>
 #include <filesystem/Descriptor.hpp>
 #include <filesystem/Pin.hpp>
@@ -15,8 +16,8 @@ namespace ComplianceEngine
 {
 namespace Tests
 {
-// Defined only in tests (the pattern used for DescriptorTestAccess). C2
-// has no public Pin factory by design (U1 b, m98-design.md section 6): the
+// Defined only in tests (the pattern used for DescriptorTestAccess). The
+// Pin layer has no public Pin factory by design: the
 // only acquisition routes a caller outside Path/DirectoryCursor can reach
 // are PinProcessRoot (root only) and AcquirePinnedObject (an already-open
 // Descriptor), both Pin-private. This bridge calls them unmodified -- the
@@ -47,7 +48,7 @@ public:
 
     // Builds a sibling Pin around an already-open, already-typed Descriptor
     // (e.g. a regular file opened as a child of the directory AcquireRoot
-    // pinned, through the C1 descriptor bridge), via Pin's own
+    // pinned, through the Descriptor-layer descriptor bridge), via Pin's own
     // AcquirePinnedObject -- the identical stat+procfs-mount acquisition
     // Path performs for every non-root component. Metadata's own provenance
     // types are not all reachable here: LookupMountId/TargetMountId are
@@ -55,7 +56,7 @@ public:
     // LookupSpelling/EffectiveSpelling are only ever returned as decoded
     // strings (LookupName()/EffectiveName()), never as the object itself,
     // and this class is not friended to those two leaf types (only to Pin
-    // and Metadata, per U1 b). So a fresh Metadata reuses an existing
+    // and Metadata). So a fresh Metadata reuses an existing
     // sibling's spelling objects by copy (reading Metadata's private fields,
     // which this class's Metadata friendship allows) rather than
     // constructing new ones from a path string. This is sufficient for
@@ -72,6 +73,17 @@ public:
         const Metadata donor = provenanceDonor.Metadata();
         Metadata facts(type, object.snapshot, donor.LookupMount(), donor.TargetMount(), donor.mLookupName, donor.mEffectiveName);
         return Pin(std::move(object.pin), std::move(facts));
+    }
+
+    // The raw fd a Pin holds, read through this class's existing Pin
+    // friendship and handed to DescriptorTestAccess (which is itself friended
+    // to Descriptor) rather than this class reaching into Descriptor
+    // directly. Lets a test pin down a MockContext expectation to the exact
+    // native fd a given Pin owns, e.g. to prove a close happens on that fd
+    // and no other.
+    static int NativeDescriptor(const Pin& pin)
+    {
+        return DescriptorTestAccess::ConsumedDescriptor(pin.mDescriptor);
     }
 };
 } // namespace Tests

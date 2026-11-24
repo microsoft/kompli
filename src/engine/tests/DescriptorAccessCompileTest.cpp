@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// C1 (Descriptor layer): Descriptor, ProcfsDescriptorAccess and the
-// ContextInterface native boundary (minus the cursor seams, which are C4 --
-// see FTWAccessCompileTest.cpp). Split from the former monolithic
+// Descriptor layer: Descriptor, ProcfsDescriptorAccess and the
+// ContextInterface native boundary (minus the cursor seams, which are FTW
+// layer -- see FTWAccessCompileTest.cpp). Split from the former monolithic
 // DescriptorAccessCompileTest.cpp (see PinAccessCompileTest.cpp,
 // PathAccessCompileTest.cpp and FTWAccessCompileTest.cpp for the other
 // layers); shared detection idioms live in AccessCompileTestSupport.h.

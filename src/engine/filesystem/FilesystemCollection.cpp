@@ -896,7 +896,7 @@ Result<FileRange> Files(Path path, std::string reportingName, FilesystemTraversa
     auto valid = ValidateContinuation(path, reportingName, continuation);
     if (!valid.HasValue())
         return valid.Error();
-    // TM-9: the selected leaf is the barrier, even for an unfrozen
+    // The selected leaf is the barrier, even for an unfrozen
     // multi-component Path. Do not resolve a child before this succeeds.
     auto frozen = path.Freeze();
     if (!frozen.HasValue())

@@ -82,7 +82,7 @@ protected:
 TEST(StigTextPatternLoweringPayloadTest, ActualCaptureHasDistinctProvenanceAndCorrectedShape)
 {
     const auto artifact = ReadFile(FixturePath());
-    ASSERT_FALSE(artifact.empty()) << "Capture actual corrected AE output before running the M-55 native regression";
+    ASSERT_FALSE(artifact.empty()) << "Capture actual corrected AE output before running the corrected text-pattern native regression";
     auto envelope = JsonWrapper::FromString(artifact);
     ASSERT_TRUE(envelope.HasValue());
     const auto* root = json_value_get_object(envelope->get());

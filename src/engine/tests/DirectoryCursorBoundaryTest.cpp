@@ -1,14 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// C4 (FTW layer): the directory-cursor cases moved out of
-// DescriptorBoundaryTest.cpp (C1) because they exercise the
+// FTW layer: the directory-cursor cases moved out of
+// DescriptorBoundaryTest.cpp (Descriptor layer) because they exercise the
 // ContextInterface cursor seam (OpenDirectoryCursor/FdOpenDirectory), which
 // only exists once the cursor layer is present. Test names are unchanged
-// (DescriptorBoundaryTest.*): each test below also covers several C1 native
-// seams alongside the cursor seam in one assertion, so the whole test moved
-// rather than being split (gtest test names must be unique per binary, so a
-// single test cannot be split across two files under the same name).
+// (DescriptorBoundaryTest.*): each test below also covers several
+// Descriptor-layer native seams alongside the cursor seam in one assertion,
+// so the whole test moved rather than being split (gtest test names must
+// be unique per binary, so a single test cannot be split across two files
+// under the same name).
 
 #include <DescriptorTestAccess.h>
 #include <DirectoryCursorTestAccess.h>
@@ -49,8 +50,8 @@ struct Void
 // This expression is compiled as part of the ordinary test build. The
 // cursor-owner-returning surface must accept both kinds of lvalue and
 // neither kind of concrete temporary, including a const temporary (mirrors
-// DescriptorBoundaryTest.cpp's OWNER_FACTORY_CONTRACT for its own, C1-only
-// seams).
+// DescriptorBoundaryTest.cpp's OWNER_FACTORY_CONTRACT for its own,
+// Descriptor-layer-only seams).
 #define OWNER_FACTORY_CONTRACT(name, expression)                                                                                                       \
     template <typename T, typename = void>                                                                                                             \
     struct Can##name : std::false_type                                                                                                                 \
@@ -134,7 +135,7 @@ TEST(DescriptorBoundaryTest, ConsumedOwnersThrowBeforeEveryNativeAccess)
     DescriptorTestAccess::Dispose(current);
 }
 
-// ADR-0044 replaces the former empty Descriptor/EBADF branch with a consumed
+// This replaces the former empty Descriptor/EBADF branch with a consumed
 // owner; the foreign-context rejection remains an independent authority check.
 TEST(DescriptorBoundaryTest, ForeignOwnerRejectsEveryNativeBoundaryWithoutConsumingIt)
 {

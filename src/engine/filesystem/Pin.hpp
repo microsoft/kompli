@@ -179,7 +179,7 @@ public:
 private:
     friend class Path;
     friend class Detail::Pin;
-    friend class ::ComplianceEngine::Tests::PinTestAccess; // test-only friendship (U1 b); no production caller
+    friend class ::ComplianceEngine::Tests::PinTestAccess; // test-only friendship; no production caller
     Metadata(Type kind, const struct stat& info, LookupMountId lookup, TargetMountId target, Detail::LookupSpelling source, Detail::EffectiveSpelling effective)
         : mType(kind),
           mStat(info),
@@ -240,7 +240,7 @@ public:
 private:
     friend class ::ComplianceEngine::Filesystem::Path;
     friend class ::ComplianceEngine::Filesystem::FTW::Detail::DirectoryCursor;
-    friend class ::ComplianceEngine::Tests::PinTestAccess; // test-only friendship (U1 b); no production caller
+    friend class ::ComplianceEngine::Tests::PinTestAccess; // test-only friendship; no production caller
     // The live O_PATH pin holds its kernel path (including mount). A verified
     // current-task procfd alias of that pin opens the same path; inode/type
     // checks reject a wrong-object alias. Every helper below dispatches

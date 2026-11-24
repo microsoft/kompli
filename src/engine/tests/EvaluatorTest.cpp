@@ -349,10 +349,10 @@ TEST_F(EvaluatorTest, ExecuteAudit_12)
 
 TEST_F(EvaluatorTest, ReachedFileRegexErrorSurvivesRuleOperators)
 {
-    const auto filename = mContext.GetTempdirPath() + "/result-evaluation.txt";
+    const auto filename = mContext.GetTempdirPath() + "/regex-content.txt";
     std::ofstream(filename) << "key=ok\n";
     const std::string leaf =
-        "{\"FileRegexMatch\":{\"path\":\"" + mContext.GetTempdirPath() + "\",\"filenamePattern\":\"result-evaluation.txt\",\"matchPattern\":\"(?i)\"}}";
+        "{\"FileRegexMatch\":{\"path\":\"" + mContext.GetTempdirPath() + "\",\"filenamePattern\":\"regex-content.txt\",\"matchPattern\":\"(?i)\"}}";
     const std::vector<std::string> expressions = {
         "{\"not\":" + leaf + "}",
         "{\"allOf\":[{\"AuditSuccess\":{}}," + leaf + "]}",
@@ -378,7 +378,7 @@ TEST_F(EvaluatorTest, ReachedFileRegexErrorSurvivesRuleOperators)
 
 TEST_F(EvaluatorTest, SerializedRegexSelectionAndBehaviorReachNativeHandler)
 {
-    const auto filename = mContext.GetTempdirPath() + "/result-evaluation.conf";
+    const auto filename = mContext.GetTempdirPath() + "/regex-content.conf";
     std::ofstream(filename) << "key=ok\n";
     const std::string arguments = "\"path\":\"" + mContext.GetTempdirPath() +
                                   "\",\"filenamePattern\":\"\\\\.conf$\",\"filenameSearch\":\"true\","
@@ -416,7 +416,7 @@ TEST_F(EvaluatorTest, SerializedRegexSelectionAndBehaviorReachNativeHandler)
 
 TEST_F(EvaluatorTest, SerializedCollectionRegexSelectsOnlyMatchingFilenames)
 {
-    const auto directory = mContext.GetTempdirPath() + "/result-evaluation";
+    const auto directory = mContext.GetTempdirPath() + "/regex-content";
     ASSERT_EQ(0, mkdir(directory.c_str(), 0700));
     std::ofstream(directory + "/selected.conf") << "value\n";
     const std::string arguments = "\"directory\":\"" + directory +

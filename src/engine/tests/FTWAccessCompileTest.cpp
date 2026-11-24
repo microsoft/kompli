@@ -1,13 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// C4 (FTW layer): DirectoryCursor and the FilesystemCollection/FTW traversal
+// FTW layer: DirectoryCursor and the FilesystemCollection/FTW traversal
 // surface (FilesystemCollectionEntry), plus the ContextInterface cursor
 // seams (OpenDirectoryCursor/CloseOwnedDirectoryCursor/FdOpenDirectory/
 // CloseDirectory). Split from the former monolithic
 // DescriptorAccessCompileTest.cpp (see DescriptorAccessCompileTest.cpp for
-// C1, PinAccessCompileTest.cpp for C2 and PathAccessCompileTest.cpp for C3);
-// shared detection idioms live in AccessCompileTestSupport.h.
+// the Descriptor layer, PinAccessCompileTest.cpp for the Pin layer and
+// PathAccessCompileTest.cpp for the Path layer); shared detection idioms
+// live in AccessCompileTestSupport.h.
 
 #include <AccessCompileTestSupport.h>
 #include <ContextInterface.h>

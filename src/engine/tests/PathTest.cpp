@@ -238,11 +238,11 @@ TEST(PathKernelIntegrationTest, SameDeviceBindMountBoundaryInPrivateChildNamespa
     int status = 0;
     ASSERT_EQ(child, ::waitpid(child, &status, 0)) << std::strerror(errno);
     ASSERT_TRUE(WIFEXITED(status)) << "Mount fixture child was interrupted: " << status;
-    const char* requirement = std::getenv("KOMPLI_REQUIRE_M71_MOUNT");
+    const char* requirement = std::getenv("KOMPLI_REQUIRE_MOUNT_NAMESPACE");
     const bool required = (nullptr != requirement) && (0 == std::strcmp("1", requirement));
     if ((unavailableMountCapability == WEXITSTATUS(status)) && !required)
     {
-        GTEST_SKIP() << "Private mount namespace/bind mount unavailable locally; CI/VM gate requires KOMPLI_REQUIRE_M71_MOUNT=1";
+        GTEST_SKIP() << "Private mount namespace/bind mount unavailable locally; CI/VM gate requires KOMPLI_REQUIRE_MOUNT_NAMESPACE=1";
     }
     EXPECT_EQ(0, WEXITSTATUS(status)) << "Child mount regression failed (77 = required kernel capability unavailable)";
 }
@@ -558,8 +558,9 @@ TEST_F(PathAliasTest, ActivationHandsOffOwnerWithoutRetryingFailedClose)
     {
         auto opened = SelectAcceptedPath(context, file, CrossMountPathPolicy(), AmpleLimits());
         ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
-        // Path moves transfer ownership (ADR-0048), so `opened` no longer holds
-        // the state; the unique_ptr lets the test retire the pin early.
+        // Path moves transfer ownership of the shared payload, so `opened`
+        // no longer holds the state; the unique_ptr lets the test retire
+        // the pin early.
         auto path = std::unique_ptr<Path>(new Path(std::move(opened).Value()));
         auto activated = path->Leaf().OpenReadOnly();
         ASSERT_TRUE(activated.HasValue()) << activated.Error().message;
@@ -882,8 +883,9 @@ TEST_F(PathAliasTest, PinnedLinkRejectsEmptyNulAndNonLinkAndClosesLinkPinOnce)
             return NativeCloseResult(::close(fd));
         });
         // A directory-cursor watchdog here (CloseDirectory, counting the
-        // link identity surfacing as a directory stream) would need a C4
-        // seam this C3 file must not depend on (see PathTraversalTest.cpp).
+        // link identity surfacing as a directory stream) would need an FTW
+        // layer seam this Path-layer file must not depend on (see
+        // PathTraversalTest.cpp).
         // It is also redundant: a close misrouted through CloseDirectory
         // instead of CloseNativeDescriptor would simply never appear in
         // `closes`, so the matchingCloses/closeSequence checks below (built
@@ -1192,12 +1194,12 @@ TEST_F(PathAliasTest, AcceptedRootRecognitionUsesHeldIdentityNotCandidateName)
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
-// ADR-0048 Decision 2: every state-reading Path/Step operation checks first,
-// before any other validation or native dispatch, so a moved-from object
-// diagnoses deterministically instead of reading retired state. StrictMock
-// with every relevant native seam declared Times(0) proves none of them
-// fire -- the throw happens before native dispatch, not instead of a call
-// that already happened.
+// A moved-from Path/Step is consumed: every state-reading operation checks
+// liveness first and throws std::logic_error, before any other validation
+// or native dispatch, so a moved-from object diagnoses deterministically
+// instead of reading retired state. StrictMock with every relevant native
+// seam declared Times(0) proves none of them fire -- the throw happens
+// before native dispatch, not instead of a call that already happened.
 TEST_F(PathAliasTest, MovedFromPathChecksEveryAccessorBeforeNativeDispatch)
 {
     ::testing::StrictMock<MockContext> strict;
@@ -1411,7 +1413,8 @@ TEST_F(PathAliasTest, ApplyConsumesItsStepOnSuccessAndOnRejection)
     Path::Step rightStep = std::move(right).Value();
     auto applied = path.Apply(std::move(leftStep));
     ASSERT_TRUE(applied.HasValue()) << applied.Error().message;
-    // ADR-0048 Decision 4: a successful Apply consumes its Step.
+    // Apply consumes its Step argument on every return path, including
+    // this successful one.
     EXPECT_THROW((void)leftStep.Target(), std::logic_error);
     auto rejected = path.Apply(std::move(rightStep)); // stale: captured before the move to "left"
     ASSERT_FALSE(rejected.HasValue());
@@ -1433,7 +1436,7 @@ TEST_F(PathAliasTest, PhysicalRootNeverEmptyAndMoveTransfersSourceToMovedFrom)
     Path source = std::move(selected).Value();
     const std::string route = PathTestAccess::ToString(source);
     const auto depth = source.Size();
-    // ADR-0048: the move transfers the shared payload; `source` is
+    // Path moves transfer ownership of the shared payload; `source` is
     // moved-from afterward and every checked accessor on it throws before
     // any other validation or native dispatch, while `moved` keeps the
     // exact snapshot `source` held.
@@ -1472,8 +1475,9 @@ TEST_F(PathAliasTest, ResolveOwnsTargetAfterPathAndStepRetireWithoutChangingSour
         retained.reset(new Path::Component(step.Target()));
         const auto expectedIno = retained->Metadata().Stat().st_ino;
         Path::Step moved(std::move(step));
-        // ADR-0048: `step` is moved-from; its checked accessors throw,
-        // while `moved` keeps the exact target `retained` already captured.
+        // Step moves transfer ownership of the shared payload: `step` is
+        // moved-from; its checked accessors throw, while `moved` keeps the
+        // exact target `retained` already captured.
         EXPECT_THROW((void)step.Target(), std::logic_error);
         EXPECT_EQ(expectedIno, moved.Target().Metadata().Stat().st_ino);
         EXPECT_EQ(before, PathTestAccess::ToString(path));
@@ -1511,10 +1515,10 @@ TEST_F(PathAliasTest, SiblingStepsStaleButInverseRestoresExactContext)
     auto inverse = path.Apply(std::move(left.Value()));
     ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;
     EXPECT_EQ(root + "/left", PathTestAccess::ToString(path));
-    // ADR-0048 Decision 4: Apply consumes its Step argument even when
-    // it rejects it, so `right` (captured at the pre-navigation depth) is
-    // moved-from after this call and cannot be replayed; the later
-    // successful application of "right" re-resolves it instead.
+    // Apply consumes its Step argument even when it rejects it, so `right`
+    // (captured at the pre-navigation depth) is moved-from after this call
+    // and cannot be replayed; the later successful application of "right"
+    // re-resolves it instead.
     auto stale = path.Apply(std::move(right.Value()));
     ASSERT_FALSE(stale.HasValue());
     EXPECT_EQ(ESTALE, stale.Error().code);
@@ -1594,11 +1598,11 @@ TEST_F(PathAliasTest, DistinctAcquisitionsOfSameDirectoryCannotAttachStep)
     ASSERT_TRUE(second.HasValue());
     EXPECT_EQ(first.Value().Leaf().Metadata().Stat().st_ino, second.Value().Leaf().Metadata().Stat().st_ino);
     EXPECT_EQ(first.Value().Size(), second.Value().Size());
-    // ADR-0048 Decision 4: Apply consumes its Step on every return path,
-    // including a rejection, so the step rejected below cannot be replayed
-    // against the correct acquisition -- a second, independently resolved
-    // step (bound to the same acquisition) proves that acquisition accepts
-    // it, instead of reusing the one `second` just rejected.
+    // Apply consumes its Step argument on every return path, including a
+    // rejection, so the step rejected below cannot be replayed against the
+    // correct acquisition -- a second, independently resolved step (bound
+    // to the same acquisition) proves that acquisition accepts it, instead
+    // of reusing the one `second` just rejected.
     auto crossStep = SelectStep(first.Value(), "child", CrossMountPathPolicy());
     ASSERT_TRUE(crossStep.HasValue());
     auto detached = second.Value().Apply(std::move(crossStep.Value()));
@@ -1616,11 +1620,11 @@ TEST_F(PathAliasTest, WorkedPhysicalSuffixDeltaAndUndoRetainHeldAncestors)
     ASSERT_EQ(0, ::mkdir((root + "/x").c_str(), 0700));
     ASSERT_EQ(0, ::symlink("../x", (root + "/sub/link").c_str()));
     auto policy = CrossMountPathPolicy(true);
-    // ADR-0048 Decision 4: Apply consumes its Step argument on every
-    // return path, including a rejection, so `undoSub` cannot be both
-    // rejected as stale (from "x", after the link detour) and later
-    // replayed to prove the full restoration back to root. The two
-    // properties now need their own acquisition of the same fixture.
+    // Apply consumes its Step argument on every return path, including a
+    // rejection, so `undoSub` cannot be both rejected as stale (from "x",
+    // after the link detour) and later replayed to prove the full
+    // restoration back to root. The two properties now need their own
+    // acquisition of the same fixture.
     {
         SCOPED_TRACE("a stale inverse, captured before a link detour, is rejected");
         auto opened = SelectAcceptedPath(context, root, policy, AmpleLimits());
@@ -2917,9 +2921,10 @@ TEST_F(PathAliasTest, PathOutcomeAlternativeReplacementAndSelfMoveRetainExactPin
     using Outcome = Variant<Path, Path::RejectionReason>;
     const auto before = CountOpenDescriptors();
     {
-        // ADR-0048: Path moves now transfer, so `opened.Value()` itself
-        // is moved-from the instant it is wrapped below; only the owning
-        // Variant (not a lingering Path snapshot) determines pin lifetime.
+        // Path moves transfer ownership of the shared payload, so
+        // `opened.Value()` itself is moved-from the instant it is wrapped
+        // below; only the owning Variant (not a lingering Path snapshot)
+        // determines pin lifetime.
         auto acquire = [&]() -> Outcome {
             auto opened = Path::Make(context, "/", CrossMountPathPolicy(), AmpleLimits());
             EXPECT_TRUE(opened.HasValue());
@@ -3027,8 +3032,8 @@ TEST_F(PathAliasTest, MovedPathEnforcesRetainedNativeDescriptorCap)
     ASSERT_TRUE(path.Apply(std::move(first.Value())).HasValue());
     Path moved(std::move(path));
     EXPECT_EQ(2u, moved.Size());
-    // ADR-0048: the move transfers; `path` is moved-from and diagnoses,
-    // it does not keep the source valid.
+    // Path moves transfer ownership of the shared payload; `path` is
+    // moved-from and diagnoses, it does not keep the source valid.
     EXPECT_THROW((void)PathTestAccess::ToString(path), std::logic_error);
     auto cap = moved.Resolve("passwd", CrossMountPathPolicy());
     ASSERT_FALSE(cap.HasValue());
@@ -3146,9 +3151,9 @@ TEST_F(PathAliasTest, IndependentPhysicalBranchesKeepTheirPinsAndRejectStaleStep
     ASSERT_EQ(0, ::mkdir((root + "/first").c_str(), 0700));
     ASSERT_EQ(0, ::mkdir((root + "/second").c_str(), 0700));
     ASSERT_EQ(0, ::symlink("../second", (root + "/first/shortcut").c_str()));
-    // ADR-0048: Path moves now transfer, so two independently
-    // navigable branches that both start at "first" need two separate
-    // acquisitions, not a single acquisition forked by move.
+    // Path moves transfer ownership of the shared payload, so two
+    // independently navigable branches that both start at "first" need
+    // two separate acquisitions, not a single acquisition forked by move.
     auto openedPath = SelectAcceptedPath(context, root, CrossMountPathPolicy(), AmpleLimits());
     ASSERT_TRUE(openedPath.HasValue());
     Path path = std::move(openedPath).Value();
@@ -3233,8 +3238,9 @@ TEST_F(PathAliasTest, InvalidFdinfoLimitIsRejectedBeforeRootAcquisition)
     auto selected = SelectAcceptedPath(context, "/", CrossMountPathPolicy(), limits);
     ASSERT_TRUE(selected.HasValue());
     Path moved(std::move(selected.Value()));
-    // ADR-0048: moving the Path held by `selected.Value()` leaves that
-    // Path moved-from; its checked accessors throw, while `moved` is usable.
+    // Path moves transfer ownership of the shared payload: moving the Path
+    // held by `selected.Value()` leaves that Path moved-from; its checked
+    // accessors throw, while `moved` is usable.
     EXPECT_THROW((void)selected.Value().Root(), std::logic_error);
     EXPECT_TRUE(moved.Root().Stat().HasValue());
 }
@@ -3617,8 +3623,8 @@ TEST_F(PathAliasTest, CopiedLeafOutlivesPathMoveAndFailedFinalCloseIsNotRetried)
         ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
         Path path = std::move(opened).Value();
         Path moved(std::move(path));
-        // ADR-0048: the move transfers; `path` is moved-from and
-        // diagnoses, `moved` keeps the exact snapshot.
+        // Path moves transfer ownership of the shared payload; `path` is
+        // moved-from and diagnoses, `moved` keeps the exact snapshot.
         EXPECT_THROW((void)PathTestAccess::ToString(path), std::logic_error);
         EXPECT_EQ(source, PathTestAccess::ToString(moved));
         surviving.reset(new Path::Component(moved.Leaf()));
@@ -3655,8 +3661,9 @@ TEST_F(PathAliasTest, AdministrativeRootLinkAndMovedPathKeepFrozenBarrier)
     ASSERT_TRUE(approved.HasValue()) << approved.Error().message;
     Path original = std::move(approved).Value();
     Path moved(std::move(original));
-    // ADR-0048: `original` is moved-from; its checked accessors throw,
-    // while `moved` keeps the exact snapshot, including the frozen barrier.
+    // Path moves transfer ownership of the shared payload: `original` is
+    // moved-from; its checked accessors throw, while `moved` keeps the
+    // exact snapshot, including the frozen barrier.
     EXPECT_THROW((void)PathTestAccess::LookupName(original), std::logic_error);
     EXPECT_THROW((void)PathTestAccess::ToString(original), std::logic_error);
     EXPECT_EQ(root, PathTestAccess::ToString(moved));
@@ -4039,13 +4046,15 @@ TEST_F(PathAliasTest, LinkExpansionContinuesThroughPhysicalSiblingThenBackToBoun
     auto up = SelectStep(path, "up", CrossMountPathPolicy(true));
     ASSERT_TRUE(up.HasValue()) << up.Error().message;
     EXPECT_EQ(root, up.Value().Target().Metadata().EffectiveName());
-    // ADR-0048: `path` was move-constructed from `opened.Value()`
+    // `path` was move-constructed from `opened.Value()`
     // (`Path path = std::move(opened).Value();` above), so `opened` itself
-    // keeps its "Value" tag (ADR-0047: extracting a payload doesn't consume
-    // the Result wrapper) but the Path object it still holds is moved-from;
-    // the acquired root's identity is read from a fresh `::stat` on the
-    // fixture path instead (`accepted`, captured above), not a moved-from
-    // Path and not `path.Root()` (always "/", not this acquisition's root).
+    // keeps its "Value" tag (the Result wrapper has its own moved-from
+    // notion, separate from Path's checked RequireLive(), and extracting a
+    // payload out of it doesn't consume the wrapper) but the Path object it
+    // still holds is moved-from; the acquired root's identity is read from
+    // a fresh `::stat` on the fixture path instead (`accepted`, captured
+    // above), not a moved-from Path and not `path.Root()` (always "/", not
+    // this acquisition's root).
     EXPECT_EQ(accepted.st_ino, up.Value().Metadata().Stat().st_ino);
     auto inverse = path.Apply(std::move(up.Value()));
     ASSERT_TRUE(inverse.HasValue()) << inverse.Error().message;

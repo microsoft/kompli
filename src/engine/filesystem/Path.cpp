@@ -770,7 +770,8 @@ Result<Variant<Path::Step, Path::RejectionReason>> Path::ResolveInput(const Path
 {
     // Both callers (Resolve, already checked; Make's factory loop, never
     // moved) already guarantee a live `path`, so this reads mState directly
-    // rather than through the checked Limits() accessor (ADR-0048).
+    // rather than through the checked Limits() accessor, which throws
+    // std::logic_error for a moved-from Path.
     auto validation = Validate(policy, path.mState->limits);
     if (validation.HasValue())
         return std::move(validation).Value();
@@ -793,9 +794,10 @@ Result<Path::Step> Path::Apply(Step&& step) &
 {
     RequireLive();
     step.RequireLive();
-    // ADR-0048 Decision 4: consume the Step's payload here, before any
-    // other validation, so the caller's Step is moved-from on every return
-    // path below -- success or rejection alike.
+    // Apply consumes its Step argument on every return path: take the
+    // Step's payload here, before any other validation, so the caller's
+    // Step is moved-from on every return path below -- success or
+    // rejection alike.
     auto delta = std::move(step.mData);
     auto source = mState;
     if (source->pins.size() != delta->sourceDepth || delta->popped.size() >= delta->sourceDepth)

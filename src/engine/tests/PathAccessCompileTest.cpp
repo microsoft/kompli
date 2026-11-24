@@ -1,12 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// C3 (Path layer): Path, Path::Component, Path::Step and LinesRange. Split
+// Path layer: Path, Path::Component, Path::Step and LinesRange. Split
 // from the former monolithic DescriptorAccessCompileTest.cpp (see
-// DescriptorAccessCompileTest.cpp for C1, PinAccessCompileTest.cpp for C2
-// and FTWAccessCompileTest.cpp for C4); shared detection idioms live in
-// AccessCompileTestSupport.h. No legacy (pre-M-98) context API absence
-// assertions were present in the original file to carry here.
+// DescriptorAccessCompileTest.cpp for the Descriptor layer,
+// PinAccessCompileTest.cpp for the Pin layer and FTWAccessCompileTest.cpp
+// for the FTW layer); shared detection idioms live in
+// AccessCompileTestSupport.h. No legacy context API absence assertions
+// were present in the original file to carry here.
 
 #include <AccessCompileTestSupport.h>
 #include <ContextInterface.h>
@@ -78,14 +79,14 @@ static_assert(!CanCloseComponent<C>::value && !CanTestComponentValue<C>::value &
     "Shared acquisition never exposes empty state, native pin or checked close");
 static_assert(std::is_same<decltype(std::declval<const P&>().Root()), C>::value && std::is_same<decltype(std::declval<const P&>().Leaf()), C>::value,
     "Path gives owning pin values");
-// ADR-0048 Decision 2: a moved-from Path diagnoses with std::logic_error
-// before any other validation or native dispatch, so these six accessors
-// (noexcept before ADR-0048) cannot stay noexcept -- a noexcept function that
-// throws terminates the process.
+// A moved-from Path is consumed: every state-reading operation checks
+// liveness first and throws std::logic_error before any other validation
+// or native dispatch, so these six accessors (noexcept previously) cannot
+// stay noexcept -- a noexcept function that throws terminates the process.
 static_assert(!noexcept(std::declval<const P&>().Root()) && !noexcept(std::declval<const P&>().Leaf()) && !noexcept(std::declval<const P&>().Size()) &&
                   !noexcept(std::declval<const P&>().RetainedDescriptors()) && !noexcept(std::declval<const P&>().Limits()) &&
                   !noexcept(std::declval<const P&>().Context()),
-    "A moved-from Path's checked accessors cannot be noexcept (ADR-0048)");
+    "A moved-from Path's checked accessors cannot be noexcept");
 static_assert(!std::is_default_constructible<P>::value && !std::is_copy_constructible<P>::value && std::is_nothrow_move_constructible<P>::value &&
                   std::is_nothrow_move_assignable<P>::value,
     "Path always owns a nonempty snapshot even after moving");
@@ -94,10 +95,11 @@ static_assert(!std::is_default_constructible<Step>::value && !std::is_copy_const
     "A delta owns its pins, including after moving");
 static_assert(std::is_same<decltype(std::declval<const Step&>().Target()), C>::value && std::is_same<decltype(std::declval<const Step&>().Metadata()), M>::value,
     "Step publishes owned components and detached facts");
-// ADR-0048 Decision 2: a moved-from Step diagnoses the same way; Target and
-// RetainedDescriptors were noexcept before ADR-0048 and cannot stay so.
+// A moved-from Step is consumed the same way: every state-reading operation
+// checks liveness first and throws std::logic_error, so Target and
+// RetainedDescriptors, noexcept before this rule applied, cannot stay so.
 static_assert(!noexcept(std::declval<const Step&>().Target()) && !noexcept(std::declval<const Step&>().RetainedDescriptors()),
-    "A moved-from Step's checked accessors cannot be noexcept (ADR-0048)");
+    "A moved-from Step's checked accessors cannot be noexcept");
 static_assert(std::is_same<decltype(std::declval<const P&>().Resolve(std::string{}, P::Policy{})), ComplianceEngine::Result<ComplianceEngine::Variant<Step, P::RejectionReason>>>::value,
     "Resolve returns an owning delta or a rejection");
 static_assert(std::is_same<decltype(std::declval<P&>().Apply(std::declval<Step&&>())), ComplianceEngine::Result<Step>>::value &&

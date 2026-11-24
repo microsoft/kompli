@@ -1,13 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// C4 (FTW layer): the nine FTW-dependent cases moved out of PathTest.cpp
-// (C3) because they exercise FTW::Files/FilesystemCollection/DirectoryCursor,
+// FTW layer: the nine FTW-dependent cases moved out of PathTest.cpp
+// (Path layer) because they exercise FTW::Files/FilesystemCollection/DirectoryCursor,
 // which only exist once the FTW layer is present. Test names are unchanged
 // (PathAliasTest.*/PathKernelIntegrationTest.NativeProcfsAndPinnedOperations);
 // shared fixtures/helpers (PathAliasTest, SelectAcceptedPath, SelectStep,
-// CrossMountPathPolicy, KernelMountId, ...) live in the C3 PathTestSupport.h,
-// which this C4 file includes rather than duplicating.
+// CrossMountPathPolicy, KernelMountId, ...) live in the Path-layer
+// PathTestSupport.h, which this FTW-layer file includes rather than
+// duplicating.
 
 #include <DescriptorTestAccess.h>
 #include <DirectoryCursorTestAccess.h>
@@ -122,8 +123,8 @@ TEST_F(PathAliasTest, DirectoryActivationTransfersVerifiedOwnerWithoutDuplicate)
         // directory root, synchronously activates and opens its children cursor
         // inside Initialize() -- the same DirectoryCursor::OpenChildren
         // production call exercised here through Files(). Path moves transfer
-        // ownership (ADR-0048), so path is moved-from after this call and the
-        // range alone retains the pin.
+        // ownership of the shared payload, so path is moved-from after this
+        // call and the range alone retains the pin.
         auto range = Files(std::move(path), directory, FilesystemTraversalPolicy{});
         ASSERT_TRUE(range.HasValue()) << range.Error().message;
         EXPECT_GE(alias, 0); // the activation alias was actually captured
@@ -351,17 +352,17 @@ TEST_F(PathAliasTest, DirectoryCursorOutlivesRetiredSourcePin)
     EXPECT_EQ(before, CountOpenDescriptors());
 }
 
-// TM-9 (ADR-0048 Consequences): mirrors the production consumer pattern
+// TM-9: mirrors the production consumer pattern
 // (LogFilePermissions.cpp, SshKeyPermissions.cpp, UserDotFilePermissions.cpp)
 // `FTW::Files(As<Path>(std::move(root).Value()), ...)`. `Result<T>::Value() &&`
 // (Result.h) returns the payload *by value*, so extracting the Path this way
-// move-constructs a new `Variant` from the one `acquired` holds; ADR-0047's
-// `MovableVariant` move constructor marks its source moved-from, so the
-// leftover `acquired` Variant *is* itself moved-from afterward (a prior
+// move-constructs a new `Variant` from the one `acquired` holds; Variant's
+// own move constructor marks its source moved-from, so the leftover
+// `acquired` Variant *is* itself moved-from afterward (a prior
 // version of this test and comment claimed otherwise, and asserted on
 // `acquired.Value()` again -- which only re-proved the Variant's own
 // moved-from check, never reaching Path's). This test targets Path's own
-// ADR-0048 rejection, so it extracts the Path into a named local first
+// moved-from rejection, so it extracts the Path into a named local first
 // (invoking Path's own move constructor directly, independent of the
 // already-moved-from Variant) and asserts on that Path object.
 TEST_F(PathAliasTest, LeftoverAfterFilesConsumesThePathAndItCannotResolveAfterward)
@@ -374,20 +375,20 @@ TEST_F(PathAliasTest, LeftoverAfterFilesConsumesThePathAndItCannotResolveAfterwa
     Path path = As<Path>(std::move(acquired).Value());
     // Documents the whole-Variant move noted above: re-entering the
     // leftover `acquired` Variant now throws from the Variant's own
-    // moved-from check (ADR-0047), not from Path's.
+    // moved-from check, not from Path's.
     EXPECT_THROW((void)As<Path>(acquired.Value()), std::logic_error);
     auto opened = Files(std::move(path), root, FilesystemTraversalPolicy{});
     ASSERT_TRUE(opened.HasValue()) << opened.Error().message;
     // `path` is a plain Path object, no longer routed through the Variant:
-    // it is moved-from per ADR-0048, and Path's own RequireLive() rejects
+    // it is moved-from (consumed), and Path's own RequireLive() rejects
     // every checked accessor below.
     EXPECT_THROW((void)path.Leaf(), std::logic_error);
     EXPECT_THROW((void)path.Resolve("x", CrossMountPathPolicy()), std::logic_error);
 }
 
 // Directory activation is only publicly reachable by consuming a whole Path
-// into FTW::Files(), which now truly transfers ownership (ADR-0048,
-// Path(Path&&) moves rather than shares the state pointer), so a
+// into FTW::Files(), which now truly transfers ownership (Path(Path&&)
+// moves rather than shares the state pointer), so a
 // single acquired root can no longer be handed to Files() for a throwaway
 // activation check and then read again afterward. The "fresh acquisition"
 // and "after a resolve/apply/inverse round trip" reactivation checks below

@@ -1484,8 +1484,9 @@ TEST_F(ReadableFileTest, ChildStatFailureOutranksDiagnosticPinRelease)
     EXPECT_TRUE(path.Leaf().Stat().HasValue());
 }
 
-// The original Pop-to-empty assertion is superseded by ADR-0042 D1/D4-D6:
-// an inverse Step restores the physical root; retained targets remain live.
+// The original Pop-to-empty assertion is superseded by the inverse-Step
+// design: an inverse Step restores the physical root; retained targets
+// remain live.
 TEST_F(ReadableFileTest, InverseStepReleasesSelectedBudgetButRetainedTargetSurvives)
 {
     const std::string source = context.MakeTempfile("retained");
@@ -1746,8 +1747,9 @@ TEST_F(ReadableFileTest, DeniedMutationsInspectHeldPinAndPreserveReplacedName)
     EXPECT_EQ(before, OpenDescriptors());
 }
 
-// ADR-0042 D4-D6 replaces auxiliary Pop cleanup with retained inverse Steps:
-// the pin is never replayed through its mutable pathname on undo or reuse.
+// Inverse Steps retain retired transition owners instead of relying on
+// auxiliary Pop cleanup: the pin is never replayed through its mutable
+// pathname on undo or reuse.
 TEST_F(ReadableFileTest, InverseStepKeepsPhysicalDirectoryAfterNameReplacement)
 {
     const std::string root = context.GetTempdirPath();
@@ -1953,8 +1955,8 @@ TEST_F(ReadableFileTest, FailedPinDisposalAndLoggerDoNotSkipRemainingOwners)
     EXPECT_EQ(before, OpenDescriptors());
 }
 
-// ADR-0042 D4-D6: retired transition owners are held by inverse Steps rather
-// than an auxiliary Pop. A failed final disposal cannot revoke a valid undo.
+// Inverse Steps hold retired transition owners rather than an auxiliary
+// Pop. A failed final disposal cannot revoke a valid undo.
 TEST_F(ReadableFileTest, DiagnosticTransitionReleasePreservesUndoAndHeldTarget)
 {
     const std::string source = context.MakeTempfile("retained");

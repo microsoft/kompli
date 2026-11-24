@@ -16,10 +16,11 @@
 #include <string>
 #include <unistd.h>
 
-// C3 (Path layer): fixtures and helpers shared by PathTest.cpp (C3) and
-// PathTraversalTest.cpp (C4, the FTW-dependent cases moved out of PathTest.cpp
-// -- see PathTraversalTest.cpp). Kept here, instead of duplicated, per the
-// "one file, one layer" test-split rule; C4 may include a C3 header.
+// Path layer: fixtures and helpers shared by PathTest.cpp (Path layer) and
+// PathTraversalTest.cpp (FTW layer, the FTW-dependent cases moved out of
+// PathTest.cpp -- see PathTraversalTest.cpp). Kept here, instead of
+// duplicated, so each test file covers one layer; the FTW-layer file may
+// include this Path-layer header.
 
 namespace ComplianceEngine
 {

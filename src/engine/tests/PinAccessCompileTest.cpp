@@ -1,12 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// C2 (Pin layer): Pin, Metadata and the provenance value types it owns
+// Pin layer: Pin, Metadata and the provenance value types it owns
 // (LookupMountId/TargetMountId/UserId/GroupId/LookupSpelling/EffectiveSpelling),
 // plus ReadableFile. Split from the former monolithic
 // DescriptorAccessCompileTest.cpp (see DescriptorAccessCompileTest.cpp for
-// C1, PathAccessCompileTest.cpp for C3 and FTWAccessCompileTest.cpp for C4);
-// shared detection idioms live in AccessCompileTestSupport.h.
+// the Descriptor layer, PathAccessCompileTest.cpp for the Path layer and
+// FTWAccessCompileTest.cpp for the FTW layer); shared detection idioms
+// live in AccessCompileTestSupport.h.
 
 #include <AccessCompileTestSupport.h>
 #include <ContextInterface.h>

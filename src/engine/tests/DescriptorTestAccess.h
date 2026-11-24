@@ -17,8 +17,8 @@ namespace Tests
 {
 // Defined only in tests. Production has no public bridge to typed operations.
 // The directory-cursor adapter lives separately in DirectoryCursorTestAccess.h
-// (C4): this class stays C1 (Descriptor/ProcfsDescriptorAccess only) and
-// includes no Pin/Path/FTW header.
+// (FTW layer): this class stays Descriptor layer only (Descriptor/ProcfsDescriptorAccess)
+// and includes no Pin/Path/FTW header.
 class DescriptorTestAccess
 {
     using Descriptor = Filesystem::Detail::Descriptor;

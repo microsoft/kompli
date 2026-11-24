@@ -15,7 +15,7 @@ namespace ComplianceEngine
 namespace Tests
 {
 // Defined only in tests (the pattern used for DescriptorTestAccess, whose
-// cursor adapter this carries -- C4, since it needs the cursor seam).
+// cursor adapter this carries -- FTW layer, since it needs the cursor seam).
 // Production has no public bridge to typed cursor acquisition.
 class DirectoryCursorTestAccess
 {

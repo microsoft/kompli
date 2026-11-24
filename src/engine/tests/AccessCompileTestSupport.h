@@ -15,7 +15,7 @@
 // here is invoked from two or more of those files; a single copy here keeps
 // every file's static_asserts about its own types without duplicating the
 // idiom itself. This header has no filesystem-layer dependency beyond
-// ContextInterface.h (C1), so every layer may include it.
+// ContextInterface.h (Descriptor layer), so every layer may include it.
 
 template <typename...>
 struct Void
@@ -83,8 +83,8 @@ struct Void
         #name " must reject base temporaries");                                                                                                        \
     static_assert(!CanBridge##name<MockContext&&>::value && !CanBridge##name<const MockContext&&>::value, #name " must reject concrete temporaries");
 
-// Close()/HasValue()/Pin() absence probes, reused across Descriptor (C1),
-// Pin (C2) and Path::Component (C3): each owner type denies the same
+// Close()/HasValue()/Pin() absence probes, reused across the Descriptor,
+// Pin and Path::Component layers: each owner type denies the same
 // generic member names, so the detector is shared instead of copied.
 template <typename T, typename = void>
 struct CanCloseComponent : std::false_type
@@ -95,8 +95,8 @@ struct CanCloseComponent<T, typename Void<decltype(std::declval<T&>().Close())>:
 {
 };
 
-// Old observation-API absence probes, reused across Pin (C2) and
-// Path::Component/Path::Step (C3).
+// Old observation-API absence probes, reused across the Pin and
+// Path::Component/Path::Step layers.
 template <typename T, typename = void>
 struct CanOldAcquired : std::false_type
 {
@@ -122,8 +122,8 @@ struct CanOldEffective<T, typename Void<decltype(std::declval<T&>().EffectiveNam
 {
 };
 
-// Directory enumeration must be FTW-only, not reachable from Pin (C2) or
-// Path::Component (C3).
+// Directory enumeration must be FTW-layer-only, not reachable from Pin or
+// Path::Component.
 template <typename T, typename = void>
 struct CanOpenChildren : std::false_type
 {
