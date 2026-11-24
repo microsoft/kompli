@@ -28,8 +28,8 @@ execution. Treat any regression in these checks as a security regression.
 The parser (`BenchmarkDefinition`) is strict:
 
 - It validates the resource envelope (`apiVersion` / `kind == "BenchmarkDefinition"`
-  / `metadata` / `spec.rules`) and the per-rule field set the augmentation engine
-  emits (`title`, `id`, `ruleName`, `payload`) plus the file-level benchmark
+  / `metadata` / `spec.rules`) and per-rule fields
+  (`title`, `id`, `ruleName`, `payload`) plus the file-level benchmark
   identity metadata.
 - It bounds the total input size (`kMaxInputBytes`) and the rule count (`kMaxRules`).
 - It **fails closed on an embedded NUL byte**: the underlying JSON parser is
@@ -38,7 +38,7 @@ The parser (`BenchmarkDefinition`) is strict:
   than parsed as a prefix.
 - Nesting depth is bounded by the vendored parson (`MAX_NESTING == 2048`), so
   deeply nested input cannot overflow the stack.
-- A fuzzer target (`fuzzer/target.cpp`) exercises `ParseString` and asserts the
+- A fuzzer target (`src/benchmarkio/fuzzer/target.cpp`) exercises `ParseString` and asserts the
   parser is crash-free and never throws; because `ParseString` is the single
   choke point, the NUL rejection and every other guard are attested by the
   fuzzer. Extend the corpus when changing the format.
@@ -121,7 +121,7 @@ and performs none of these checks, still accepts stdin.
 Before running a rule, kompli checks the benchmark's
 distribution/version against the detected system via
 `BenchmarkInfo::Match`. This is the **same shared code**
-(`lib/BenchmarkInfo.cpp`) used by the module interface's
+(`src/engine/BenchmarkInfo.cpp`) used by the module interface's
 `ComplianceEngineCheckApplicability`, so kompli and the engine agree by
 construction. Version matching uses `fnmatch(3)` against the system `VERSION_ID`;
 `ValidateGlobbing` rejects `[ ] { }` character-class/brace metacharacters. The

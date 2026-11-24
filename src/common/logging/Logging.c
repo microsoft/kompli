@@ -113,19 +113,9 @@ bool IsDebugLoggingEnabled(void)
     return (LoggingLevelDebug == g_loggingLevel) ? true : false;
 }
 
-unsigned int GetMaxLogSize(void)
-{
-    return g_maxLogSize;
-}
-
 void SetMaxLogSize(unsigned int value)
 {
     g_maxLogSize = value;
-}
-
-unsigned int GetMaxLogSizeDebugMultiplier(void)
-{
-    return g_maxLogSizeDebugMultiplier;
 }
 
 void SetMaxLogSizeDebugMultiplier(unsigned int value)
