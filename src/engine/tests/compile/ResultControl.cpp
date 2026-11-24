@@ -1,17 +1,16 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "../Result.h"
+// Positive control: ordinary Result<T> usage below must COMPILE cleanly, so
+// the negative Result<T> cases in the sibling files are known to fail for
+// their own specific reason rather than a broken translation unit.
+
+#include "../../Result.h"
 
 #include <memory>
 #include <type_traits>
 #include <utility>
 
-#ifndef RESULT_COMPILE_CASE
-#error Select a Result compile case
-#endif
-
-using ComplianceEngine::Error;
 using ComplianceEngine::Result;
 
 struct ConstructibleNotAssignable
@@ -23,19 +22,6 @@ struct ConstructibleNotAssignable
     ConstructibleNotAssignable& operator=(ConstructibleNotAssignable&&) = delete;
 };
 
-struct ThrowingMove
-{
-    ThrowingMove(int);
-    ThrowingMove(const ThrowingMove&) = default;
-    ThrowingMove(ThrowingMove&&) noexcept(false);
-};
-
-struct ThrowingDestructor
-{
-    ~ThrowingDestructor() noexcept(false);
-};
-
-#if RESULT_COMPILE_CASE == 0
 static_assert(std::is_copy_constructible<Result<int>>::value && std::is_copy_assignable<Result<int>>::value, "Result int copies");
 static_assert(!std::is_copy_constructible<Result<std::unique_ptr<int>>>::value && !std::is_copy_assignable<Result<std::unique_ptr<int>>>::value,
     "Result move-only traits");
@@ -45,8 +31,6 @@ static_assert(std::is_same<decltype(std::declval<Result<int>&&>().Value()), int>
 void ValidControl()
 {
     Result<int> result = 5;
-    Error codeOnly(5);
-    (void)codeOnly;
     Result<int> resultCopy(result);
     resultCopy = result;
 
@@ -61,37 +45,3 @@ void ValidControl()
     Result<const int> constResult(1);
     (void)constResult;
 }
-#elif RESULT_COMPILE_CASE == 1
-void CopyMoveOnlyResult()
-{
-    Result<std::unique_ptr<int>> source(Error("error"));
-    Result<std::unique_ptr<int>> copy(source);
-}
-#elif RESULT_COMPILE_CASE == 2
-void AssignMoveOnlyResult()
-{
-    Result<std::unique_ptr<int>> source(Error("error")), destination(Error("old"));
-    destination = source;
-}
-#elif RESULT_COMPILE_CASE == 3
-void MutateConstResult()
-{
-    const Result<int> value(1);
-    value.Value() = 2;
-}
-#elif RESULT_COMPILE_CASE == 5
-static_assert(sizeof(Result<int&>) > 0, "instantiate Result reference");
-#elif RESULT_COMPILE_CASE == 6
-static_assert(sizeof(Result<Error>) > 0, "instantiate ambiguous Result Error");
-#elif RESULT_COMPILE_CASE == 9
-void ImplicitIntegerError()
-{
-    Error error = 5;
-}
-#elif RESULT_COMPILE_CASE == 10
-static_assert(sizeof(Result<ThrowingMove>) > 0, "instantiate Result with a throwing move");
-#elif RESULT_COMPILE_CASE == 11
-static_assert(sizeof(Result<ThrowingDestructor>) > 0, "instantiate Result with a throwing destructor");
-#else
-#error Unknown Result compile case
-#endif

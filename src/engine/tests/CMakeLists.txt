@@ -16,9 +16,29 @@ set(variant_compile_flags
     "-DCMAKE_CXX_EXTENSIONS:BOOL=OFF"
 )
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
-set(result_compile_case_source "${CMAKE_CURRENT_SOURCE_DIR}/ResultCompileCase.cpp")
+# Result's cases live one per file under compile/, named for what each one
+# checks, so a missing/renamed case is a path that doesn't exist rather than
+# a silently-skipped preprocessor branch.
+set(result_compile_case_dir "${CMAKE_CURRENT_SOURCE_DIR}/compile")
+set(result_control_source "${result_compile_case_dir}/ResultControl.cpp")
+set(result_rejects_copy_of_move_only_source "${result_compile_case_dir}/ResultRejectsCopyOfMoveOnly.cpp")
+set(result_rejects_assignment_of_move_only_source "${result_compile_case_dir}/ResultRejectsAssignmentOfMoveOnly.cpp")
+set(result_rejects_const_mutation_source "${result_compile_case_dir}/ResultRejectsConstMutation.cpp")
+set(result_rejects_reference_source "${result_compile_case_dir}/ResultRejectsReference.cpp")
+set(result_rejects_error_as_value_source "${result_compile_case_dir}/ResultRejectsErrorAsValue.cpp")
+set(result_rejects_implicit_integer_error_source "${result_compile_case_dir}/ResultRejectsImplicitIntegerError.cpp")
+set(result_rejects_throwing_move_source "${result_compile_case_dir}/ResultRejectsThrowingMove.cpp")
+set(result_rejects_throwing_destructor_source "${result_compile_case_dir}/ResultRejectsThrowingDestructor.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${result_compile_case_source}"
+    "${result_control_source}"
+    "${result_rejects_copy_of_move_only_source}"
+    "${result_rejects_assignment_of_move_only_source}"
+    "${result_rejects_const_mutation_source}"
+    "${result_rejects_reference_source}"
+    "${result_rejects_error_as_value_source}"
+    "${result_rejects_implicit_integer_error_source}"
+    "${result_rejects_throwing_move_source}"
+    "${result_rejects_throwing_destructor_source}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../Result.h"
 )
 
@@ -66,15 +86,15 @@ function(check_wrapper_compile_case subject source case_number case_name diagnos
     message(STATUS "${subject} C++11 negative compile ${case_name}: rejected as expected")
 endfunction()
 
-check_wrapper_compile_case(Result "${result_compile_case_source}" 0 "control" "")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 1 "move-only copy construction" "deleted")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 2 "move-only copy assignment" "deleted")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 3 "const mutation" "cannot assign to return value|assignment of read-only location")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 5 "reference" "Result cannot hold references")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 6 "Error value" "Result cannot hold Error as its value type")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 9 "implicit integer Error" "no viable conversion|to non-scalar type")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 10 "throwing move" "Result requires a nonthrowing move constructor")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 11 "throwing destructor" "Result requires a nonthrowing destructor")
+check_wrapper_compile_case(Result "${result_control_source}" 0 "control" "")
+check_wrapper_compile_case(Result "${result_rejects_copy_of_move_only_source}" 1 "move-only copy construction" "deleted")
+check_wrapper_compile_case(Result "${result_rejects_assignment_of_move_only_source}" 2 "move-only copy assignment" "deleted")
+check_wrapper_compile_case(Result "${result_rejects_const_mutation_source}" 3 "const mutation" "cannot assign to return value|assignment of read-only location")
+check_wrapper_compile_case(Result "${result_rejects_reference_source}" 5 "reference" "Result cannot hold references")
+check_wrapper_compile_case(Result "${result_rejects_error_as_value_source}" 6 "Error value" "Result cannot hold Error as its value type")
+check_wrapper_compile_case(Result "${result_rejects_implicit_integer_error_source}" 9 "implicit integer Error" "no viable conversion|to non-scalar type")
+check_wrapper_compile_case(Result "${result_rejects_throwing_move_source}" 10 "throwing move" "Result requires a nonthrowing move constructor")
+check_wrapper_compile_case(Result "${result_rejects_throwing_destructor_source}" 11 "throwing destructor" "Result requires a nonthrowing destructor")
 
 set(PROCEDURES
     procedures/AideAttributesTest.cpp
