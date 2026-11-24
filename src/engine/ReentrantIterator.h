@@ -9,7 +9,7 @@
 #include <Result.h>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 template <typename EntryType, typename RangeType>
 class ReentrantIterator
@@ -183,6 +183,6 @@ public:
         return IteratorType(nullptr); // Return an end iterator
     }
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCE_REENTRANT_ITERATOR_H

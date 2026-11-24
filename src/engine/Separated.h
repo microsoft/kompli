@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_SEPARATED_H
-#define COMPLIANCEENGINE_SEPARATED_H
+#ifndef KOMPLI_SEPARATED_H
+#define KOMPLI_SEPARATED_H
 
 #include <BindingParsers.h>
 #include <initializer_list>
@@ -19,7 +19,7 @@ inline string to_string(const string& value) // NOLINT(*-identifier-naming)
 }
 } // namespace std
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // Used to represent a list of items separated by a specific character
 template <typename T, char Separator>
@@ -72,5 +72,5 @@ struct Separated
             [](const std::string& a, const T& b) { return a + (a.length() > 0 ? std::string(1, separator) : "") + std::to_string(b); });
     }
 };
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_SEPARATED_H
+} // namespace Kompli
+#endif // KOMPLI_SEPARATED_H

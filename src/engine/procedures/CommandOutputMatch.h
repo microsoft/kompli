@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_COMMAND_OUTPUT_MATCH_H
-#define COMPLIANCEENGINE_PROCEDURES_COMMAND_OUTPUT_MATCH_H
+#ifndef KOMPLI_PROCEDURES_COMMAND_OUTPUT_MATCH_H
+#define KOMPLI_PROCEDURES_COMMAND_OUTPUT_MATCH_H
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class RegexType
 {
@@ -43,5 +43,5 @@ struct CommandOutputMatchParams
 };
 
 Result<Status> AuditCommandOutputMatch(const CommandOutputMatchParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_COMMAND_OUTPUT_MATCH_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_COMMAND_OUTPUT_MATCH_H

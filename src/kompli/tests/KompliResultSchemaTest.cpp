@@ -24,12 +24,12 @@
 #error "KOMPLI_RESULT_SCHEMA_PATH must be defined by the build."
 #endif
 
-using ComplianceEngine::Action;
-using ComplianceEngine::Architecture;
-using ComplianceEngine::LinuxDistribution;
-using ComplianceEngine::Status;
-using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
-using ComplianceEngine::BenchmarkIO::Resource;
+using Kompli::Action;
+using Kompli::Architecture;
+using Kompli::LinuxDistribution;
+using Kompli::Status;
+using Kompli::BenchmarkFormatters::BenchmarkFormatter;
+using Kompli::BenchmarkIO::Resource;
 
 namespace
 {
@@ -73,7 +73,7 @@ void ExpectAllRequiredPresent(const JSON_Object* object, const JSON_Array* requi
 // no parameters and one non-compliant rule with parameters.
 std::string GenerateResult()
 {
-    ComplianceEngine::DistributionInfo distInfo;
+    Kompli::DistributionInfo distInfo;
     distInfo.distribution = LinuxDistribution::Ubuntu;
     distInfo.architecture = Architecture::x86_64;
     distInfo.version = "24.04";
@@ -211,7 +211,7 @@ TEST(KompliResultSchemaTest, SkippedRuleSatisfiesSchemaRequiredFields)
     JSON_Object* schemaObject = json_value_get_object(schema);
     ASSERT_NE(schemaObject, nullptr);
 
-    ComplianceEngine::DistributionInfo distInfo;
+    Kompli::DistributionInfo distInfo;
     distInfo.distribution = LinuxDistribution::Ubuntu;
     distInfo.architecture = Architecture::x86_64;
     distInfo.version = "24.04";

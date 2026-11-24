@@ -1,14 +1,14 @@
-#ifndef COMPLIANCE_ENGINE_CLI_CLI_OPTIONS_HPP
-#define COMPLIANCE_ENGINE_CLI_CLI_OPTIONS_HPP
+#ifndef KOMPLI_CLI_CLI_OPTIONS_HPP
+#define KOMPLI_CLI_CLI_OPTIONS_HPP
 
 #include <Optional.h>
 #include <Result.h>
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
-{
 namespace Kompli
+{
+namespace Cli
 {
 
 enum class Command
@@ -127,7 +127,7 @@ void PrintHelp(const std::string& programName);
 
 Result<Options> ParseCommandLine(int argc, char* argv[]);
 
+} // namespace Cli
 } // namespace Kompli
-} // namespace ComplianceEngine
 
-#endif // COMPLIANCE_ENGINE_CLI_CLI_OPTIONS_HPP
+#endif // KOMPLI_CLI_CLI_OPTIONS_HPP

@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCE_ENGINE_BENCHMARKIO_BENCHMARK_DEFINITION_HPP
-#define COMPLIANCE_ENGINE_BENCHMARKIO_BENCHMARK_DEFINITION_HPP
+#ifndef KOMPLI_BENCHMARKIO_BENCHMARK_DEFINITION_HPP
+#define KOMPLI_BENCHMARKIO_BENCHMARK_DEFINITION_HPP
 
 #include "ContentVersion.hpp"
 #include "Resource.hpp"
@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BenchmarkDefinition
 {
@@ -70,5 +70,5 @@ Result<BenchmarkDocument> ParseStream(std::istream& stream, OsConfigLogHandle lo
 Result<BenchmarkDocument> ParseFile(const std::string& path, OsConfigLogHandle logHandle);
 
 } // namespace BenchmarkDefinition
-} // namespace ComplianceEngine
-#endif // COMPLIANCE_ENGINE_BENCHMARKIO_BENCHMARK_DEFINITION_HPP
+} // namespace Kompli
+#endif // KOMPLI_BENCHMARKIO_BENCHMARK_DEFINITION_HPP

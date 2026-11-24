@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_INTERFACE_H
-#define COMPLIANCEENGINE_INTERFACE_H
+#ifndef KOMPLI_INTERFACE_H
+#define KOMPLI_INTERFACE_H
 
 #include "../inc/Mmi.h"
 
@@ -32,4 +32,4 @@ int ComplianceEngineCheckApplicability(MMI_HANDLE clientSession, const char* pay
 }
 #endif
 
-#endif // COMPLIANCEENGINE_INTERFACE_H
+#endif // KOMPLI_INTERFACE_H

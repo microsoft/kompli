@@ -9,12 +9,12 @@
 #include <sstream>
 #include <string>
 
-using ComplianceEngine::AuditMountPointExists;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::MountPointExistsParams;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditMountPointExists;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::MountPointExistsParams;
+using Kompli::Result;
+using Kompli::Status;
 using ::testing::Return;
 
 class EnsureMountPointExistsTest : public ::testing::Test

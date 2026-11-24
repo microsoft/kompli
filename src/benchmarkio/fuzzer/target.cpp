@@ -31,7 +31,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         // Discard the result. We only care that the parser is crash-free and
         // that every error is surfaced as a Result<> rather than an exception or
         // undefined behaviour.
-        auto result = ComplianceEngine::BenchmarkDefinition::ParseString(input, nullptr);
+        auto result = Kompli::BenchmarkDefinition::ParseString(input, nullptr);
         (void)result;
     }
     catch (...)

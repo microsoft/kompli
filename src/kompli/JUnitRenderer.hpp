@@ -1,15 +1,15 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCE_ENGINE_CLI_JUNIT_RENDERER_HPP
-#define COMPLIANCE_ENGINE_CLI_JUNIT_RENDERER_HPP
+#ifndef KOMPLI_CLI_JUNIT_RENDERER_HPP
+#define KOMPLI_CLI_JUNIT_RENDERER_HPP
 
 #include <Result.h>
 #include <string>
 
-namespace ComplianceEngine
-{
 namespace Kompli
+{
+namespace Cli
 {
 // Renders a canonical kompli result JSON (as emitted by `run`)
 // into a JUnit XML document.
@@ -34,7 +34,7 @@ namespace Kompli
 // `suiteName` names the <testsuite>.
 Result<std::string> RenderJUnit(const std::string& canonicalJson, const std::string& suiteName);
 
+} // namespace Cli
 } // namespace Kompli
-} // namespace ComplianceEngine
 
-#endif // COMPLIANCE_ENGINE_CLI_JUNIT_RENDERER_HPP
+#endif // KOMPLI_CLI_JUNIT_RENDERER_HPP

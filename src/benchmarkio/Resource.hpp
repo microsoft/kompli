@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCE_ENGINE_BENCHMARKIO_RESOURCE_HPP
-#define COMPLIANCE_ENGINE_BENCHMARKIO_RESOURCE_HPP
+#ifndef KOMPLI_BENCHMARKIO_RESOURCE_HPP
+#define KOMPLI_BENCHMARKIO_RESOURCE_HPP
 
 #include <BenchmarkInfo.h>
 #include <Optional.h>
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BenchmarkIO
 {
@@ -79,5 +79,5 @@ struct Resource
     bool hasInitAudit = false;
 };
 } // namespace BenchmarkIO
-} // namespace ComplianceEngine
-#endif // COMPLIANCE_ENGINE_BENCHMARKIO_RESOURCE_HPP
+} // namespace Kompli
+#endif // KOMPLI_BENCHMARKIO_RESOURCE_HPP

@@ -8,10 +8,10 @@
 #include <cerrno>
 #include <gtest/gtest.h>
 
-using ComplianceEngine::AuditResult;
-using ComplianceEngine::Error;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditResult;
+using Kompli::Error;
+using Kompli::Result;
+using Kompli::Status;
 
 class ResultTest : public ::testing::Test
 {

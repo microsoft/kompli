@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_REVERT_MAP_H
-#define COMPLIANCEENGINE_REVERT_MAP_H
+#ifndef KOMPLI_REVERT_MAP_H
+#define KOMPLI_REVERT_MAP_H
 
 #include <map>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 template <typename K, typename V>
 std::map<V, K> RevertMap(const std::map<K, V>& input)
@@ -18,6 +18,6 @@ std::map<V, K> RevertMap(const std::map<K, V>& input)
     }
     return result;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_REVERT_MAP_H
+#endif // KOMPLI_REVERT_MAP_H

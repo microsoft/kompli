@@ -16,12 +16,12 @@ using std::map;
 using std::string;
 using std::vector;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
-using ComplianceEngine::Error;
-using ComplianceEngine::Result;
+using Kompli::Error;
+using Kompli::Result;
 
 enum PasswordEncryptionMethod
 {
@@ -316,4 +316,4 @@ Result<Status> AuditShadowField(const ShadowFieldParams& params, IndicatorsTree&
 
     return indicators.Compliant(PrettyFieldName(params.field) + " matches expected value for all tested users");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

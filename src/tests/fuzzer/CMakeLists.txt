@@ -10,7 +10,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=fuzzer")
 
 add_executable(kompli-fuzzer target.cpp)
 target_link_libraries(kompli-fuzzer PRIVATE
-    complianceenginelib
+    kompli-engine
     commonutils
     $<$<BOOL:${BUILD_TELEMETRY}>:telemetry-interface>
 )

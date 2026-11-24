@@ -16,16 +16,16 @@
 #include <utility>
 #include <version.h>
 
-using ComplianceEngine::Action;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::LuaEvaluator;
-using ComplianceEngine::NestedListFormatter;
-using ComplianceEngine::Optional;
-using ComplianceEngine::PayloadFormatter;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
-using ComplianceEngine::Cli::Context;
+using Kompli::Action;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::LuaEvaluator;
+using Kompli::NestedListFormatter;
+using Kompli::Optional;
+using Kompli::PayloadFormatter;
+using Kompli::Result;
+using Kompli::Status;
+using Kompli::Cli::Context;
 using std::ifstream;
 using std::istream;
 using std::string;

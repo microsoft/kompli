@@ -3,7 +3,7 @@
 
 add_compile_options("-Wno-unused-const-variable")
 
-project(compliancetests)
+project(kompli-engine-tests)
 
 include(GoogleTest)
 find_package(GTest CONFIG REQUIRED)
@@ -61,7 +61,7 @@ foreach(proc ${GLOBBED_PROCEDURES})
     endif()
 endforeach()
 
-add_executable(complianceenginetests
+add_executable(kompli-engine-tests
     CliContextTest.cpp
     Base64Test.cpp
     BenchmarkInfoTest.cpp
@@ -98,20 +98,20 @@ add_executable(complianceenginetests
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/../src/lib)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/../src/lib/procedures)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(complianceenginetests
+target_link_libraries(kompli-engine-tests
     GTest::gtest
     GTest::gtest_main
     GTest::gmock
     GTest::gmock_main
     pthread
-    complianceenginelib
+    kompli-engine
     logging
     commonutils
     parsonlib
 )
 
-gtest_discover_tests(complianceenginetests
+gtest_discover_tests(kompli-engine-tests
     XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR}
-    TEST_LIST complianceenginetests_TESTS
+    TEST_LIST kompli_engine_tests
 )
 set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/CTestProperties.cmake)

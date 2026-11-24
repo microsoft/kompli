@@ -1,15 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_RANGES_COUNT_HPP
-#define COMPLIANCEENGINE_RANGES_COUNT_HPP
+#ifndef KOMPLI_RANGES_COUNT_HPP
+#define KOMPLI_RANGES_COUNT_HPP
 
 #include "View.hpp"
 
 #include <cerrno>
 #include <limits>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace Ranges
 {
@@ -33,6 +33,6 @@ Result<std::size_t> Count(View<Source> source)
 }
 
 } // namespace Ranges
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_RANGES_COUNT_HPP
+#endif // KOMPLI_RANGES_COUNT_HPP

@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 //
-#ifndef COMPLIANCE_ENGINE_BENCHMARK_FORMATTER_HPP
-#define COMPLIANCE_ENGINE_BENCHMARK_FORMATTER_HPP
+#ifndef KOMPLI_BENCHMARK_FORMATTER_HPP
+#define KOMPLI_BENCHMARK_FORMATTER_HPP
 
 #include <DistributionInfo.h>
 #include <Evaluator.h>
@@ -14,7 +14,7 @@
 #include <map>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BenchmarkFormatters
 {
@@ -52,5 +52,5 @@ private:
     JsonWrapper mJson;
 };
 } // namespace BenchmarkFormatters
-} // namespace ComplianceEngine
-#endif // COMPLIANCE_ENGINE_BENCHMARK_FORMATTER_HPP
+} // namespace Kompli
+#endif // KOMPLI_BENCHMARK_FORMATTER_HPP

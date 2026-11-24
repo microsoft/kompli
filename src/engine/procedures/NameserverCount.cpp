@@ -10,7 +10,7 @@
 #include <ranges/Count.hpp>
 #include <ranges/Unique.hpp>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 Result<Status> AuditNameserverCount(const NameserverCountParams& params, IndicatorsTree& indicators, ContextInterface& context)
@@ -48,4 +48,4 @@ Result<Status> AuditNameserverCount(const NameserverCountParams& params, Indicat
     }
     return indicators.NonCompliant("Fewer than two distinct nameserver entries are configured");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

@@ -7,10 +7,10 @@
 #include <gtest/gtest.h>
 #include <parsers/LoginDefs.h>
 
-using ComplianceEngine::Error;
-using ComplianceEngine::GetUidMin;
-using ComplianceEngine::Result;
-using ComplianceEngine::UsersRange;
+using Kompli::Error;
+using Kompli::GetUidMin;
+using Kompli::Result;
+using Kompli::UsersRange;
 
 class UsersIteratorTest : public ::testing::Test
 {
@@ -116,7 +116,7 @@ TEST_F(UsersIteratorTest, UidMinRejectsSelectedEmbeddedNul)
 
 TEST_F(UsersIteratorTest, UidMinRejectsOversizedInput)
 {
-    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>(std::string(ComplianceEngine::LoginDefs::MaxBytes + 1, 'x'))));
+    EXPECT_CALL(mContext, GetFileContents("/etc/login.defs")).WillOnce(testing::Return(Result<std::string>(std::string(Kompli::LoginDefs::MaxBytes + 1, 'x'))));
     const auto result = GetUidMin(mContext);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(E2BIG, result.Error().code);

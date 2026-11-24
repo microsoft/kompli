@@ -1,14 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_RANGES_UNIQUE_HPP
-#define COMPLIANCEENGINE_RANGES_UNIQUE_HPP
+#ifndef KOMPLI_RANGES_UNIQUE_HPP
+#define KOMPLI_RANGES_UNIQUE_HPP
 
 #include "View.hpp"
 
 #include <set>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace Ranges
 {
@@ -58,6 +58,6 @@ View<Detail::UniqueSource<View<Source>>> Unique(View<Source> source)
 }
 
 } // namespace Ranges
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_RANGES_UNIQUE_HPP
+#endif // KOMPLI_RANGES_UNIQUE_HPP

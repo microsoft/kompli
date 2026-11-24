@@ -11,11 +11,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-using ComplianceEngine::AuditRootPathSecurity;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditRootPathSecurity;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::Result;
+using Kompli::Status;
 using ::testing::Return;
 
 namespace

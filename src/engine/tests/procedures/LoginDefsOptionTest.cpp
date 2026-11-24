@@ -12,15 +12,15 @@
 #include <sys/stat.h>
 #include <sys/xattr.h>
 
-using ComplianceEngine::AuditLoginDefsOption;
-using ComplianceEngine::ComparisonOperation;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::LoginDefsOptionParams;
-using ComplianceEngine::NestedListFormatter;
-using ComplianceEngine::RemediateLoginDefsOption;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditLoginDefsOption;
+using Kompli::ComparisonOperation;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::LoginDefsOptionParams;
+using Kompli::NestedListFormatter;
+using Kompli::RemediateLoginDefsOption;
+using Kompli::Result;
+using Kompli::Status;
 using std::string;
 using testing::Return;
 

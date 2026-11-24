@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-static_assert(!std::is_constructible<ComplianceEngine::TemporaryDirectory, std::string, std::string, int, int>::value,
+static_assert(!std::is_constructible<Kompli::TemporaryDirectory, std::string, std::string, int, int>::value,
     "Only the temporary directory factory may create an owned directory");
 
 namespace
@@ -70,7 +70,7 @@ private:
 TEST(TemporaryDirectoryTest, SelectsConfiguredParent)
 {
     ScopedTmpdir environment("/configured/temporary/root");
-    auto result = ComplianceEngine::Detail::GetTemporaryDirectoryParent();
+    auto result = Kompli::Detail::GetTemporaryDirectoryParent();
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
     EXPECT_EQ("/configured/temporary/root", result.Value());
 }
@@ -78,7 +78,7 @@ TEST(TemporaryDirectoryTest, SelectsConfiguredParent)
 TEST(TemporaryDirectoryTest, EmptyParentUsesCompatibilityFallback)
 {
     ScopedTmpdir environment("");
-    auto result = ComplianceEngine::Detail::GetTemporaryDirectoryParent();
+    auto result = Kompli::Detail::GetTemporaryDirectoryParent();
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
     EXPECT_EQ("/tmp", result.Value());
 }
@@ -86,7 +86,7 @@ TEST(TemporaryDirectoryTest, EmptyParentUsesCompatibilityFallback)
 TEST(TemporaryDirectoryTest, UnsetParentUsesCompatibilityFallback)
 {
     ScopedTmpdir environment(nullptr);
-    auto result = ComplianceEngine::Detail::GetTemporaryDirectoryParent();
+    auto result = Kompli::Detail::GetTemporaryDirectoryParent();
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
     EXPECT_EQ("/tmp", result.Value());
 }
@@ -94,7 +94,7 @@ TEST(TemporaryDirectoryTest, UnsetParentUsesCompatibilityFallback)
 TEST(TemporaryDirectoryTest, RejectsRelativeParent)
 {
     ScopedTmpdir environment("relative/path");
-    auto result = ComplianceEngine::Detail::GetTemporaryDirectoryParent();
+    auto result = Kompli::Detail::GetTemporaryDirectoryParent();
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);
 }
@@ -104,11 +104,11 @@ TEST(TemporaryDirectoryTest, RejectsWhitespaceInConfiguredParent)
     for (const char* value : {"/configured/temporary root", "/configured/temporary\troot", "/configured/temporary\nroot"})
     {
         ScopedTmpdir environment(value);
-        auto selected = ComplianceEngine::Detail::GetTemporaryDirectoryParent();
+        auto selected = Kompli::Detail::GetTemporaryDirectoryParent();
         ASSERT_FALSE(selected.HasValue());
         EXPECT_EQ(EINVAL, selected.Error().code);
 
-        auto created = ComplianceEngine::TemporaryDirectory::Make("whitespace");
+        auto created = Kompli::TemporaryDirectory::Make("whitespace");
         ASSERT_FALSE(created.HasValue());
         EXPECT_EQ(EINVAL, created.Error().code);
     }
@@ -135,14 +135,14 @@ TEST(TemporaryDirectoryTest, LimitsValidatedParentDepth)
     }
     {
         ScopedTmpdir environment(path.c_str());
-        auto valid = ComplianceEngine::TemporaryDirectory::Make("depth");
+        auto valid = Kompli::TemporaryDirectory::Make("depth");
         ASSERT_TRUE(valid.HasValue()) << valid.Error().message;
     }
 
     path += "/d";
     ASSERT_EQ(0, ::mkdir(path.c_str(), 0700));
     ScopedTmpdir environment(path.c_str());
-    auto overLimit = ComplianceEngine::TemporaryDirectory::Make("depth");
+    auto overLimit = Kompli::TemporaryDirectory::Make("depth");
     ASSERT_FALSE(overLimit.HasValue());
     EXPECT_EQ(ELOOP, overLimit.Error().code);
 }
@@ -150,7 +150,7 @@ TEST(TemporaryDirectoryTest, LimitsValidatedParentDepth)
 TEST(TemporaryDirectoryTest, CliContextReportsInvalidParent)
 {
     ScopedTmpdir environment("relative/path");
-    auto result = ComplianceEngine::Cli::Context::Make(nullptr);
+    auto result = Kompli::Cli::Context::Make(nullptr);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);
 }
@@ -158,7 +158,7 @@ TEST(TemporaryDirectoryTest, CliContextReportsInvalidParent)
 TEST(TemporaryDirectoryTest, CliContextReportsWhitespaceInParent)
 {
     ScopedTmpdir environment("/configured/temporary root");
-    auto result = ComplianceEngine::Cli::Context::Make(nullptr);
+    auto result = Kompli::Cli::Context::Make(nullptr);
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);
 }
@@ -187,7 +187,7 @@ TEST(TemporaryDirectoryTest, CreationFailureDoesNotFallBack)
     const std::string missingParent = owner.GetTempdirPath() + "/missing/parent";
     ScopedTmpdir environment(missingParent.c_str());
 
-    auto result = ComplianceEngine::TemporaryDirectory::Make("failure");
+    auto result = Kompli::TemporaryDirectory::Make("failure");
     EXPECT_FALSE(result.HasValue());
 }
 
@@ -198,14 +198,14 @@ TEST(TemporaryDirectoryTest, RejectsParentTraversal)
     ASSERT_EQ(0, ::mkdir(parent.c_str(), 0700));
     ScopedTmpdir environment((parent + "/../parent").c_str());
 
-    auto result = ComplianceEngine::TemporaryDirectory::Make("traversal");
+    auto result = Kompli::TemporaryDirectory::Make("traversal");
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);
 }
 
 TEST(TemporaryDirectoryTest, RejectsPrefixTraversal)
 {
-    auto result = ComplianceEngine::TemporaryDirectory::Make("../escape");
+    auto result = Kompli::TemporaryDirectory::Make("../escape");
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EINVAL, result.Error().code);
 }
@@ -219,7 +219,7 @@ TEST(TemporaryDirectoryTest, RejectsSymlinkedParent)
     ASSERT_EQ(0, ::symlink(parent.c_str(), link.c_str()));
     ScopedTmpdir environment(link.c_str());
 
-    auto result = ComplianceEngine::TemporaryDirectory::Make("symlink");
+    auto result = Kompli::TemporaryDirectory::Make("symlink");
     EXPECT_FALSE(result.HasValue());
 }
 
@@ -231,7 +231,7 @@ TEST(TemporaryDirectoryTest, RejectsUntrustedWritableParent)
     ASSERT_EQ(0, ::chmod(parent.c_str(), 0777));
     ScopedTmpdir environment(parent.c_str());
 
-    auto result = ComplianceEngine::TemporaryDirectory::Make("writable");
+    auto result = Kompli::TemporaryDirectory::Make("writable");
     ASSERT_FALSE(result.HasValue());
     EXPECT_EQ(EPERM, result.Error().code);
 }
@@ -245,7 +245,7 @@ TEST(TemporaryDirectoryTest, CleanupUsesValidatedParentAfterPathReplacement)
     ASSERT_EQ(0, ::mkdir(parent.c_str(), 0700));
     ASSERT_EQ(0, ::mkdir(outside.c_str(), 0700));
     ScopedTmpdir environment(parent.c_str());
-    auto created = ComplianceEngine::TemporaryDirectory::Make("pinned");
+    auto created = Kompli::TemporaryDirectory::Make("pinned");
     ASSERT_TRUE(created.HasValue()) << created.Error().message;
     auto directory = std::move(created).Value();
     const std::string name = directory.Path().substr(parent.size() + 1);
@@ -266,7 +266,7 @@ TEST(TemporaryDirectoryTest, CleanupUsesValidatedParentAfterPathReplacement)
 
 TEST(TemporaryDirectoryTest, RemovalReportsMissingRoot)
 {
-    auto created = ComplianceEngine::TemporaryDirectory::Make("missing-root");
+    auto created = Kompli::TemporaryDirectory::Make("missing-root");
     ASSERT_TRUE(created.HasValue()) << created.Error().message;
     auto directory = std::move(created).Value();
     ASSERT_EQ(0, ::rmdir(directory.Path().c_str()));
@@ -283,7 +283,7 @@ TEST(TemporaryDirectoryTest, RemovalReportsReplacedRoot)
     const std::string parent = owner.GetTempdirPath() + "/parent";
     ASSERT_EQ(0, ::mkdir(parent.c_str(), 0700));
     ScopedTmpdir environment(parent.c_str());
-    auto created = ComplianceEngine::TemporaryDirectory::Make("replacement");
+    auto created = Kompli::TemporaryDirectory::Make("replacement");
     ASSERT_TRUE(created.HasValue()) << created.Error().message;
     auto directory = std::move(created).Value();
     const std::string original = directory.Path();
@@ -302,7 +302,7 @@ TEST(TemporaryDirectoryTest, RemovalReportsReplacedRoot)
 
 TEST(TemporaryDirectoryTest, CleanupStopsAtMaximumDepth)
 {
-    auto result = ComplianceEngine::TemporaryDirectory::Make("deep-cleanup");
+    auto result = Kompli::TemporaryDirectory::Make("deep-cleanup");
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
     auto directory = std::move(result).Value();
     std::string path = directory.Path();
@@ -363,7 +363,7 @@ TEST(TemporaryDirectoryTest, CleanupDoesNotDeleteReplacementDirectory)
     sentinelFile.close();
     ScopedTmpdir environment(parent.c_str());
 
-    auto contextResult = ComplianceEngine::Cli::Context::Make(nullptr);
+    auto contextResult = Kompli::Cli::Context::Make(nullptr);
     ASSERT_TRUE(contextResult.HasValue()) << contextResult.Error().message;
     auto context = std::move(contextResult).Value();
     const std::string root = context->GetStatePath();
@@ -391,7 +391,7 @@ TEST(TemporaryDirectoryTest, CliContextCleanupDoesNotFollowReplacedRoot)
     sentinelFile.close();
     ScopedTmpdir environment(parent.c_str());
 
-    auto contextResult = ComplianceEngine::Cli::Context::Make(nullptr);
+    auto contextResult = Kompli::Cli::Context::Make(nullptr);
     ASSERT_TRUE(contextResult.HasValue()) << contextResult.Error().message;
     auto context = std::move(contextResult).Value();
     const std::string originalRoot = context->GetStatePath();

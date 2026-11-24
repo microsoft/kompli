@@ -15,10 +15,10 @@
 namespace
 {
 
-using ComplianceEngine::ContextInterface;
-using ComplianceEngine::Error;
-using ComplianceEngine::PackageManagerType;
-using ComplianceEngine::Result;
+using Kompli::ContextInterface;
+using Kompli::Error;
+using Kompli::PackageManagerType;
+using Kompli::Result;
 
 struct PackageCache
 {
@@ -444,7 +444,7 @@ Result<PackageCache> GetInstalledPackages(PackageManagerType packageManager, Con
 
 } // namespace
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditPackageInstalled(const PackageInstalledParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -578,4 +578,4 @@ Result<Status> AuditPackageInstalled(const PackageInstalledParams& params, Indic
     }
     return indicators.Compliant("Package " + params.packageName + " is installed");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

@@ -17,7 +17,7 @@
 #include <unistd.h>
 #include <utility>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -501,4 +501,4 @@ Result<TemporaryDirectory> TemporaryDirectory::Make(const std::string& prefix)
     }
     return TemporaryDirectory(std::move(path), std::move(name), parent.Release(), root);
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

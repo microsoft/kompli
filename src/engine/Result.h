@@ -1,15 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_RESULT_H
-#define COMPLIANCEENGINE_RESULT_H
+#ifndef KOMPLI_RESULT_H
+#define KOMPLI_RESULT_H
 
 #include "TypeTraits.h"
 
 #include <stdexcept>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct Error
 {
@@ -60,7 +60,7 @@ struct Error
     }
     ~Error() = default;
 };
-std::ostream& operator<<(std::ostream& os, const ComplianceEngine::Error& error);
+std::ostream& operator<<(std::ostream& os, const Kompli::Error& error);
 
 namespace
 {
@@ -83,7 +83,7 @@ class Result
         Empty
     };
 
-    alignas(Max(alignof(T), alignof(ComplianceEngine::Error))) char mBuffer[Max(sizeof(T), sizeof(ComplianceEngine::Error))];
+    alignas(Max(alignof(T), alignof(Kompli::Error))) char mBuffer[Max(sizeof(T), sizeof(Kompli::Error))];
     Tag mTag;
 
     // No pointer member caches the placement-new'd address: mBuffer's
@@ -102,13 +102,13 @@ class Result
     {
         return reinterpret_cast<const T*>(mBuffer);
     }
-    ComplianceEngine::Error* ErrorPtr() noexcept
+    Kompli::Error* ErrorPtr() noexcept
     {
-        return reinterpret_cast<ComplianceEngine::Error*>(mBuffer);
+        return reinterpret_cast<Kompli::Error*>(mBuffer);
     }
-    const ComplianceEngine::Error* ErrorPtr() const noexcept
+    const Kompli::Error* ErrorPtr() const noexcept
     {
-        return reinterpret_cast<const ComplianceEngine::Error*>(mBuffer);
+        return reinterpret_cast<const Kompli::Error*>(mBuffer);
     }
 
 public:
@@ -118,10 +118,10 @@ public:
         new (mBuffer) T(std::move(value));
     }
 
-    Result(ComplianceEngine::Error error)
+    Result(Kompli::Error error)
         : mTag(Tag::Error)
     {
-        new (mBuffer) ComplianceEngine::Error(std::move(error));
+        new (mBuffer) Kompli::Error(std::move(error));
     }
 
     Result(const Result& other)
@@ -133,7 +133,7 @@ public:
         }
         else if (Tag::Error == mTag)
         {
-            new (mBuffer) ComplianceEngine::Error(*other.ErrorPtr());
+            new (mBuffer) Kompli::Error(*other.ErrorPtr());
         }
     }
 
@@ -146,7 +146,7 @@ public:
         }
         else if (Tag::Error == mTag)
         {
-            new (mBuffer) ComplianceEngine::Error(std::move(*other.ErrorPtr()));
+            new (mBuffer) Kompli::Error(std::move(*other.ErrorPtr()));
         }
 
         other.Reset();
@@ -166,7 +166,7 @@ private:
         }
         else if (Tag::Error == mTag)
         {
-            using Type = ComplianceEngine::Error;
+            using Type = Kompli::Error;
             ErrorPtr()->~Type();
         }
         mTag = Tag::Empty;
@@ -195,7 +195,7 @@ public:
         }
         else if (Tag::Error == mTag)
         {
-            new (mBuffer) ComplianceEngine::Error(*other.ErrorPtr());
+            new (mBuffer) Kompli::Error(*other.ErrorPtr());
         }
 
         return *this;
@@ -216,7 +216,7 @@ public:
         }
         else if (Tag::Error == mTag)
         {
-            new (mBuffer) ComplianceEngine::Error(std::move(*other.ErrorPtr()));
+            new (mBuffer) Kompli::Error(std::move(*other.ErrorPtr()));
         }
 
         other.Reset();
@@ -283,19 +283,19 @@ public:
         return ValuePtr();
     }
 
-    const ComplianceEngine::Error& Error() const&
+    const Kompli::Error& Error() const&
     {
         CheckError();
         return *ErrorPtr();
     }
 
-    ComplianceEngine::Error Error() &&
+    Kompli::Error Error() &&
     {
         CheckError();
         return std::move(*ErrorPtr());
     }
 
-    ComplianceEngine::Error& Error() &
+    Kompli::Error& Error() &
     {
         CheckError();
         return *ErrorPtr();
@@ -317,6 +317,6 @@ private:
         }
     }
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_RESULT_H
+#endif // KOMPLI_RESULT_H

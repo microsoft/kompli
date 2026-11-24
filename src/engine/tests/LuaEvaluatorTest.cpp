@@ -14,12 +14,12 @@
 #include <memory>
 #include <string>
 
-using ComplianceEngine::Action;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::LuaEvaluator;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::Action;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::LuaEvaluator;
+using Kompli::Result;
+using Kompli::Status;
 
 class LuaEvaluatorTest : public ::testing::Test
 {

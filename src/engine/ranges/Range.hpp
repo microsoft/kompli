@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_RANGES_RANGE_HPP
-#define COMPLIANCEENGINE_RANGES_RANGE_HPP
+#ifndef KOMPLI_RANGES_RANGE_HPP
+#define KOMPLI_RANGES_RANGE_HPP
 
 #include "View.hpp"
 
@@ -11,7 +11,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace Ranges
 {
@@ -147,6 +147,6 @@ View<Detail::CollectionSource<std::vector<T>>> Range(std::initializer_list<T> va
     return View<Source>(Source(std::vector<T>(values)));
 }
 } // namespace Ranges
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_RANGES_RANGE_HPP
+#endif // KOMPLI_RANGES_RANGE_HPP

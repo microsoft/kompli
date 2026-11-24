@@ -6,11 +6,11 @@
 #include <fnmatch.h>
 #include <gtest/gtest.h>
 
-using ComplianceEngine::BenchmarkInfo;
-using ComplianceEngine::DistributionInfo;
-using ComplianceEngine::Error;
-using ComplianceEngine::LinuxDistribution;
-using ComplianceEngine::Result;
+using Kompli::BenchmarkInfo;
+using Kompli::DistributionInfo;
+using Kompli::Error;
+using Kompli::LinuxDistribution;
+using Kompli::Result;
 
 class BenchmarkInfoTest : public ::testing::Test
 {

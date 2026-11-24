@@ -4,7 +4,7 @@
 #include <CommonUtils.h>
 #include <FileExists.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditFileExists(const FileExistsParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -25,4 +25,4 @@ Result<Status> AuditFileExists(const FileExistsParams& params, IndicatorsTree& i
 
     return indicators.Compliant("File '" + params.filename + "' exists");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

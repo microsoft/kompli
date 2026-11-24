@@ -7,9 +7,9 @@
 
 #include <gtest/gtest.h>
 
-using ComplianceEngine::Base64Decode;
-using ComplianceEngine::Error;
-using ComplianceEngine::Result;
+using Kompli::Base64Decode;
+using Kompli::Error;
+using Kompli::Result;
 
 class Base64Test : public ::testing::Test
 {

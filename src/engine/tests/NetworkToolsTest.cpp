@@ -9,7 +9,7 @@
 
 using ::testing::Return;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 class NetworkToolsTest : public ::testing::Test
@@ -52,7 +52,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_ValidTCPPorts_ReturnsCorrectPorts)
     std::vector<std::string> lines = {"tcp   LISTEN  0       128           0.0.0.0:22       0.0.0.0:*      users:((\"sshd\",pid=1234,fd=3))",
         "tcp   LISTEN  0       128         127.0.0.1:3306     0.0.0.0:*      users:((\"mysqld\",pid=5678,fd=10))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -69,7 +69,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_ValidUDPPorts_ReturnsCorrectPorts)
     std::vector<std::string> lines = {"udp   UNCONN  0       0             0.0.0.0:53       0.0.0.0:*      users:((\"systemd-resolve\",pid=910,fd=12))",
         "udp   UNCONN  0       0           127.0.0.1:323      0.0.0.0:*      users:((\"chronyd\",pid=1122,fd=5))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -87,7 +87,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_IPv6Addresses_ReturnsCorrectPorts)
         "tcp   LISTEN  0       128         [::1]:3306          [::]:*      users:((\"mysqld\",pid=5678,fd=11))",
         "udp   UNCONN  0       0               [::]:53          [::]:*      users:((\"systemd-resolve\",pid=910,fd=13))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -107,7 +107,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_MixedIPv4AndIPv6_ReturnsAllPorts)
         "udp   UNCONN  0       0           127.0.0.1:53       0.0.0.0:*      users:((\"dnsmasq\",pid=3000,fd=4))",
         "udp   UNCONN  0       0               [::1]:53          [::]:*      users:((\"dnsmasq\",pid=3000,fd=5))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -123,7 +123,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_MixedIPv4AndIPv6_ReturnsAllPorts)
 
 TEST_F(NetworkToolsTest, GetOpenPorts_CommandExecutionFails_ReturnsError)
 {
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Error("Command not found", 127)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Error("Command not found", 127)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -134,7 +134,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_CommandExecutionFails_ReturnsError)
 
 TEST_F(NetworkToolsTest, GetOpenPorts_EmptyOutput_ReturnsEmptyVector)
 {
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>("")));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>("")));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -145,7 +145,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_EmptyOutput_ReturnsEmptyVector)
 TEST_F(NetworkToolsTest, GetOpenPorts_OnlyHeaderLine_ReturnsEmptyVector)
 {
     std::string output = "Netid  State   Recv-Q Send-Q  Local Address:Port  Peer Address:Port  Process\n";
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -159,7 +159,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_MalformedLines_SkipsInvalidLines)
         "invalid line with insufficient fields", "", "# This is a comment",
         "tcp   LISTEN  0       128         127.0.0.1:3306     0.0.0.0:*      users:((\"mysqld\",pid=5678,fd=10))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -178,7 +178,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_UnsupportedProtocols_SkipsUnsupportedProto
         "raw   UNCONN  0       0             0.0.0.0:1        0.0.0.0:*      users:((\"ping\",pid=8888,fd=2))",
         "udp   UNCONN  0       0             0.0.0.0:53       0.0.0.0:*      users:((\"dns\",pid=7777,fd=4))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -197,7 +197,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_InvalidIPAddresses_SkipsInvalidAddresses)
         "tcp   LISTEN  0       128         256.256.256.256:443  0.0.0.0:*   users:((\"nginx\",pid=3456,fd=6))",
         "udp   UNCONN  0       0             0.0.0.0:53       0.0.0.0:*      users:((\"dns\",pid=4567,fd=7))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -215,7 +215,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_PortsWithoutColon_SkipsInvalidFormat)
         "tcp   LISTEN  0       128           0.0.0.0          0.0.0.0:*      users:((\"invalid\",pid=2345,fd=5))",
         "udp   UNCONN  0       0             127.0.0.1:53     0.0.0.0:*      users:((\"dns\",pid=3456,fd=7))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -232,7 +232,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_HighPortNumbers_HandlesCorrectly)
     std::vector<std::string> lines = {"tcp   LISTEN  0       128           0.0.0.0:65535    0.0.0.0:*      users:((\"app1\",pid=1234,fd=3))",
         "udp   UNCONN  0       0             127.0.0.1:32768  0.0.0.0:*      users:((\"app2\",pid=5678,fd=4))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -254,7 +254,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_RealWorldSSOutput_ParsesCorrectly)
         "tcp    LISTEN  0      128              [::]:22            [::]:*     users:((\"sshd\",pid=1234,fd=4))\n"
         "tcp    LISTEN  0      80            127.0.0.1:3306       0.0.0.0:*     users:((\"mysqld\",pid=5678,fd=10))\n";
 
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -275,7 +275,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_WildcardAddress_ConvertsToZeros)
         "udp   UNCONN  0       0                  *:53         0.0.0.0:*      users:((\"dns\",pid=5678,fd=4))",
         "tcp   LISTEN  0       128                *:443        0.0.0.0:*      users:((\"nginx\",pid=9999,fd=5))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -294,7 +294,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_InterfaceSpecificIPv4_ParsesInterfaceCorre
         "udp   UNCONN  0       0       10.0.0.1%wlan0:53         0.0.0.0:*      users:((\"dns\",pid=5678,fd=4))",
         "tcp   LISTEN  0       128     172.16.1.1%docker0:8080   0.0.0.0:*      users:((\"app\",pid=9999,fd=5))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -318,7 +318,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_InterfaceSpecificIPv6_ParsesInterfaceCorre
         "udp   UNCONN  0       0       [2001:db8::1%wlan0]:53     [::]:*         users:((\"dns\",pid=5678,fd=4))",
         "tcp   LISTEN  0       128     [::1%lo]:8080              [::]:*         users:((\"app\",pid=9999,fd=5))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -343,7 +343,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_MixedWildcardAndInterface_ParsesBoth)
         "udp   UNCONN  0       0                  *:53           0.0.0.0:*      users:((\"dns\",pid=9999,fd=5))",
         "udp   UNCONN  0       0       10.0.0.1%wlan0:5353       0.0.0.0:*      users:((\"mdns\",pid=1111,fd=6))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -372,7 +372,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_IPv6WildcardWithInterface_ParsesCorrectly)
         "tcp   LISTEN  0       128     [fe80::1%eth0]:8080        [::]:*         users:((\"app\",pid=5678,fd=4))",
         "udp   UNCONN  0       0                [::]:53           [::]:*         users:((\"dns\",pid=9999,fd=5))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -399,7 +399,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_ComplexInterfaceNames_ParsesCorrectly)
         "udp   UNCONN  0       0       10.0.0.1%veth12345ab:53       0.0.0.0:*      users:((\"dns\",pid=5678,fd=4))",
         "tcp   LISTEN  0       128     172.17.0.1%docker_gwbridge:8080  0.0.0.0:*   users:((\"app\",pid=9999,fd=5))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -423,7 +423,7 @@ TEST_F(NetworkToolsTest, GetOpenPorts_NoInterfaceSpecified_InterfaceEmpty)
         "tcp   LISTEN  0       128         127.0.0.1:3306      0.0.0.0:*      users:((\"mysql\",pid=5678,fd=4))",
         "udp   UNCONN  0       0             ::1:53             [::]:*         users:((\"dns\",pid=9999,fd=5))"};
     std::string output = CreateSSOutput(lines);
-    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(ComplianceEngine::Result<std::string>(output)));
+    EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Kompli::Result<std::string>(output)));
 
     auto result = GetOpenPorts(mockContext);
 
@@ -442,4 +442,4 @@ TEST_F(NetworkToolsTest, GetOpenPorts_NoInterfaceSpecified_InterfaceEmpty)
     EXPECT_TRUE(ports[2].interface.empty());
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

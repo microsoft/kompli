@@ -6,7 +6,7 @@
 #include <cerrno>
 #include <parson.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BenchmarkIO
 {
@@ -242,4 +242,4 @@ Result<JsonWrapper> BuildSkippedRuleResultJson(const Resource& entry, const std:
 }
 
 } // namespace BenchmarkIO
-} // namespace ComplianceEngine
+} // namespace Kompli

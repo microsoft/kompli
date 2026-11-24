@@ -21,7 +21,7 @@
 #include <sys/stat.h>
 #include <utility>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 static constexpr const char* cModuleInfo =
     "{\"Name\": \"ComplianceEngine\","
@@ -364,4 +364,4 @@ Result<Status> Engine::MmiSet(const char* objectName, const std::string& payload
     OsConfigLogError(Log(), "Invalid object name: Must start with %s, %s or %s prefix", initPrefix, procedurePrefix, remediatePrefix);
     return Error("Invalid object name");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

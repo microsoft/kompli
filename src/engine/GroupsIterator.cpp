@@ -5,7 +5,7 @@
 #include <cerrno>
 #include <pwd.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 GroupsRange::GroupsRange(FILE* stream, OsConfigLogHandle logHandle) noexcept
@@ -30,4 +30,4 @@ Result<GroupsRange> GroupsRange::Make(std::string path, OsConfigLogHandle logHan
 
     return GroupsRange(stream, logHandle);
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

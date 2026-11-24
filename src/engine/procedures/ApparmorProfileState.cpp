@@ -4,7 +4,7 @@
 #include <ApparmorProfileState.h>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditApparmorProfileState(const ApparmorProfileStateParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -102,4 +102,4 @@ Result<Status> AuditApparmorProfileState(const ApparmorProfileStateParams& param
     return indicators.Compliant("AppArmor status command executed successfully");
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

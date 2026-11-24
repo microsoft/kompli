@@ -15,14 +15,14 @@
 #include <unistd.h>
 #include <vector>
 
-using ComplianceEngine::AuditSystemdConfigValue;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::RemediateSystemdConfigValue;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
-using ComplianceEngine::SystemdConfigValueOperator;
-using ComplianceEngine::SystemdConfigValueParams;
+using Kompli::AuditSystemdConfigValue;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::RemediateSystemdConfigValue;
+using Kompli::Result;
+using Kompli::Status;
+using Kompli::SystemdConfigValueOperator;
+using Kompli::SystemdConfigValueParams;
 using ::testing::Return;
 
 namespace

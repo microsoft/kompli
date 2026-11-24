@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 // Unit tests for the benchmark-definition JSON parser
-// (ComplianceEngine::BenchmarkDefinition). The parser reads the in-repo
+// (Kompli::BenchmarkDefinition). The parser reads the in-repo
 // data/definitions/*.benchmark.json documents produced by the Compliance
 // Augmentation Engine and yields file-level identity plus the
 // BenchmarkIO::Resource entries the kompli CLI consumes.
@@ -13,9 +13,9 @@
 #include <string>
 #include <vector>
 
-using ComplianceEngine::Result;
-using ComplianceEngine::BenchmarkDefinition::ParseString;
-using ComplianceEngine::BenchmarkDefinition::Resource;
+using Kompli::Result;
+using Kompli::BenchmarkDefinition::ParseString;
+using Kompli::BenchmarkDefinition::Resource;
 
 namespace
 {
@@ -82,7 +82,7 @@ TEST(BenchmarkDefinitionParserTest, ParsesValidDocument)
     EXPECT_EQ(doc.version.minor, "0");
     EXPECT_EQ(doc.version.patch, "0");
     EXPECT_EQ(doc.benchmarkInfo.framework, "cis");
-    EXPECT_EQ(doc.benchmarkInfo.distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
+    EXPECT_EQ(doc.benchmarkInfo.distribution, Kompli::LinuxDistribution::Ubuntu);
     EXPECT_EQ(doc.benchmarkInfo.version, "22.04");
     EXPECT_EQ(doc.benchmarkInfo.benchmarkVersion, "v2.0.0");
     ASSERT_EQ(doc.resources.size(), 1u);
@@ -160,13 +160,13 @@ TEST(BenchmarkDefinitionParserTest, ParsesArbitrarilyLargeDecimalComponents)
 
 TEST(BenchmarkDefinitionParserTest, ComparesDecimalComponentsWithoutIntegerConversion)
 {
-    auto earlier = ComplianceEngine::ParseContentVersion("1.99999999999999999999.9");
-    auto later = ComplianceEngine::ParseContentVersion("1.100000000000000000000.0");
+    auto earlier = Kompli::ParseContentVersion("1.99999999999999999999.9");
+    auto later = Kompli::ParseContentVersion("1.100000000000000000000.0");
     ASSERT_TRUE(earlier.HasValue());
     ASSERT_TRUE(later.HasValue());
-    EXPECT_LT(ComplianceEngine::CompareContentVersion(earlier.Value(), later.Value()), 0);
-    EXPECT_GT(ComplianceEngine::CompareContentVersion(later.Value(), earlier.Value()), 0);
-    EXPECT_EQ(ComplianceEngine::ContentVersionToString(later.Value()), "1.100000000000000000000.0");
+    EXPECT_LT(Kompli::CompareContentVersion(earlier.Value(), later.Value()), 0);
+    EXPECT_GT(Kompli::CompareContentVersion(later.Value(), earlier.Value()), 0);
+    EXPECT_EQ(Kompli::ContentVersionToString(later.Value()), "1.100000000000000000000.0");
 }
 
 TEST(BenchmarkDefinitionParserTest, PreservesEqualAndNaturallyPrefixedTitlesWithoutMergingRules)
@@ -268,7 +268,7 @@ TEST(BenchmarkDefinitionParserTest, ParsesLegacyDocumentWithoutHoistedIdentity)
     auto result = ParseString(MakeDocWithMetadata(R"({"name":"legacy"})", std::string("[") + legacyRule + "]"), nullptr);
     ASSERT_TRUE(result.HasValue()) << result.Error().message;
     EXPECT_EQ(result.Value().benchmarkInfo.framework, "cis");
-    EXPECT_EQ(result.Value().benchmarkInfo.distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
+    EXPECT_EQ(result.Value().benchmarkInfo.distribution, Kompli::LinuxDistribution::Ubuntu);
     EXPECT_EQ(result.Value().benchmarkInfo.version, "22.04");
     EXPECT_EQ(result.Value().benchmarkInfo.benchmarkVersion, "v2.0.0");
     EXPECT_TRUE(result.Value().benchmarkInfo.section.empty());

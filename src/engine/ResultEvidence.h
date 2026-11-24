@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_RESULT_EVIDENCE_H
-#define COMPLIANCEENGINE_RESULT_EVIDENCE_H
+#ifndef KOMPLI_RESULT_EVIDENCE_H
+#define KOMPLI_RESULT_EVIDENCE_H
 
 #include <MmiResults.h>
 #include <Result.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class StateSatisfaction
 {
@@ -61,6 +61,6 @@ private:
     CompletedItemEvidence mItems;
     bool mHasEmptyItem = false;
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_RESULT_EVIDENCE_H
+#endif // KOMPLI_RESULT_EVIDENCE_H

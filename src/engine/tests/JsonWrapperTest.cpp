@@ -8,7 +8,7 @@
 #include <gtest/gtest.h>
 #include <string>
 
-using ComplianceEngine::JsonWrapper;
+using Kompli::JsonWrapper;
 
 TEST(JsonWrapperTest, RejectsRawNulAcrossLengthBearingInput)
 {

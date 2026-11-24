@@ -6,7 +6,7 @@
 #include <TypedComparison.h>
 #include <algorithm>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -87,4 +87,4 @@ Result<Status> RemediateDconfValue(const DconfValueParams& params, IndicatorsTre
     return AuditDconfValue(params, indicators, context);
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

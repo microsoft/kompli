@@ -11,7 +11,7 @@
 #include <cctype>
 #include <cstdint>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -227,4 +227,4 @@ Result<Status> RemediateGsettingsValue(const GsettingsValueParams& params, Indic
     return AuditGsettingsValue(params, indicators, context);
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

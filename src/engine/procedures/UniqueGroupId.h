@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_UNIQUE_GROUP_ID_H
-#define COMPLIANCEENGINE_PROCEDURES_UNIQUE_GROUP_ID_H
+#ifndef KOMPLI_PROCEDURES_UNIQUE_GROUP_ID_H
+#define KOMPLI_PROCEDURES_UNIQUE_GROUP_ID_H
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct UniqueGroupIdParams
 {
@@ -19,5 +19,5 @@ struct UniqueGroupIdParams
 };
 
 Result<Status> AuditUniqueGroupId(const UniqueGroupIdParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_UNIQUE_GROUP_ID_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_UNIQUE_GROUP_ID_H

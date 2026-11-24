@@ -13,7 +13,7 @@ using std::map;
 using std::string;
 using std::vector;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditPasswordChangeDate(IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -63,4 +63,4 @@ Result<Status> AuditPasswordChangeDate(IndicatorsTree& indicators, ContextInterf
 
     return indicators.NonCompliant("At least " + std::to_string(invalidUsersCount) + " users have password change dates in the future");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

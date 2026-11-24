@@ -7,7 +7,7 @@
 #include <UsersIterator.h>
 #include <grp.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditNoShadowPrimaryGroup(IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -36,4 +36,4 @@ Result<Status> AuditNoShadowPrimaryGroup(IndicatorsTree& indicators, ContextInte
     return indicators.Compliant("No user has 'shadow' as primary group");
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

@@ -44,40 +44,40 @@
 #include <vector>
 #include <version.h>
 
-using ComplianceEngine::Action;
-using ComplianceEngine::BenchmarkInfo;
-using ComplianceEngine::CombineAllOf;
-using ComplianceEngine::DistributionInfo;
-using ComplianceEngine::Engine;
-using ComplianceEngine::Error;
-using ComplianceEngine::Optional;
-using ComplianceEngine::PayloadFormatter;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
-using ComplianceEngine::TelemetryEvent;
-using ComplianceEngine::TelemetryEventType;
-using ComplianceEngine::BenchmarkDefinition::BenchmarkDocument;
-using ComplianceEngine::BenchmarkDefinition::ParseFile;
-using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
-using ComplianceEngine::BenchmarkIO::RefuseUnsafeLogFile;
-using ComplianceEngine::Cli::Context;
-using ComplianceEngine::Kompli::ApplyParameterOverrides;
-using ComplianceEngine::Kompli::CheckUniqueBenchmarkFiles;
-using ComplianceEngine::Kompli::CheckUniqueBenchmarkIdentities;
-using ComplianceEngine::Kompli::Command;
-using ComplianceEngine::Kompli::Format;
-using ComplianceEngine::Kompli::GeneratePlan;
-using ComplianceEngine::Kompli::Options;
-using ComplianceEngine::Kompli::ParseCommandLine;
-using ComplianceEngine::Kompli::ParsePlanFile;
-using ComplianceEngine::Kompli::Plan;
-using ComplianceEngine::Kompli::PrintHelp;
-using ComplianceEngine::Kompli::RenderJUnit;
-using ComplianceEngine::Kompli::RenderText;
-using ComplianceEngine::Kompli::TextStyle;
-using ComplianceEngine::Kompli::ToggleMode;
-using ComplianceEngine::Kompli::ValidatePlanForRun;
-using ComplianceEngine::Kompli::WritePlanFile;
+using Kompli::Action;
+using Kompli::BenchmarkInfo;
+using Kompli::CombineAllOf;
+using Kompli::DistributionInfo;
+using Kompli::Engine;
+using Kompli::Error;
+using Kompli::Optional;
+using Kompli::PayloadFormatter;
+using Kompli::Result;
+using Kompli::Status;
+using Kompli::TelemetryEvent;
+using Kompli::TelemetryEventType;
+using Kompli::BenchmarkDefinition::BenchmarkDocument;
+using Kompli::BenchmarkDefinition::ParseFile;
+using Kompli::BenchmarkFormatters::BenchmarkFormatter;
+using Kompli::BenchmarkIO::RefuseUnsafeLogFile;
+using Kompli::Cli::ApplyParameterOverrides;
+using Kompli::Cli::CheckUniqueBenchmarkFiles;
+using Kompli::Cli::CheckUniqueBenchmarkIdentities;
+using Kompli::Cli::Command;
+using Kompli::Cli::Context;
+using Kompli::Cli::Format;
+using Kompli::Cli::GeneratePlan;
+using Kompli::Cli::Options;
+using Kompli::Cli::ParseCommandLine;
+using Kompli::Cli::ParsePlanFile;
+using Kompli::Cli::Plan;
+using Kompli::Cli::PrintHelp;
+using Kompli::Cli::RenderJUnit;
+using Kompli::Cli::RenderText;
+using Kompli::Cli::TextStyle;
+using Kompli::Cli::ToggleMode;
+using Kompli::Cli::ValidatePlanForRun;
+using Kompli::Cli::WritePlanFile;
 using std::string;
 
 #ifdef BUILD_TELEMETRY
@@ -359,7 +359,7 @@ int main(int argc, char* argv[])
     if (options.telemetryEnabled)
     {
         std::string telemetry_log_path(telemetry_log_dir);
-        if (!ComplianceEngine::MkdirRecursive(telemetry_log_path, 0700))
+        if (!Kompli::MkdirRecursive(telemetry_log_path, 0700))
         {
             OsConfigLogError(logHandle.get(), "Failed to create telemetry directory %s: %d", telemetry_log_path.c_str(), errno);
         }
@@ -392,7 +392,7 @@ int main(int argc, char* argv[])
     // to render each rule's indicators. Pass the JSON one explicitly: the
     // constructor's default is a DebugFormatter, whose text output could not be
     // embedded as the canonical result's indicators array.
-    Engine engine(std::move(context), std::unique_ptr<PayloadFormatter>(new ComplianceEngine::JsonFormatter()));
+    Engine engine(std::move(context), std::unique_ptr<PayloadFormatter>(new Kompli::JsonFormatter()));
 
     // Determine the OS this tool is running on so rules that target a different
     // distribution/version can be skipped. LoadDistributionInfo prefers the

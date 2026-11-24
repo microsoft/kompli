@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_CLICONTEXT_H
-#define COMPLIANCEENGINE_CLICONTEXT_H
+#ifndef KOMPLI_CLICONTEXT_H
+#define KOMPLI_CLICONTEXT_H
 
 #include "CommonContext.h"
 #include "Logging.h"
@@ -11,7 +11,7 @@
 #include <memory>
 #include <utility>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace Cli
 {
@@ -57,5 +57,5 @@ private:
 };
 
 } // namespace Cli
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_CLICONTEXT_H
+} // namespace Kompli
+#endif // KOMPLI_CLICONTEXT_H

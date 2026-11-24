@@ -6,8 +6,8 @@ set (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_MODULE_PATH};${CMAKE_CURREN
 
 SET(CMAKE_CONFIGURATION_TYPES ${CMAKE_BUILD_TYPE} CACHE STRING "" FORCE)
 
-project(ce-lua-evaluator)
-set(target_name ce-lua-evaluator)
+project(kompli-lua-evaluator)
+set(target_name kompli-lua-evaluator)
 
 set(SOURCES
     Main.cpp
@@ -25,7 +25,7 @@ target_link_libraries(${target_name}
     logging
     commonutils
     parsonlib
-    complianceenginelib
+    kompli-engine
     )
 
 include(GNUInstallDirs)

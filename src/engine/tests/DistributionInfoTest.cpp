@@ -6,9 +6,9 @@
 #include <gtest/gtest.h>
 #include <sys/utsname.h>
 
-using ComplianceEngine::DistributionInfo;
-using ComplianceEngine::Error;
-using ComplianceEngine::Result;
+using Kompli::DistributionInfo;
+using Kompli::Error;
+using Kompli::Result;
 
 namespace
 {
@@ -61,9 +61,9 @@ TEST_F(DistributionInfoTest, ValidEtcOsReleaseFile)
     }
 
     ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(result.Value().osType, ComplianceEngine::OSType::Linux);
+    EXPECT_EQ(result.Value().osType, Kompli::OSType::Linux);
     EXPECT_EQ(std::to_string(result.Value().architecture), hostArch);
-    EXPECT_EQ(result.Value().distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
+    EXPECT_EQ(result.Value().distribution, Kompli::LinuxDistribution::Ubuntu);
     EXPECT_EQ(result.Value().version, "20.04");
     const std::string expected = std::string(R"(OS="Linux" ARCH=")") + hostArch + R"(" DISTRO="ubuntu" VERSION="20.04")";
     EXPECT_EQ(std::to_string(result.Value()), expected);
@@ -87,9 +87,9 @@ TEST_F(DistributionInfoTest, ValidEtcOsReleaseFile_WithComments)
     }
 
     ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(result.Value().osType, ComplianceEngine::OSType::Linux);
+    EXPECT_EQ(result.Value().osType, Kompli::OSType::Linux);
     EXPECT_EQ(std::to_string(result.Value().architecture), hostArch);
-    EXPECT_EQ(result.Value().distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
+    EXPECT_EQ(result.Value().distribution, Kompli::LinuxDistribution::Ubuntu);
     EXPECT_EQ(result.Value().version, "20.04");
     const std::string expected = std::string(R"(OS="Linux" ARCH=")") + hostArch + R"(" DISTRO="ubuntu" VERSION="20.04")";
     EXPECT_EQ(std::to_string(result.Value()), expected);
@@ -125,9 +125,9 @@ TEST_F(DistributionInfoTest, ValidEtcOsReleaseFile_AzureContainerLinux)
     }
 
     ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(result.Value().osType, ComplianceEngine::OSType::Linux);
+    EXPECT_EQ(result.Value().osType, Kompli::OSType::Linux);
     EXPECT_EQ(std::to_string(result.Value().architecture), hostArch);
-    EXPECT_EQ(result.Value().distribution, ComplianceEngine::LinuxDistribution::AzureLinux);
+    EXPECT_EQ(result.Value().distribution, Kompli::LinuxDistribution::AzureLinux);
     EXPECT_EQ(result.Value().version, "4.0.20260709");
     const std::string expected = std::string(R"(OS="Linux" ARCH=")") + hostArch + R"(" DISTRO="azurelinux" VERSION="4.0.20260709")";
     EXPECT_EQ(std::to_string(result.Value()), expected);
@@ -234,9 +234,9 @@ TEST_F(DistributionInfoTest, ValidOverrideFile_1)
 
     auto result = DistributionInfo::ParseOverrideFile(filePath);
     ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(result.Value().osType, ComplianceEngine::OSType::Linux);
-    EXPECT_EQ(result.Value().architecture, ComplianceEngine::Architecture::x86_64);
-    EXPECT_EQ(result.Value().distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
+    EXPECT_EQ(result.Value().osType, Kompli::OSType::Linux);
+    EXPECT_EQ(result.Value().architecture, Kompli::Architecture::x86_64);
+    EXPECT_EQ(result.Value().distribution, Kompli::LinuxDistribution::Ubuntu);
     EXPECT_EQ(result.Value().version, "20.04");
     EXPECT_EQ(std::to_string(result.Value()), R"(OS="Linux" ARCH="x86_64" DISTRO="ubuntu" VERSION="20.04")");
 }
@@ -248,9 +248,9 @@ TEST_F(DistributionInfoTest, ValidOverrideFile_Aarch64)
 
     auto result = DistributionInfo::ParseOverrideFile(filePath);
     ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(result.Value().osType, ComplianceEngine::OSType::Linux);
-    EXPECT_EQ(result.Value().architecture, ComplianceEngine::Architecture::aarch64);
-    EXPECT_EQ(result.Value().distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
+    EXPECT_EQ(result.Value().osType, Kompli::OSType::Linux);
+    EXPECT_EQ(result.Value().architecture, Kompli::Architecture::aarch64);
+    EXPECT_EQ(result.Value().distribution, Kompli::LinuxDistribution::Ubuntu);
     EXPECT_EQ(result.Value().version, "20.04");
     EXPECT_EQ(std::to_string(result.Value()), content);
 }
@@ -262,9 +262,9 @@ TEST_F(DistributionInfoTest, ValidOverrideFile_2)
 
     auto result = DistributionInfo::ParseOverrideFile(filePath);
     ASSERT_TRUE(result.HasValue());
-    EXPECT_EQ(result.Value().osType, ComplianceEngine::OSType::Linux);
-    EXPECT_EQ(result.Value().architecture, ComplianceEngine::Architecture::x86_64);
-    EXPECT_EQ(result.Value().distribution, ComplianceEngine::LinuxDistribution::Ubuntu);
+    EXPECT_EQ(result.Value().osType, Kompli::OSType::Linux);
+    EXPECT_EQ(result.Value().architecture, Kompli::Architecture::x86_64);
+    EXPECT_EQ(result.Value().distribution, Kompli::LinuxDistribution::Ubuntu);
     EXPECT_EQ(result.Value().version, "20.04");
     EXPECT_EQ(std::to_string(result.Value()), content);
 }

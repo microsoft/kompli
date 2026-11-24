@@ -9,16 +9,16 @@
 #include <ShadowField.h>
 #include <fstream>
 
-using ComplianceEngine::AuditShadowField;
-using ComplianceEngine::ComparisonOperation;
-using ComplianceEngine::Error;
-using ComplianceEngine::Field;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::NestedListFormatter;
-using ComplianceEngine::Optional;
-using ComplianceEngine::Result;
-using ComplianceEngine::ShadowFieldParams;
-using ComplianceEngine::Status;
+using Kompli::AuditShadowField;
+using Kompli::ComparisonOperation;
+using Kompli::Error;
+using Kompli::Field;
+using Kompli::IndicatorsTree;
+using Kompli::NestedListFormatter;
+using Kompli::Optional;
+using Kompli::Result;
+using Kompli::ShadowFieldParams;
+using Kompli::Status;
 using std::map;
 using std::string;
 

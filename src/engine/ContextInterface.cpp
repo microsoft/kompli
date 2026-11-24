@@ -7,7 +7,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // Provide a definition for the virtual destructor
 ContextInterface::~ContextInterface() = default;
@@ -36,4 +36,4 @@ int ContextInterface::CloseFileDescriptor(int descriptor) const
 {
     return ::close(descriptor);
 }
-} // namespace ComplianceEngine
+} // namespace Kompli
