@@ -259,7 +259,8 @@ target_link_libraries(complianceenginetests
     parsonlib
 )
 
-# Keep intentional allocation faults out of the shared test executable.
+# Allocation-fault tests replace the global operator new, so they get their own
+# executable; CTest runs it together with the other tests.
 add_executable(result-allocation-test ResultAllocationTest.cpp)
 target_link_libraries(result-allocation-test PRIVATE GTest::gtest_main)
 gtest_discover_tests(result-allocation-test XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR})
