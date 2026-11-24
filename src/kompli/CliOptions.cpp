@@ -46,6 +46,7 @@ void PrintHelp(const std::string& programName)
                  "--audit=.\n";
     std::cout << "\t    --param=<ref>.<name>=<value>\tOverride parameter <name> for <ref> (default: pre-filled from the definition's "
                  "parameterMetadata). Repeatable. Same <ref> form as --audit=.\n";
+    std::cout << "\t    --pin=<caret|tilde|exact>\tPin every definition's content version (default: caret).\n";
     std::cout << "\t-o, --output\tWrite the generated plan to this path. Default: standard output.\n";
     std::cout << "\n";
     std::cout << "render options:\n";
@@ -65,7 +66,8 @@ enum
     kAuditOpt,
     kRemediateOpt,
     kEnforceOpt,
-    kParamOpt
+    kParamOpt,
+    kPinOpt
 };
 
 // Command line parser using getopt_long.
@@ -89,7 +91,8 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
         {"telemetry", no_argument, nullptr, 't'},
 #endif // BUILD_TELEMETRY
         {"audit", required_argument, nullptr, kAuditOpt}, {"remediate", required_argument, nullptr, kRemediateOpt},
-        {"enforce", required_argument, nullptr, kEnforceOpt}, {"param", required_argument, nullptr, kParamOpt}, {nullptr, 0, nullptr, 0}};
+        {"enforce", required_argument, nullptr, kEnforceOpt}, {"param", required_argument, nullptr, kParamOpt},
+        {"pin", required_argument, nullptr, kPinOpt}, {nullptr, 0, nullptr, 0}};
 
     auto result = Options{};
     int opt = getopt_long(argc, argv, short_opts, long_opts, nullptr);
@@ -167,6 +170,27 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
                 }
                 result.output = std::string(optarg);
                 break;
+            case kPinOpt: {
+                const std::string value(optarg);
+                if (value == "caret")
+                {
+                    result.pin = PlanPin::Caret;
+                }
+                else if (value == "tilde")
+                {
+                    result.pin = PlanPin::Tilde;
+                }
+                else if (value == "exact")
+                {
+                    result.pin = PlanPin::Exact;
+                }
+                else
+                {
+                    return Error("Invalid --pin value. Allowed values: {caret, tilde, exact}.");
+                }
+                result.pinSpecified = true;
+                break;
+            }
             case kAuditOpt:
             case kRemediateOpt:
             case kEnforceOpt: {
@@ -305,6 +329,10 @@ Result<Options> ParseCommandLine(const int argc, char* argv[])
         if (result.output.HasValue())
         {
             return Error("--output is only valid for 'plan'.");
+        }
+        if (result.pinSpecified)
+        {
+            return Error("--pin is only valid for 'plan'.");
         }
         if (Command::List == result.command && result.continueOnError)
         {

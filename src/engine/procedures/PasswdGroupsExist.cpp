@@ -32,7 +32,8 @@ Result<Status> AuditPasswdGroupsExist(IndicatorsTree& indicators, ContextInterfa
     }
     int status = errno;
     endgrent();
-    if (0 != status)
+    // Non-files glibc NSS modules (e.g. aad, sss) end enumeration with ENOENT; treat it as end of data.
+    if (0 != status && ENOENT != status)
     {
         return Error(std::string("getgrent failed: ") + strerror(status), status);
     }
@@ -49,7 +50,7 @@ Result<Status> AuditPasswdGroupsExist(IndicatorsTree& indicators, ContextInterfa
     }
     status = errno;
     endpwent();
-    if (0 != status)
+    if (0 != status && ENOENT != status)
     {
         return Error(std::string("getpwent failed: ") + strerror(status), status);
     }

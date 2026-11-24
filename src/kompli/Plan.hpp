@@ -80,7 +80,7 @@ struct Plan
 // parameter, or a value that doesn't match the parameter's validationRegex
 // (fail-fast validation, see docs/CLI.md section 2/8.1).
 Result<std::string> GeneratePlan(const std::vector<std::string>& benchmarkFiles, const std::vector<Toggle>& toggles,
-    const std::vector<ParamOverride>& paramOverrides, OsConfigLogHandle logHandle);
+    const std::vector<ParamOverride>& paramOverrides, OsConfigLogHandle logHandle, PlanPin pin = PlanPin::Caret);
 
 // Parses a plan file from disk, applying the same input-hardening posture as
 // benchmark-definition files (this is root-run input too).
