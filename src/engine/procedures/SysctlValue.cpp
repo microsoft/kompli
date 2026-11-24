@@ -476,6 +476,8 @@ Result<Status> RemediateSysctlValue(const SysctlValueParams& params, IndicatorsT
     const std::string configPath = persistent ? context.GetSpecialFilePath("/etc/sysctl.d/99-zz-kompli-" + params.sysctlName + ".conf") : std::string();
     bool configExists = false;
     std::string originalConfig;
+    std::string candidateConfig;
+    struct stat candidateMetadata = {};
     struct stat createdMetadata = {};
     if (persistent)
     {
@@ -499,8 +501,9 @@ Result<Status> RemediateSysctlValue(const SysctlValueParams& params, IndicatorsT
             }
             originalConfig = contents.Value();
         }
-        const std::string contents = "# Managed by kompli\n" + params.sysctlName + " = " + desired.Value() + "\n";
-        auto written = configExists ? ReplaceFileContentsAtomic(configPath, contents) : CreateFileContentsAtomic(configPath, contents, 0644, &createdMetadata);
+        candidateConfig = "# Managed by kompli\n" + params.sysctlName + " = " + desired.Value() + "\n";
+        auto written = configExists ? ReplaceFileContentsAtomic(configPath, candidateConfig, &candidateMetadata) :
+                                      CreateFileContentsAtomic(configPath, candidateConfig, 0644, &createdMetadata);
         if (!written.HasValue())
         {
             return written.Error();
@@ -538,10 +541,17 @@ Result<Status> RemediateSysctlValue(const SysctlValueParams& params, IndicatorsT
     {
         if (configExists)
         {
-            auto restored = ReplaceFileContentsAtomic(configPath, originalConfig);
+            auto restored = ReplaceFileContentsAtomicIfUnchanged(configPath, originalConfig, candidateMetadata, candidateConfig);
             if (!restored.HasValue())
             {
-                rollbackErrors += "; configuration: " + restored.Error().message;
+                if (restored.Error().code == EAGAIN)
+                {
+                    rollbackErrors += "; managed configuration changed before rollback";
+                }
+                else
+                {
+                    rollbackErrors += "; configuration: " + restored.Error().message;
+                }
             }
         }
         else

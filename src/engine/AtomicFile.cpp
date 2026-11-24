@@ -3,6 +3,7 @@
 
 #include "AtomicFile.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstring>
@@ -43,6 +44,42 @@ Result<bool> WriteContents(int fd, const std::string& path, const std::string& c
         written += static_cast<size_t>(result);
     }
     return true;
+}
+
+Result<bool> FileContentsMatch(int fd, const std::string& path, const std::string& expected)
+{
+    char buffer[4096];
+    size_t offset = 0;
+    while (offset < expected.size())
+    {
+        const size_t requested = std::min(sizeof(buffer), expected.size() - offset);
+        const ssize_t count = pread(fd, buffer, requested, static_cast<off_t>(offset));
+        if (count < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            return FileError("Failed to verify contents for", path, errno);
+        }
+        if (count == 0 || expected.compare(offset, static_cast<size_t>(count), buffer, static_cast<size_t>(count)) != 0)
+        {
+            return false;
+        }
+        offset += static_cast<size_t>(count);
+    }
+
+    char extra;
+    ssize_t count;
+    do
+    {
+        count = pread(fd, &extra, 1, static_cast<off_t>(offset));
+    } while (count < 0 && errno == EINTR);
+    if (count < 0)
+    {
+        return FileError("Failed to verify contents for", path, errno);
+    }
+    return count == 0;
 }
 
 struct ResolvedPath
@@ -312,7 +349,8 @@ Result<bool> CreateFileContentsAtomic(const std::string& path, const std::string
     return true;
 }
 
-Result<bool> ReplaceFileContentsAtomic(const std::string& path, const std::string& contents)
+static Result<bool> ReplaceFileContentsAtomicImpl(const std::string& path, const std::string& contents, struct stat* replaced,
+    const struct stat* expectedMetadata, const std::string* expectedContents)
 {
     auto resolved = ResolveParentNoFollow(path);
     if (!resolved.HasValue())
@@ -339,6 +377,11 @@ Result<bool> ReplaceFileContentsAtomic(const std::string& path, const std::strin
         close(parent);
         return Error("Refusing to replace multiply-linked file '" + path + "'", EMLINK);
     }
+    if (expectedMetadata != nullptr && (original.st_dev != expectedMetadata->st_dev || original.st_ino != expectedMetadata->st_ino))
+    {
+        close(parent);
+        return Error("File changed before replacement '" + path + "'", EAGAIN);
+    }
 
     const int source = openat(parent, name.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (source < 0)
@@ -356,11 +399,23 @@ Result<bool> ReplaceFileContentsAtomic(const std::string& path, const std::strin
         close(parent);
         return FileError("Failed to inspect opened file", path, status);
     }
-    if (opened.st_dev != original.st_dev || opened.st_ino != original.st_ino)
+    if (opened.st_dev != original.st_dev || opened.st_ino != original.st_ino ||
+        (expectedMetadata != nullptr && (opened.st_dev != expectedMetadata->st_dev || opened.st_ino != expectedMetadata->st_ino)))
     {
         close(source);
         close(parent);
         return Error("File changed while opening '" + path + "'", EAGAIN);
+    }
+    if (expectedContents != nullptr)
+    {
+        auto matches = FileContentsMatch(source, path, *expectedContents);
+        if (!matches.HasValue() || !matches.Value())
+        {
+            const auto error = matches.HasValue() ? Error("File contents changed before replacement '" + path + "'", EAGAIN) : matches.Error();
+            close(source);
+            close(parent);
+            return error;
+        }
     }
 
     auto temporaryResult = CreateTemporaryFile(parent, path);
@@ -409,35 +464,59 @@ Result<bool> ReplaceFileContentsAtomic(const std::string& path, const std::strin
     {
         return fail("Failed to flush replacement for", errno);
     }
-    if (close(source) != 0)
-    {
-        const int status = errno;
-        close(temporary);
-        unlinkat(parent, temporaryName.c_str(), 0);
-        close(parent);
-        return FileError("Failed to close source for", path, status);
-    }
     if (close(temporary) != 0)
     {
         const int status = errno;
+        close(source);
         unlinkat(parent, temporaryName.c_str(), 0);
         close(parent);
         return FileError("Failed to close replacement for", path, status);
+    }
+
+    struct stat replacementMetadata;
+    if (fstatat(parent, temporaryName.c_str(), &replacementMetadata, AT_SYMLINK_NOFOLLOW) != 0)
+    {
+        const int status = errno;
+        close(source);
+        unlinkat(parent, temporaryName.c_str(), 0);
+        close(parent);
+        return FileError("Failed to inspect replacement for", path, status);
     }
 
     struct stat current;
     if (fstatat(parent, name.c_str(), &current, AT_SYMLINK_NOFOLLOW) != 0)
     {
         const int status = errno;
+        close(source);
         unlinkat(parent, temporaryName.c_str(), 0);
         close(parent);
         return FileError("Failed to re-inspect", path, status);
     }
     if (current.st_dev != original.st_dev || current.st_ino != original.st_ino)
     {
+        close(source);
         unlinkat(parent, temporaryName.c_str(), 0);
         close(parent);
         return Error("File changed before replacement '" + path + "'", EAGAIN);
+    }
+    if (expectedContents != nullptr)
+    {
+        auto matches = FileContentsMatch(source, path, *expectedContents);
+        if (!matches.HasValue() || !matches.Value())
+        {
+            const auto error = matches.HasValue() ? Error("File contents changed before replacement '" + path + "'", EAGAIN) : matches.Error();
+            close(source);
+            unlinkat(parent, temporaryName.c_str(), 0);
+            close(parent);
+            return error;
+        }
+    }
+    if (close(source) != 0)
+    {
+        const int status = errno;
+        unlinkat(parent, temporaryName.c_str(), 0);
+        close(parent);
+        return FileError("Failed to close source for", path, status);
     }
     if (renameat(parent, temporaryName.c_str(), parent, name.c_str()) != 0)
     {
@@ -447,6 +526,21 @@ Result<bool> ReplaceFileContentsAtomic(const std::string& path, const std::strin
         return FileError("Failed to replace", path, status);
     }
     close(parent);
+    if (replaced != nullptr)
+    {
+        *replaced = replacementMetadata;
+    }
     return true;
+}
+
+Result<bool> ReplaceFileContentsAtomic(const std::string& path, const std::string& contents, struct stat* replaced)
+{
+    return ReplaceFileContentsAtomicImpl(path, contents, replaced, nullptr, nullptr);
+}
+
+Result<bool> ReplaceFileContentsAtomicIfUnchanged(const std::string& path, const std::string& contents, const struct stat& expectedMetadata,
+    const std::string& expectedContents)
+{
+    return ReplaceFileContentsAtomicImpl(path, contents, nullptr, &expectedMetadata, &expectedContents);
 }
 } // namespace ComplianceEngine

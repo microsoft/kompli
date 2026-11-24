@@ -511,6 +511,49 @@ TEST_F(SysctlValueRemediationTest, LaterPrecedenceConflictRestoresExistingManage
     ExpectFile(configPath, original);
 }
 
+TEST_F(SysctlValueRemediationTest, RollbackDoesNotOverwriteEditedExistingManagedFile)
+{
+    std::ofstream(configPath) << "# existing managed content\nnet.ipv4.ip_forward = 1\n";
+    laterConfiguration = "\nnet.ipv4.ip_forward = 1\n";
+    int calls = 0;
+    EXPECT_CALL(mContext, ExecuteCommand(systemdSysctlCat)).WillRepeatedly(::testing::Invoke([&](const std::string&) -> Result<std::string> {
+        if (++calls == 1)
+        {
+            std::ofstream(configPath, std::ios::trunc) << "# administrator update\n";
+        }
+        auto contents = ReadTestFile(configPath);
+        return (contents.HasValue() ? contents.Value() : std::string()) + laterConfiguration;
+    }));
+
+    auto result = RemediateSysctlValue(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("managed configuration changed before rollback"), std::string::npos);
+    ExpectFile(runtimePath, "1\n");
+    ExpectFile(configPath, "# administrator update\n");
+}
+
+TEST_F(SysctlValueRemediationTest, RollbackDoesNotOverwriteReplacedExistingManagedFile)
+{
+    std::ofstream(configPath) << "# existing managed content\nnet.ipv4.ip_forward = 1\n";
+    const auto replacement = mContext.MakeTempfile("# administrator replacement\n");
+    laterConfiguration = "\nnet.ipv4.ip_forward = 1\n";
+    int calls = 0;
+    EXPECT_CALL(mContext, ExecuteCommand(systemdSysctlCat)).WillRepeatedly(::testing::Invoke([&](const std::string&) -> Result<std::string> {
+        if (++calls == 1)
+        {
+            EXPECT_EQ(0, rename(replacement.c_str(), configPath.c_str()));
+        }
+        auto contents = ReadTestFile(configPath);
+        return (contents.HasValue() ? contents.Value() : std::string()) + laterConfiguration;
+    }));
+
+    auto result = RemediateSysctlValue(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("managed configuration changed before rollback"), std::string::npos);
+    ExpectFile(runtimePath, "1\n");
+    ExpectFile(configPath, "# administrator replacement\n");
+}
+
 TEST_F(SysctlValueRemediationTest, RuntimeWriteFailureRollsBackPersistentCreation)
 {
     const auto target = mContext.MakeTempfile("1\n");
