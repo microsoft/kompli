@@ -269,7 +269,7 @@ public:
     {
         if (this->mTag != Tag::Value)
         {
-            return std::move(default_value);
+            return default_value;
         }
 
         return *this->mPointer.value;
@@ -279,7 +279,7 @@ public:
     {
         if (this->mTag != Tag::Value)
         {
-            return std::move(default_value);
+            return default_value;
         }
 
         return std::move(*this->mPointer.value);
