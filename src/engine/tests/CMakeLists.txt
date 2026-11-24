@@ -10,7 +10,7 @@ find_package(GTest CONFIG REQUIRED)
 
 # Independently check each class's copy operations and unsupported payloads
 # against its own valid C++11 translation unit before accepting failures.
-set(variant_compile_flags
+set(wrapper_compile_flags
     "-DCMAKE_CXX_STANDARD:STRING=11"
     "-DCMAKE_CXX_STANDARD_REQUIRED:BOOL=ON"
     "-DCMAKE_CXX_EXTENSIONS:BOOL=OFF"
@@ -68,7 +68,7 @@ function(check_wrapper_compile_case subject source case_number case_name diagnos
     try_compile(${result_var}
         "${CMAKE_CURRENT_BINARY_DIR}/${subject_lower}-compile/${case_dir}"
         "${source}"
-        CMAKE_FLAGS ${variant_compile_flags}
+        CMAKE_FLAGS ${wrapper_compile_flags}
         COMPILE_DEFINITIONS "-D${subject_upper}_COMPILE_CASE=${case_number}"
         OUTPUT_VARIABLE compile_output
     )
