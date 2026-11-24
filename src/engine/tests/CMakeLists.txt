@@ -16,7 +16,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../Variant.hpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../TypeTraits.h"
 )
-set(variant_compile_flags
+set(wrapper_compile_flags
     "-DCMAKE_CXX_STANDARD:STRING=11"
     "-DCMAKE_CXX_STANDARD_REQUIRED:BOOL=ON"
     "-DCMAKE_CXX_EXTENSIONS:BOOL=OFF"
@@ -25,7 +25,7 @@ set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 try_compile(variant_compile_control
     "${CMAKE_CURRENT_BINARY_DIR}/variant-compile/control"
     "${variant_compile_case_source}"
-    CMAKE_FLAGS ${variant_compile_flags}
+    CMAKE_FLAGS ${wrapper_compile_flags}
     COMPILE_DEFINITIONS "-DVARIANT_COMPILE_CASE=0"
     OUTPUT_VARIABLE variant_compile_output
 )
@@ -52,7 +52,7 @@ function(expect_variant_compile_failure case_number case_name diagnostic)
     try_compile(${result_var}
         "${CMAKE_CURRENT_BINARY_DIR}/variant-compile/${case_number}"
         "${variant_compile_case_source}"
-        CMAKE_FLAGS ${variant_compile_flags}
+        CMAKE_FLAGS ${wrapper_compile_flags}
         COMPILE_DEFINITIONS "-DVARIANT_COMPILE_CASE=${case_number}"
         OUTPUT_VARIABLE compile_output
     )
@@ -116,7 +116,7 @@ function(check_wrapper_compile_case subject source case_number case_name diagnos
     try_compile(${result_var}
         "${CMAKE_CURRENT_BINARY_DIR}/${subject_lower}-compile/${case_dir}"
         "${source}"
-        CMAKE_FLAGS ${variant_compile_flags}
+        CMAKE_FLAGS ${wrapper_compile_flags}
         COMPILE_DEFINITIONS "-D${subject_upper}_COMPILE_CASE=${case_number}"
         OUTPUT_VARIABLE compile_output
     )
