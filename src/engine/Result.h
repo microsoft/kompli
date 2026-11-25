@@ -89,12 +89,6 @@ template <typename T>
 class Storage
 {
 protected:
-    union Pointer
-    {
-        T* value;
-        ComplianceEngine::Error* error;
-    };
-
     enum class Tag
     {
         Value,
@@ -104,7 +98,30 @@ protected:
 
     alignas(Max(alignof(T), alignof(ComplianceEngine::Error))) char mBuffer[Max(sizeof(T), sizeof(ComplianceEngine::Error))];
     Tag mTag = Tag::MovedFrom;
-    Pointer mPointer = {nullptr};
+
+    // No pointer member caches the placement-new'd address: mBuffer's
+    // address never moves, so these always re-derive it from mBuffer
+    // instead of reusing a value computed before an earlier placement-new
+    // of a different type at the same address. A cached pointer, typed as
+    // whichever tag was last active, let GCC Release (-O3) carry a value
+    // loaded through the old type across the subsequent placement-new of
+    // the other type, mis-reading the new object's leading bytes.
+    T* ValuePtr() noexcept
+    {
+        return reinterpret_cast<T*>(mBuffer);
+    }
+    const T* ValuePtr() const noexcept
+    {
+        return reinterpret_cast<const T*>(mBuffer);
+    }
+    ComplianceEngine::Error* ErrorPtr() noexcept
+    {
+        return reinterpret_cast<ComplianceEngine::Error*>(mBuffer);
+    }
+    const ComplianceEngine::Error* ErrorPtr() const noexcept
+    {
+        return reinterpret_cast<const ComplianceEngine::Error*>(mBuffer);
+    }
 
     Storage() = default;
     ~Storage()
@@ -119,12 +136,12 @@ protected:
     {
         if (other.mTag == Tag::Value)
         {
-            mPointer.value = ::new (static_cast<void*>(mBuffer)) T(*other.mPointer.value);
+            ::new (static_cast<void*>(mBuffer)) T(*other.ValuePtr());
             mTag = Tag::Value;
         }
         else if (other.mTag == Tag::Error)
         {
-            mPointer.error = ::new (static_cast<void*>(mBuffer)) ComplianceEngine::Error(*other.mPointer.error);
+            ::new (static_cast<void*>(mBuffer)) ComplianceEngine::Error(*other.ErrorPtr());
             mTag = Tag::Error;
         }
     }
@@ -137,12 +154,12 @@ protected:
     {
         if (other.mTag == Tag::Value)
         {
-            mPointer.value = ::new (static_cast<void*>(mBuffer)) T(std::move(*other.mPointer.value));
+            ::new (static_cast<void*>(mBuffer)) T(std::move(*other.ValuePtr()));
             mTag = Tag::Value;
         }
         else if (other.mTag == Tag::Error)
         {
-            mPointer.error = ::new (static_cast<void*>(mBuffer)) ComplianceEngine::Error(std::move(*other.mPointer.error));
+            ::new (static_cast<void*>(mBuffer)) ComplianceEngine::Error(std::move(*other.ErrorPtr()));
             mTag = Tag::Error;
         }
         other.Reset();
@@ -152,14 +169,13 @@ protected:
     {
         if (mTag == Tag::Value)
         {
-            mPointer.value->~T();
+            ValuePtr()->~T();
         }
         else if (mTag == Tag::Error)
         {
             using Type = ComplianceEngine::Error;
-            mPointer.error->~Type();
+            ErrorPtr()->~Type();
         }
-        mPointer.value = nullptr;
         mTag = Tag::MovedFrom;
     }
 };
@@ -215,13 +231,13 @@ class Result : private ResultDetail::CopyStorage<T, std::is_copy_constructible<T
 public:
     Result(T value)
     {
-        this->mPointer.value = ::new (static_cast<void*>(this->mBuffer)) T(std::move(value));
+        ::new (static_cast<void*>(this->mBuffer)) T(std::move(value));
         this->mTag = Tag::Value;
     }
 
     Result(ComplianceEngine::Error error)
     {
-        this->mPointer.error = ::new (static_cast<void*>(this->mBuffer)) ComplianceEngine::Error(std::move(error));
+        ::new (static_cast<void*>(this->mBuffer)) ComplianceEngine::Error(std::move(error));
         this->mTag = Tag::Error;
     }
 
@@ -272,7 +288,7 @@ public:
             return default_value;
         }
 
-        return *this->mPointer.value;
+        return *this->ValuePtr();
     }
 
     T ValueOr(T default_value) && noexcept
@@ -282,55 +298,55 @@ public:
             return default_value;
         }
 
-        return std::move(*this->mPointer.value);
+        return std::move(*this->ValuePtr());
     }
 
     const T& Value() const&
     {
         CheckValue();
-        return *this->mPointer.value;
+        return *this->ValuePtr();
     }
 
     T Value() &&
     {
         CheckValue();
-        return std::move(*this->mPointer.value);
+        return std::move(*this->ValuePtr());
     }
 
     T& Value() &
     {
         CheckValue();
-        return *this->mPointer.value;
+        return *this->ValuePtr();
     }
 
     const T* operator->() const&
     {
         CheckValue();
-        return this->mPointer.value;
+        return this->ValuePtr();
     }
 
     T* operator->() &
     {
         CheckValue();
-        return this->mPointer.value;
+        return this->ValuePtr();
     }
 
     const ComplianceEngine::Error& Error() const&
     {
         CheckError();
-        return *this->mPointer.error;
+        return *this->ErrorPtr();
     }
 
     ComplianceEngine::Error Error() &&
     {
         CheckError();
-        return std::move(*this->mPointer.error);
+        return std::move(*this->ErrorPtr());
     }
 
     ComplianceEngine::Error& Error() &
     {
         CheckError();
-        return *this->mPointer.error;
+        return *this->ErrorPtr();
     }
 
 private:
