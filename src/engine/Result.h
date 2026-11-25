@@ -306,6 +306,8 @@ public:
         return *this->ValuePtr();
     }
 
+    const T& Value() const&& = delete;
+
     T Value() &&
     {
         CheckValue();
@@ -324,6 +326,8 @@ public:
         return this->ValuePtr();
     }
 
+    const T* operator->() const&& = delete;
+
     T* operator->() &
     {
         CheckValue();
@@ -335,6 +339,8 @@ public:
         CheckError();
         return *this->ErrorPtr();
     }
+
+    const Kompli::Error& Error() const&& = delete;
 
     Kompli::Error Error() &&
     {

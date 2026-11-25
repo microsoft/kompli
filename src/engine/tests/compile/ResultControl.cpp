@@ -33,6 +33,8 @@ void ValidControl()
     Result<int> result = 5;
     Result<int> resultCopy(result);
     resultCopy = result;
+    const int extracted = std::move(resultCopy).Value();
+    (void)extracted;
 
     Result<std::unique_ptr<int>> moveOnlyResult(std::unique_ptr<int>(new int(1)));
     Result<std::unique_ptr<int>> movedResult(std::move(moveOnlyResult));

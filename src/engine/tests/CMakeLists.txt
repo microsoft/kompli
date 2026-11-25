@@ -29,6 +29,9 @@ set(result_rejects_error_as_value_source "${result_compile_case_dir}/ResultRejec
 set(result_rejects_implicit_integer_error_source "${result_compile_case_dir}/ResultRejectsImplicitIntegerError.cpp")
 set(result_rejects_throwing_move_source "${result_compile_case_dir}/ResultRejectsThrowingMove.cpp")
 set(result_rejects_throwing_destructor_source "${result_compile_case_dir}/ResultRejectsThrowingDestructor.cpp")
+set(result_rejects_const_rvalue_value_access_source "${result_compile_case_dir}/ResultRejectsConstRvalueValueAccess.cpp")
+set(result_rejects_const_rvalue_error_access_source "${result_compile_case_dir}/ResultRejectsConstRvalueErrorAccess.cpp")
+set(result_rejects_const_rvalue_arrow_access_source "${result_compile_case_dir}/ResultRejectsConstRvalueArrowAccess.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${result_control_source}"
     "${result_rejects_copy_of_move_only_source}"
@@ -39,6 +42,9 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${result_rejects_implicit_integer_error_source}"
     "${result_rejects_throwing_move_source}"
     "${result_rejects_throwing_destructor_source}"
+    "${result_rejects_const_rvalue_value_access_source}"
+    "${result_rejects_const_rvalue_error_access_source}"
+    "${result_rejects_const_rvalue_arrow_access_source}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../Result.h"
 )
 
@@ -95,6 +101,9 @@ check_wrapper_compile_case(Result "${result_rejects_error_as_value_source}" 6 "E
 check_wrapper_compile_case(Result "${result_rejects_implicit_integer_error_source}" 9 "implicit integer Error" "no viable conversion|to non-scalar type")
 check_wrapper_compile_case(Result "${result_rejects_throwing_move_source}" 10 "throwing move" "Result requires a nonthrowing move constructor")
 check_wrapper_compile_case(Result "${result_rejects_throwing_destructor_source}" 11 "throwing destructor" "Result requires a nonthrowing destructor")
+check_wrapper_compile_case(Result "${result_rejects_const_rvalue_value_access_source}" 12 "const rvalue Value access" "call to deleted member function|use of deleted function")
+check_wrapper_compile_case(Result "${result_rejects_const_rvalue_error_access_source}" 13 "const rvalue Error access" "call to deleted member function|use of deleted function")
+check_wrapper_compile_case(Result "${result_rejects_const_rvalue_arrow_access_source}" 14 "const rvalue arrow access" "call to deleted member function|use of deleted function")
 
 set(PROCEDURES
     procedures/AideAttributesTest.cpp
