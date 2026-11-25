@@ -21,10 +21,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-using ComplianceEngine::BenchmarkIO::OpenVerifiedInput;
-using ComplianceEngine::BenchmarkIO::RefusePathTraversal;
-using ComplianceEngine::BenchmarkIO::RefuseUnsafeLogFile;
-using ComplianceEngine::BenchmarkIO::RefuseWritableParentDir;
+using Kompli::BenchmarkIO::OpenVerifiedInput;
+using Kompli::BenchmarkIO::RefusePathTraversal;
+using Kompli::BenchmarkIO::RefuseUnsafeLogFile;
+using Kompli::BenchmarkIO::RefuseWritableParentDir;
 
 namespace
 {

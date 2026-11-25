@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_LOGIN_DEFS_OPTION_H
-#define COMPLIANCEENGINE_PROCEDURES_LOGIN_DEFS_OPTION_H
+#ifndef KOMPLI_PROCEDURES_LOGIN_DEFS_OPTION_H
+#define KOMPLI_PROCEDURES_LOGIN_DEFS_OPTION_H
 
 #include <Evaluator.h>
 #include <ShadowField.h> // For ComparisonOperation enum
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct LoginDefsOptionParams
 {
@@ -25,5 +25,5 @@ struct LoginDefsOptionParams
 
 Result<Status> AuditLoginDefsOption(const LoginDefsOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateLoginDefsOption(const LoginDefsOptionParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_LOGIN_DEFS_OPTION_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_LOGIN_DEFS_OPTION_H

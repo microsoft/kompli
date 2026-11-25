@@ -10,7 +10,7 @@
 #include <NoWorldWritableFiles.h>
 #include <sys/stat.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 static constexpr int maxWritable = 3;
@@ -57,4 +57,4 @@ Result<Status> AuditNoWorldWritableFiles(IndicatorsTree& indicators, ContextInte
     return indicators.Compliant("No world-writable files; all world-writable directories have sticky bit");
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

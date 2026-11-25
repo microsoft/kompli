@@ -10,10 +10,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-using ComplianceEngine::AuditNoWorldWritableFiles;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditNoWorldWritableFiles;
+using Kompli::IndicatorsTree;
+using Kompli::Result;
+using Kompli::Status;
 
 class EnsureNoWritablesTest : public ::testing::Test
 {

@@ -12,10 +12,10 @@
 #include <type_traits>
 #include <utility>
 
-using ComplianceEngine::AuditResult;
-using ComplianceEngine::Error;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditResult;
+using Kompli::Error;
+using Kompli::Result;
+using Kompli::Status;
 
 namespace
 {

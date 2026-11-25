@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_WIRELESS_DISABLED_H
-#define COMPLIANCEENGINE_PROCEDURES_WIRELESS_DISABLED_H
+#ifndef KOMPLI_PROCEDURES_WIRELESS_DISABLED_H
+#define KOMPLI_PROCEDURES_WIRELESS_DISABLED_H
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditWirelessDisabled(IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_WIRELESS_DISABLED_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_WIRELESS_DISABLED_H

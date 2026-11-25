@@ -7,7 +7,7 @@
 
 #include "../../Result.h"
 
-using ComplianceEngine::Error;
+using Kompli::Error;
 
 void ImplicitIntegerError()
 {

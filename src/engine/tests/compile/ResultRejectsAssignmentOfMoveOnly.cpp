@@ -9,8 +9,8 @@
 
 #include <memory>
 
-using ComplianceEngine::Error;
-using ComplianceEngine::Result;
+using Kompli::Error;
+using Kompli::Result;
 
 void AssignMoveOnlyResult()
 {

@@ -26,7 +26,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -42,13 +42,13 @@ public:
         fl.m_fd = ::open(path.c_str(), O_RDWR | O_CREAT, 0644);
         if (fl.m_fd < 0)
         {
-            return ComplianceEngine::Error("failed to open lock file");
+            return Kompli::Error("failed to open lock file");
         }
         if (::flock(fl.m_fd, LOCK_EX | LOCK_NB) != 0)
         {
             ::close(fl.m_fd);
             fl.m_fd = -1;
-            return ComplianceEngine::Error("another process holds lock");
+            return Kompli::Error("another process holds lock");
         }
         if (::ftruncate(fl.m_fd, 0) == 0)
         {
@@ -167,7 +167,7 @@ Result<std::shared_ptr<const FilesystemScanner::FSCache>> FilesystemScanner::Get
             }
             if (!m_cache)
             {
-                return ComplianceEngine::Error("filesystem cache unavailable; background scan started");
+                return Kompli::Error("filesystem cache unavailable; background scan started");
             }
         }
     }
@@ -196,7 +196,7 @@ Result<std::shared_ptr<const FilesystemScanner::FSCache>> FilesystemScanner::Get
             }
         }
         m_cache.reset();
-        return ComplianceEngine::Error("filesystem cache expired (hard timeout); refresh started");
+        return Kompli::Error("filesystem cache expired (hard timeout); refresh started");
     }
 
     if (softExpired)
@@ -443,4 +443,4 @@ bool FilesystemScanner::LoadCache()
     return false;
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

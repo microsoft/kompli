@@ -6,7 +6,7 @@
 #include <AksCommand.h>
 #include <gtest/gtest.h>
 
-using namespace ComplianceEngine;
+using namespace Kompli;
 using ::testing::HasSubstr;
 using ::testing::Return;
 

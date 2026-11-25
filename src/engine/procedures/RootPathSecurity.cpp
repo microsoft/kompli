@@ -8,7 +8,7 @@
 #include <string>
 #include <sys/stat.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditRootPathSecurity(IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -85,4 +85,4 @@ Result<Status> AuditRootPathSecurity(IndicatorsTree& indicators, ContextInterfac
 
     return indicators.Compliant("Root's PATH does not contain dangerous entries.");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

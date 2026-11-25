@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PARSERS_LOGIN_DEFS_H
-#define COMPLIANCEENGINE_PARSERS_LOGIN_DEFS_H
+#ifndef KOMPLI_PARSERS_LOGIN_DEFS_H
+#define KOMPLI_PARSERS_LOGIN_DEFS_H
 
 #include <Logging.h>
 #include <Optional.h>
@@ -11,7 +11,7 @@
 #include <string>
 #include <sys/types.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace LoginDefs
 {
@@ -48,6 +48,6 @@ const char* EncryptionMethodName(EncryptionMethod method);
 // LF ends a physical line; a preceding CR remains in the raw value.
 Result<Document> Parse(std::string bytes, std::string source, OsConfigLogHandle logHandle);
 } // namespace LoginDefs
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_PARSERS_LOGIN_DEFS_H
+#endif // KOMPLI_PARSERS_LOGIN_DEFS_H

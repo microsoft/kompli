@@ -6,6 +6,6 @@
 
 #include "../../Result.h"
 
-using ComplianceEngine::Result;
+using Kompli::Result;
 
 static_assert(sizeof(Result<int&>) > 0, "instantiate Result reference");

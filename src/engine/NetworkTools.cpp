@@ -4,7 +4,7 @@
 #include <NetworkTools.h>
 #include <sstream>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 bool OpenPort::IsLocal() const
 {
@@ -114,4 +114,4 @@ Result<std::vector<OpenPort>> GetOpenPorts(ContextInterface& context)
     }
     return openPorts;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

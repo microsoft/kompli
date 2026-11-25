@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_SCE_H
-#define COMPLIANCEENGINE_PROCEDURES_SCE_H
+#ifndef KOMPLI_PROCEDURES_SCE_H
+#define KOMPLI_PROCEDURES_SCE_H
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct SCEParams
 {
@@ -19,5 +19,5 @@ struct SCEParams
 
 Result<Status> AuditSCE(const SCEParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateSCE(const SCEParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_SCE_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_SCE_H

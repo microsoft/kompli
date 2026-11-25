@@ -10,7 +10,7 @@
 #include <limits>
 #include <regex>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BindingParsers
 {
@@ -89,4 +89,4 @@ Result<mode_t> Parse<mode_t>(const string& input)
     return static_cast<mode_t>(value);
 }
 } // namespace BindingParsers
-} // namespace ComplianceEngine
+} // namespace Kompli

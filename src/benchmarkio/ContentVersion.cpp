@@ -5,7 +5,7 @@
 
 #include <cerrno>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -59,4 +59,4 @@ std::string ContentVersionToString(const ContentVersion& version)
 {
     return version.major + "." + version.minor + "." + version.patch;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

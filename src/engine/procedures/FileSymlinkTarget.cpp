@@ -6,7 +6,7 @@
 #include <regex>
 #include <sys/stat.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditFileSymlinkTarget(const FileSymlinkTargetParams& params, IndicatorsTree& indicators, ContextInterface&)
 {
@@ -41,4 +41,4 @@ Result<Status> AuditFileSymlinkTarget(const FileSymlinkTargetParams& params, Ind
     }
     return indicators.Compliant("Symlink target matches: " + target);
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

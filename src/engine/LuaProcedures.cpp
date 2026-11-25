@@ -23,10 +23,10 @@
 #include <unistd.h>
 #include <vector>
 
-using ComplianceEngine::FilesystemScanner;
-using ComplianceEngine::Result;
+using Kompli::FilesystemScanner;
+using Kompli::Result;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -678,4 +678,4 @@ void RegisterLuaProcedures(lua_State* L)
     // pop ce, restricted_env and indicators
     lua_pop(L, 3);
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

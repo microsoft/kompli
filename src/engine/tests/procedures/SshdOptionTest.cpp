@@ -9,17 +9,17 @@
 #include <gtest/gtest.h>
 #include <string>
 
-using ComplianceEngine::AuditSshdOption;
-using ComplianceEngine::CompactListFormatter;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Optional;
-using ComplianceEngine::Result;
-using ComplianceEngine::Separated;
-using ComplianceEngine::SshdOptionMode;
-using ComplianceEngine::SshdOptionOperation;
-using ComplianceEngine::SshdOptionParams;
-using ComplianceEngine::Status;
+using Kompli::AuditSshdOption;
+using Kompli::CompactListFormatter;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::Optional;
+using Kompli::Result;
+using Kompli::Separated;
+using Kompli::SshdOptionMode;
+using Kompli::SshdOptionOperation;
+using Kompli::SshdOptionParams;
+using Kompli::Status;
 using ::testing::Return;
 
 static const char sshdInitialCommand[] = "sshd -T 2>&1";
@@ -747,7 +747,7 @@ TEST_F(EnsureSshdOptionTest, NoOption_AllOptionsAbsent_Adapted)
     params.value = ".*";
     params.op = SshdOptionOperation::NotMatch;
 
-    auto result = ComplianceEngine::AuditSshdOption(params, mIndicators, mContext);
+    auto result = Kompli::AuditSshdOption(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
     auto formatted = mFormatter.Format(mIndicators).Value();
@@ -767,7 +767,7 @@ TEST_F(EnsureSshdOptionTest, NoOption_OptionPresentWithForbiddenValue_Adapted)
     params.value = "no";                   // forbidden value pattern
     params.op = SshdOptionOperation::NotMatch;
 
-    auto result = ComplianceEngine::AuditSshdOption(params, mIndicators, mContext);
+    auto result = Kompli::AuditSshdOption(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::NonCompliant);
     auto formatted = mFormatter.Format(mIndicators).Value();
@@ -783,7 +783,7 @@ TEST_F(EnsureSshdOptionTest, NoOption_OptionPresentWithAllowedValue_Adapted)
     params.value = "5,6,7";
     params.op = SshdOptionOperation::NotMatch;
 
-    auto result = ComplianceEngine::AuditSshdOption(params, mIndicators, mContext);
+    auto result = Kompli::AuditSshdOption(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
     auto formatted = mFormatter.Format(mIndicators).Value();

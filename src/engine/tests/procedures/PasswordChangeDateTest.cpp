@@ -6,13 +6,13 @@
 #include <PasswordChangeDate.h>
 #include <fstream>
 
-using ComplianceEngine::AuditPasswordChangeDate;
-using ComplianceEngine::CompactListFormatter;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Optional;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditPasswordChangeDate;
+using Kompli::CompactListFormatter;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::Optional;
+using Kompli::Result;
+using Kompli::Status;
 using std::map;
 using std::string;
 

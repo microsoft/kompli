@@ -10,13 +10,13 @@
 #include <gtest/gtest.h>
 #include <sys/socket.h>
 
-using ComplianceEngine::AuditIp6tablesOpenPorts;
-using ComplianceEngine::AuditIptablesOpenPorts;
-using ComplianceEngine::AuditUfwOpenPorts;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditIp6tablesOpenPorts;
+using Kompli::AuditIptablesOpenPorts;
+using Kompli::AuditUfwOpenPorts;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::Result;
+using Kompli::Status;
 using ::testing::Return;
 
 class EnsureFirewallOpenPortsTest : public ::testing::Test

@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_PACKAGE_INSTALLED_H
-#define COMPLIANCEENGINE_PROCEDURES_PACKAGE_INSTALLED_H
+#ifndef KOMPLI_PROCEDURES_PACKAGE_INSTALLED_H
+#define KOMPLI_PROCEDURES_PACKAGE_INSTALLED_H
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class PackageManagerType
 {
@@ -34,5 +34,5 @@ struct PackageInstalledParams
 };
 
 Result<Status> AuditPackageInstalled(const PackageInstalledParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_PACKAGE_INSTALLED_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_PACKAGE_INSTALLED_H

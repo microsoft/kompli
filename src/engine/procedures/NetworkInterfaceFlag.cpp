@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -113,4 +113,4 @@ Result<Status> AuditNetworkInterfaceFlag(const NetworkInterfaceFlagParams& param
     return indicators.NonCompliant("No interface has flag '" + std::to_string(params.flag) + "' set");
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

@@ -9,7 +9,7 @@
 #include <parson.h>
 #include <sstream>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BenchmarkFormatters
 {
@@ -168,4 +168,4 @@ Result<string> BenchmarkFormatter::Finish(Status status) &&
 }
 
 } // namespace BenchmarkFormatters
-} // namespace ComplianceEngine
+} // namespace Kompli

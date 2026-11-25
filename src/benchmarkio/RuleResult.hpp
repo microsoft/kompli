@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCE_ENGINE_BENCHMARKIO_RULE_RESULT_HPP
-#define COMPLIANCE_ENGINE_BENCHMARKIO_RULE_RESULT_HPP
+#ifndef KOMPLI_BENCHMARKIO_RULE_RESULT_HPP
+#define KOMPLI_BENCHMARKIO_RULE_RESULT_HPP
 
 #include "Resource.hpp"
 
@@ -13,7 +13,7 @@
 #include <map>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BenchmarkIO
 {
@@ -35,5 +35,5 @@ Result<JsonWrapper> BuildRuleResultJson(const Resource& entry, Status status, co
 Result<JsonWrapper> BuildSkippedRuleResultJson(const Resource& entry, const std::map<std::string, std::string>& parameters);
 
 } // namespace BenchmarkIO
-} // namespace ComplianceEngine
-#endif // COMPLIANCE_ENGINE_BENCHMARKIO_RULE_RESULT_HPP
+} // namespace Kompli
+#endif // KOMPLI_BENCHMARKIO_RULE_RESULT_HPP

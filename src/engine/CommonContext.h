@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_COMMONCONTEXT_H
-#define COMPLIANCEENGINE_COMMONCONTEXT_H
+#ifndef KOMPLI_COMMONCONTEXT_H
+#define KOMPLI_COMMONCONTEXT_H
 
 #include "ContextInterface.h"
 #include "Logging.h"
@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 class CommonContext : public ContextInterface
@@ -70,5 +70,5 @@ private:
     Telemetry mTelemetry;
     FilesystemScanner mFsScanner;
 };
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_COMMONCONTEXT_H
+} // namespace Kompli
+#endif // KOMPLI_COMMONCONTEXT_H

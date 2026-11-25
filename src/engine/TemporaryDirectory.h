@@ -1,15 +1,15 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_TEMPORARYDIRECTORY_H
-#define COMPLIANCEENGINE_TEMPORARYDIRECTORY_H
+#ifndef KOMPLI_TEMPORARYDIRECTORY_H
+#define KOMPLI_TEMPORARYDIRECTORY_H
 
 #include "Result.h"
 
 #include <cstddef>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace Detail
 {
@@ -39,6 +39,6 @@ private:
     int mParent;
     int mRoot;
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_TEMPORARYDIRECTORY_H
+#endif // KOMPLI_TEMPORARYDIRECTORY_H

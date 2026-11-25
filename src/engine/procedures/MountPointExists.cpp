@@ -6,7 +6,7 @@
 #include <iostream>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 Result<Status> AuditMountPointExists(const MountPointExistsParams& params, IndicatorsTree& indicators, ContextInterface& context)
@@ -31,4 +31,4 @@ Result<Status> AuditMountPointExists(const MountPointExistsParams& params, Indic
     return indicators.NonCompliant("Mount point " + params.mountPoint + " is not mounted");
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

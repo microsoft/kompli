@@ -1,14 +1,14 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCE_ENGINE_BENCHMARKIO_INPUT_SECURITY_HPP
-#define COMPLIANCE_ENGINE_BENCHMARKIO_INPUT_SECURITY_HPP
+#ifndef KOMPLI_BENCHMARKIO_INPUT_SECURITY_HPP
+#define KOMPLI_BENCHMARKIO_INPUT_SECURITY_HPP
 
 #include <Logging.h>
 #include <Result.h>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BenchmarkIO
 {
@@ -42,7 +42,7 @@ bool RefuseWritableParentDir(const std::string& path, OsConfigLogHandle logHandl
 //
 // Returns the open fd on success (caller owns it and must ::close() it),
 // or an Error on any failure (error already logged).
-ComplianceEngine::Result<int> OpenVerifiedInput(const std::string& path, OsConfigLogHandle logHandle);
+Kompli::Result<int> OpenVerifiedInput(const std::string& path, OsConfigLogHandle logHandle);
 
 // Rejects path traversal sequences ("/../", "/.." suffix, "../" prefix, or
 // a bare ".."). These sequences can be used to escape an expected directory
@@ -71,6 +71,6 @@ bool RefusePathTraversal(const std::string& path, OsConfigLogHandle logHandle);
 bool RefuseUnsafeLogFile(const std::string& path, OsConfigLogHandle logHandle);
 
 } // namespace BenchmarkIO
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCE_ENGINE_BENCHMARKIO_INPUT_SECURITY_HPP
+#endif // KOMPLI_BENCHMARKIO_INPUT_SECURITY_HPP

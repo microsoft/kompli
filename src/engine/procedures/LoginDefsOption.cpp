@@ -15,7 +15,7 @@
 
 using std::string;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -320,4 +320,4 @@ Result<Status> RemediateLoginDefsOption(const LoginDefsOptionParams& params, Ind
     }
     return postAudit;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

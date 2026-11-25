@@ -11,7 +11,7 @@
 #include <type_traits>
 #include <utility>
 
-using ComplianceEngine::Result;
+using Kompli::Result;
 
 struct ConstructibleNotAssignable
 {

@@ -11,7 +11,7 @@ using std::map;
 using std::string;
 using std::vector;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditUniqueUserId(const UniqueUserIdParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -63,4 +63,4 @@ Result<Status> AuditUniqueUserId(const UniqueUserIdParams& params, IndicatorsTre
 
     return indicators.Compliant("All criteria has been met for user '" + params.username + "'");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

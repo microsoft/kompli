@@ -11,7 +11,7 @@
 #include <sstream>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 using std::string;
 
@@ -130,11 +130,11 @@ bool BenchmarkInfo::Match(const DistributionInfo& distributionInfo) const
 
     return true;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 namespace std
 {
-string to_string(const ComplianceEngine::BenchmarkInfo& benchmarkInfo)
+string to_string(const Kompli::BenchmarkInfo& benchmarkInfo)
 {
     ostringstream oss;
     oss << "/" << benchmarkInfo.framework << "/" << to_string(benchmarkInfo.distribution) << "/" << benchmarkInfo.version << "/"

@@ -1,15 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_FILE_PERMISSIONS_H
-#define COMPLIANCEENGINE_PROCEDURES_FILE_PERMISSIONS_H
+#ifndef KOMPLI_PROCEDURES_FILE_PERMISSIONS_H
+#define KOMPLI_PROCEDURES_FILE_PERMISSIONS_H
 
 #include <Behavior.h>
 #include <Evaluator.h>
 #include <Pattern.h>
 #include <Separated.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 struct FilePermissionsParams
@@ -89,5 +89,5 @@ struct FilePermissionsCollectionParams
 
 Result<Status> AuditFilePermissionsCollection(const FilePermissionsCollectionParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateFilePermissionsCollection(const FilePermissionsCollectionParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_FILE_PERMISSIONS_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_FILE_PERMISSIONS_H

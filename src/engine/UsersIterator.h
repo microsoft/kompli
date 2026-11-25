@@ -11,7 +11,7 @@
 #include <pwd.h>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 class UsersRange;
 class UsersIterator : public ReentrantIterator<struct passwd, UsersRange>
@@ -32,6 +32,6 @@ public:
     static Result<UsersRange> Make(OsConfigLogHandle logHandle);
     static Result<UsersRange> Make(std::string path, OsConfigLogHandle logHandle);
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCE_USERS_ITERATOR_H

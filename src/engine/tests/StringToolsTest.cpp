@@ -6,9 +6,9 @@
 #include <gtest/gtest.h>
 #include <limits>
 
-using ComplianceEngine::EscapeForShell;
-using ComplianceEngine::IsAsciiWhitespace;
-using ComplianceEngine::TrimWhiteSpaces;
+using Kompli::EscapeForShell;
+using Kompli::IsAsciiWhitespace;
+using Kompli::TrimWhiteSpaces;
 
 class StringToolsTest : public ::testing::Test
 {
@@ -16,10 +16,10 @@ class StringToolsTest : public ::testing::Test
 
 TEST_F(StringToolsTest, ToLowerPreservesNonLetters)
 {
-    EXPECT_EQ(ComplianceEngine::ToLower(""), "");
-    EXPECT_EQ(ComplianceEngine::ToLower("MiXeD_123"), "mixed_123");
-    EXPECT_EQ(ComplianceEngine::ToLower(std::string("A\0Z", 3)), std::string("a\0z", 3));
-    EXPECT_EQ(ComplianceEngine::ToLower("A\x80\xff"), "a\x80\xff");
+    EXPECT_EQ(Kompli::ToLower(""), "");
+    EXPECT_EQ(Kompli::ToLower("MiXeD_123"), "mixed_123");
+    EXPECT_EQ(Kompli::ToLower(std::string("A\0Z", 3)), std::string("a\0z", 3));
+    EXPECT_EQ(Kompli::ToLower("A\x80\xff"), "a\x80\xff");
 }
 
 // Tests for EscapeForShell
@@ -163,21 +163,21 @@ TEST_F(StringToolsTest, TrimWhiteSpaces_PreservesHighBitBytes)
 
 TEST_F(StringToolsTest, StripCommentLeavesWhitespaceForCaller)
 {
-    EXPECT_EQ("UID_MIN  1000 ", ComplianceEngine::StripComment("UID_MIN  1000 # users"));
-    EXPECT_EQ("", ComplianceEngine::StripComment("# UID_MIN 0"));
-    EXPECT_EQ("UID_MIN 1000", ComplianceEngine::StripComment("UID_MIN 1000"));
+    EXPECT_EQ("UID_MIN  1000 ", Kompli::StripComment("UID_MIN  1000 # users"));
+    EXPECT_EQ("", Kompli::StripComment("# UID_MIN 0"));
+    EXPECT_EQ("UID_MIN 1000", Kompli::StripComment("UID_MIN 1000"));
 }
 
 TEST_F(StringToolsTest, IntegerConversionRejectsUnconsumedSuffixes)
 {
     for (const auto& value : {"5junk", "5 # comment", "5 ", "5\n", "5 6"})
     {
-        const auto signedResult = ComplianceEngine::TryStringToInt(value);
+        const auto signedResult = Kompli::TryStringToInt(value);
         ASSERT_FALSE(signedResult.HasValue()) << value;
         EXPECT_EQ(signedResult.Error().code, EINVAL) << value;
         EXPECT_EQ(signedResult.Error().message, std::string("Invalid integer value: ") + value);
 
-        const auto unsignedResult = ComplianceEngine::TryStringToUint(value);
+        const auto unsignedResult = Kompli::TryStringToUint(value);
         ASSERT_FALSE(unsignedResult.HasValue()) << value;
         EXPECT_EQ(unsignedResult.Error().code, EINVAL) << value;
     }
@@ -185,53 +185,53 @@ TEST_F(StringToolsTest, IntegerConversionRejectsUnconsumedSuffixes)
 
 TEST_F(StringToolsTest, IntegerConversionKeepsLeadingWhitespaceSignsAndBases)
 {
-    auto signedResult = ComplianceEngine::TryStringToInt(" \t-12");
+    auto signedResult = Kompli::TryStringToInt(" \t-12");
     ASSERT_TRUE(signedResult.HasValue());
     EXPECT_EQ(signedResult.Value(), -12);
 
-    signedResult = ComplianceEngine::TryStringToInt("+12");
+    signedResult = Kompli::TryStringToInt("+12");
     ASSERT_TRUE(signedResult.HasValue());
     EXPECT_EQ(signedResult.Value(), 12);
 
-    signedResult = ComplianceEngine::TryStringToInt("077", 8);
+    signedResult = Kompli::TryStringToInt("077", 8);
     ASSERT_TRUE(signedResult.HasValue());
     EXPECT_EQ(signedResult.Value(), 63);
 
-    signedResult = ComplianceEngine::TryStringToInt("0x10", 0);
+    signedResult = Kompli::TryStringToInt("0x10", 0);
     ASSERT_TRUE(signedResult.HasValue());
     EXPECT_EQ(signedResult.Value(), 16);
 
-    signedResult = ComplianceEngine::TryStringToInt("078", 8);
+    signedResult = Kompli::TryStringToInt("078", 8);
     ASSERT_FALSE(signedResult.HasValue());
     EXPECT_EQ(signedResult.Error().code, EINVAL);
 
-    const auto unsignedResult = ComplianceEngine::TryStringToUint("-1");
+    const auto unsignedResult = Kompli::TryStringToUint("-1");
     ASSERT_FALSE(unsignedResult.HasValue());
 }
 
 TEST_F(StringToolsTest, UnsignedConversionSupportsFullWidthAndRejectsOverflow)
 {
-    const auto aboveSignedMax = ComplianceEngine::TryStringToUint("2147483648");
+    const auto aboveSignedMax = Kompli::TryStringToUint("2147483648");
     ASSERT_TRUE(aboveSignedMax.HasValue());
     EXPECT_EQ(2147483648U, aboveSignedMax.Value());
 
-    const auto maximum = ComplianceEngine::TryStringToUint(std::to_string(std::numeric_limits<unsigned int>::max()));
+    const auto maximum = Kompli::TryStringToUint(std::to_string(std::numeric_limits<unsigned int>::max()));
     ASSERT_TRUE(maximum.HasValue());
     EXPECT_EQ(std::numeric_limits<unsigned int>::max(), maximum.Value());
 
-    const auto overflow = ComplianceEngine::TryStringToUint("4294967296");
+    const auto overflow = Kompli::TryStringToUint("4294967296");
     ASSERT_FALSE(overflow.HasValue());
     EXPECT_EQ(ERANGE, overflow.Error().code);
 }
 
 TEST_F(StringToolsTest, IntegerConversionRetainsOverflowAndInvalidErrors)
 {
-    const auto overflow = ComplianceEngine::TryStringToInt("2147483648");
+    const auto overflow = Kompli::TryStringToInt("2147483648");
     ASSERT_FALSE(overflow.HasValue());
     EXPECT_EQ(overflow.Error().code, ERANGE);
     EXPECT_EQ(overflow.Error().message, "Integer value out of range: 2147483648");
 
-    const auto invalid = ComplianceEngine::TryStringToInt("junk");
+    const auto invalid = Kompli::TryStringToInt("junk");
     ASSERT_FALSE(invalid.HasValue());
     EXPECT_EQ(invalid.Error().code, EINVAL);
 }

@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_SHADOW_FIELD_H
-#define COMPLIANCEENGINE_PROCEDURES_SHADOW_FIELD_H
+#ifndef KOMPLI_PROCEDURES_SHADOW_FIELD_H
+#define KOMPLI_PROCEDURES_SHADOW_FIELD_H
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class ComparisonOperation
 {
@@ -87,5 +87,5 @@ struct ShadowFieldParams
 };
 
 Result<Status> AuditShadowField(const ShadowFieldParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_SHADOW_FIELD_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_SHADOW_FIELD_H

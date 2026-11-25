@@ -12,7 +12,7 @@ using std::map;
 using std::string;
 using std::vector;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditUniqueGroupId(const UniqueGroupIdParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -46,4 +46,4 @@ Result<Status> AuditUniqueGroupId(const UniqueGroupIdParams& params, IndicatorsT
 
     return indicators.Compliant("All criteria has been met for group '" + params.groupName + "'");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

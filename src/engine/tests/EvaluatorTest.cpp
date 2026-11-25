@@ -13,20 +13,20 @@
 #include <gtest/gtest.h>
 #include <sys/stat.h>
 
-using ComplianceEngine::action_func_t;
-using ComplianceEngine::Error;
-using ComplianceEngine::Evaluator;
-using ComplianceEngine::JsonWrapper;
-using ComplianceEngine::NestedListFormatter;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::action_func_t;
+using Kompli::Error;
+using Kompli::Evaluator;
+using Kompli::JsonWrapper;
+using Kompli::NestedListFormatter;
+using Kompli::Result;
+using Kompli::Status;
 
 class EvaluatorTest : public ::testing::Test
 {
 protected:
     std::map<std::string, std::string> mParameters;
     MockContext mContext;
-    ComplianceEngine::DebugFormatter mFormatter;
+    Kompli::DebugFormatter mFormatter;
 };
 
 TEST_F(EvaluatorTest, UserDotFileRemediationIsDisabledWithoutChangingFiles)
@@ -40,9 +40,9 @@ TEST_F(EvaluatorTest, UserDotFileRemediationIsDisabledWithoutChangingFiles)
     struct stat before = {}, after = {};
     ASSERT_EQ(0, stat(file.c_str(), &before));
 
-    ComplianceEngine::IndicatorsTree indicators;
+    Kompli::IndicatorsTree indicators;
     indicators.Push("UserDotFilePermissions");
-    const auto direct = ComplianceEngine::RemediateUserDotFilePermissions(indicators, mContext);
+    const auto direct = Kompli::RemediateUserDotFilePermissions(indicators, mContext);
     ASSERT_FALSE(direct.HasValue());
     EXPECT_EQ(ENOTSUP, direct.Error().code);
     EXPECT_EQ("UserDotFilePermissions remediation is disabled", direct.Error().message);

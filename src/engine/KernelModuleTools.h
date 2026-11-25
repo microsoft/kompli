@@ -10,7 +10,7 @@
 
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 Result<bool> SearchFilesystemForModuleName(std::string& moduleName, ContextInterface& context);
@@ -18,6 +18,6 @@ Result<bool> IsKernelModuleLoaded(std::string moduleName, ContextInterface& cont
 Result<bool> IsModuleAvailableInRunningKernel(const std::string& moduleName, ContextInterface& context);
 Result<Status> IsKernelModuleBlocked(std::string moduleName, bool requireMask, IndicatorsTree& indicators, ContextInterface& context);
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // KERNELMODULETOOLS_H

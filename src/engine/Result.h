@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_RESULT_H
-#define COMPLIANCEENGINE_RESULT_H
+#ifndef KOMPLI_RESULT_H
+#define KOMPLI_RESULT_H
 
 #include "TypeTraits.h"
 
@@ -14,7 +14,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct Error
 {
@@ -72,7 +72,7 @@ struct Error
 };
 static_assert(std::is_nothrow_move_constructible<Error>::value && std::is_nothrow_destructible<Error>::value,
     "Error must move and destroy without throwing");
-std::ostream& operator<<(std::ostream& os, const ComplianceEngine::Error& error);
+std::ostream& operator<<(std::ostream& os, const Kompli::Error& error);
 
 namespace
 {
@@ -95,7 +95,7 @@ protected:
         MovedFrom
     };
 
-    alignas(Max(alignof(T), alignof(ComplianceEngine::Error))) char mBuffer[Max(sizeof(T), sizeof(ComplianceEngine::Error))];
+    alignas(Max(alignof(T), alignof(Kompli::Error))) char mBuffer[Max(sizeof(T), sizeof(Kompli::Error))];
     Tag mTag = Tag::MovedFrom;
 
     // No pointer member caches the placement-new'd address: mBuffer's
@@ -113,13 +113,13 @@ protected:
     {
         return reinterpret_cast<const T*>(mBuffer);
     }
-    ComplianceEngine::Error* ErrorPtr() noexcept
+    Kompli::Error* ErrorPtr() noexcept
     {
-        return reinterpret_cast<ComplianceEngine::Error*>(mBuffer);
+        return reinterpret_cast<Kompli::Error*>(mBuffer);
     }
-    const ComplianceEngine::Error* ErrorPtr() const noexcept
+    const Kompli::Error* ErrorPtr() const noexcept
     {
-        return reinterpret_cast<const ComplianceEngine::Error*>(mBuffer);
+        return reinterpret_cast<const Kompli::Error*>(mBuffer);
     }
 
     Storage() = default;
@@ -140,7 +140,7 @@ protected:
         }
         else if (other.mTag == Tag::Error)
         {
-            ::new (static_cast<void*>(mBuffer)) ComplianceEngine::Error(*other.ErrorPtr());
+            ::new (static_cast<void*>(mBuffer)) Kompli::Error(*other.ErrorPtr());
             mTag = Tag::Error;
         }
     }
@@ -158,7 +158,7 @@ protected:
         }
         else if (other.mTag == Tag::Error)
         {
-            ::new (static_cast<void*>(mBuffer)) ComplianceEngine::Error(std::move(*other.ErrorPtr()));
+            ::new (static_cast<void*>(mBuffer)) Kompli::Error(std::move(*other.ErrorPtr()));
             mTag = Tag::Error;
         }
         other.Reset();
@@ -172,7 +172,7 @@ protected:
         }
         else if (mTag == Tag::Error)
         {
-            using Type = ComplianceEngine::Error;
+            using Type = Kompli::Error;
             ErrorPtr()->~Type();
         }
         mTag = Tag::MovedFrom;
@@ -223,7 +223,7 @@ class Result : private ResultDetail::CopyStorage<T, std::is_copy_constructible<T
     // own message; destructor before move so a throwing destructor reports
     // its own message even if a compiler stops at the first failure.
     static_assert(!std::is_reference<T>::value, "Result cannot hold references");
-    static_assert(!std::is_same<T, ComplianceEngine::Error>::value, "Result cannot hold Error as its value type");
+    static_assert(!std::is_same<T, Kompli::Error>::value, "Result cannot hold Error as its value type");
     static_assert(std::is_nothrow_destructible<T>::value, "Result requires a nonthrowing destructor");
     static_assert(std::is_nothrow_move_constructible<T>::value, "Result requires a nonthrowing move constructor");
 
@@ -234,9 +234,9 @@ public:
         this->mTag = Tag::Value;
     }
 
-    Result(ComplianceEngine::Error error)
+    Result(Kompli::Error error)
     {
-        ::new (static_cast<void*>(this->mBuffer)) ComplianceEngine::Error(std::move(error));
+        ::new (static_cast<void*>(this->mBuffer)) Kompli::Error(std::move(error));
         this->mTag = Tag::Error;
     }
 
@@ -330,19 +330,19 @@ public:
         return this->ValuePtr();
     }
 
-    const ComplianceEngine::Error& Error() const&
+    const Kompli::Error& Error() const&
     {
         CheckError();
         return *this->ErrorPtr();
     }
 
-    ComplianceEngine::Error Error() &&
+    Kompli::Error Error() &&
     {
         CheckError();
         return std::move(*this->ErrorPtr());
     }
 
-    ComplianceEngine::Error& Error() &
+    Kompli::Error& Error() &
     {
         CheckError();
         return *this->ErrorPtr();
@@ -372,6 +372,7 @@ private:
         }
     }
 };
-} // namespace ComplianceEngine
 
-#endif // COMPLIANCEENGINE_RESULT_H
+} // namespace Kompli
+
+#endif // KOMPLI_RESULT_H

@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_TESTING_PROCEDURES_H
-#define COMPLIANCEENGINE_PROCEDURES_TESTING_PROCEDURES_H
+#ifndef KOMPLI_PROCEDURES_TESTING_PROCEDURES_H
+#define KOMPLI_PROCEDURES_TESTING_PROCEDURES_H
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct TestingProcedureParams
 {
@@ -38,5 +38,5 @@ struct TestingProcedureGetParamValuesParams
 };
 
 Result<Status> AuditAuditGetParamValues(const TestingProcedureGetParamValuesParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_TESTING_PROCEDURES_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_TESTING_PROCEDURES_H

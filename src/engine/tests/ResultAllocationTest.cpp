@@ -12,8 +12,8 @@
 #include <type_traits>
 #include <utility>
 
-using ComplianceEngine::Error;
-using ComplianceEngine::Result;
+using Kompli::Error;
+using Kompli::Result;
 
 namespace
 {

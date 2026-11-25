@@ -7,7 +7,7 @@
 
 #include "../../Result.h"
 
-using ComplianceEngine::Error;
-using ComplianceEngine::Result;
+using Kompli::Error;
+using Kompli::Result;
 
 static_assert(sizeof(Result<Error>) > 0, "instantiate ambiguous Result Error");

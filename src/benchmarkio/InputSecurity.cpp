@@ -10,10 +10,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-using ComplianceEngine::Error;
-using ComplianceEngine::Result;
+using Kompli::Error;
+using Kompli::Result;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BenchmarkIO
 {
@@ -201,4 +201,4 @@ bool RefuseUnsafeLogFile(const std::string& path, OsConfigLogHandle logHandle)
 }
 
 } // namespace BenchmarkIO
-} // namespace ComplianceEngine
+} // namespace Kompli

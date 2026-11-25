@@ -1,10 +1,10 @@
-#ifndef COMPLIANCEENGINE_PROCEDURES_FILE_SYMLINK_TARGET_H
-#define COMPLIANCEENGINE_PROCEDURES_FILE_SYMLINK_TARGET_H
+#ifndef KOMPLI_PROCEDURES_FILE_SYMLINK_TARGET_H
+#define KOMPLI_PROCEDURES_FILE_SYMLINK_TARGET_H
 
 #include <Evaluator.h>
 #include <regex>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct FileSymlinkTargetParams
 {
@@ -15,6 +15,6 @@ struct FileSymlinkTargetParams
 };
 
 Result<Status> AuditFileSymlinkTarget(const FileSymlinkTargetParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif

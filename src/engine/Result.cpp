@@ -5,11 +5,11 @@
 
 #include <ostream>
 
-namespace ComplianceEngine
+namespace Kompli
 {
-std::ostream& operator<<(std::ostream& os, const ComplianceEngine::Error& error)
+std::ostream& operator<<(std::ostream& os, const Kompli::Error& error)
 {
     os << "Error: " << error.message << ": code " << error.code;
     return os;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

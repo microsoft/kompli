@@ -17,7 +17,7 @@
 #include <string>
 #include <utility>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 using std::map;
 using std::string;
@@ -706,4 +706,4 @@ Result<std::string> LastIncomplianceFormatter::Format(const IndicatorsTree& indi
     return result.str();
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

@@ -3,7 +3,7 @@
 
 #include "GuestConfigurationContext.h"
 
-namespace ComplianceEngine
+namespace Kompli
 {
 constexpr char GuestConfigurationContext::sStatePath[];
-} // namespace ComplianceEngine
+} // namespace Kompli

@@ -12,14 +12,14 @@
 #include <string>
 #include <unistd.h>
 
-using ComplianceEngine::AuditPackageInstalled;
-using ComplianceEngine::CompactListFormatter;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::PackageInstalledParams;
-using ComplianceEngine::PackageManagerType;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditPackageInstalled;
+using Kompli::CompactListFormatter;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::PackageInstalledParams;
+using Kompli::PackageManagerType;
+using Kompli::Result;
+using Kompli::Status;
 
 using testing::HasSubstr;
 using testing::Return;

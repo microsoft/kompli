@@ -9,7 +9,7 @@
 
 namespace
 {
-namespace ld = ComplianceEngine::LoginDefs;
+namespace ld = Kompli::LoginDefs;
 
 TEST(LoginDefsTest, EmptyAndCommentOnlyAreSuccessfulDocuments)
 {

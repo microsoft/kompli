@@ -7,7 +7,7 @@
 
 #include "../../Result.h"
 
-using ComplianceEngine::Result;
+using Kompli::Result;
 
 void MutateConstResult()
 {
