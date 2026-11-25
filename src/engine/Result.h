@@ -35,39 +35,10 @@ struct Error
         : message(std::move(message))
     {
     }
-    Error(const Error& other)
-        : code(other.code),
-          message(other.message)
-    {
-    }
-    Error(Error&& other) noexcept
-        : code(other.code),
-          message(std::move(other.message))
-    {
-    }
-    Error& operator=(const Error& other)
-    {
-        if (this == &other)
-        {
-            return *this;
-        }
-
-        code = other.code;
-        message = other.message;
-        return *this;
-    }
-
-    Error& operator=(Error&& other) noexcept
-    {
-        if (this == &other)
-        {
-            return *this;
-        }
-
-        code = other.code;
-        message = std::move(other.message);
-        return *this;
-    }
+    Error(const Error&) = default;
+    Error(Error&&) = default;
+    Error& operator=(const Error&) = default;
+    Error& operator=(Error&&) = default;
     ~Error() = default;
 };
 static_assert(std::is_nothrow_move_constructible<Error>::value && std::is_nothrow_destructible<Error>::value,
