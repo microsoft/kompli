@@ -275,7 +275,7 @@ public:
         return this->mTag == Tag::Value;
     }
 
-    operator bool() const noexcept
+    explicit operator bool() const noexcept
     {
         return HasValue();
     }

@@ -27,6 +27,7 @@ static_assert(!std::is_copy_constructible<Result<std::unique_ptr<int>>>::value &
     "Result move-only traits");
 static_assert(std::is_copy_assignable<Result<ConstructibleNotAssignable>>::value, "copy construction suffices for assignment");
 static_assert(std::is_same<decltype(std::declval<Result<int>&&>().Value()), int>::value, "Result rvalue Value returns by value");
+static_assert(!std::is_convertible<Result<int>, bool>::value, "Result bool conversion is explicit");
 
 void ValidControl()
 {
