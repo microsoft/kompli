@@ -140,7 +140,7 @@ Result<Optional<string>> OptionalString(const JSON_Object* object, const char* k
     return Optional<string>(std::move(value.Value()));
 }
 
-// Serializes a rule's `payload` object into the compact JSON the ComplianceEngine
+// Serializes a rule's `payload` object into the compact JSON the engine
 // consumes as the procedure. The engine parses plain JSON directly
 // (Engine::SetProcedure falls back from base64 to a plain-JSON parse), so no
 // base64 encoding is needed here.

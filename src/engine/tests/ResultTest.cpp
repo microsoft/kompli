@@ -37,7 +37,7 @@ Result<AuditResult> DispatchRuleNotFound()
 //   auto result = engine.MmiGet(objectName);
 //   if (!result.HasValue())
 //   {
-//       result = ComplianceEngine::AuditResult(Status::NonCompliant, "..." + result.Error().message);
+//       result = Kompli::AuditResult(Status::NonCompliant, "..." + result.Error().message);
 //   }
 // Before the Result<T> fix, GCC Release (-O3) could inline DispatchRuleNotFound
 // into this test body and miscompile the Error -> Value move-assignment so

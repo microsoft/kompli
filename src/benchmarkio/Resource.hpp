@@ -59,7 +59,7 @@ struct Resource
     // Emitted unchanged in canonical results for external correlation.
     std::string ruleId;
 
-    // The rule payload serialized as JSON. Passed to the ComplianceEngine as the
+    // The rule payload serialized as JSON. Passed to the engine as the
     // procedure; the engine parses plain JSON directly (Engine::SetProcedure).
     std::string procedure;
 
@@ -67,7 +67,7 @@ struct Resource
     // absent; an absent payload is modelled as an empty JSON object downstream.
     Optional<std::string> payload;
 
-    // The ComplianceEngine rule name (the definition's `ruleName`), shared by the
+    // The engine rule name (the definition's `ruleName`), shared by the
     // procedure/init/audit/remediate object names the engine is driven with.
     std::string ruleName;
 

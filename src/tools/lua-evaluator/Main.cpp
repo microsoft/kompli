@@ -139,7 +139,7 @@ int main(int argc, char* argv[])
 
     if (Command::Version == options.command)
     {
-        std::cout << "ComplianceEngine Lua Evaluator\nVersion: " << KOMPLI_VERSION << "\n";
+        std::cout << "kompli Lua evaluator\nVersion: " << KOMPLI_VERSION << "\n";
         return 0;
     }
 

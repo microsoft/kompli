@@ -15,7 +15,7 @@
 namespace Kompli
 {
 
-Result<std::string> GetComplianceEngineDirectory()
+Result<std::string> GetModuleDirectory()
 {
     Dl_info dlInfo = {};
     if ((0 == dladdr(reinterpret_cast<void*>(ComplianceEngineMmiOpen), &dlInfo)) || (nullptr == dlInfo.dli_fname))

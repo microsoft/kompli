@@ -35,7 +35,7 @@
 using Kompli::BenchmarkInfo;
 using Kompli::DistributionInfo;
 using Kompli::Engine;
-using Kompli::GetComplianceEngineDirectory;
+using Kompli::GetModuleDirectory;
 using Kompli::JsonWrapper;
 using Kompli::Status;
 
@@ -184,7 +184,7 @@ void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
     event.Add("ComplianceEngineVersion", KOMPLI_VERSION);
     Kompli::LogCreatedTelemetryEvent(event, engine->GetTelemetry(), g_log, durationUs, g_benchmarkRunCreatedAt);
     engine->GetTelemetry().CloseFileDescriptor();
-    auto moduleDirectory = GetComplianceEngineDirectory();
+    auto moduleDirectory = GetModuleDirectory();
     if (moduleDirectory.HasValue())
     {
         const std::string telemetryBinaryPath = moduleDirectory.Value() + "/" + telemetry_binary;
@@ -202,7 +202,7 @@ void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
     }
     else
     {
-        OsConfigLogError(g_log, "ComplianceEngineUnload: failed to GetComplianceEngineDirectory() telemetry not run");
+        OsConfigLogError(g_log, "ComplianceEngineUnload: failed to GetModuleDirectory() telemetry not run");
     }
 #endif // BUILD_TELEMETRY
 }
@@ -468,7 +468,7 @@ int ComplianceEngineCheckApplicability(MMI_HANDLE clientSession, const char* pay
     // In case the payloadKey starts with /cis, it becomes: /cis/<distribution>/<version>/<benchmark_version>/<section1>/<section2>/...
     if ((nullptr == clientSession) || (nullptr == payloadKey))
     {
-        OsConfigLogError(log, "ComplianceEngineValidatePayload called with invalid arguments");
+        OsConfigLogError(log, "ComplianceEngineCheckApplicability called with invalid arguments");
         return EINVAL;
     }
 
@@ -476,14 +476,14 @@ int ComplianceEngineCheckApplicability(MMI_HANDLE clientSession, const char* pay
     const auto& distributionInfo = engine.GetDistributionInfo();
     if (!distributionInfo.HasValue())
     {
-        OsConfigLogError(log, "ComplianceEngineValidatePayload: Distribution info is not available");
+        OsConfigLogError(log, "ComplianceEngineCheckApplicability: Distribution info is not available");
         return EINVAL;
     }
 
     auto benchmark = BenchmarkInfo::Parse(payloadKey);
     if (!benchmark.HasValue())
     {
-        OsConfigLogError(log, "ComplianceEngineValidatePayload failed to parse benchmark: %s", benchmark.Error().message.c_str());
+        OsConfigLogError(log, "ComplianceEngineCheckApplicability failed to parse benchmark: %s", benchmark.Error().message.c_str());
         return EINVAL;
     }
 

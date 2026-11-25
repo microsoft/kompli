@@ -18,7 +18,7 @@
 namespace Kompli
 {
 
-// This structure represents a ComplianceEngine indicator, which is a message that indicates whether a certain condition is met.
+// This structure represents a kompli engine indicator, which is a message that indicates whether a certain condition is met.
 // Each indicator has a message and a status (compliant or non-compliant).
 struct Indicator
 {
@@ -35,7 +35,7 @@ struct Indicator
 
 // This structure represents a tree of indicators, where each node can have multiple children and indicators.
 // The indicators are stored in a vector, and each node has its own status (compliant or non-compliant).
-// The tree structure allows for a hierarchical representation of the ComplianceEngine indicators, making it easier to format payload messages.
+// The tree structure allows for a hierarchical representation of the kompli engine indicators, making it easier to format payload messages.
 // The tree is built dynamically as the rule evaluation process progresses, with nodes being pushed and popped from the stack.
 struct IndicatorsTree
 {

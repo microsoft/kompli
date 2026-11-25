@@ -10,7 +10,7 @@
 namespace Kompli
 {
 
-Result<std::string> GetComplianceEngineDirectory();
+Result<std::string> GetModuleDirectory();
 
 } // namespace Kompli
 
