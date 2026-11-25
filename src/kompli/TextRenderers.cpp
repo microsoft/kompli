@@ -8,9 +8,9 @@
 #include <sstream>
 #include <string>
 
-namespace ComplianceEngine
-{
 namespace Kompli
+{
+namespace Cli
 {
 using std::string;
 
@@ -166,5 +166,5 @@ Result<string> RenderText(const string& canonicalJson, const TextStyle style)
     return out.str();
 }
 
+} // namespace Cli
 } // namespace Kompli
-} // namespace ComplianceEngine

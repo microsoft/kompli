@@ -1,9 +1,9 @@
-#ifndef COMPLIANCEENGINE_PROCEDURES_AIDE_ATTRIBUTES_H
-#define COMPLIANCEENGINE_PROCEDURES_AIDE_ATTRIBUTES_H
+#ifndef KOMPLI_PROCEDURES_AIDE_ATTRIBUTES_H
+#define KOMPLI_PROCEDURES_AIDE_ATTRIBUTES_H
 
 #include <Evaluator.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct AideAttributesParams
 {
@@ -19,6 +19,6 @@ struct AideAttributesParams
 
 Result<Status> AuditAideAttributes(const AideAttributesParams& params, IndicatorsTree& indicators, ContextInterface& context);
 Result<Status> RemediateAideAttributes(const AideAttributesParams& params, IndicatorsTree& indicators, ContextInterface& context);
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif

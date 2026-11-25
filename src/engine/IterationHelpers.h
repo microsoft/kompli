@@ -4,7 +4,7 @@
 #ifndef COMPLIANCE_ITERATION_HELPERS_H
 #define COMPLIANCE_ITERATION_HELPERS_H
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // Enumeration to control the behavior of various iteration functions
 // when a non-compliant user is encountered.
@@ -16,6 +16,6 @@ enum class BreakOnNonCompliant
     True,
     False
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCE_ITERATION_HELPERS_H

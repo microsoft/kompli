@@ -1,14 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_BENCHMARK_INFO_H
-#define COMPLIANCEENGINE_BENCHMARK_INFO_H
+#ifndef KOMPLI_BENCHMARK_INFO_H
+#define KOMPLI_BENCHMARK_INFO_H
 
 #include <DistributionInfo.h>
 #include <Result.h>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // Defines the identity and applicability information shared by every rule in a
 // benchmark.
@@ -80,11 +80,11 @@ struct BenchmarkInfo
     }
 };
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 namespace std
 {
-std::string to_string(const ComplianceEngine::BenchmarkInfo& benchmarkInfo); // NOLINT(*-identifier-naming)
+std::string to_string(const Kompli::BenchmarkInfo& benchmarkInfo); // NOLINT(*-identifier-naming)
 } // namespace std
 
-#endif // COMPLIANCEENGINE_BENCHMARK_INFO_H
+#endif // KOMPLI_BENCHMARK_INFO_H

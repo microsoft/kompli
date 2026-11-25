@@ -3,11 +3,11 @@
 
 #include <BenchmarkSettings.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditSetBenchmarkSettings(const std::map<std::string, std::string>& settings, IndicatorsTree& indicators, ContextInterface& context)
 {
     context.SetBenchmarkSettings(settings);
     return indicators.Compliant("Benchmark settings updated");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

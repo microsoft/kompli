@@ -1,17 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCE_ENGINE_BENCHMARKIO_TAG_LIMITS_HPP
-#define COMPLIANCE_ENGINE_BENCHMARKIO_TAG_LIMITS_HPP
+#ifndef KOMPLI_BENCHMARKIO_TAG_LIMITS_HPP
+#define KOMPLI_BENCHMARKIO_TAG_LIMITS_HPP
 
 #include <cstddef>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BenchmarkDefinition
 {
 constexpr size_t kMaxTagBytes = 256;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCE_ENGINE_BENCHMARKIO_TAG_LIMITS_HPP
+#endif // KOMPLI_BENCHMARKIO_TAG_LIMITS_HPP

@@ -9,7 +9,7 @@
 #include <set>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // NOTE: This procedure has no dedicated unit test. AuditPasswdGroupsExist enumerates the live
 // account and group databases directly through the NSS entry points (setpwent/getpwent,
@@ -32,7 +32,8 @@ Result<Status> AuditPasswdGroupsExist(IndicatorsTree& indicators, ContextInterfa
     }
     int status = errno;
     endgrent();
-    if (0 != status)
+    // Non-files glibc NSS modules (e.g. aad, sss) end enumeration with ENOENT; treat it as end of data.
+    if (0 != status && ENOENT != status)
     {
         return Error(std::string("getgrent failed: ") + strerror(status), status);
     }
@@ -49,7 +50,7 @@ Result<Status> AuditPasswdGroupsExist(IndicatorsTree& indicators, ContextInterfa
     }
     status = errno;
     endpwent();
-    if (0 != status)
+    if (0 != status && ENOENT != status)
     {
         return Error(std::string("getpwent failed: ") + strerror(status), status);
     }
@@ -75,4 +76,4 @@ Result<Status> RemediatePasswdGroupsExist(IndicatorsTree& indicators, ContextInt
 
     return indicators.NonCompliant("Manual remediation is required to ensure all groups from /etc/passwd exist in /etc/group");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-#ifndef COMPLIANCE_ENGINE_CLI_PLAN_HPP
-#define COMPLIANCE_ENGINE_CLI_PLAN_HPP
+#ifndef KOMPLI_CLI_PLAN_HPP
+#define KOMPLI_CLI_PLAN_HPP
 
 #include <BenchmarkDefinition.hpp>
 #include <BenchmarkInfo.h>
@@ -14,9 +14,9 @@
 #include <utility>
 #include <vector>
 
-namespace ComplianceEngine
-{
 namespace Kompli
+{
+namespace Cli
 {
 
 // A plan rule's resolved mode and parameters (docs/CLI.md "Parametrization").
@@ -124,6 +124,6 @@ Optional<Error> ValidatePlanForRun(const Plan& plan, const std::vector<Benchmark
 // message) with its already-parsed benchmarkInfo, in the order to check.
 Optional<Error> CheckUniqueBenchmarkIdentities(const std::vector<std::pair<std::string, BenchmarkInfo>>& benchmarks);
 
+} // namespace Cli
 } // namespace Kompli
-} // namespace ComplianceEngine
-#endif // COMPLIANCE_ENGINE_CLI_PLAN_HPP
+#endif // KOMPLI_CLI_PLAN_HPP

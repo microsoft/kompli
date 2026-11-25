@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct FstabEntry
 {
@@ -277,4 +277,4 @@ Result<Status> RemediateFilesystemMountOption(const FilesystemMountOptionParams&
 
     return Status::Compliant;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

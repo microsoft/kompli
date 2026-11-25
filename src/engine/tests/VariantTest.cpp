@@ -13,11 +13,11 @@
 #include <type_traits>
 #include <utility>
 
-using ComplianceEngine::As;
-using ComplianceEngine::InPlaceType;
-using ComplianceEngine::MovableVariant;
-using ComplianceEngine::Variant;
-namespace TypeTraits = ComplianceEngine::TypeTraits;
+using Kompli::As;
+using Kompli::InPlaceType;
+using Kompli::MovableVariant;
+using Kompli::Variant;
+namespace TypeTraits = Kompli::TypeTraits;
 
 namespace
 {

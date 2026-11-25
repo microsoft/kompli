@@ -6,7 +6,7 @@
 #include <regex>
 #include <sstream>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -352,4 +352,4 @@ Result<Status> AuditAksCommand(const AksCommandParams& params, IndicatorsTree& i
     return compliant ? indicators.Compliant("AKS query output matched the expected state") :
                        indicators.NonCompliant("AKS query output did not match the expected state");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

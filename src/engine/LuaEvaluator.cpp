@@ -15,7 +15,7 @@
 #include <memory>
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 using std::map;
@@ -24,11 +24,11 @@ using std::string;
 namespace
 {
 
-using ComplianceEngine::ContextInterface;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::ContextInterface;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::Result;
+using Kompli::Status;
 
 // Using unified LuaCallContext from LuaProcedures.h
 
@@ -304,7 +304,7 @@ int LuaEvaluator::LuaProcedureWrapper(lua_State* L)
     std::string procedureName = lua_tostring(L, -1);
     lua_pop(L, 1);
 
-    if ((callContext->action != ComplianceEngine::Action::Remediate) && (procedureName.substr(0, 9) == "Remediate"))
+    if ((callContext->action != Kompli::Action::Remediate) && (procedureName.substr(0, 9) == "Remediate"))
     {
         OsConfigLogError(log, "Remediation not allowed in audit mode");
         lua_pushstring(L, "Remediation not allowed in audit mode");
@@ -320,7 +320,7 @@ int LuaEvaluator::LuaProcedureWrapper(lua_State* L)
         lua_error(L);
         return 0;
     }
-    const ComplianceEngine::action_func_t* actionFunc = reinterpret_cast<const ComplianceEngine::action_func_t*>(lua_touserdata(L, -1));
+    const Kompli::action_func_t* actionFunc = reinterpret_cast<const Kompli::action_func_t*>(lua_touserdata(L, -1));
     lua_pop(L, 1);
 
     if (!actionFunc)
@@ -368,10 +368,9 @@ int LuaEvaluator::LuaProcedureWrapper(lua_State* L)
     {
         OsConfigLogInfo(callContext->ctx.GetLogHandle(), "Lua procedure '%s' executed: %scompliant", procedureName.c_str(),
             (result.Value() == Status::NonCompliant) ? "non-" : "");
-        lua_pushboolean(L, result.Value() == ComplianceEngine::Status::Compliant);
+        lua_pushboolean(L, result.Value() == Kompli::Status::Compliant);
 
-        std::string message =
-            (result.Value() == ComplianceEngine::Status::Compliant) ? (procedureName + " is compliant") : (procedureName + " is not compliant");
+        std::string message = (result.Value() == Kompli::Status::Compliant) ? (procedureName + " is compliant") : (procedureName + " is not compliant");
         lua_pushstring(L, message.c_str());
         return 2;
     }
@@ -385,4 +384,4 @@ int LuaEvaluator::LuaProcedureWrapper(lua_State* L)
     return 0;
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

@@ -11,7 +11,7 @@
 #include <string>
 #include <sys/stat.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 class FilesystemScanner
@@ -49,4 +49,4 @@ private:
     time_t m_hardTimeout = 0;         // Invalidate when exceeded (0 = disabled); >= soft if both set
     time_t m_waitTimeout = 0;         // Optional polling window for initial/hard-expired rebuild (0 = no wait)
 };
-} // namespace ComplianceEngine
+} // namespace Kompli

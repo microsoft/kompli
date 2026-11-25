@@ -12,13 +12,13 @@
 #include <regex>
 #include <string>
 
-using ComplianceEngine::Action;
-using ComplianceEngine::Architecture;
-using ComplianceEngine::DistributionInfo;
-using ComplianceEngine::LinuxDistribution;
-using ComplianceEngine::Status;
-using ComplianceEngine::BenchmarkFormatters::BenchmarkFormatter;
-using ComplianceEngine::BenchmarkIO::Resource;
+using Kompli::Action;
+using Kompli::Architecture;
+using Kompli::DistributionInfo;
+using Kompli::LinuxDistribution;
+using Kompli::Status;
+using Kompli::BenchmarkFormatters::BenchmarkFormatter;
+using Kompli::BenchmarkIO::Resource;
 
 namespace
 {

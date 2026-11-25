@@ -11,14 +11,14 @@
 #include <string>
 #include <vector>
 
-using ComplianceEngine::AuditNetworkInterfaceFlag;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::InterfaceFlag;
-using ComplianceEngine::InterfaceInfo;
-using ComplianceEngine::NetworkInterfaceFlagParams;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditNetworkInterfaceFlag;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::InterfaceFlag;
+using Kompli::InterfaceInfo;
+using Kompli::NetworkInterfaceFlagParams;
+using Kompli::Result;
+using Kompli::Status;
 using ::testing::Return;
 
 namespace

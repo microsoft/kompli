@@ -41,8 +41,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         maxObservedInputBytes = size;
     }
     const std::string bytes = 0 == size ? std::string() : std::string(reinterpret_cast<const char*>(data), size);
-    const auto first = ComplianceEngine::LoginDefs::Parse(bytes, "fuzz", nullptr);
-    const auto second = ComplianceEngine::LoginDefs::Parse(bytes, "fuzz", nullptr);
+    const auto first = Kompli::LoginDefs::Parse(bytes, "fuzz", nullptr);
+    const auto second = Kompli::LoginDefs::Parse(bytes, "fuzz", nullptr);
     if (first.HasValue() != second.HasValue())
     {
         std::abort();
@@ -61,14 +61,14 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     {
         std::abort();
     }
-    const auto equalUid = [](const ComplianceEngine::Optional<uid_t>& left, const ComplianceEngine::Optional<uid_t>& right) {
+    const auto equalUid = [](const Kompli::Optional<uid_t>& left, const Kompli::Optional<uid_t>& right) {
         return left.HasValue() == right.HasValue() && (!left.HasValue() || left.Value() == right.Value());
     };
-    const auto equalInt = [](const ComplianceEngine::Optional<int>& left, const ComplianceEngine::Optional<int>& right) {
+    const auto equalInt = [](const Kompli::Optional<int>& left, const Kompli::Optional<int>& right) {
         return left.HasValue() == right.HasValue() && (!left.HasValue() || left.Value() == right.Value());
     };
-    const auto equalMethod = [](const ComplianceEngine::Optional<ComplianceEngine::LoginDefs::EncryptionMethod>& left,
-                                 const ComplianceEngine::Optional<ComplianceEngine::LoginDefs::EncryptionMethod>& right) {
+    const auto equalMethod = [](const Kompli::Optional<Kompli::LoginDefs::EncryptionMethod>& left,
+                                 const Kompli::Optional<Kompli::LoginDefs::EncryptionMethod>& right) {
         return left.HasValue() == right.HasValue() && (!left.HasValue() || left.Value() == right.Value());
     };
     if (!equalUid(document.uidMin, repeated.uidMin) || !equalInt(document.passMaxDays, repeated.passMaxDays) ||

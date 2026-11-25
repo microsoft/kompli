@@ -9,7 +9,7 @@
 #include <type_traits>
 #include <utility>
 
-using ComplianceEngine::Optional;
+using Kompli::Optional;
 
 namespace
 {

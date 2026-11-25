@@ -11,7 +11,7 @@
 #error Select an Optional compile case
 #endif
 
-using ComplianceEngine::Optional;
+using Kompli::Optional;
 
 struct ConstructibleNotAssignable
 {

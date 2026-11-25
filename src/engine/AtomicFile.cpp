@@ -13,7 +13,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -449,4 +449,4 @@ Result<bool> ReplaceFileContentsAtomic(const std::string& path, const std::strin
     close(parent);
     return true;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

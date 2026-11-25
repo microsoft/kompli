@@ -14,7 +14,7 @@
 struct json_value_t;
 struct json_object_t;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 class ProcedureParameters : public std::map<std::string, std::string>
 {
@@ -63,6 +63,6 @@ public:
 private:
     Optional<Error> UpdateUserParameters(const ProcedureParameters& userParameters);
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // PROCEDURE_HPP

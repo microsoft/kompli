@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_RESULT_H
-#define COMPLIANCEENGINE_RESULT_H
+#ifndef KOMPLI_RESULT_H
+#define KOMPLI_RESULT_H
 
 #include "Optional.h"
 #include "TypeTraits.h"
@@ -15,7 +15,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 struct Error
 {
@@ -73,7 +73,7 @@ struct Error
 };
 static_assert(std::is_nothrow_move_constructible<Error>::value && std::is_nothrow_destructible<Error>::value,
     "Error must move and destroy without throwing");
-std::ostream& operator<<(std::ostream& os, const ComplianceEngine::Error& error);
+std::ostream& operator<<(std::ostream& os, const Kompli::Error& error);
 
 namespace
 {
@@ -89,12 +89,6 @@ template <typename T>
 class Storage
 {
 protected:
-    union Pointer
-    {
-        T* value;
-        ComplianceEngine::Error* error;
-    };
-
     enum class Tag
     {
         Value,
@@ -102,9 +96,32 @@ protected:
         MovedFrom
     };
 
-    alignas(Max(alignof(T), alignof(ComplianceEngine::Error))) char mBuffer[Max(sizeof(T), sizeof(ComplianceEngine::Error))];
+    alignas(Max(alignof(T), alignof(Kompli::Error))) char mBuffer[Max(sizeof(T), sizeof(Kompli::Error))];
     Tag mTag = Tag::MovedFrom;
-    Pointer mPointer = {nullptr};
+
+    // No pointer member caches the placement-new'd address: mBuffer's
+    // address never moves, so these always re-derive it from mBuffer
+    // instead of reusing a value computed before an earlier placement-new
+    // of a different type at the same address. A cached pointer, typed as
+    // whichever tag was last active, let GCC Release (-O3) carry a value
+    // loaded through the old type across the subsequent placement-new of
+    // the other type, mis-reading the new object's leading bytes.
+    T* ValuePtr() noexcept
+    {
+        return reinterpret_cast<T*>(mBuffer);
+    }
+    const T* ValuePtr() const noexcept
+    {
+        return reinterpret_cast<const T*>(mBuffer);
+    }
+    Kompli::Error* ErrorPtr() noexcept
+    {
+        return reinterpret_cast<Kompli::Error*>(mBuffer);
+    }
+    const Kompli::Error* ErrorPtr() const noexcept
+    {
+        return reinterpret_cast<const Kompli::Error*>(mBuffer);
+    }
 
     Storage() = default;
     ~Storage()
@@ -119,12 +136,12 @@ protected:
     {
         if (other.mTag == Tag::Value)
         {
-            mPointer.value = ::new (static_cast<void*>(mBuffer)) T(*other.mPointer.value);
+            ::new (static_cast<void*>(mBuffer)) T(*other.ValuePtr());
             mTag = Tag::Value;
         }
         else if (other.mTag == Tag::Error)
         {
-            mPointer.error = ::new (static_cast<void*>(mBuffer)) ComplianceEngine::Error(*other.mPointer.error);
+            ::new (static_cast<void*>(mBuffer)) Kompli::Error(*other.ErrorPtr());
             mTag = Tag::Error;
         }
     }
@@ -137,12 +154,12 @@ protected:
     {
         if (other.mTag == Tag::Value)
         {
-            mPointer.value = ::new (static_cast<void*>(mBuffer)) T(std::move(*other.mPointer.value));
+            ::new (static_cast<void*>(mBuffer)) T(std::move(*other.ValuePtr()));
             mTag = Tag::Value;
         }
         else if (other.mTag == Tag::Error)
         {
-            mPointer.error = ::new (static_cast<void*>(mBuffer)) ComplianceEngine::Error(std::move(*other.mPointer.error));
+            ::new (static_cast<void*>(mBuffer)) Kompli::Error(std::move(*other.ErrorPtr()));
             mTag = Tag::Error;
         }
         other.Reset();
@@ -152,14 +169,13 @@ protected:
     {
         if (mTag == Tag::Value)
         {
-            mPointer.value->~T();
+            ValuePtr()->~T();
         }
         else if (mTag == Tag::Error)
         {
-            using Type = ComplianceEngine::Error;
-            mPointer.error->~Type();
+            using Type = Kompli::Error;
+            ErrorPtr()->~Type();
         }
-        mPointer.value = nullptr;
         mTag = Tag::MovedFrom;
     }
 };
@@ -208,20 +224,20 @@ class Result : private ResultDetail::CopyStorage<T, std::is_copy_constructible<T
     // own message; destructor before move so a throwing destructor reports
     // its own message even if a compiler stops at the first failure.
     static_assert(!std::is_reference<T>::value, "Result cannot hold references");
-    static_assert(!std::is_same<T, ComplianceEngine::Error>::value, "Result cannot hold Error as its value type");
+    static_assert(!std::is_same<T, Kompli::Error>::value, "Result cannot hold Error as its value type");
     static_assert(std::is_nothrow_destructible<T>::value, "Result requires a nonthrowing destructor");
     static_assert(std::is_nothrow_move_constructible<T>::value, "Result requires a nonthrowing move constructor");
 
 public:
     Result(T value)
     {
-        this->mPointer.value = ::new (static_cast<void*>(this->mBuffer)) T(std::move(value));
+        ::new (static_cast<void*>(this->mBuffer)) T(std::move(value));
         this->mTag = Tag::Value;
     }
 
-    Result(ComplianceEngine::Error error)
+    Result(Kompli::Error error)
     {
-        this->mPointer.error = ::new (static_cast<void*>(this->mBuffer)) ComplianceEngine::Error(std::move(error));
+        ::new (static_cast<void*>(this->mBuffer)) Kompli::Error(std::move(error));
         this->mTag = Tag::Error;
     }
 
@@ -272,7 +288,7 @@ public:
             return default_value;
         }
 
-        return *this->mPointer.value;
+        return *this->ValuePtr();
     }
 
     T ValueOr(T default_value) && noexcept
@@ -282,55 +298,55 @@ public:
             return default_value;
         }
 
-        return std::move(*this->mPointer.value);
+        return std::move(*this->ValuePtr());
     }
 
     const T& Value() const&
     {
         CheckValue();
-        return *this->mPointer.value;
+        return *this->ValuePtr();
     }
 
     T Value() &&
     {
         CheckValue();
-        return std::move(*this->mPointer.value);
+        return std::move(*this->ValuePtr());
     }
 
     T& Value() &
     {
         CheckValue();
-        return *this->mPointer.value;
+        return *this->ValuePtr();
     }
 
     const T* operator->() const&
     {
         CheckValue();
-        return this->mPointer.value;
+        return this->ValuePtr();
     }
 
     T* operator->() &
     {
         CheckValue();
-        return this->mPointer.value;
+        return this->ValuePtr();
     }
 
-    const ComplianceEngine::Error& Error() const&
+    const Kompli::Error& Error() const&
     {
         CheckError();
-        return *this->mPointer.error;
+        return *this->ErrorPtr();
     }
 
-    ComplianceEngine::Error Error() &&
+    Kompli::Error Error() &&
     {
         CheckError();
-        return std::move(*this->mPointer.error);
+        return std::move(*this->ErrorPtr());
     }
 
-    ComplianceEngine::Error& Error() &
+    Kompli::Error& Error() &
     {
         CheckError();
-        return *this->mPointer.error;
+        return *this->ErrorPtr();
     }
 
 private:
@@ -367,12 +383,12 @@ public:
         return Result();
     }
 
-    Result(const ComplianceEngine::Error& error)
+    Result(const Kompli::Error& error)
         : mError(error)
     {
     }
 
-    Result(ComplianceEngine::Error&& error) noexcept
+    Result(Kompli::Error&& error) noexcept
         : mError(std::move(error))
     {
     }
@@ -408,19 +424,19 @@ public:
         return HasValue();
     }
 
-    const ComplianceEngine::Error& Error() const&
+    const Kompli::Error& Error() const&
     {
         CheckError();
         return mError.Value();
     }
 
-    ComplianceEngine::Error& Error() &
+    Kompli::Error& Error() &
     {
         CheckError();
         return mError.Value();
     }
 
-    ComplianceEngine::Error Error() &&
+    Kompli::Error Error() &&
     {
         CheckError();
         return std::move(mError).Value();
@@ -441,9 +457,9 @@ private:
         }
     }
 
-    Optional<ComplianceEngine::Error> mError;
+    Optional<Kompli::Error> mError;
     bool mMovedFrom = false;
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_RESULT_H
+#endif // KOMPLI_RESULT_H

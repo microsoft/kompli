@@ -16,29 +16,29 @@
 #include <utility>
 #include <vector>
 
-struct MockContext : public ComplianceEngine::ContextInterface
+struct MockContext : public Kompli::ContextInterface
 {
-    MOCK_METHOD(ComplianceEngine::Result<std::string>, ExecuteCommand, (const std::string& cmd), (const, override));
-    MOCK_METHOD(ComplianceEngine::Result<std::string>, GetFileContents, (const std::string& filePath), (const, override));
+    MOCK_METHOD(Kompli::Result<std::string>, ExecuteCommand, (const std::string& cmd), (const, override));
+    MOCK_METHOD(Kompli::Result<std::string>, GetFileContents, (const std::string& filePath), (const, override));
     MOCK_METHOD(int, OpenExistingFile, (const char* path, int flags), (const, override));
     MOCK_METHOD(int, StatFileDescriptor, (int descriptor, struct stat* metadata), (const, override));
     MOCK_METHOD(ssize_t, ReadFileDescriptor, (int descriptor, void* buffer, std::size_t size), (const, override));
     MOCK_METHOD(int, CloseFileDescriptor, (int descriptor), (const, override));
-    MOCK_METHOD(ComplianceEngine::Result<std::vector<ComplianceEngine::InterfaceInfo>>, GetNetworkInterfaces, (), (const, override));
+    MOCK_METHOD(Kompli::Result<std::vector<Kompli::InterfaceInfo>>, GetNetworkInterfaces, (), (const, override));
 
-    ComplianceEngine::Result<std::string> GetRunningKernelRelease() const override
+    Kompli::Result<std::string> GetRunningKernelRelease() const override
     {
         return mRunningKernelRelease;
     }
 
     // Overrides the value returned by GetRunningKernelRelease(); pass an Error to simulate
     // uname() failing.
-    void SetRunningKernelRelease(ComplianceEngine::Result<std::string> release)
+    void SetRunningKernelRelease(Kompli::Result<std::string> release)
     {
         mRunningKernelRelease = std::move(release);
     }
 
-    ComplianceEngine::Telemetry& GetTelemetry() override
+    Kompli::Telemetry& GetTelemetry() override
     {
         return mTelemetry;
     }
@@ -74,8 +74,7 @@ struct MockContext : public ComplianceEngine::ContextInterface
 
         std::string mCachePath = mTempdir + "/fsscanner-cache";
         std::string mLockfilePath = mTempdir + "/fsscanner-lock";
-        mFsScannerp =
-            std::unique_ptr<ComplianceEngine::FilesystemScanner>(new ComplianceEngine::FilesystemScanner(mTempRootDir, mCachePath, mLockfilePath, 60, 120, 10));
+        mFsScannerp = std::unique_ptr<Kompli::FilesystemScanner>(new Kompli::FilesystemScanner(mTempRootDir, mCachePath, mLockfilePath, 60, 120, 10));
     }
 
     ~MockContext() override
@@ -115,7 +114,7 @@ struct MockContext : public ComplianceEngine::ContextInterface
         mSpecialFilesMap[path] = overridden;
     }
 
-    ComplianceEngine::FilesystemScanner& GetFilesystemScanner() override
+    Kompli::FilesystemScanner& GetFilesystemScanner() override
     {
         return *mFsScannerp;
     }
@@ -132,9 +131,9 @@ struct MockContext : public ComplianceEngine::ContextInterface
 
 private:
     // throws as it's used by the constructor
-    static ComplianceEngine::TemporaryDirectory CreateTempdir()
+    static Kompli::TemporaryDirectory CreateTempdir()
     {
-        auto result = ComplianceEngine::TemporaryDirectory::Make("ComplianceEngineTest");
+        auto result = Kompli::TemporaryDirectory::Make("ComplianceEngineTest");
         if (!result.HasValue())
         {
             throw std::runtime_error(result.Error().message);
@@ -142,13 +141,13 @@ private:
         return std::move(result).Value();
     }
 
-    ComplianceEngine::TemporaryDirectory mTempOwner;
+    Kompli::TemporaryDirectory mTempOwner;
     std::string mTempdir;
     std::string mTempRootDir;
     std::size_t mTempfileCount{0};
     std::map<std::string, std::string> mSpecialFilesMap;
-    std::unique_ptr<ComplianceEngine::FilesystemScanner> mFsScannerp;
-    ComplianceEngine::Result<std::string> mRunningKernelRelease{std::string("5.15.test")};
+    std::unique_ptr<Kompli::FilesystemScanner> mFsScannerp;
+    Kompli::Result<std::string> mRunningKernelRelease{std::string("5.15.test")};
     OsConfigLogHandle mLogHandle{nullptr};
-    ComplianceEngine::Telemetry mTelemetry{-1};
+    Kompli::Telemetry mTelemetry{-1};
 };

@@ -9,7 +9,7 @@
 #include <shadow.h>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 class PasswordEntryRange;
 // Iterator for iterating over password entries for system users (/etc/shadow).
@@ -63,6 +63,6 @@ public:
     PasswordEntryIterator begin(); // NOLINT(*-identifier-naming)
     PasswordEntryIterator end();   // NOLINT(*-identifier-naming)
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // COMPLIANCE_PASSWORD_ENTRIES_ITERATOR_H

@@ -21,7 +21,7 @@ target_include_directories(benchmarkio PUBLIC
 target_link_libraries(benchmarkio PUBLIC
     logging
     parsonlib
-    complianceenginelib
+    kompli-engine
     )
 
 if (BUILD_TESTS)

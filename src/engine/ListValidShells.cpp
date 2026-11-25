@@ -4,7 +4,7 @@
 #include <ListValidShells.h>
 #include <fstream>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 using std::set;
 using std::string;
@@ -45,4 +45,4 @@ Result<set<string>> ListValidShells(ContextInterface& context)
     }
     return validShells;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

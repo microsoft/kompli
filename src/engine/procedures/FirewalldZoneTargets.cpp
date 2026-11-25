@@ -6,7 +6,7 @@
 #include <StringTools.h>
 #include <sstream>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 Result<Status> AuditFirewalldZoneTargets(IndicatorsTree& indicators, ContextInterface& context)
@@ -142,4 +142,4 @@ Result<Status> AuditFirewalldZoneTargets(IndicatorsTree& indicators, ContextInte
     return indicators.Compliant("All active firewalld zones have valid targets");
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

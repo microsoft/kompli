@@ -7,7 +7,7 @@
 #include <MtaLocalOnly.h>
 #include <regex>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditMtaLocalOnly(const MtaLocalOnlyParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -56,4 +56,4 @@ Result<Status> AuditMtaLocalOnly(const MtaLocalOnlyParams& params, IndicatorsTre
     return indicators.Compliant("No open MTA ports found on non-local interfaces");
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

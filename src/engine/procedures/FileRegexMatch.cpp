@@ -12,7 +12,7 @@
 #include <iterator>
 #include <regex>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 using std::ifstream;
 using std::string;
@@ -481,4 +481,4 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
         return Error("Unknown behavior: " + std::to_string(params.behavior), EINVAL);
     }
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

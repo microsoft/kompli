@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_OPTIONAL_H
-#define COMPLIANCEENGINE_OPTIONAL_H
+#ifndef KOMPLI_OPTIONAL_H
+#define KOMPLI_OPTIONAL_H
 
 #include "TypeTraits.h"
 
@@ -11,7 +11,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace OptionalDetail
 {
@@ -203,6 +203,6 @@ private:
         }
     }
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_OPTIONAL_H
+#endif // KOMPLI_OPTIONAL_H

@@ -10,9 +10,9 @@
 #error Select a Variant compile case
 #endif
 
-using ComplianceEngine::As;
-using ComplianceEngine::InPlaceType;
-using ComplianceEngine::Variant;
+using Kompli::As;
+using Kompli::InPlaceType;
+using Kompli::Variant;
 
 struct ThrowingMove
 {

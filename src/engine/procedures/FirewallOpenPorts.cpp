@@ -7,7 +7,7 @@
 #include <Evaluator.h>
 #include <set>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> AuditIptablesOpenPorts(IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -206,4 +206,4 @@ Result<Status> AuditUfwOpenPorts(IndicatorsTree& indicators, ContextInterface& c
     return indicators.Compliant("All open ports are listed in ufw");
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

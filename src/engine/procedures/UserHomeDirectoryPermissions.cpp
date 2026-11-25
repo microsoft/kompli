@@ -15,7 +15,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 using std::ifstream;
 using std::map;
@@ -197,4 +197,4 @@ Result<Status> RemediateUserHomeDirectoryPermissions(IndicatorsTree& indicators,
     return result;
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

@@ -12,7 +12,7 @@
 #include <sys/stat.h>
 #include <utility>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 using std::set;
 using std::string;
@@ -128,4 +128,4 @@ Result<Status> AuditSystemAccountShell(IndicatorsTree& indicators, ContextInterf
 
     return Status::Compliant;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

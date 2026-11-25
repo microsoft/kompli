@@ -8,7 +8,7 @@
 #include <SshKeyPermissions.h>
 #include <sstream>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -134,4 +134,4 @@ Result<Status> RemediateSshKeyPermissions(const SshKeyPermissionsParams& params,
     return SshKeyPermsHelper(isPublic, true, indicators, context);
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

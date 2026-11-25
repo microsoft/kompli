@@ -17,7 +17,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // Mask to display permissions
 const unsigned short displayMask = 0xFFF;
@@ -585,4 +585,4 @@ Result<Status> RemediateFilePermissionsCollection(const FilePermissionsCollectio
     return EnsureFilePermissionsCollectionHelper(params, indicators, context, true);
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

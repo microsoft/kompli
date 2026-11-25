@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_TYPE_TRAITS_H
-#define COMPLIANCEENGINE_TYPE_TRAITS_H
+#ifndef KOMPLI_TYPE_TRAITS_H
+#define KOMPLI_TYPE_TRAITS_H
 
 #include <cstddef>
 #include <type_traits>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 // Reusable C++11 pack helpers for type-safe storage and selection.
 namespace TypeTraits
@@ -104,6 +104,6 @@ constexpr bool NoexceptCopyable() noexcept
 {
     return std::is_nothrow_copy_constructible<T>::value;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_TYPE_TRAITS_H
+#endif // KOMPLI_TYPE_TRAITS_H

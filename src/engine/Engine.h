@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_ENGINE_H
-#define COMPLIANCEENGINE_ENGINE_H
+#ifndef KOMPLI_ENGINE_H
+#define KOMPLI_ENGINE_H
 
 #include "ContextInterface.h"
 #include "DistributionInfo.h"
@@ -21,7 +21,7 @@
 
 struct json_object_t;
 
-namespace ComplianceEngine
+namespace Kompli
 {
 class Engine
 {
@@ -65,6 +65,6 @@ public:
     Result<AuditResult> MmiGet(const char* objectName);
     Result<Status> MmiSet(const char* objectName, const std::string& payload);
 };
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_ENGINE_H
+#endif // KOMPLI_ENGINE_H

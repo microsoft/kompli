@@ -12,20 +12,20 @@
 #include <unistd.h>
 #include <vector>
 
-using ComplianceEngine::AuditFilePermissions;
-using ComplianceEngine::AuditFilePermissionsCollection;
-using ComplianceEngine::Behavior;
-using ComplianceEngine::Error;
-using ComplianceEngine::FilePermissionsCollectionParams;
-using ComplianceEngine::FilePermissionsParams;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Optional;
-using ComplianceEngine::Pattern;
-using ComplianceEngine::RemediateFilePermissions;
-using ComplianceEngine::RemediateFilePermissionsCollection;
-using ComplianceEngine::Result;
-using ComplianceEngine::Separated;
-using ComplianceEngine::Status;
+using Kompli::AuditFilePermissions;
+using Kompli::AuditFilePermissionsCollection;
+using Kompli::Behavior;
+using Kompli::Error;
+using Kompli::FilePermissionsCollectionParams;
+using Kompli::FilePermissionsParams;
+using Kompli::IndicatorsTree;
+using Kompli::Optional;
+using Kompli::Pattern;
+using Kompli::RemediateFilePermissions;
+using Kompli::RemediateFilePermissionsCollection;
+using Kompli::Result;
+using Kompli::Separated;
+using Kompli::Status;
 
 class EnsureFilePermissionsTest : public ::testing::Test
 {
@@ -34,7 +34,7 @@ protected:
     std::string testDir;
     MockContext mContext;
     IndicatorsTree indicators;
-    ComplianceEngine::CompactListFormatter mFormatter;
+    Kompli::CompactListFormatter mFormatter;
 
     void SetUp() override
     {

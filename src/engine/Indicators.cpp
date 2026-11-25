@@ -3,7 +3,7 @@
 
 #include "Indicators.h"
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Indicator::Indicator(std::string msg, Status stat)
     : message(std::move(msg)),
@@ -78,4 +78,4 @@ IndicatorsTree::Node& IndicatorsTree::Back() & noexcept
     return *mEvaluationStack.back();
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

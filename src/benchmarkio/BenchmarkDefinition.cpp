@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace BenchmarkDefinition
 {
@@ -758,4 +758,4 @@ Result<BenchmarkDocument> ParseFile(const string& path, OsConfigLogHandle logHan
 }
 
 } // namespace BenchmarkDefinition
-} // namespace ComplianceEngine
+} // namespace Kompli

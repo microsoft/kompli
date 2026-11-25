@@ -11,13 +11,13 @@
 #include <fstream>
 #include <iterator>
 
-using ComplianceEngine::AuditDefaultUmask;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Optional;
-using ComplianceEngine::RemediateDefaultUmask;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditDefaultUmask;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::Optional;
+using Kompli::RemediateDefaultUmask;
+using Kompli::Result;
+using Kompli::Status;
 using std::map;
 using std::string;
 

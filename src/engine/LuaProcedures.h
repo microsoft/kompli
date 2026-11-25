@@ -5,7 +5,7 @@
 
 // Forward declare lua_State from Lua headers to avoid pulling them in everywhere
 struct lua_State;
-namespace ComplianceEngine
+namespace Kompli
 {
 
 // Forward declare needed types to avoid heavy includes.
@@ -60,4 +60,4 @@ struct LuaCallContext
 //   - Raises Lua error if message is missing, non-string, empty, or more than one argument is passed.
 void RegisterLuaProcedures(lua_State* L);
 
-} // namespace ComplianceEngine
+} // namespace Kompli

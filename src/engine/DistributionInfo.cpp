@@ -13,7 +13,7 @@
 #include <string>
 #include <sys/utsname.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 using std::map;
 using std::string;
@@ -360,18 +360,18 @@ Result<DistributionInfo> DistributionInfo::ParseOverrideFile(const string& overr
     return result;
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 namespace std
 {
-using ComplianceEngine::Architecture;
-using ComplianceEngine::LinuxDistribution;
-using ComplianceEngine::OSType;
-using ComplianceEngine::RevertMap;
+using Kompli::Architecture;
+using Kompli::LinuxDistribution;
+using Kompli::OSType;
+using Kompli::RevertMap;
 
 string to_string(LinuxDistribution distribution) noexcept(false)
 {
-    static const auto distributionMap = RevertMap(ComplianceEngine::GetDistributionMap());
+    static const auto distributionMap = RevertMap(Kompli::GetDistributionMap());
     auto it = distributionMap.find(distribution);
     if (it != distributionMap.end())
     {
@@ -383,7 +383,7 @@ string to_string(LinuxDistribution distribution) noexcept(false)
 
 string to_string(OSType osType) noexcept(false)
 {
-    static const auto osTypeMap = RevertMap(ComplianceEngine::GetOSTypeMap());
+    static const auto osTypeMap = RevertMap(Kompli::GetOSTypeMap());
     auto it = osTypeMap.find(osType);
     if (it != osTypeMap.end())
     {
@@ -395,7 +395,7 @@ string to_string(OSType osType) noexcept(false)
 
 string to_string(Architecture architecture) noexcept(false)
 {
-    static const auto architectureMap = RevertMap(ComplianceEngine::GetArchitectureMap());
+    static const auto architectureMap = RevertMap(Kompli::GetArchitectureMap());
     auto it = architectureMap.find(architecture);
     if (it != architectureMap.end())
     {
@@ -405,7 +405,7 @@ string to_string(Architecture architecture) noexcept(false)
     throw invalid_argument("Unsupported architecture");
 }
 
-string to_string(const ComplianceEngine::DistributionInfo& distributionInfo) noexcept(false)
+string to_string(const Kompli::DistributionInfo& distributionInfo) noexcept(false)
 {
     ostringstream oss;
     oss << "OS=\"" << to_string(distributionInfo.osType) << "\"";

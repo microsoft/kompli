@@ -8,7 +8,7 @@
 #include <cassert>
 #include <parson.h>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -289,4 +289,4 @@ const JSON_Object* Procedure::Remediation() const noexcept
     }
     return json_value_get_object(mRemediationRule.get());
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

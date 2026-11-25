@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 class OpenPort
@@ -31,6 +31,6 @@ public:
 
 Result<std::vector<OpenPort>> GetOpenPorts(ContextInterface& context);
 
-} // namespace ComplianceEngine
+} // namespace Kompli
 
 #endif // NETWORKTOOLS_H

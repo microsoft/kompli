@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_PROCEDURES_BEHAVIOR_H
-#define COMPLIANCEENGINE_PROCEDURES_BEHAVIOR_H
+#ifndef KOMPLI_PROCEDURES_BEHAVIOR_H
+#define KOMPLI_PROCEDURES_BEHAVIOR_H
 
 // Used by EnsureFilePermissions, FileRegexMatch procedure to determine how the function should
 // interpret results.
-namespace ComplianceEngine
+namespace Kompli
 {
 enum class Behavior
 {
@@ -28,5 +28,5 @@ enum class Behavior
     /// label: only_one_exists
     OnlyOneExists,
 };
-} // namespace ComplianceEngine
-#endif // COMPLIANCEENGINE_PROCEDURES_BEHAVIOR_H
+} // namespace Kompli
+#endif // KOMPLI_PROCEDURES_BEHAVIOR_H

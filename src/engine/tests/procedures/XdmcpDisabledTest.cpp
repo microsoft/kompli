@@ -14,12 +14,12 @@
 #include <unistd.h>
 #include <vector>
 
-using ComplianceEngine::AuditXdmcpDisabled;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::RemediateXdmcpDisabled;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditXdmcpDisabled;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::RemediateXdmcpDisabled;
+using Kompli::Result;
+using Kompli::Status;
 
 class EnsureXdmcp : public ::testing::Test
 {

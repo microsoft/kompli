@@ -6,7 +6,7 @@
 #include <cerrno>
 #include <stdexcept>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 using std::string;
 
@@ -180,4 +180,4 @@ PasswordEntryIterator PasswordEntryRange::end() // NOLINT(*-identifier-naming)
     return PasswordEntryIterator(nullptr);
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli

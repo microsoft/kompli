@@ -7,7 +7,7 @@
 
 #include <string>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 static inline char Base64Char(const unsigned char c)
 {
@@ -96,4 +96,4 @@ Result<std::string> Base64Decode(const std::string& input)
     }
     return ret;
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

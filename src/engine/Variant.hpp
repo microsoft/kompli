@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#ifndef COMPLIANCEENGINE_VARIANT_HPP
-#define COMPLIANCEENGINE_VARIANT_HPP
+#ifndef KOMPLI_VARIANT_HPP
+#define KOMPLI_VARIANT_HPP
 
 #include "TypeTraits.h"
 
@@ -13,7 +13,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 template <typename T>
 struct InPlaceType
@@ -402,6 +402,6 @@ const T&& As(const MovableVariant<Alternatives...>&& variant)
 {
     return std::move(variant).template Get<T>();
 }
-} // namespace ComplianceEngine
+} // namespace Kompli
 
-#endif // COMPLIANCEENGINE_VARIANT_HPP
+#endif // KOMPLI_VARIANT_HPP

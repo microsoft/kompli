@@ -3,7 +3,7 @@
 
 add_compile_options("-Wno-unused-const-variable")
 
-project(compliancetests)
+project(kompli-engine-tests)
 
 include(GoogleTest)
 find_package(GTest CONFIG REQUIRED)
@@ -95,10 +95,43 @@ expect_variant_compile_failure(26 "inconsistent Visit result" "Variant visitor m
 # Independently check each class's copy operations and unsupported payloads
 # against its own valid C++11 translation unit before accepting failures.
 set(optional_compile_case_source "${CMAKE_CURRENT_SOURCE_DIR}/OptionalCompileCase.cpp")
-set(result_compile_case_source "${CMAKE_CURRENT_SOURCE_DIR}/ResultCompileCase.cpp")
+
+# Result's cases live one per file under compile/, named for what each one
+# checks, so a missing/renamed case is a path that doesn't exist rather than
+# a silently-skipped preprocessor branch. The ResultVoid* names group
+# Result<void>'s cases so they can travel together to a future PR.
+set(result_compile_case_dir "${CMAKE_CURRENT_SOURCE_DIR}/compile")
+set(result_control_source "${result_compile_case_dir}/ResultControl.cpp")
+set(result_rejects_copy_of_move_only_source "${result_compile_case_dir}/ResultRejectsCopyOfMoveOnly.cpp")
+set(result_rejects_assignment_of_move_only_source "${result_compile_case_dir}/ResultRejectsAssignmentOfMoveOnly.cpp")
+set(result_rejects_const_mutation_source "${result_compile_case_dir}/ResultRejectsConstMutation.cpp")
+set(result_void_rejects_value_access_source "${result_compile_case_dir}/ResultVoidRejectsValueAccess.cpp")
+set(result_rejects_reference_source "${result_compile_case_dir}/ResultRejectsReference.cpp")
+set(result_rejects_error_as_value_source "${result_compile_case_dir}/ResultRejectsErrorAsValue.cpp")
+set(result_void_rejects_default_construction_source "${result_compile_case_dir}/ResultVoidRejectsDefaultConstruction.cpp")
+set(result_void_rejects_empty_brace_return_source "${result_compile_case_dir}/ResultVoidRejectsEmptyBraceReturn.cpp")
+set(result_rejects_implicit_integer_error_source "${result_compile_case_dir}/ResultRejectsImplicitIntegerError.cpp")
+set(result_rejects_throwing_move_source "${result_compile_case_dir}/ResultRejectsThrowingMove.cpp")
+set(result_rejects_throwing_destructor_source "${result_compile_case_dir}/ResultRejectsThrowingDestructor.cpp")
+# Result<void> is not yet implemented by every PR this control travels to, so
+# it gets its own control source and its own "must compile" check below
+# rather than sharing ResultControl.cpp's Result<T> content.
+set(result_void_control_source "${result_compile_case_dir}/ResultVoidControl.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${optional_compile_case_source}"
-    "${result_compile_case_source}"
+    "${result_control_source}"
+    "${result_void_control_source}"
+    "${result_rejects_copy_of_move_only_source}"
+    "${result_rejects_assignment_of_move_only_source}"
+    "${result_rejects_const_mutation_source}"
+    "${result_void_rejects_value_access_source}"
+    "${result_rejects_reference_source}"
+    "${result_rejects_error_as_value_source}"
+    "${result_void_rejects_default_construction_source}"
+    "${result_void_rejects_empty_brace_return_source}"
+    "${result_rejects_implicit_integer_error_source}"
+    "${result_rejects_throwing_move_source}"
+    "${result_rejects_throwing_destructor_source}"
     "${CMAKE_CURRENT_SOURCE_DIR}/../Optional.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/../Result.h"
 )
@@ -134,6 +167,24 @@ function(check_wrapper_compile_case subject source case_number case_name diagnos
     message(STATUS "${subject} C++11 negative compile ${case_name}: rejected as expected")
 endfunction()
 
+# An additional, independent positive control for a part of a class not every
+# PR has yet (e.g. Result<void>): same "must compile" check as case 0 above,
+# under its own label so it doesn't collide with the class's main control.
+function(check_wrapper_compile_control subject source label)
+    string(TOLOWER "${subject}" subject_lower)
+    string(TOLOWER "${label}" label_lower)
+    try_compile("${subject_lower}_compile_control_${label_lower}"
+        "${CMAKE_CURRENT_BINARY_DIR}/${subject_lower}-compile/control-${label_lower}"
+        "${source}"
+        CMAKE_FLAGS ${wrapper_compile_flags}
+        OUTPUT_VARIABLE compile_output
+    )
+    if(NOT ${subject_lower}_compile_control_${label_lower})
+        message(FATAL_ERROR "${subject} ${label} compile control failed:\n${compile_output}")
+    endif()
+    message(STATUS "${subject} C++11 ${label} compile control: passed")
+endfunction()
+
 check_wrapper_compile_case(Optional "${optional_compile_case_source}" 0 "control" "")
 check_wrapper_compile_case(Optional "${optional_compile_case_source}" 1 "move-only copy construction" "deleted")
 check_wrapper_compile_case(Optional "${optional_compile_case_source}" 2 "move-only copy assignment" "deleted")
@@ -143,18 +194,19 @@ check_wrapper_compile_case(Optional "${optional_compile_case_source}" 5 "referen
 check_wrapper_compile_case(Optional "${optional_compile_case_source}" 6 "throwing move" "Optional requires a nonthrowing move constructor")
 check_wrapper_compile_case(Optional "${optional_compile_case_source}" 7 "throwing destructor" "Optional requires a nonthrowing destructor")
 
-check_wrapper_compile_case(Result "${result_compile_case_source}" 0 "control" "")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 1 "move-only copy construction" "deleted")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 2 "move-only copy assignment" "deleted")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 3 "const mutation" "cannot assign to return value|assignment of read-only location")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 4 "void Value access" "no member named 'Value'|no member named ‘Value’")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 5 "reference" "Result cannot hold references")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 6 "Error value" "Result cannot hold Error as its value type")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 7 "void default construction" "calling a private constructor|is private within this context")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 8 "void empty-brace return" "calling a private constructor|is private within this context")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 9 "implicit integer Error" "no viable conversion|to non-scalar type")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 10 "throwing move" "Result requires a nonthrowing move constructor")
-check_wrapper_compile_case(Result "${result_compile_case_source}" 11 "throwing destructor" "Result requires a nonthrowing destructor")
+check_wrapper_compile_case(Result "${result_control_source}" 0 "control" "")
+check_wrapper_compile_control(Result "${result_void_control_source}" "void")
+check_wrapper_compile_case(Result "${result_rejects_copy_of_move_only_source}" 1 "move-only copy construction" "deleted")
+check_wrapper_compile_case(Result "${result_rejects_assignment_of_move_only_source}" 2 "move-only copy assignment" "deleted")
+check_wrapper_compile_case(Result "${result_rejects_const_mutation_source}" 3 "const mutation" "cannot assign to return value|assignment of read-only location")
+check_wrapper_compile_case(Result "${result_void_rejects_value_access_source}" 4 "void Value access" "no member named 'Value'|no member named ‘Value’")
+check_wrapper_compile_case(Result "${result_rejects_reference_source}" 5 "reference" "Result cannot hold references")
+check_wrapper_compile_case(Result "${result_rejects_error_as_value_source}" 6 "Error value" "Result cannot hold Error as its value type")
+check_wrapper_compile_case(Result "${result_void_rejects_default_construction_source}" 7 "void default construction" "calling a private constructor|is private within this context")
+check_wrapper_compile_case(Result "${result_void_rejects_empty_brace_return_source}" 8 "void empty-brace return" "calling a private constructor|is private within this context")
+check_wrapper_compile_case(Result "${result_rejects_implicit_integer_error_source}" 9 "implicit integer Error" "no viable conversion|to non-scalar type")
+check_wrapper_compile_case(Result "${result_rejects_throwing_move_source}" 10 "throwing move" "Result requires a nonthrowing move constructor")
+check_wrapper_compile_case(Result "${result_rejects_throwing_destructor_source}" 11 "throwing destructor" "Result requires a nonthrowing destructor")
 
 set(PROCEDURES
     procedures/AideAttributesTest.cpp
@@ -209,7 +261,7 @@ foreach(proc ${GLOBBED_PROCEDURES})
     endif()
 endforeach()
 
-add_executable(complianceenginetests
+add_executable(kompli-engine-tests
     CliContextTest.cpp
     Base64Test.cpp
     BenchmarkInfoTest.cpp
@@ -247,13 +299,13 @@ add_executable(complianceenginetests
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/../src/lib)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/../src/lib/procedures)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(complianceenginetests
+target_link_libraries(kompli-engine-tests
     GTest::gtest
     GTest::gtest_main
     GTest::gmock
     GTest::gmock_main
     pthread
-    complianceenginelib
+    kompli-engine
     logging
     commonutils
     parsonlib
@@ -265,8 +317,8 @@ add_executable(result-allocation-test ResultAllocationTest.cpp)
 target_link_libraries(result-allocation-test PRIVATE GTest::gtest_main)
 gtest_discover_tests(result-allocation-test XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR})
 
-gtest_discover_tests(complianceenginetests
+gtest_discover_tests(kompli-engine-tests
     XML_OUTPUT_DIR ${GTEST_OUTPUT_DIR}
-    TEST_LIST complianceenginetests_TESTS
+    TEST_LIST kompli_engine_tests
 )
 set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/CTestProperties.cmake)

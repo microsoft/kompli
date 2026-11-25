@@ -6,12 +6,12 @@
 #include <fstream>
 #include <gtest/gtest.h>
 
-using ComplianceEngine::AuditFileExists;
-using ComplianceEngine::Error;
-using ComplianceEngine::FileExistsParams;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
+using Kompli::AuditFileExists;
+using Kompli::Error;
+using Kompli::FileExistsParams;
+using Kompli::IndicatorsTree;
+using Kompli::Result;
+using Kompli::Status;
 
 class EnsureFileExistsTest : public ::testing::Test
 {

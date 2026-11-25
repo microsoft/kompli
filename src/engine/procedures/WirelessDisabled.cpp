@@ -18,7 +18,7 @@
 #include <unistd.h>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 
 Result<Status> AuditWirelessDisabled(IndicatorsTree& indicators, ContextInterface& context)
@@ -124,4 +124,4 @@ Result<Status> AuditWirelessDisabled(IndicatorsTree& indicators, ContextInterfac
     }
     return indicators.Compliant("No wireless kernel module found");
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

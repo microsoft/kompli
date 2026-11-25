@@ -6,7 +6,7 @@
 #include <TestingProcedures.h>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 Result<Status> RemediateRemediationFailure(const TestingProcedureParams& params, IndicatorsTree& indicators, ContextInterface& context)
 {
@@ -106,4 +106,4 @@ Result<Status> AuditAuditGetParamValues(const TestingProcedureGetParamValuesPara
     }
     return indicators.Compliant(rv);
 }
-} // namespace ComplianceEngine
+} // namespace Kompli

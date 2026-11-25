@@ -14,15 +14,15 @@
 #include <gtest/gtest.h>
 #include <sys/socket.h>
 
-using ComplianceEngine::AuditMtaLocalOnly;
-using ComplianceEngine::Error;
-using ComplianceEngine::IndicatorsTree;
-using ComplianceEngine::MtaConfigurationVersion;
-using ComplianceEngine::MtaLocalOnlyParams;
-using ComplianceEngine::OpenPort;
-using ComplianceEngine::Result;
-using ComplianceEngine::Status;
-using ComplianceEngine::BindingsImpl::ParseArguments;
+using Kompli::AuditMtaLocalOnly;
+using Kompli::Error;
+using Kompli::IndicatorsTree;
+using Kompli::MtaConfigurationVersion;
+using Kompli::MtaLocalOnlyParams;
+using Kompli::OpenPort;
+using Kompli::Result;
+using Kompli::Status;
+using Kompli::BindingsImpl::ParseArguments;
 using ::testing::Return;
 
 class EnsureMTAsLocalOnlyTest : public ::testing::Test
@@ -38,7 +38,7 @@ protected:
 
     Result<Status> AuditConfigurationWithShell(const std::string& version, const std::string& commands)
     {
-        ComplianceEngine::CommonContext context(nullptr, "/tmp");
+        Kompli::CommonContext context(nullptr, "/tmp");
         EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Result<std::string>("")));
         EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("command -v postconf"))).WillOnce(::testing::Invoke([&](const std::string& command) {
             return context.ExecuteCommand("PATH=/nonexistent; " + commands + command);
@@ -127,7 +127,7 @@ TEST_F(EnsureMTAsLocalOnlyTest, ConfigurationCheckedWithoutListeningPorts)
         {"inet_interfaces = 192.168.1.20\n", Status::NonCompliant},
         {"", Status::Compliant},
     };
-    ComplianceEngine::MtaLocalOnlyParams params;
+    Kompli::MtaLocalOnlyParams params;
     params.configurationVersion = MtaConfigurationVersion::Version2;
     for (const auto& entry : cases)
     {
@@ -142,7 +142,7 @@ TEST_F(EnsureMTAsLocalOnlyTest, ConfigurationCheckedWithoutListeningPorts)
 
 TEST_F(EnsureMTAsLocalOnlyTest, ConfigurationQueryFailureReturnsError)
 {
-    ComplianceEngine::MtaLocalOnlyParams params;
+    Kompli::MtaLocalOnlyParams params;
     params.configurationVersion = MtaConfigurationVersion::Version2;
     EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Result<std::string>("")));
     EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("command -v postconf"))).WillOnce(Return(Error("postconf failed", 1)));

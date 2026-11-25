@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace ComplianceEngine
+namespace Kompli
 {
 namespace
 {
@@ -502,4 +502,4 @@ Result<Status> AuditSshdOption(const SshdOptionParams& params, IndicatorsTree& i
     return indicators.Compliant("All options are compliant");
 }
 
-} // namespace ComplianceEngine
+} // namespace Kompli
