@@ -93,8 +93,8 @@ function(check_wrapper_compile_case subject source case_number case_name diagnos
 endfunction()
 
 check_wrapper_compile_case(Result "${result_control_source}" 0 "control" "")
-check_wrapper_compile_case(Result "${result_rejects_copy_of_move_only_source}" 1 "move-only copy construction" "deleted")
-check_wrapper_compile_case(Result "${result_rejects_assignment_of_move_only_source}" 2 "move-only copy assignment" "deleted")
+check_wrapper_compile_case(Result "${result_rejects_copy_of_move_only_source}" 1 "move-only copy construction" "call to implicitly-deleted copy constructor of 'Result<|Kompli::Result<T>::Result(const Kompli::Result<T>&)")
+check_wrapper_compile_case(Result "${result_rejects_assignment_of_move_only_source}" 2 "move-only copy assignment" "cannot be assigned because its copy assignment operator is implicitly deleted|Kompli::Result<T>& Kompli::Result<T>::operator=(const Kompli::Result<T>&)")
 check_wrapper_compile_case(Result "${result_rejects_const_mutation_source}" 3 "const mutation" "cannot assign to return value|assignment of read-only location")
 check_wrapper_compile_case(Result "${result_rejects_reference_source}" 5 "reference" "Result cannot hold references")
 check_wrapper_compile_case(Result "${result_rejects_error_as_value_source}" 6 "Error value" "Result cannot hold Error as its value type")
