@@ -4,10 +4,16 @@
 #ifndef KOMPLI_RESULT_H
 #define KOMPLI_RESULT_H
 
+#include "Optional.h"
 #include "TypeTraits.h"
 
+#include <cstddef>
+#include <iosfwd>
+#include <new>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <utility>
 
 namespace Kompli
 {
@@ -16,6 +22,11 @@ struct Error
     int code = -1;
     std::string message;
 
+    // Format code-only diagnostics with strerror at report time.
+    explicit Error(int code) noexcept
+        : code(code)
+    {
+    }
     Error(std::string message, int code)
         : code(code),
           message(std::move(message))
@@ -60,6 +71,8 @@ struct Error
     }
     ~Error() = default;
 };
+static_assert(std::is_nothrow_move_constructible<Error>::value && std::is_nothrow_destructible<Error>::value,
+    "Error must move and destroy without throwing");
 std::ostream& operator<<(std::ostream& os, const Kompli::Error& error);
 
 namespace
@@ -70,30 +83,29 @@ constexpr std::size_t Max(std::size_t a, std::size_t b)
 }
 } // anonymous namespace
 
-template <typename T>
-class Result
+namespace ResultDetail
 {
-    // Tag::Empty marks storage that holds neither a T nor an Error (after
-    // Reset(), e.g. a moved-from Result): it keeps Reset() idempotent
-    // without a nullable pointer to guard against double-destruction.
+template <typename T>
+class Storage
+{
+protected:
     enum class Tag
     {
         Value,
         Error,
-        Empty
+        MovedFrom
     };
 
     alignas(Max(alignof(T), alignof(Kompli::Error))) char mBuffer[Max(sizeof(T), sizeof(Kompli::Error))];
-    Tag mTag;
+    Tag mTag = Tag::MovedFrom;
 
     // No pointer member caches the placement-new'd address: mBuffer's
     // address never moves, so these always re-derive it from mBuffer
     // instead of reusing a value computed before an earlier placement-new
-    // of a different type at the same address. A cached self-pointer,
-    // typed as whichever union arm was last active, let GCC Release (-O3)
-    // carry a value loaded through the old arm's type across the
-    // subsequent placement-new of the other type, mis-reading the new
-    // object's leading bytes.
+    // of a different type at the same address. A cached pointer, typed as
+    // whichever tag was last active, let GCC Release (-O3) carry a value
+    // loaded through the old type across the subsequent placement-new of
+    // the other type, mis-reading the new object's leading bytes.
     T* ValuePtr() noexcept
     {
         return reinterpret_cast<T*>(mBuffer);
@@ -111,76 +123,143 @@ class Result
         return reinterpret_cast<const Kompli::Error*>(mBuffer);
     }
 
-public:
-    Result(T value)
-        : mTag(Tag::Value)
-    {
-        new (mBuffer) T(std::move(value));
-    }
-
-    Result(Kompli::Error error)
-        : mTag(Tag::Error)
-    {
-        new (mBuffer) Kompli::Error(std::move(error));
-    }
-
-    Result(const Result& other)
-        : mTag(other.mTag)
-    {
-        if (Tag::Value == mTag)
-        {
-            new (mBuffer) T(*other.ValuePtr());
-        }
-        else if (Tag::Error == mTag)
-        {
-            new (mBuffer) Kompli::Error(*other.ErrorPtr());
-        }
-    }
-
-    Result(Result&& other) noexcept(NoexceptMovable<T>())
-        : mTag(other.mTag)
-    {
-        if (Tag::Value == mTag)
-        {
-            new (mBuffer) T(std::move(*other.ValuePtr()));
-        }
-        else if (Tag::Error == mTag)
-        {
-            new (mBuffer) Kompli::Error(std::move(*other.ErrorPtr()));
-        }
-
-        other.Reset();
-    }
-
-    ~Result()
+    Storage() = default;
+    ~Storage()
     {
         Reset();
     }
 
-private:
-    void Reset() noexcept(NoexceptDestructible<T>())
+    // Precondition: this storage is empty. Construct first, so mTag
+    // publishes only once the placement-new succeeds. A moved-from other
+    // leaves this storage moved-from too.
+    void CopyFrom(const Storage& other)
     {
-        if (Tag::Value == mTag)
+        if (other.mTag == Tag::Value)
+        {
+            ::new (static_cast<void*>(mBuffer)) T(*other.ValuePtr());
+            mTag = Tag::Value;
+        }
+        else if (other.mTag == Tag::Error)
+        {
+            ::new (static_cast<void*>(mBuffer)) Kompli::Error(*other.ErrorPtr());
+            mTag = Tag::Error;
+        }
+    }
+
+    // Precondition: this storage is empty. Nonthrowing because Result<T>
+    // asserts T's move constructor and destructor are nonthrowing. A
+    // moved-from other leaves this storage moved-from too; other ends up
+    // moved-from either way, since Reset() now settles on that tag.
+    void MoveFrom(Storage& other) noexcept
+    {
+        if (other.mTag == Tag::Value)
+        {
+            ::new (static_cast<void*>(mBuffer)) T(std::move(*other.ValuePtr()));
+            mTag = Tag::Value;
+        }
+        else if (other.mTag == Tag::Error)
+        {
+            ::new (static_cast<void*>(mBuffer)) Kompli::Error(std::move(*other.ErrorPtr()));
+            mTag = Tag::Error;
+        }
+        other.Reset();
+    }
+
+    void Reset() noexcept
+    {
+        if (mTag == Tag::Value)
         {
             ValuePtr()->~T();
         }
-        else if (Tag::Error == mTag)
+        else if (mTag == Tag::Error)
         {
             using Type = Kompli::Error;
             ErrorPtr()->~Type();
         }
-        mTag = Tag::Empty;
+        mTag = Tag::MovedFrom;
+    }
+};
+
+template <typename T, bool Copyable>
+class CopyStorage;
+
+template <typename T>
+class CopyStorage<T, true> : public Storage<T>
+{
+public:
+    CopyStorage() = default;
+    CopyStorage(const CopyStorage& other)
+    {
+        this->CopyFrom(other);
+    }
+    CopyStorage& operator=(const CopyStorage& other)
+    {
+        if (this != &other)
+        {
+            CopyStorage copy(other); // May throw; *this stays untouched until here.
+            this->Reset();
+            this->MoveFrom(copy);
+        }
+        return *this;
+    }
+};
+
+template <typename T>
+class CopyStorage<T, false> : public Storage<T>
+{
+public:
+    CopyStorage() = default;
+    CopyStorage(const CopyStorage&) = delete;
+    CopyStorage& operator=(const CopyStorage&) = delete;
+};
+} // namespace ResultDetail
+
+template <typename T>
+class Result : private ResultDetail::CopyStorage<T, std::is_copy_constructible<T>::value>
+{
+    using Storage = ResultDetail::CopyStorage<T, std::is_copy_constructible<T>::value>;
+    using Tag = typename ResultDetail::Storage<T>::Tag;
+
+    // Existing type guards first so reference/Error-as-value report their
+    // own message; destructor before move so a throwing destructor reports
+    // its own message even if a compiler stops at the first failure.
+    static_assert(!std::is_reference<T>::value, "Result cannot hold references");
+    static_assert(!std::is_same<T, Kompli::Error>::value, "Result cannot hold Error as its value type");
+    static_assert(std::is_nothrow_destructible<T>::value, "Result requires a nonthrowing destructor");
+    static_assert(std::is_nothrow_move_constructible<T>::value, "Result requires a nonthrowing move constructor");
+
+public:
+    Result(T value)
+    {
+        ::new (static_cast<void*>(this->mBuffer)) T(std::move(value));
+        this->mTag = Tag::Value;
+    }
+
+    Result(Kompli::Error error)
+    {
+        ::new (static_cast<void*>(this->mBuffer)) Kompli::Error(std::move(error));
+        this->mTag = Tag::Error;
+    }
+
+    Result(const Result&) = default;
+
+    Result(Result&& other) noexcept
+    {
+        this->MoveFrom(other);
+    }
+
+    ~Result() = default;
+
+private:
+    void Reset() noexcept
+    {
+        Storage::Reset();
     }
 
 public:
-    // Known exception-safety gap, to be fixed in a follow-up: both assignment
-    // operators publish the source tag before placement-constructing the
-    // payload. If the T or Error copy/move constructor throws, this Result
-    // keeps a Value/Error tag over storage that holds no live object, and its
-    // destructor then destroys unconstructed storage. The fix is to keep the
-    // tag Empty until construction succeeds. Constructors are not affected:
-    // a throwing constructor never runs ~Result.
-    Result& operator=(const Result& other)
+    Result& operator=(const Result&) = default;
+
+    Result& operator=(Result&& other) noexcept
     {
         if (this == &other)
         {
@@ -188,44 +267,13 @@ public:
         }
 
         Reset();
-        mTag = other.mTag;
-        if (Tag::Value == mTag)
-        {
-            new (mBuffer) T(*other.ValuePtr());
-        }
-        else if (Tag::Error == mTag)
-        {
-            new (mBuffer) Kompli::Error(*other.ErrorPtr());
-        }
-
-        return *this;
-    }
-
-    Result& operator=(Result&& other) noexcept(NoexceptMovable<T>())
-    {
-        if (this == &other)
-        {
-            return *this;
-        }
-
-        Reset();
-        mTag = other.mTag;
-        if (Tag::Value == mTag)
-        {
-            new (mBuffer) T(std::move(*other.ValuePtr()));
-        }
-        else if (Tag::Error == mTag)
-        {
-            new (mBuffer) Kompli::Error(std::move(*other.ErrorPtr()));
-        }
-
-        other.Reset();
+        this->MoveFrom(other);
         return *this;
     }
 
     bool HasValue() const noexcept
     {
-        return mTag == Tag::Value;
+        return this->mTag == Tag::Value;
     }
 
     operator bool() const noexcept
@@ -235,87 +283,182 @@ public:
 
     T ValueOr(T default_value) const& noexcept(NoexceptCopyable<T>())
     {
-        if (Tag::Value != mTag)
+        if (this->mTag != Tag::Value)
         {
-            return std::move(default_value);
+            return default_value;
         }
 
-        return *ValuePtr();
+        return *this->ValuePtr();
     }
 
-    T ValueOr(T default_value) && noexcept(NoexceptMovable<T>())
+    T ValueOr(T default_value) && noexcept
     {
-        if (Tag::Value != mTag)
+        if (this->mTag != Tag::Value)
         {
-            return std::move(default_value);
+            return default_value;
         }
 
-        return std::move(*ValuePtr());
+        return std::move(*this->ValuePtr());
     }
 
     const T& Value() const&
     {
         CheckValue();
-        return *ValuePtr();
+        return *this->ValuePtr();
     }
 
     T Value() &&
     {
         CheckValue();
-        return std::move(*ValuePtr());
+        return std::move(*this->ValuePtr());
     }
 
     T& Value() &
     {
         CheckValue();
-        return *ValuePtr();
+        return *this->ValuePtr();
     }
 
     const T* operator->() const&
     {
         CheckValue();
-        return ValuePtr();
+        return this->ValuePtr();
     }
 
     T* operator->() &
     {
         CheckValue();
-        return ValuePtr();
+        return this->ValuePtr();
     }
 
     const Kompli::Error& Error() const&
     {
         CheckError();
-        return *ErrorPtr();
+        return *this->ErrorPtr();
     }
 
     Kompli::Error Error() &&
     {
         CheckError();
-        return std::move(*ErrorPtr());
+        return std::move(*this->ErrorPtr());
     }
 
     Kompli::Error& Error() &
     {
         CheckError();
-        return *ErrorPtr();
+        return *this->ErrorPtr();
     }
 
 private:
     void CheckError() const
     {
-        if (mTag != Tag::Error)
+        if (this->mTag == Tag::MovedFrom)
+        {
+            throw std::logic_error("Result: use after move");
+        }
+        if (this->mTag != Tag::Error)
         {
             throw std::logic_error("Result: unchecked access to Error");
         }
     }
     void CheckValue() const
     {
-        if (mTag != Tag::Value)
+        if (this->mTag == Tag::MovedFrom)
+        {
+            throw std::logic_error("Result: use after move");
+        }
+        if (this->mTag != Tag::Value)
         {
             throw std::logic_error("Result: unchecked access to Value");
         }
     }
+};
+
+template <>
+class Result<void>
+{
+public:
+    static Result Success() noexcept
+    {
+        return Result();
+    }
+
+    Result(const Kompli::Error& error)
+        : mError(error)
+    {
+    }
+
+    Result(Kompli::Error&& error) noexcept
+        : mError(std::move(error))
+    {
+    }
+
+    Result(const Result&) = default;
+    Result& operator=(const Result&) = default;
+
+    Result(Result&& other) noexcept
+        : mError(std::move(other.mError)),
+          mMovedFrom(other.mMovedFrom)
+    {
+        other.mMovedFrom = true;
+    }
+
+    Result& operator=(Result&& other) noexcept
+    {
+        if (this != &other)
+        {
+            mError = std::move(other.mError);
+            mMovedFrom = other.mMovedFrom;
+            other.mMovedFrom = true;
+        }
+        return *this;
+    }
+
+    bool HasValue() const noexcept
+    {
+        return !mMovedFrom && !mError.HasValue();
+    }
+
+    explicit operator bool() const noexcept
+    {
+        return HasValue();
+    }
+
+    const Kompli::Error& Error() const&
+    {
+        CheckError();
+        return mError.Value();
+    }
+
+    Kompli::Error& Error() &
+    {
+        CheckError();
+        return mError.Value();
+    }
+
+    Kompli::Error Error() &&
+    {
+        CheckError();
+        return std::move(mError).Value();
+    }
+
+private:
+    Result() noexcept = default;
+
+    void CheckError() const
+    {
+        if (mMovedFrom)
+        {
+            throw std::logic_error("Result: use after move");
+        }
+        if (HasValue())
+        {
+            throw std::logic_error("Result: unchecked access to Error");
+        }
+    }
+
+    Optional<Kompli::Error> mError;
+    bool mMovedFrom = false;
 };
 } // namespace Kompli
 

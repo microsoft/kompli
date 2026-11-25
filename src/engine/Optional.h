@@ -6,151 +6,50 @@
 
 #include "TypeTraits.h"
 
-#include <memory>
+#include <new>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 
 namespace Kompli
 {
-template <typename T>
-class Optional
+namespace OptionalDetail
 {
+template <typename T>
+class Storage
+{
+protected:
     alignas(T) char mBuffer[sizeof(T)];
     T* mValue = nullptr;
 
-public:
-    Optional() = default;
-    Optional(T value)
-        : mValue(new (mBuffer) T(std::move(value)))
-    {
-    }
-
-    ~Optional()
+    Storage() = default;
+    ~Storage()
     {
         Reset();
     }
 
-    Optional(const Optional& other)
+    // Precondition: this storage is empty. Only publishes mValue once the
+    // placement-new succeeds, so a throwing copy leaves this storage empty.
+    void CopyFrom(const Storage& other)
     {
-        Reset();
         if (nullptr != other.mValue)
         {
-            mValue = new (mBuffer) T(*other.mValue);
-        }
-        else
-        {
-            mValue = nullptr;
+            mValue = ::new (static_cast<void*>(mBuffer)) T(*other.mValue);
         }
     }
 
-    Optional(Optional&& other) noexcept(NoexceptMovable<T>())
+    // Precondition: this storage is empty. Nonthrowing because Optional<T>
+    // asserts T's move constructor and destructor are nonthrowing.
+    void MoveFrom(Storage& other) noexcept
     {
         if (nullptr != other.mValue)
         {
-            mValue = new (mBuffer) T(std::move(*other.mValue));
-        }
-        else
-        {
-            mValue = nullptr;
+            mValue = ::new (static_cast<void*>(mBuffer)) T(std::move(*other.mValue));
         }
         other.Reset();
     }
 
-    Optional& operator=(const Optional& other)
-    {
-        if (this == &other)
-        {
-            return *this;
-        }
-
-        Reset();
-        if (nullptr != other.mValue)
-        {
-            mValue = new (mBuffer) T(*other.mValue);
-        }
-        else
-        {
-            mValue = nullptr;
-        }
-
-        return *this;
-    }
-
-    Optional& operator=(T value)
-    {
-        Reset();
-        mValue = new (mBuffer) T(std::move(value));
-        return *this;
-    }
-
-    Optional& operator=(Optional&& other) noexcept(NoexceptMovable<T>())
-    {
-        if (this == &other)
-        {
-            return *this;
-        }
-
-        Reset();
-        if (nullptr != other.mValue)
-        {
-            mValue = new (mBuffer) T(std::move(*other.mValue));
-        }
-        else
-        {
-            mValue = nullptr;
-        }
-        other.Reset();
-        return *this;
-    }
-
-    bool HasValue() const
-    {
-        return mValue != nullptr;
-    }
-
-    T ValueOr(T default_value) const noexcept(NoexceptCopyable<T>())
-    {
-        if (nullptr == mValue)
-        {
-            return default_value;
-        }
-
-        return *mValue;
-    }
-
-    const T& Value() const&
-    {
-        CheckValue();
-        return *mValue;
-    }
-
-    T Value() && noexcept(NoexceptMovable<T>())
-    {
-        CheckValue();
-        return std::move(*mValue);
-    }
-
-    T& Value() &
-    {
-        CheckValue();
-        return *mValue;
-    }
-
-    const T* operator->() const&
-    {
-        return mValue;
-    }
-
-    T* operator->() &
-    {
-        return mValue;
-    }
-
-    operator bool() const noexcept
-    {
-        return HasValue();
-    }
-
-    void Reset() noexcept(NoexceptDestructible<T>())
+    void Reset() noexcept
     {
         if (nullptr != mValue)
         {
@@ -158,11 +57,147 @@ public:
         }
         mValue = nullptr;
     }
+};
+
+template <typename T, bool Copyable>
+class CopyStorage;
+
+template <typename T>
+class CopyStorage<T, true> : public Storage<T>
+{
+public:
+    CopyStorage() = default;
+    CopyStorage(const CopyStorage& other)
+    {
+        this->CopyFrom(other);
+    }
+    CopyStorage& operator=(const CopyStorage& other)
+    {
+        if (this != &other)
+        {
+            CopyStorage copy(other); // May throw; *this stays untouched until here.
+            this->Reset();
+            this->MoveFrom(copy);
+        }
+        return *this;
+    }
+};
+
+template <typename T>
+class CopyStorage<T, false> : public Storage<T>
+{
+public:
+    CopyStorage() = default;
+    CopyStorage(const CopyStorage&) = delete;
+    CopyStorage& operator=(const CopyStorage&) = delete;
+};
+} // namespace OptionalDetail
+
+template <typename T>
+class Optional : private OptionalDetail::CopyStorage<T, std::is_copy_constructible<T>::value>
+{
+    // Existing type guards first so void/reference report their own
+    // message; destructor before move so a throwing destructor reports its
+    // own message even if a compiler stops at the first failure.
+    static_assert(!std::is_void<T>::value, "Optional cannot hold void");
+    static_assert(!std::is_reference<T>::value, "Optional cannot hold references");
+    static_assert(std::is_nothrow_destructible<T>::value, "Optional requires a nonthrowing destructor");
+    static_assert(std::is_nothrow_move_constructible<T>::value, "Optional requires a nonthrowing move constructor");
+
+public:
+    Optional() = default;
+    Optional(T value)
+    {
+        this->mValue = ::new (static_cast<void*>(this->mBuffer)) T(std::move(value));
+    }
+
+    ~Optional() = default;
+
+    Optional(const Optional&) = default;
+
+    Optional(Optional&& other) noexcept
+    {
+        this->MoveFrom(other);
+    }
+
+    Optional& operator=(const Optional&) = default;
+
+    Optional& operator=(T value)
+    {
+        Reset();
+        this->mValue = ::new (static_cast<void*>(this->mBuffer)) T(std::move(value));
+        return *this;
+    }
+
+    Optional& operator=(Optional&& other) noexcept
+    {
+        if (this != &other)
+        {
+            Reset();
+            this->MoveFrom(other);
+        }
+        return *this;
+    }
+
+    bool HasValue() const
+    {
+        return this->mValue != nullptr;
+    }
+
+    T ValueOr(T default_value) const noexcept(NoexceptCopyable<T>())
+    {
+        if (nullptr == this->mValue)
+        {
+            return default_value;
+        }
+
+        return *this->mValue;
+    }
+
+    const T& Value() const&
+    {
+        CheckValue();
+        return *this->mValue;
+    }
+
+    T Value() &&
+    {
+        CheckValue();
+        return std::move(*this->mValue);
+    }
+
+    T& Value() &
+    {
+        CheckValue();
+        return *this->mValue;
+    }
+
+    const T* operator->() const&
+    {
+        CheckValue();
+        return this->mValue;
+    }
+
+    T* operator->() &
+    {
+        CheckValue();
+        return this->mValue;
+    }
+
+    operator bool() const noexcept
+    {
+        return HasValue();
+    }
+
+    void Reset() noexcept
+    {
+        OptionalDetail::CopyStorage<T, std::is_copy_constructible<T>::value>::Reset();
+    }
 
 private:
     void CheckValue() const
     {
-        if (nullptr == mValue)
+        if (nullptr == this->mValue)
         {
             throw std::logic_error("Optional: unchecked access to Value");
         }
