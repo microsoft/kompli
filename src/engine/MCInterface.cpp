@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "ComplianceEngineInterface.h"
+#include "MCInterface.h"
 
 #include "BenchmarkInfo.h"
 #include "CommonContext.h"
@@ -103,7 +103,7 @@ int OpenTelemetryFile()
 } // namespace
 
 // This function is called in library constructor by BaselineInitialize
-void ComplianceEngineInitialize(OsConfigLogHandle log)
+void KompliInitialize(OsConfigLogHandle log)
 {
     UNUSED(log);
     g_log = log;
@@ -127,17 +127,17 @@ void ComplianceEngineInitialize(OsConfigLogHandle log)
     RestrictFileAccessToCurrentAccountOnly(g_configurationFile);
 }
 
-void ComplianceEngineLoad(MMI_HANDLE clientSession, const char* componentName)
+void KompliLoad(MMI_HANDLE clientSession, const char* componentName)
 {
     if ((nullptr == componentName) || (nullptr == clientSession))
     {
-        OsConfigLogError(g_log, "ComplianceEngineLoad(%s, %p) called with invalid arguments", componentName ? componentName : "(null)", clientSession);
+        OsConfigLogError(g_log, "KompliLoad(%s, %p) called with invalid arguments", componentName ? componentName : "(null)", clientSession);
         return;
     }
 
     if (0 != strcmp(componentName, "ComplianceEngine"))
     {
-        OsConfigLogError(g_log, "ComplianceEngineLoad called for an unsupported component name (%s)", componentName);
+        OsConfigLogError(g_log, "KompliLoad called for an unsupported component name (%s)", componentName);
         return;
     }
 
@@ -148,17 +148,17 @@ void ComplianceEngineLoad(MMI_HANDLE clientSession, const char* componentName)
     g_benchmarkRunBeginAt = std::chrono::steady_clock::now();
 #endif
 }
-void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
+void KompliUnload(MMI_HANDLE clientSession, const char* componentName)
 {
     if ((nullptr == componentName) || (nullptr == clientSession))
     {
-        OsConfigLogError(g_log, "ComplianceEngineUnload(%s, %p) called with invalid arguments", componentName != nullptr ? componentName : "(null)", clientSession);
+        OsConfigLogError(g_log, "KompliUnload(%s, %p) called with invalid arguments", componentName != nullptr ? componentName : "(null)", clientSession);
         return;
     }
 
     if (0 != strcmp(componentName, "ComplianceEngine"))
     {
-        OsConfigLogError(g_log, "ComplianceEngineLoad called for an unsupported component name (%s)", componentName);
+        OsConfigLogError(g_log, "KompliUnload called for an unsupported component name (%s)", componentName);
         return;
     }
 #ifdef BUILD_TELEMETRY
@@ -202,16 +202,16 @@ void ComplianceEngineUnload(MMI_HANDLE clientSession, const char* componentName)
     }
     else
     {
-        OsConfigLogError(g_log, "ComplianceEngineUnload: failed to GetModuleDirectory() telemetry not run");
+        OsConfigLogError(g_log, "KompliUnload: failed to GetModuleDirectory() telemetry not run");
     }
 #endif // BUILD_TELEMETRY
 }
 // This function is called in library destructor by BaselineInitialize
-void ComplianceEngineShutdown(void)
+void KompliShutdown(void)
 {
 }
 
-MMI_HANDLE ComplianceEngineMmiOpen(const char* clientName, const unsigned int maxPayloadSizeBytes)
+MMI_HANDLE KompliMmiOpen(const char* clientName, const unsigned int maxPayloadSizeBytes)
 {
     int telemetry_fd = -1;
 #ifdef BUILD_TELEMETRY
@@ -221,23 +221,23 @@ MMI_HANDLE ComplianceEngineMmiOpen(const char* clientName, const unsigned int ma
     auto context = std::unique_ptr<Kompli::GuestConfigurationContext>(new Kompli::GuestConfigurationContext(g_log, telemetry_fd));
     if (nullptr == context)
     {
-        OsConfigLogError(g_log, "ComplianceEngineMmiOpen(%s, %u): failed to create context", clientName, maxPayloadSizeBytes);
+        OsConfigLogError(g_log, "KompliMmiOpen(%s, %u): failed to create context", clientName, maxPayloadSizeBytes);
         return nullptr;
     }
     std::unique_ptr<Kompli::PayloadFormatter> formatter;
     if (!strcmp(clientName, cModuleTestClientName))
     {
-        OsConfigLogInfo(g_log, "ComplianceEngineMmiOpen(%s) using DebugFormatter", clientName);
+        OsConfigLogInfo(g_log, "KompliMmiOpen(%s) using DebugFormatter", clientName);
         formatter.reset(new Kompli::DebugFormatter());
     }
     else if (!strcmp(clientName, cNRPClientName))
     {
-        OsConfigLogInfo(g_log, "ComplianceEngineMmiOpen(%s) using NestedListFormatter", clientName);
+        OsConfigLogInfo(g_log, "KompliMmiOpen(%s) using NestedListFormatter", clientName);
         formatter.reset(new Kompli::NestedListFormatter());
     }
     else
     {
-        OsConfigLogInfo(g_log, "ComplianceEngineMmiOpen(%s) using JsonFormatter", clientName);
+        OsConfigLogInfo(g_log, "KompliMmiOpen(%s) using JsonFormatter", clientName);
         formatter.reset(new Kompli::JsonFormatter());
     }
 
@@ -245,33 +245,33 @@ MMI_HANDLE ComplianceEngineMmiOpen(const char* clientName, const unsigned int ma
     auto error = engine->LoadDistributionInfo();
     if (error)
     {
-        OsConfigLogError(g_log, "ComplianceEngineMmiOpen(%s, %u): failed to load distribution info: %s", clientName, maxPayloadSizeBytes, error->message.c_str());
+        OsConfigLogError(g_log, "KompliMmiOpen(%s, %u): failed to load distribution info: %s", clientName, maxPayloadSizeBytes, error->message.c_str());
         delete engine;
         return nullptr;
     }
 
     auto* result = reinterpret_cast<void*>(engine);
-    OsConfigLogInfo(g_log, "ComplianceEngineMmiOpen(%s, %u) returning %p", clientName, maxPayloadSizeBytes, result);
+    OsConfigLogInfo(g_log, "KompliMmiOpen(%s, %u) returning %p", clientName, maxPayloadSizeBytes, result);
     return result;
 }
 
-void ComplianceEngineMmiClose(MMI_HANDLE clientSession)
+void KompliMmiClose(MMI_HANDLE clientSession)
 {
     delete reinterpret_cast<Engine*>(clientSession);
 }
 
-int ComplianceEngineMmiGetInfo(const char* clientName, char** payload, int* payloadSizeBytes)
+int KompliMmiGetInfo(const char* clientName, char** payload, int* payloadSizeBytes)
 {
     if ((nullptr == payload) || (nullptr == payloadSizeBytes))
     {
-        OsConfigLogError(g_log, "ComplianceEngineMmiGetInfo(%s, %p, %p) called with invalid arguments", clientName, payload, payloadSizeBytes);
+        OsConfigLogError(g_log, "KompliMmiGetInfo(%s, %p, %p) called with invalid arguments", clientName, payload, payloadSizeBytes);
         return EINVAL;
     }
 
     *payload = strdup(Engine::GetModuleInfo());
     if (!*payload)
     {
-        OsConfigLogError(g_log, "ComplianceEngineMmiGetInfo: failed to duplicate module info");
+        OsConfigLogError(g_log, "KompliMmiGetInfo: failed to duplicate module info");
         return ENOMEM;
     }
 
@@ -279,23 +279,23 @@ int ComplianceEngineMmiGetInfo(const char* clientName, char** payload, int* payl
     return MMI_OK;
 }
 
-int ComplianceEngineMmiGet(MMI_HANDLE clientSession, const char* componentName, const char* objectName, char** payload, int* payloadSizeBytes)
+int KompliMmiGet(MMI_HANDLE clientSession, const char* componentName, const char* objectName, char** payload, int* payloadSizeBytes)
 {
     if ((nullptr == componentName) || (nullptr == objectName) || (nullptr == payload) || (nullptr == payloadSizeBytes))
     {
-        OsConfigLogError(g_log, "ComplianceEngineMmiGet(%s, %s, %p, %p) called with invalid arguments", componentName, objectName, payload, payloadSizeBytes);
+        OsConfigLogError(g_log, "KompliMmiGet(%s, %s, %p, %p) called with invalid arguments", componentName, objectName, payload, payloadSizeBytes);
         return EINVAL;
     }
 
     if (nullptr == clientSession)
     {
-        OsConfigLogError(g_log, "ComplianceEngineMmiGet(%s, %s) called outside of a valid session", componentName, objectName);
+        OsConfigLogError(g_log, "KompliMmiGet(%s, %s) called outside of a valid session", componentName, objectName);
         return EINVAL;
     }
 
     if (0 != strcmp(componentName, "ComplianceEngine"))
     {
-        OsConfigLogError(g_log, "ComplianceEngineMmiGet called for an unsupported component name (%s)", componentName);
+        OsConfigLogError(g_log, "KompliMmiGet called for an unsupported component name (%s)", componentName);
         return EINVAL;
     }
     auto& engine = *reinterpret_cast<Engine*>(clientSession);
@@ -310,14 +310,14 @@ int ComplianceEngineMmiGet(MMI_HANDLE clientSession, const char* componentName, 
         {
             if (g_criticalErrors.find(result.Error().code) != g_criticalErrors.end())
             {
-                OsConfigLogError(engine.Log(), "ComplianceEngineMmiGet failed with a critical error: %s (errno: %d)", result.Error().message.c_str(),
+                OsConfigLogError(engine.Log(), "KompliMmiGet failed with a critical error: %s (errno: %d)", result.Error().message.c_str(),
                     result.Error().code);
                 return result.Error().code;
             }
             else
             {
-                OsConfigLogError(engine.Log(), "ComplianceEngineMmiGet failed with a non-critical error: %s (errno: %d)",
-                    result.Error().message.c_str(), result.Error().code);
+                OsConfigLogError(engine.Log(), "KompliMmiGet failed with a non-critical error: %s (errno: %d)", result.Error().message.c_str(),
+                    result.Error().code);
                 result = Kompli::AuditResult(Status::NonCompliant, "Audit failed with a non-critical error: " + result.Error().message);
             }
         }
@@ -331,14 +331,14 @@ int ComplianceEngineMmiGet(MMI_HANDLE clientSession, const char* componentName, 
         auto json = JsonWrapper::FromJsonString(payloadString);
         if (!json.HasValue())
         {
-            OsConfigLogError(engine.Log(), "ComplianceEngineMmiGet failed: Failed to create JSON object from string");
+            OsConfigLogError(engine.Log(), "KompliMmiGet failed: Failed to create JSON object from string");
             return ENOMEM;
         }
 
         *payload = json_serialize_to_string(json->get());
         if (nullptr == *payload)
         {
-            OsConfigLogError(engine.Log(), "ComplianceEngineMmiGet failed: Failed to serialize JSON object");
+            OsConfigLogError(engine.Log(), "KompliMmiGet failed: Failed to serialize JSON object");
             return ENOMEM;
         }
 
@@ -348,29 +348,29 @@ int ComplianceEngineMmiGet(MMI_HANDLE clientSession, const char* componentName, 
     }
     catch (const std::exception& e)
     {
-        OsConfigLogError(engine.Log(), "ComplianceEngineMmiGet failed: %s", e.what());
+        OsConfigLogError(engine.Log(), "KompliMmiGet failed: %s", e.what());
     }
 
     return -1;
 }
 
-int ComplianceEngineMmiSet(MMI_HANDLE clientSession, const char* componentName, const char* objectName, const char* payload, const int payloadSizeBytes)
+int KompliMmiSet(MMI_HANDLE clientSession, const char* componentName, const char* objectName, const char* payload, const int payloadSizeBytes)
 {
     if ((nullptr == componentName) || (nullptr == objectName) || (nullptr == payload) || (0 > payloadSizeBytes))
     {
-        OsConfigLogError(g_log, "ComplianceEngineMmiSet(%s, %s, %.*s) called with invalid arguments", componentName, objectName, payloadSizeBytes, payload);
+        OsConfigLogError(g_log, "KompliMmiSet(%s, %s, %.*s) called with invalid arguments", componentName, objectName, payloadSizeBytes, payload);
         return EINVAL;
     }
 
     if (nullptr == clientSession)
     {
-        OsConfigLogError(g_log, "ComplianceEngineMmiSet(%s, %s, %.*s) called outside of a valid session", componentName, objectName, payloadSizeBytes, payload);
+        OsConfigLogError(g_log, "KompliMmiSet(%s, %s, %.*s) called outside of a valid session", componentName, objectName, payloadSizeBytes, payload);
         return EINVAL;
     }
 
     if (0 != strcmp(componentName, "ComplianceEngine"))
     {
-        OsConfigLogError(g_log, "ComplianceEngineMmiSet called for an unsupported component name (%s)", componentName);
+        OsConfigLogError(g_log, "KompliMmiSet called for an unsupported component name (%s)", componentName);
         return EINVAL;
     }
     auto& engine = *reinterpret_cast<Engine*>(clientSession);
@@ -380,19 +380,19 @@ int ComplianceEngineMmiSet(MMI_HANDLE clientSession, const char* componentName, 
         std::string payloadStr(payload, payloadSizeBytes);
         if (payloadStr.find('\0') != std::string::npos)
         {
-            OsConfigLogError(engine.Log(), "ComplianceEngineMmiSet failed: payload contains embedded NUL");
+            OsConfigLogError(engine.Log(), "KompliMmiSet failed: payload contains embedded NUL");
             return EINVAL;
         }
         auto json = JsonWrapper::FromString(payloadStr.c_str());
         if (!json.HasValue())
         {
-            OsConfigLogError(engine.Log(), "ComplianceEngineMmiSet failed: Failed to parse JSON string");
+            OsConfigLogError(engine.Log(), "KompliMmiSet failed: Failed to parse JSON string");
             return EINVAL;
         }
 
         if ((JSONString != json_value_get_type(json->get())) && (JSONObject != json_value_get_type(json->get())))
         {
-            OsConfigLogError(engine.Log(), "ComplianceEngineMmiSet failed: Failed to parse JSON string");
+            OsConfigLogError(engine.Log(), "KompliMmiSet failed: Failed to parse JSON string");
             return EINVAL;
         }
         std::string realPayload;
@@ -402,7 +402,7 @@ int ComplianceEngineMmiSet(MMI_HANDLE clientSession, const char* componentName, 
             const std::size_t decodedLength = json_value_get_string_len(json->get());
             if (nullptr != std::memchr(decoded, '\0', decodedLength))
             {
-                OsConfigLogError(engine.Log(), "ComplianceEngineMmiSet failed: decoded payload contains embedded NUL");
+                OsConfigLogError(engine.Log(), "KompliMmiSet failed: decoded payload contains embedded NUL");
                 return EINVAL;
             }
             realPayload.assign(decoded, decodedLength);
@@ -418,14 +418,14 @@ int ComplianceEngineMmiSet(MMI_HANDLE clientSession, const char* componentName, 
         {
             if (g_criticalErrors.find(result.Error().code) != g_criticalErrors.end())
             {
-                OsConfigLogError(engine.Log(), "ComplianceEngineMmiSet failed with a critical error: %s (errno: %d)", result.Error().message.c_str(),
+                OsConfigLogError(engine.Log(), "KompliMmiSet failed with a critical error: %s (errno: %d)", result.Error().message.c_str(),
                     result.Error().code);
                 return result.Error().code;
             }
             else
             {
-                OsConfigLogError(engine.Log(), "ComplianceEngineMmiSet failed with a non-critical error: %s (errno: %d)",
-                    result.Error().message.c_str(), result.Error().code);
+                OsConfigLogError(engine.Log(), "KompliMmiSet failed with a non-critical error: %s (errno: %d)", result.Error().message.c_str(),
+                    result.Error().code);
                 return MMI_OK;
             }
         }
@@ -450,25 +450,25 @@ int ComplianceEngineMmiSet(MMI_HANDLE clientSession, const char* componentName, 
     }
     catch (const std::exception& e)
     {
-        OsConfigLogError(engine.Log(), "ComplianceEngineMmiSet failed: %s", e.what());
+        OsConfigLogError(engine.Log(), "KompliMmiSet failed: %s", e.what());
     }
 
     return -1;
 }
 
-void ComplianceEngineMmiFree(char* payload)
+void KompliMmiFree(char* payload)
 {
     FREE_MEMORY(payload);
 }
 
-int ComplianceEngineCheckApplicability(MMI_HANDLE clientSession, const char* payloadKey, OsConfigLogHandle log)
+int KompliCheckApplicability(MMI_HANDLE clientSession, const char* payloadKey, OsConfigLogHandle log)
 {
     // parse the /etc/os-release and check whether the payloadKey defines the same distribution as the one in the file
     // the payloadKey is formatted as a path: /<benchmark>/<benchmark_specific_format>
     // In case the payloadKey starts with /cis, it becomes: /cis/<distribution>/<version>/<benchmark_version>/<section1>/<section2>/...
     if ((nullptr == clientSession) || (nullptr == payloadKey))
     {
-        OsConfigLogError(log, "ComplianceEngineCheckApplicability called with invalid arguments");
+        OsConfigLogError(log, "KompliCheckApplicability called with invalid arguments");
         return EINVAL;
     }
 
@@ -476,14 +476,14 @@ int ComplianceEngineCheckApplicability(MMI_HANDLE clientSession, const char* pay
     const auto& distributionInfo = engine.GetDistributionInfo();
     if (!distributionInfo.HasValue())
     {
-        OsConfigLogError(log, "ComplianceEngineCheckApplicability: Distribution info is not available");
+        OsConfigLogError(log, "KompliCheckApplicability: Distribution info is not available");
         return EINVAL;
     }
 
     auto benchmark = BenchmarkInfo::Parse(payloadKey);
     if (!benchmark.HasValue())
     {
-        OsConfigLogError(log, "ComplianceEngineCheckApplicability failed to parse benchmark: %s", benchmark.Error().message.c_str());
+        OsConfigLogError(log, "KompliCheckApplicability failed to parse benchmark: %s", benchmark.Error().message.c_str());
         return EINVAL;
     }
 

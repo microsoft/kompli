@@ -259,7 +259,7 @@ TEST_F(BenchmarkInfoTest, SuggestedOverrideSatisfiesMatch)
     // End-to-end check of the override suggestion for the PayloadKey forms that
     // appear in real generated MOFs (e.g. "/cis/rhel/8.*/...", "/cis/sles/15.*/...",
     // "/cis/ubuntu/22.04/..."). This mirrors, without parsing logs, the suggestion
-    // built in Main.cpp / ComplianceEngineInterface.cpp when a benchmark does not
+    // built in Main.cpp / MCInterface.cpp when a benchmark does not
     // apply to the detected system:
     //
     //     auto overridden = detected;

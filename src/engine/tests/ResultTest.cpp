@@ -90,10 +90,10 @@ class ResultTest : public ::testing::Test
 
 namespace
 {
-// Reproduces the ComplianceEngineInterface.cpp "audit error -> NonCompliant
+// Reproduces the MCInterface.cpp "audit error -> NonCompliant
 // AuditResult" reassignment idiom (below) in a single translation unit: the
 // real producer, Engine::MmiGet, lives in a separate TU (Engine.cpp) from its
-// ComplianceEngineInterface.cpp caller, but putting a stand-in producer here,
+// MCInterface.cpp caller, but putting a stand-in producer here,
 // next to the caller shape, lets GCC Release (-O3) inline it -- exactly the
 // shape that exposed the stale-alias read below. A cross-TU call (no LTO)
 // does not reproduce it.
@@ -103,7 +103,7 @@ Result<AuditResult> DispatchRuleNotFound()
 }
 } // namespace
 
-// Characterizes the ComplianceEngineInterface.cpp
+// Characterizes the MCInterface.cpp
 // "audit error -> NonCompliant AuditResult" reassignment idiom:
 //   auto result = engine.MmiGet(objectName);
 //   if (!result.HasValue())
