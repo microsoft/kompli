@@ -8,8 +8,11 @@
 #include <memory>
 
 #ifdef BUILD_TELEMETRY
+#include <algorithm>
+#include <cerrno>
 #include <fcntl.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <utility>
 #endif // BUILD_TELEMETRY
@@ -44,6 +47,109 @@ void LogCreatedTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& t
 }
 
 #ifdef BUILD_TELEMETRY
+
+int OpenTelemetryFile(const std::string& path, OsConfigLogHandle log)
+{
+    const int descriptor = open(path.c_str(), O_CREAT | O_NOFOLLOW | O_RDWR | O_CLOEXEC | O_NONBLOCK, 0600);
+    if (descriptor < 0)
+    {
+        OsConfigLogError(log, "Failed to open telemetry file %s: %d", path.c_str(), errno);
+        return -1;
+    }
+
+    auto fail = [&](const char* operation, int error) {
+        OsConfigLogError(log, "Failed to %s telemetry file %s: %d", operation, path.c_str(), error);
+        close(descriptor);
+        return -1;
+    };
+
+    struct stat metadata = {};
+    if (fstat(descriptor, &metadata) != 0)
+    {
+        return fail("stat", errno);
+    }
+    if (!S_ISREG(metadata.st_mode))
+    {
+        return fail("validate", EINVAL);
+    }
+    if (fchmod(descriptor, 0600) != 0)
+    {
+        return fail("set permissions on", errno);
+    }
+
+    if (metadata.st_size >= static_cast<off_t>(kTelemetryLogSizeLimit))
+    {
+        // Only the last limit bytes can survive. Starting after the first
+        // newline in this window preserves events and leaves strictly less
+        // than the limit, even when the window starts in the middle of one.
+        char buffer[64 * 1024];
+        off_t source = metadata.st_size - static_cast<off_t>(kTelemetryLogSizeLimit);
+        while (source < metadata.st_size)
+        {
+            const auto size = static_cast<std::size_t>(std::min<off_t>(sizeof(buffer), metadata.st_size - source));
+            const auto count = pread(descriptor, buffer, size, source);
+            if (count < 0 && errno == EINTR)
+            {
+                continue;
+            }
+            if (count <= 0)
+            {
+                return fail("read", count < 0 ? errno : EIO);
+            }
+            const auto newline = std::find(buffer, buffer + count, '\n');
+            source += newline - buffer;
+            if (newline != buffer + count)
+            {
+                ++source;
+                break;
+            }
+        }
+
+        off_t destination = 0;
+        while (source < metadata.st_size)
+        {
+            const auto size = static_cast<std::size_t>(std::min<off_t>(sizeof(buffer), metadata.st_size - source));
+            const auto count = pread(descriptor, buffer, size, source);
+            if (count < 0 && errno == EINTR)
+            {
+                continue;
+            }
+            if (count <= 0)
+            {
+                return fail("read", count < 0 ? errno : EIO);
+            }
+            ssize_t written = 0;
+            while (written < count)
+            {
+                // O_APPEND is enabled only after compaction: on Linux it
+                // also makes pwrite ignore the explicit offset.
+                const auto bytes = pwrite(descriptor, buffer + written, static_cast<std::size_t>(count - written), destination + written);
+                if (bytes < 0 && errno == EINTR)
+                {
+                    continue;
+                }
+                if (bytes <= 0)
+                {
+                    return fail("write", bytes < 0 ? errno : EIO);
+                }
+                written += bytes;
+            }
+            source += count;
+            destination += count;
+        }
+        if (ftruncate(descriptor, destination) != 0)
+        {
+            return fail("truncate", errno);
+        }
+    }
+
+    const int flags = fcntl(descriptor, F_GETFL);
+    if (flags < 0 || fcntl(descriptor, F_SETFL, (flags & ~O_NONBLOCK) | O_APPEND) != 0)
+    {
+        return fail("enable append on", errno);
+    }
+    return descriptor;
+}
 
 namespace
 {
