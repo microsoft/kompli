@@ -190,6 +190,19 @@ Apart from that there are style rules that can't be expressed in clang-format bu
 # Error Handling
 - For C, return integer status codes for functions that can fail, typically using standard errno values, and 0 for success
 - For C++ using complex/optional error types is recommended
+- `Result<T>` (`src/engine/Result.h`) is a value wrapper for fallible
+  returns; prefer it over inventing a new error shape:
+  - its payload type must have a nonthrowing move constructor and
+    destructor (enforced with `static_assert`s), so its own move and
+    reset operations are unconditionally `noexcept`;
+  - `Result<T>` constructs its payload before committing any tag or
+    pointer change, so a throwing constructor never leaves a half-set
+    object;
+  - after a whole-object move, `Result<T>` enters a diagnosed moved-from
+    state: state queries (`HasValue()`, `operator bool`) report false,
+    and value-producing accessors (`Value()`, `Error()`) throw
+    `std::logic_error` instead of reading retired state; destroying or
+    reassigning a moved-from wrapper stays safe.
 - Always validate function inputs
 - Use early returns for validation and error conditions
 - Log errors with descriptive messages using OsConfigLogError, OsConfigLogWarning, or OsConfigLogInfo

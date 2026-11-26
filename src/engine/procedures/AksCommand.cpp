@@ -322,7 +322,7 @@ Result<Status> AuditAksCommand(const AksCommandParams& params, IndicatorsTree& i
         return indicators.NonCompliant(output.Error().message);
     }
 
-    bool compliant;
+    bool compliant = false;
     if (params.operation == AksCommandOperation::PrivateNodes)
     {
         auto poolsComply = PrivateNodePoolsComply(output.Value(), outputPattern, params.matchMeansCompliant.ValueOr(true));
