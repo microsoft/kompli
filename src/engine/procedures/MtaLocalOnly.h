@@ -22,12 +22,15 @@ enum class MtaConfigurationVersion
 
     /// label: 3
     Version3,
+
+    /// label: 4
+    Version4,
 };
 
 struct MtaLocalOnlyParams
 {
     /// Configuration check version from the source audit; none checks only listening ports
-    /// pattern: ^(none|1|2|3)$
+    /// pattern: ^(none|1|2|3|4)$
     Optional<MtaConfigurationVersion> configurationVersion = MtaConfigurationVersion::None;
 };
 

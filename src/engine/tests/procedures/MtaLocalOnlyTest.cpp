@@ -39,7 +39,8 @@ protected:
     Result<Status> AuditConfigurationWithShell(const std::string& version, const std::string& commands)
     {
         Kompli::CommonContext context(nullptr, "/tmp");
-        EXPECT_CALL(mockContext, ExecuteCommand("ss -ptuln")).WillOnce(Return(Result<std::string>("")));
+        EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr(version == "4" ? "ss -plntu" : "ss -ptuln")))
+            .WillOnce(Return(Result<std::string>("")));
         EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("command -v postconf"))).WillOnce(::testing::Invoke([&](const std::string& command) {
             return context.ExecuteCommand("PATH=/nonexistent; " + commands + command);
         }));
@@ -81,6 +82,7 @@ TEST_F(EnsureMTAsLocalOnlyTest, ConfigurationVersionBindings)
         {"1", MtaConfigurationVersion::Version1},
         {"2", MtaConfigurationVersion::Version2},
         {"3", MtaConfigurationVersion::Version3},
+        {"4", MtaConfigurationVersion::Version4},
     };
     for (const auto& version : versions)
     {
@@ -88,9 +90,190 @@ TEST_F(EnsureMTAsLocalOnlyTest, ConfigurationVersionBindings)
         ASSERT_TRUE(params.HasValue()) << version.first;
         EXPECT_EQ(params.Value().configurationVersion.Value(), version.second);
     }
-    for (const auto& version : {"", "0", "4", "None", "Version1", "1 "})
+    for (const auto& version : {"", "0", "5", "None", "Version1", "1 "})
     {
         EXPECT_FALSE(ParseArguments<MtaLocalOnlyParams>({{"configurationVersion", version}}).HasValue()) << version;
+    }
+}
+
+TEST_F(EnsureMTAsLocalOnlyTest, V4InterfaceTokensMatchSourceGrammar)
+{
+    const std::vector<std::pair<std::string, Status>> cases = {
+        {"127.0.0.1", Status::Compliant},
+        {"127.24.255.9", Status::Compliant},
+        {"127.999.999.999", Status::Compliant},
+        {"LOCALHOST,loopback-only;127.0.0.2 [::1]\t::1", Status::Compliant},
+        {"localhost,192.0.2.1", Status::NonCompliant},
+        {"127.0.0.1;all", Status::NonCompliant},
+        {"0.0.0.0", Status::NonCompliant},
+        {"::", Status::NonCompliant},
+        {"localhost.example", Status::NonCompliant},
+        {"127.0.0.1/8", Status::NonCompliant},
+        {"127.0.0.1000", Status::NonCompliant},
+        {"inet_interfaces = localhost", Status::NonCompliant},
+        {"localhost\r", Status::NonCompliant},
+        {"localhost\v::1", Status::NonCompliant},
+        {"", Status::Compliant},
+        {" ,;\t", Status::Compliant},
+        {"localhost\nall", Status::Compliant},
+        {"all\nlocalhost", Status::NonCompliant},
+    };
+    for (const auto& entry : cases)
+    {
+        SCOPED_TRACE(entry.first);
+        EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("ss -plntu"))).WillOnce(Return(Result<std::string>("")));
+        EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("postconf -h inet_interfaces"))).WillOnce(Return(Result<std::string>(entry.first)));
+        const auto result = AuditMtaLocalOnly(ParseArguments<MtaLocalOnlyParams>({{"configurationVersion", "4"}}).Value(), indicators, mockContext);
+        ASSERT_TRUE(result.HasValue()) << result.Error().message;
+        EXPECT_EQ(entry.second, result.Value());
+    }
+}
+
+TEST_F(EnsureMTAsLocalOnlyTest, V4SocketsMatchSourcePortAndLoopbackBoundaries)
+{
+    const std::vector<std::pair<std::string, Status>> cases = {
+        {"127.0.0.1:25", Status::Compliant},
+        {"[::1]:465", Status::Compliant},
+        {"::1:587", Status::Compliant},
+        {"127.0.0.2:25", Status::NonCompliant},
+        {"127.0.0.1%lo:25", Status::NonCompliant},
+        {"[::1]%lo:465", Status::NonCompliant},
+        {"192.0.2.1%lo:587", Status::NonCompliant},
+        {"0.0.0.0:25", Status::NonCompliant},
+        {"*:587", Status::NonCompliant},
+        {"[::]:465", Status::NonCompliant},
+        {"[fe80::465]%eth0:123", Status::Compliant},
+        {"[fe80::25]:123", Status::Compliant},
+        {"[fe80::587]%eth0:123", Status::Compliant},
+        {"[fe80::1]%eth0:465", Status::NonCompliant},
+        {"0.0.0.0:250", Status::Compliant},
+    };
+    for (const auto& entry : cases)
+    {
+        SCOPED_TRACE(entry.first);
+        // No process column: the source inspects lines even when ss omits process details.
+        EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("ss -plntu"))).WillOnce(Return(Result<std::string>("tcp LISTEN 0 128 " + entry.first + " *:*\n")));
+        EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("postconf -h inet_interfaces")))
+            .Times(entry.second == Status::Compliant ? 1 : 0)
+            .WillRepeatedly(Return(Result<std::string>("")));
+        const auto result = AuditMtaLocalOnly(ParseArguments<MtaLocalOnlyParams>({{"configurationVersion", "4"}}).Value(), indicators, mockContext);
+        ASSERT_TRUE(result.HasValue()) << result.Error().message;
+        EXPECT_EQ(entry.second, result.Value());
+    }
+}
+
+TEST_F(EnsureMTAsLocalOnlyTest, V4MixedSocketsCannotHideNonlocalListener)
+{
+    EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("ss -plntu")))
+        .WillOnce(Return(Result<std::string>("tcp LISTEN 0 128 127.0.0.1:25 *:*\nudp UNCONN 0 0 0.0.0.0:25 *:*\n")));
+    EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("postconf -h inet_interfaces"))).Times(0);
+    const auto result = AuditMtaLocalOnly(ParseArguments<MtaLocalOnlyParams>({{"configurationVersion", "4"}}).Value(), indicators, mockContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+}
+
+TEST_F(EnsureMTAsLocalOnlyTest, V4RealQueriesUseEffectivePostfixAndFirstInstalledMta)
+{
+    for (const int exitCode : {0, 1})
+    {
+        for (const auto& entry : std::vector<std::pair<std::string, Status>>{{"127.0.0.1", Status::Compliant}, {"0.0.0.0", Status::NonCompliant},
+                 {"localhost,192.0.2.1", Status::NonCompliant}, {"", Status::Compliant}})
+        {
+            SCOPED_TRACE(entry.first + ":" + std::to_string(exitCode));
+            const auto result = AuditConfigurationWithShell("4",
+                "postconf() { [ \"$*\" = '-h inet_interfaces' ] || { printf '%s' all; return 2; }; "
+                "printf '%s' '" +
+                    entry.first + "'; printf '%s' all >&2; return " + std::to_string(exitCode) +
+                    "; }; exim() { printf '%s' 'local_interfaces = all'; }; ");
+            ASSERT_TRUE(result.HasValue()) << result.Error().message;
+            EXPECT_EQ(entry.second, result.Value());
+        }
+    }
+    const auto result = AuditConfigurationWithShell("4", "");
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+}
+
+TEST_F(EnsureMTAsLocalOnlyTest, V4RealEximQueryStripsLabelAndListSeparatorMarker)
+{
+    for (const auto& entry : std::vector<std::pair<std::string, Status>>{{"local_interfaces = <; ::1 ; 127.0.0.1", Status::Compliant},
+             {"local_interfaces = <, [::1], localhost", Status::Compliant}, {"local_interfaces = <; ::1 ; 0.0.0.0", Status::NonCompliant},
+             {"local_interfaces = ::1 : 127.0.0.1", Status::NonCompliant}, {"local_interfaces =", Status::Compliant}, {"", Status::Compliant}})
+    {
+        SCOPED_TRACE(entry.first);
+        const auto result = AuditConfigurationWithShell("4",
+            "sed() { /usr/bin/sed \"$@\"; }; exim() { [ \"$*\" = '-bP local_interfaces' ] || return 2; "
+            "printf '%s' '" +
+                entry.first + "'; return 1; }; sendmail() { printf '%s' all; }; ");
+        ASSERT_TRUE(result.HasValue()) << result.Error().message;
+        EXPECT_EQ(entry.second, result.Value());
+    }
+}
+
+TEST_F(EnsureMTAsLocalOnlyTest, V4RealSendmailQueryCollectsEveryAddress)
+{
+    for (const auto& entry : std::vector<std::pair<std::string, Status>>{{"", Status::Compliant},
+             {"O DaemonPortOptions=Port=smtp,Addr=127.0.0.1, Name=MTA", Status::Compliant}, {"O DaemonPortOptions=Port=smtp,Addr=::1, Name=MTA", Status::Compliant},
+             {"O DaemonPortOptions=Port=smtp,Addr=[::1], Name=MTA", Status::Compliant}, {"O DaemonPortOptions=Port=smtp,Addr=0.0.0.0, Name=MTA", Status::NonCompliant},
+             {"O DaemonPortOptions=Port=smtp,Addr=127.0.0.1, Name=MTA\nO DaemonPortOptions=Port=smtp,Addr=192.0.2.1, Name=MTA", Status::NonCompliant}})
+    {
+        SCOPED_TRACE(entry.first);
+        const auto result = AuditConfigurationWithShell("4",
+            "sendmail() { :; }; paste() { /usr/bin/paste \"$@\"; }; "
+            "grep() { if [ \"$*\" = '-i O DaemonPortOptions= /etc/mail/sendmail.cf' ]; then "
+            "printf '%s\\n' '" +
+                entry.first +
+                "' | /usr/bin/grep -i 'O DaemonPortOptions='; "
+                "else /usr/bin/grep \"$@\"; fi; }; ");
+        ASSERT_TRUE(result.HasValue()) << result.Error().message;
+        EXPECT_EQ(entry.second, result.Value());
+    }
+    const auto result = AuditConfigurationWithShell("4",
+        "sendmail() { :; }; grep() { printf '%s' 'missing sendmail.cf' >&2; return 2; }; paste() { /usr/bin/paste \"$@\"; }; ");
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::Compliant, result.Value());
+}
+
+TEST_F(EnsureMTAsLocalOnlyTest, V4MissingSsFailsAndProbeExecutionErrorsPropagate)
+{
+    Kompli::CommonContext context(nullptr, "/tmp");
+    EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("ss -plntu"))).WillOnce(::testing::Invoke([&](const std::string& command) {
+        return context.ExecuteCommand("PATH=/nonexistent; " + command);
+    }));
+    EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("postconf -h inet_interfaces"))).Times(0);
+    const auto params = ParseArguments<MtaLocalOnlyParams>({{"configurationVersion", "4"}}).Value();
+    auto result = AuditMtaLocalOnly(params, indicators, mockContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(Status::NonCompliant, result.Value());
+
+    EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("ss -plntu"))).WillOnce(Return(Error("execution failed", 5)));
+    result = AuditMtaLocalOnly(params, indicators, mockContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(5, result.Error().code);
+
+    EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("ss -plntu"))).WillOnce(Return(Result<std::string>("")));
+    EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("postconf -h inet_interfaces"))).WillOnce(Return(Error("execution failed", 6)));
+    result = AuditMtaLocalOnly(params, indicators, mockContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(6, result.Error().code);
+}
+
+TEST_F(EnsureMTAsLocalOnlyTest, V4AvailableSsEvaluatesStdoutEvenOnProbeFailure)
+{
+    Kompli::CommonContext context(nullptr, "/tmp");
+    const auto params = ParseArguments<MtaLocalOnlyParams>({{"configurationVersion", "4"}}).Value();
+    for (const auto& entry : std::vector<std::pair<std::string, Status>>{{"", Status::Compliant}, {"tcp LISTEN 0 128 0.0.0.0:25 *:*", Status::NonCompliant}})
+    {
+        EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("ss -plntu"))).WillOnce(::testing::Invoke([&](const std::string& command) {
+            return context.ExecuteCommand("PATH=/nonexistent; ss() { printf '%s\\n' '" + entry.first +
+                                          "'; printf '%s' 'tcp LISTEN 0 128 0.0.0.0:25 *:*' >&2; return 1; }; " + command);
+        }));
+        EXPECT_CALL(mockContext, ExecuteCommand(::testing::HasSubstr("postconf -h inet_interfaces")))
+            .Times(entry.second == Status::Compliant ? 1 : 0)
+            .WillRepeatedly(Return(Result<std::string>("")));
+        const auto result = AuditMtaLocalOnly(params, indicators, mockContext);
+        ASSERT_TRUE(result.HasValue()) << result.Error().message;
+        EXPECT_EQ(entry.second, result.Value());
     }
 }
 

@@ -180,6 +180,7 @@ inline const std::map<std::string, MtaConfigurationVersion>& MapEnum<MtaConfigur
         {"1", MtaConfigurationVersion::Version1},
         {"2", MtaConfigurationVersion::Version2},
         {"3", MtaConfigurationVersion::Version3},
+        {"4", MtaConfigurationVersion::Version4},
     };
     return map;
 }

@@ -19,6 +19,25 @@ kompli design principles are the following:
 
 The main way to extend kompli is by developing new [procedures](../src/engine/procedures/).
 
+## Versioned MTA audit
+
+[`MtaLocalOnly`](../src/engine/procedures/MtaLocalOnly.h) accepts
+`configurationVersion` values `none`, `1`, `2`, `3`, and `4`; the default and
+older versions retain their existing behavior. Version `4` maps the
+`nix_mta_chk_v4.sh` audit: effective Postfix interfaces (`postconf -h`), Exim
+list-marker removal, and all Sendmail `Addr` values. Each comma, semicolon,
+space, or tab-separated token on the first line must match the source's
+loopback grammar (`localhost`, `loopback-only`, `::1`, `[::1]`, or
+`127` followed by three one-to-three-digit octets). This intentionally does
+not validate octet ranges or accept CIDR notation.
+
+The v4 socket check uses exact mail-port boundaries and permits only
+`127.0.0.1` and `::1`, not every address in `127/8` or an interface named `lo`.
+Missing `ss` is noncompliant. Available probes follow source stdout semantics
+even on nonzero exit; empty MTA configuration is N/A and leaves socket results
+authoritative. Native command-execution errors still propagate. Deploy the
+updated engine before packages using `configurationVersion: "4"`.
+
 # 2. Overall kompli Architecture
 
 ## 2.1. Repository Layout

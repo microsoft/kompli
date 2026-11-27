@@ -59,7 +59,7 @@ const char* Bindings<LoginDefsOptionParams>::names[] = {"option", "value", "comp
 // MountPointExists.h:15
 const char* Bindings<MountPointExistsParams>::names[] = {"mountPoint"};
 
-// MtaLocalOnly.h:32
+// MtaLocalOnly.h:35
 const char* Bindings<MtaLocalOnlyParams>::names[] = {"configurationVersion"};
 
 // NameserverCount.h:16

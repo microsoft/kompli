@@ -18,7 +18,7 @@
                 "configurationVersion": {
                   "type": "string",
                   "description": "Configuration check version from the source audit; none checks only listening ports",
-                  "pattern": "(^\\$[a-zA-Z0-9_]+:((none|1|2|3))$|(^(none|1|2|3)$))"
+                  "pattern": "(^\\$[a-zA-Z0-9_]+:((none|1|2|3|4))$|(^(none|1|2|3|4)$))"
                 }
               }
             }
