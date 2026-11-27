@@ -4,11 +4,14 @@
 #include "CommonUtils.h"
 #include "MockContext.h"
 
+#include <JsonWrapper.h>
 #include <PackageInstalled.h>
+#include <cstdlib>
 #include <dirent.h>
 #include <fstream>
 #include <gtest/gtest.h>
 #include <linux/limits.h>
+#include <parson.h>
 #include <string>
 #include <unistd.h>
 
@@ -88,6 +91,22 @@ protected:
             cache << pkg.first << " " << pkg.second << std::endl;
         }
         cache.close();
+    }
+
+    PackageInstalledParams LatestParams(const std::string& name = "sample-package")
+    {
+        PackageInstalledParams params;
+        params.packageName = name;
+        params.packageManager = PackageManagerType::DPKG;
+        params.latestPackageVersion = true;
+        return params;
+    }
+
+    void ExpectCandidate(const std::string& installed, const std::string& candidate, const std::string& name = "sample-package")
+    {
+        CreateCacheFile("dpkg", time(nullptr), {{name, installed}});
+        EXPECT_CALL(mContext, ExecuteCommand("LC_ALL=C apt-cache policy -- \"" + name + "\""))
+            .WillOnce(Return(Result<std::string>(name + ":\n  Installed: " + installed + "\n  Candidate: " + candidate + "\n  Version table:\n")));
     }
 };
 
@@ -655,4 +674,232 @@ TEST_F(PackageInstalledTest, MixedEpochAndNoEpochComparison_Rpm)
     auto result = AuditPackageInstalled(params, mIndicators, mContext);
     ASSERT_TRUE(result.HasValue());
     ASSERT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(PackageInstalledTest, LatestVersionBelowCandidate)
+{
+    ExpectCandidate("3.1.4-2", "3.1.4-3");
+    EXPECT_CALL(mContext, ExecuteCommand("dpkg --compare-versions \"3.1.4-2\" ge \"3.1.4-3\"; printf '%s' \"$?\""))
+        .WillOnce(Return(Result<std::string>("1")));
+    auto result = AuditPackageInstalled(LatestParams(), mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+    EXPECT_THAT(mFormatter.Format(mIndicators).Value(), HasSubstr("APT candidate 3.1.4-3"));
+}
+
+TEST_F(PackageInstalledTest, LatestVersionMeetsCandidateAndReusesCache)
+{
+    ExpectCandidate("3.1.4-2", "3.1.4-2");
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("dpkg --compare-versions"))).Times(2).WillRepeatedly(Return(Result<std::string>("0")));
+    for (int i = 0; i < 2; ++i)
+    {
+        auto result = AuditPackageInstalled(LatestParams(), mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), Status::Compliant);
+    }
+}
+
+TEST_F(PackageInstalledTest, LatestVersionWithoutCandidate)
+{
+    ExpectCandidate("3.1.4-2", "(none)");
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("dpkg --compare-versions"))).Times(0);
+    auto result = AuditPackageInstalled(LatestParams(), mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(PackageInstalledTest, LatestVersionMissingPackage)
+{
+    CreateCacheFile("dpkg", time(nullptr), {{"other-package", "1.0"}});
+    EXPECT_CALL(mContext, ExecuteCommand(testing::_)).Times(0);
+    auto result = AuditPackageInstalled(LatestParams(), mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(PackageInstalledTest, LatestVersionPackageRemovedSinceCache)
+{
+    ExpectCandidate("(none)", "3.1.4-2");
+    auto result = AuditPackageInstalled(LatestParams(), mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(PackageInstalledTest, LatestVersionAutodetectsDpkgFromCache)
+{
+    ExpectCandidate("3.1.4-2", "3.1.4-2");
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("dpkg --compare-versions"))).WillOnce(Return(Result<std::string>("0")));
+    auto params = LatestParams();
+    params.packageManager = PackageManagerType::Autodetect;
+    auto result = AuditPackageInstalled(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(PackageInstalledTest, LatestVersionRejectsRpm)
+{
+    auto params = LatestParams();
+    params.packageManager = PackageManagerType::RPM;
+    EXPECT_CALL(mContext, ExecuteCommand(testing::_)).Times(0);
+    auto result = AuditPackageInstalled(params, mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_EQ(result.Error().code, EINVAL);
+}
+
+TEST_F(PackageInstalledTest, LatestVersionAptFailure)
+{
+    CreateCacheFile("dpkg", time(nullptr), {{"sample-package", "3.1.4-2"}});
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("apt-cache policy"))).WillOnce(Return(Result<std::string>(Error("apt-cache unavailable", 127))));
+    auto result = AuditPackageInstalled(LatestParams(), mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_THAT(result.Error().message, HasSubstr("apt-cache unavailable"));
+}
+
+TEST_F(PackageInstalledTest, LatestVersionInvalidPolicy)
+{
+    CreateCacheFile("dpkg", time(nullptr), {{"sample-package", "3.1.4-2"}});
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("apt-cache policy")))
+        .WillOnce(Return(Result<std::string>("sample-package:\n  Installed: 3.1.4-2\n")));
+    auto result = AuditPackageInstalled(LatestParams(), mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_THAT(result.Error().message, HasSubstr("Invalid APT policy"));
+}
+
+TEST_F(PackageInstalledTest, LatestVersionAmbiguousPolicy)
+{
+    CreateCacheFile("dpkg", time(nullptr), {{"sample-package", "3.1.4-2"}});
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("apt-cache policy")))
+        .WillOnce(Return(Result<std::string>("sample-package:\n  Installed: 3.1.4-2\n  Candidate: 3.1.4-2\nother:\n  Installed: 1\n  Candidate: 2\n")));
+    auto result = AuditPackageInstalled(LatestParams(), mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_THAT(result.Error().message, HasSubstr("Ambiguous APT policy"));
+}
+
+TEST_F(PackageInstalledTest, LatestVersionComparisonFailure)
+{
+    ExpectCandidate("3.1.4-2", "invalid-version");
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("dpkg --compare-versions"))).WillOnce(Return(Result<std::string>("2")));
+    auto result = AuditPackageInstalled(LatestParams(), mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_THAT(result.Error().message, HasSubstr("exit status 2"));
+}
+
+TEST_F(PackageInstalledTest, LatestVersionComparisonCommandFailure)
+{
+    ExpectCandidate("3.1.4-2", "3.1.4-3");
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("dpkg --compare-versions"))).WillOnce(Return(Result<std::string>(Error("command failed"))));
+    auto result = AuditPackageInstalled(LatestParams(), mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_THAT(result.Error().message, HasSubstr("Failed to compare dpkg versions"));
+}
+
+TEST_F(PackageInstalledTest, LatestVersionDoesNotReuseStaleCacheOnRefreshFailure)
+{
+    CreateCacheFile("dpkg", time(nullptr) - 4000, {{"sample-package", "3.1.4-2"}});
+    EXPECT_CALL(mContext, ExecuteCommand(dpkgCommand)).WillOnce(Return(Result<std::string>(Error("dpkg unavailable"))));
+    auto result = AuditPackageInstalled(LatestParams(), mIndicators, mContext);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_THAT(result.Error().message, HasSubstr("Failed to get installed packages"));
+}
+
+TEST_F(PackageInstalledTest, LatestVersionRefreshesExpiredCandidate)
+{
+    CreateCacheFile("dpkg", time(nullptr) - 4000, {{"sample-package", "3.1.4-2"}});
+    {
+        std::ofstream cache(cacheFile, std::ios::app);
+        cache << "# Candidate sample-package 3.1.4-2\n";
+    }
+    EXPECT_CALL(mContext, ExecuteCommand(dpkgCommand)).WillOnce(Return(Result<std::string>(dpkgWithPackageOutput)));
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("apt-cache policy")))
+        .WillOnce(Return(Result<std::string>("sample-package:\n  Installed: 3.1.4-2\n  Candidate: 3.1.4-3\n")));
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("dpkg --compare-versions"))).WillOnce(Return(Result<std::string>("1")));
+    auto result = AuditPackageInstalled(LatestParams(), mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(PackageInstalledTest, LatestVersionAlsoEnforcesMinimumVersion)
+{
+    ExpectCandidate("3.1.4-2", "3.1.4-2");
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("dpkg --compare-versions"))).WillOnce(Return(Result<std::string>("0")));
+    auto params = LatestParams();
+    params.minPackageVersion = "4.0";
+    auto result = AuditPackageInstalled(params, mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(PackageInstalledTest, LatestVersionHeldArchitectureQualifiedPackage)
+{
+    EXPECT_CALL(mContext, ExecuteCommand(dpkgCommand))
+        .WillOnce(Return(Result<std::string>("+++-====\nhi  sample-package:amd64 3.1.4-2 amd64 Held package\n")));
+    EXPECT_CALL(mContext, ExecuteCommand("LC_ALL=C apt-cache policy -- \"sample-package:amd64\""))
+        .WillOnce(Return(Result<std::string>("sample-package:amd64:\n  Installed: 3.1.4-2\n  Candidate: 3.1.4-3\n")));
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("dpkg --compare-versions"))).WillOnce(Return(Result<std::string>("1")));
+    auto result = AuditPackageInstalled(LatestParams("sample-package:amd64"), mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(PackageInstalledTest, LatestVersionUsesNativeDebianOrdering)
+{
+    if (access("/usr/bin/dpkg", X_OK) != 0)
+    {
+        GTEST_SKIP() << "dpkg is not installed";
+    }
+    const std::vector<std::tuple<std::string, std::string, Status>> cases = {
+        {"1.0~rc1-1", "1.0-1", Status::NonCompliant},
+        {"1:1.0-1", "2.0-1", Status::Compliant},
+        {"1.0-1", "1.0-1+b1", Status::NonCompliant},
+        {"1.0-2", "1.0-1", Status::Compliant},
+    };
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("dpkg --compare-versions"))).WillRepeatedly([](const std::string& cmd) -> Result<std::string> {
+        char* output = nullptr;
+        int status = ::ExecuteCommand(nullptr, cmd.c_str(), false, false, 0, 0, &output, nullptr, nullptr);
+        std::string text = output ? output : "";
+        std::free(output);
+        if (status != 0)
+        {
+            return Error("Failed to execute dpkg", status);
+        }
+        return text;
+    });
+    for (const auto& entry : cases)
+    {
+        SCOPED_TRACE(std::get<0>(entry) + " vs " + std::get<1>(entry));
+        ExpectCandidate(std::get<0>(entry), std::get<1>(entry));
+        auto result = AuditPackageInstalled(LatestParams(), mIndicators, mContext);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value(), std::get<2>(entry));
+    }
+}
+
+TEST_F(PackageInstalledTest, LatestVersionArchitectureAlias)
+{
+    EXPECT_CALL(mContext, ExecuteCommand(dpkgCommand)).WillOnce(Return(Result<std::string>(dpkgWithPackageOutput)));
+    EXPECT_CALL(mContext, ExecuteCommand("LC_ALL=C apt-cache policy -- \"sample-package:amd64\""))
+        .WillOnce(Return(Result<std::string>("sample-package:\n  Installed: 3.1.4-2\n  Candidate: 3.1.4-2\n")));
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("dpkg --compare-versions"))).WillOnce(Return(Result<std::string>("0")));
+    auto result = AuditPackageInstalled(LatestParams("sample-package:amd64"), mIndicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(PackageInstalledTest, LatestVersionFourPayloadsThroughEvaluator)
+{
+    const std::vector<std::string> packages = {"libpam-runtime", "libpam-modules", "libpam-pwquality", "cracklib-runtime"};
+    EXPECT_CALL(mContext, ExecuteCommand(HasSubstr("dpkg --compare-versions"))).Times(4).WillRepeatedly(Return(Result<std::string>("1")));
+    const std::map<std::string, std::string> parameters;
+    for (const auto& package : packages)
+    {
+        SCOPED_TRACE(package);
+        ExpectCandidate("1.0-1", "1.0-2", package);
+        auto json = Kompli::JsonWrapper::FromString("{\"PackageInstalled\":{\"packageName\":\"" + package +
+                                                    "\",\"packageManager\":\"dpkg\",\"latestPackageVersion\":\"true\"}}");
+        ASSERT_TRUE(json.HasValue());
+        Kompli::Evaluator evaluator(package, json_value_get_object(json->get()), parameters, mContext);
+        auto result = evaluator.ExecuteAudit(mFormatter);
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(result.Value().status, Status::NonCompliant);
+    }
 }

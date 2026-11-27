@@ -31,6 +31,9 @@ struct PackageInstalledParams
     /// Package manager, autodetected by default
     /// pattern: ^(rpm|dpkg)$
     Optional<PackageManagerType> packageManager = PackageManagerType::Autodetect;
+
+    /// Require the installed version to meet the locally cached APT candidate (dpkg only)
+    Optional<bool> latestPackageVersion = false;
 };
 
 Result<Status> AuditPackageInstalled(const PackageInstalledParams& params, IndicatorsTree& indicators, ContextInterface& context);

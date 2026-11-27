@@ -533,9 +533,9 @@ template <>
 struct Bindings<PackageInstalledParams>
 {
     using T = PackageInstalledParams;
-    static constexpr size_t size = 3;
+    static constexpr size_t size = 4;
     static const char* names[];
-    static constexpr auto members = std::make_tuple(&T::packageName, &T::minPackageVersion, &T::packageManager);
+    static constexpr auto members = std::make_tuple(&T::packageName, &T::minPackageVersion, &T::packageManager, &T::latestPackageVersion);
 };
 
 // Defines the bindings for the SCEParams structure.

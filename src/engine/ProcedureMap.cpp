@@ -74,8 +74,8 @@ const char* Bindings<NoDuplicateEntriesParams>::names[] = {"filename", "delimite
 // NoShellAccountsLocked.h:21
 const char* Bindings<NoShellAccountsLockedParams>::names[] = {"excludeUsers", "skipBelowUidMin", "skipInvalidShells"};
 
-// PackageInstalled.h:34
-const char* Bindings<PackageInstalledParams>::names[] = {"packageName", "minPackageVersion", "packageManager"};
+// PackageInstalled.h:37
+const char* Bindings<PackageInstalledParams>::names[] = {"packageName", "minPackageVersion", "packageManager", "latestPackageVersion"};
 
 // SCE.h:18
 const char* Bindings<SCEParams>::names[] = {"scriptName", "environment"};

@@ -5,6 +5,7 @@
 #include <PackageInstalled.h>
 #include <ProcedureMap.h>
 #include <Result.h>
+#include <StringTools.h>
 #include <cstdio>
 #include <fstream>
 #include <functional>
@@ -25,6 +26,7 @@ struct PackageCache
     time_t lastUpdateTime;
     PackageManagerType packageManager = PackageManagerType::Autodetect;
     std::map<std::string, std::string> packages;
+    std::map<std::string, std::string> candidates;
 };
 
 static constexpr long PACKAGELIST_TTL = 3000L;        // just shy of an hours
@@ -119,6 +121,17 @@ Result<PackageCache> LoadPackageCache(const std::string& path)
     std::string line;
     while (std::getline(cacheFile, line))
     {
+        if (line.find("# Candidate ") == 0)
+        {
+            std::istringstream candidateStream(line.substr(12));
+            std::string name, version, extra;
+            if (!(candidateStream >> name >> version) || (candidateStream >> extra))
+            {
+                return Error("Invalid package candidate in cache file");
+            }
+            cache.candidates[name] = version;
+            continue;
+        }
         if (!line.empty())
         {
             auto sepPos = line.find(' ');
@@ -174,6 +187,15 @@ Result<int> SavePackageCache(const PackageCache& cache, const std::string& path)
         if (!tempFile)
         {
             return Error("Failed to write package name to temporary file");
+        }
+    }
+
+    for (const auto& candidate : cache.candidates)
+    {
+        tempFile << "# Candidate " << candidate.first << " " << candidate.second << "\n";
+        if (!tempFile)
+        {
+            return Error("Failed to write package candidate to temporary file");
         }
     }
 
@@ -253,20 +275,90 @@ Result<PackageCache> GetInstalledPackagesDpkg(ContextInterface& context)
             continue;
         }
 
-        if (line.size() >= 3 && line.substr(0, 3) == "ii ")
+        if (line.size() >= 3 && line[1] == 'i' && line[2] == ' ')
         {
             std::istringstream lineStream(line);
-            std::string status, name, version;
-            lineStream >> status >> name >> version;
+            std::string status, name, version, architecture;
+            lineStream >> status >> name >> version >> architecture;
             if (!name.empty())
             {
+                cache.packages[name] = version;
                 // some packages have arch after a colon (e.g. "foo:amd64"), get rid of it
                 name = name.substr(0, name.find(':'));
                 cache.packages[name] = version;
+                if (!architecture.empty())
+                {
+                    cache.packages[name + ":" + architecture] = version;
+                }
             }
         }
     }
     return cache;
+}
+
+Result<int> LoadDpkgCandidate(PackageCache& cache, const std::string& packageName, ContextInterface& context)
+{
+    auto output = context.ExecuteCommand("LC_ALL=C apt-cache policy -- \"" + Kompli::EscapeForShell(packageName) + "\"");
+    if (!output.HasValue())
+    {
+        return Error("Failed to query APT candidate: " + output.Error().message);
+    }
+
+    std::istringstream stream(output.Value());
+    std::string line, installed, candidate;
+    while (std::getline(stream, line))
+    {
+        line = Kompli::TrimWhiteSpaces(line);
+        if (line.find("Installed: ") == 0)
+        {
+            if (!installed.empty())
+            {
+                return Error("Ambiguous APT policy output for package " + packageName);
+            }
+            installed = line.substr(11);
+        }
+        else if (line.find("Candidate: ") == 0)
+        {
+            if (!candidate.empty())
+            {
+                return Error("Ambiguous APT policy output for package " + packageName);
+            }
+            candidate = line.substr(11);
+        }
+    }
+    if (installed.empty() || candidate.empty())
+    {
+        return Error("Invalid APT policy output for package " + packageName);
+    }
+    if (installed == "(none)")
+    {
+        cache.packages.erase(packageName);
+    }
+    else
+    {
+        cache.packages[packageName] = installed;
+    }
+    cache.candidates[packageName] = candidate;
+    return 0;
+}
+
+Result<bool> DpkgVersionAtLeast(const std::string& installed, const std::string& required, ContextInterface& context)
+{
+    auto output = context.ExecuteCommand("dpkg --compare-versions \"" + Kompli::EscapeForShell(installed) + "\" ge \"" +
+                                         Kompli::EscapeForShell(required) + "\"; printf '%s' \"$?\"");
+    if (!output.HasValue())
+    {
+        return Error("Failed to compare dpkg versions: " + output.Error().message);
+    }
+    if (output.Value() == "0")
+    {
+        return true;
+    }
+    if (output.Value() == "1")
+    {
+        return false;
+    }
+    return Error("Failed to compare dpkg versions: exit status " + output.Value());
 }
 
 int VersionCompare(const std::string& v1, const std::string& v2)
@@ -497,6 +589,13 @@ Result<Status> AuditPackageInstalled(const PackageInstalledParams& params, Indic
         packageManager = result.Value();
     }
 
+    const bool latestPackageVersion = params.latestPackageVersion.HasValue() && params.latestPackageVersion.Value();
+    if (latestPackageVersion && packageManager != PackageManagerType::DPKG)
+    {
+        OsConfigLogError(log, "latestPackageVersion is only supported for dpkg");
+        return Error("latestPackageVersion is only supported for dpkg", EINVAL);
+    }
+
     if (params.minPackageVersion.HasValue())
     {
         OsConfigLogInfo(log, "Checking if package %s is installed with minimum version %s using package manager %s", params.packageName.c_str(),
@@ -540,7 +639,7 @@ Result<Status> AuditPackageInstalled(const PackageInstalledParams& params, Indic
         }
         else
         {
-            if (cacheStale)
+            if (cacheStale && !latestPackageVersion)
             {
                 OsConfigLogError(log, "Failed to get installed packages: %s, reusing stale cache", cacheResult.Error().message.c_str());
             }
@@ -552,11 +651,44 @@ Result<Status> AuditPackageInstalled(const PackageInstalledParams& params, Indic
         }
     }
 
+    if (latestPackageVersion && cache.packages.count(params.packageName) && !cache.candidates.count(params.packageName))
+    {
+        auto candidateResult = LoadDpkgCandidate(cache, params.packageName, context);
+        if (!candidateResult.HasValue())
+        {
+            OsConfigLogError(log, "%s", candidateResult.Error().message.c_str());
+            return candidateResult.Error();
+        }
+        auto saveResult = SavePackageCache(cache, context.GetStatePath() + "/ComplianceEnginePackageCache");
+        if (!saveResult.HasValue())
+        {
+            OsConfigLogError(log, "Failed to save package candidates: %s", saveResult.Error().message.c_str());
+        }
+    }
+
     auto packageIt = cache.packages.find(params.packageName);
     if (packageIt == cache.packages.end())
     {
         OsConfigLogInfo(log, "Package %s is not installed", params.packageName.c_str());
         return indicators.NonCompliant("Package " + params.packageName + " is not installed");
+    }
+    if (latestPackageVersion)
+    {
+        const auto& candidate = cache.candidates.at(params.packageName);
+        if (candidate != "(none)")
+        {
+            auto comparison = DpkgVersionAtLeast(packageIt->second, candidate, context);
+            if (!comparison.HasValue())
+            {
+                OsConfigLogError(log, "%s", comparison.Error().message.c_str());
+                return comparison.Error();
+            }
+            if (!comparison.Value())
+            {
+                return indicators.NonCompliant("Package " + params.packageName + " is installed with version " + packageIt->second +
+                                               ", which is less than the locally cached APT candidate " + candidate);
+            }
+        }
     }
     if (params.minPackageVersion.HasValue())
     {
@@ -576,6 +708,6 @@ Result<Status> AuditPackageInstalled(const PackageInstalledParams& params, Indic
                                         ", which meets or exceeds the minimum required version " + params.minPackageVersion.Value());
         }
     }
-    return indicators.Compliant("Package " + params.packageName + " is installed");
+    return indicators.Compliant("Package " + params.packageName + (latestPackageVersion ? " is installed and meets the locally cached APT candidate" : " is installed"));
 }
 } // namespace Kompli

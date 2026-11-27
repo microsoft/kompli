@@ -29,6 +29,10 @@
                   "type": "string",
                   "description": "Package manager, autodetected by default",
                   "pattern": "(^\\$[a-zA-Z0-9_]+:((rpm|dpkg))$|(^(rpm|dpkg)$))"
+                },
+                "latestPackageVersion": {
+                  "type": "string",
+                  "description": "Require the installed version to meet the locally cached APT candidate (dpkg only)"
                 }
               }
             }
