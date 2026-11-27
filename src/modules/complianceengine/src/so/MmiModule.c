@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "MCInterface.h"
 #include "Logging.h"
+#include "MCInterface.h"
 
 #include <Mmi.h>
 #include <assert.h>

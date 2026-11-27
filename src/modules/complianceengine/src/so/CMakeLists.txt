@@ -3,7 +3,7 @@
 
 project(complianceengine)
 
-add_library(complianceengine SHARED ComplianceEngineModule.c)
+add_library(complianceengine SHARED MmiModule.c)
 target_link_libraries(complianceengine
     PRIVATE
         commonutils
