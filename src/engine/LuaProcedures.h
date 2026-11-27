@@ -49,6 +49,12 @@ struct LuaCallContext
 //   - Snapshot semantics: iterator holds shared_ptr<const FSCache>; unaffected by background refresh.
 //   - Arguments outside unsigned 32-bit range produce Lua error.
 //
+//   ce.GetSshdVersion() -> string
+// Behavior:
+//   - Executes only the fixed command "sshd -V 2>&1" through the current execution context.
+//   - Returns the raw banner without parsing, trimming, or interpreting version numbers.
+//   - Raises Lua error on command failure, missing call context, or any arguments.
+//
 //   ce.log.info(message)    -- log at informational level
 //   ce.log.warning(message) -- log at warning level
 //   ce.log.error(message)   -- log at error level

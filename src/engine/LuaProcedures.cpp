@@ -330,6 +330,34 @@ static int LuaGetFilesystemEntriesWithPerms(lua_State* L)
     return 1;
 }
 
+int LuaGetSshdVersion(lua_State* L)
+{
+    if (lua_gettop(L) != 0)
+    {
+        return luaL_error(L, "GetSshdVersion expects no arguments");
+    }
+
+    lua_getfield(L, LUA_REGISTRYINDEX, "lua_call_context");
+    auto* view = reinterpret_cast<LuaCallContext*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    if (!view)
+    {
+        return luaL_error(L, "internal error: missing call context");
+    }
+
+    {
+        auto result = view->ctx.ExecuteCommand("sshd -V 2>&1");
+        if (result.HasValue())
+        {
+            lua_pushlstring(L, result.Value().data(), result.Value().size());
+            return 1;
+        }
+        lua_pushfstring(L, "GetSshdVersion failed (code %d): %s", result.Error().code, result.Error().message.c_str());
+    }
+    // Destroy the command result before Lua's error longjmp.
+    return lua_error(L);
+}
+
 int LuaSystemdCatConfig(lua_State* L)
 {
     // Fetch call context placed in registry by evaluator to access ContextInterface
@@ -629,6 +657,9 @@ void RegisterLuaProcedures(lua_State* L)
 
     lua_pushcfunction(L, LuaSystemdCatConfig);
     lua_setfield(L, -2, "SystemdCatConfig");
+
+    lua_pushcfunction(L, LuaGetSshdVersion);
+    lua_setfield(L, -2, "GetSshdVersion");
 
     // Get or create ce.log table
     lua_getfield(L, -1, "log");

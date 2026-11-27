@@ -3,8 +3,11 @@
 
 #include "Indicators.h"
 #include "LuaEvaluator.h"
+#include "LuaProcedures.h"
 #include "MockContext.h"
 #include "Result.h"
+#include "lauxlib.h"
+#include "lua.h"
 
 #include <cerrno>
 #include <cstring>
@@ -79,6 +82,105 @@ protected:
         return script;
     }
 };
+
+TEST_F(LuaProceduresTest, GetSshdVersion_FixedCommandAndRawBanner)
+{
+    const std::string banner = "OpenSSH_9.10p1 Ubuntu-1, OpenSSL 3.5.0\n";
+    EXPECT_CALL(mContext, ExecuteCommand(testing::_)).Times(0);
+    EXPECT_CALL(mContext, ExecuteCommand("sshd -V 2>&1")).WillOnce(testing::Return(banner));
+
+    LuaEvaluator evaluator;
+    const auto result = evaluator.Evaluate("return true, ce.GetSshdVersion()", mIndicators, mContext, Action::Audit);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+    EXPECT_EQ(mIndicators.GetRootNode()->indicators.back().message, banner);
+}
+
+TEST_F(LuaProceduresTest, GetSshdVersion_PreservesBinaryOutput)
+{
+    EXPECT_CALL(mContext, ExecuteCommand("sshd -V 2>&1")).WillOnce(testing::Return(std::string("a\0b\n", 4)));
+
+    LuaEvaluator evaluator;
+    const auto result = evaluator.Evaluate(
+        "local banner = ce.GetSshdVersion(); return #banner == 4 and banner == 'a\\0b\\n'",
+        mIndicators, mContext, Action::Audit);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(LuaProceduresTest, GetSshdVersion_EmptyOutput)
+{
+    EXPECT_CALL(mContext, ExecuteCommand("sshd -V 2>&1")).WillOnce(testing::Return(std::string()));
+
+    LuaEvaluator evaluator;
+    const auto result = evaluator.Evaluate("return ce.GetSshdVersion() == ''", mIndicators, mContext, Action::Audit);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(LuaProceduresTest, GetSshdVersion_CommandFailureRaisesError)
+{
+    EXPECT_CALL(mContext, ExecuteCommand("sshd -V 2>&1"))
+        .WillOnce(testing::Return(Kompli::Error("sshd: command not found", 127)));
+
+    LuaEvaluator evaluator;
+    const auto result = evaluator.Evaluate("ce.GetSshdVersion(); return true", mIndicators, mContext, Action::Audit);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("GetSshdVersion failed (code 127): sshd: command not found"), std::string::npos);
+}
+
+TEST_F(LuaProceduresTest, GetSshdVersion_CodeOnlyFailureRaisesError)
+{
+    EXPECT_CALL(mContext, ExecuteCommand("sshd -V 2>&1")).WillOnce(testing::Return(Kompli::Error(EIO)));
+
+    LuaEvaluator evaluator;
+    const auto result = evaluator.Evaluate("ce.GetSshdVersion(); return true", mIndicators, mContext, Action::Audit);
+    ASSERT_FALSE(result.HasValue());
+    EXPECT_NE(result.Error().message.find("GetSshdVersion failed (code " + std::to_string(EIO) + ")"), std::string::npos);
+}
+
+TEST_F(LuaProceduresTest, GetSshdVersion_RejectsArgumentsWithoutExecuting)
+{
+    EXPECT_CALL(mContext, ExecuteCommand(testing::_)).Times(0);
+    LuaEvaluator evaluator;
+    for (const auto* args : {"nil", "'sshd -V; touch injected'", "1", "false", "{}", "nil, nil"})
+    {
+        SCOPED_TRACE(args);
+        const auto result = evaluator.Evaluate(
+            std::string("ce.GetSshdVersion(") + args + "); return true", mIndicators, mContext, Action::Audit);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_NE(result.Error().message.find("GetSshdVersion expects no arguments"), std::string::npos);
+    }
+}
+
+TEST_F(LuaProceduresTest, GetSshdVersion_AvailableInSandbox)
+{
+    EXPECT_CALL(mContext, ExecuteCommand("sshd -V 2>&1")).WillOnce(testing::Return(std::string("raw banner")));
+
+    LuaEvaluator evaluator;
+    const auto result = evaluator.Evaluate(
+        "return type(ce.GetSshdVersion) == 'function' and io.popen == nil and package == nil "
+        "and (os == nil or os.execute == nil) and ce.GetSshdVersion() == 'raw banner'",
+        mIndicators, mContext, Action::Audit);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(LuaProceduresTest, GetSshdVersion_MissingCallContextRaisesError)
+{
+    EXPECT_CALL(mContext, ExecuteCommand(testing::_)).Times(0);
+    lua_State* state = luaL_newstate();
+    ASSERT_NE(state, nullptr);
+    lua_newtable(state);
+    lua_setfield(state, LUA_REGISTRYINDEX, "restricted_env");
+    Kompli::RegisterLuaProcedures(state);
+    lua_getfield(state, LUA_REGISTRYINDEX, "restricted_env");
+    lua_getfield(state, -1, "ce");
+    lua_getfield(state, -1, "GetSshdVersion");
+    EXPECT_EQ(lua_pcall(state, 0, 1, 0), LUA_ERRRUN);
+    EXPECT_STREQ(lua_tostring(state, -1), "internal error: missing call context");
+    lua_close(state);
+}
 
 TEST_F(LuaProceduresTest, GetFilesystemEntriesWithPermsBasic)
 {
