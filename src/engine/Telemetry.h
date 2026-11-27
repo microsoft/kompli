@@ -117,7 +117,7 @@ void LogCreatedTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& t
 
 #ifdef BUILD_TELEMETRY
 
-constexpr std::size_t kTelemetryLogSizeLimit = 10 * 1024 * 1024;
+extern const std::size_t kTelemetryLogSizeLimit;
 
 // Opens an append-only event log, removing oldest whole lines until its size
 // is strictly below the limit. Returns -1 and logs an error on failure.

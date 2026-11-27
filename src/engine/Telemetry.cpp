@@ -48,6 +48,8 @@ void LogCreatedTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& t
 
 #ifdef BUILD_TELEMETRY
 
+const std::size_t kTelemetryLogSizeLimit = 10 * 1024 * 1024;
+
 int OpenTelemetryFile(const std::string& path, OsConfigLogHandle log)
 {
     const int descriptor = open(path.c_str(), O_CREAT | O_NOFOLLOW | O_RDWR | O_CLOEXEC | O_NONBLOCK, 0600);
