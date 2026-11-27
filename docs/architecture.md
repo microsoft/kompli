@@ -380,6 +380,11 @@ The CLI continues to log to stderr unless `--log-file` is supplied.
 
 Telemetry-enabled builds use `/var/lib/kompli/telemetry.events.json` for the
 event file and `/var/lib/kompli/telemetry.cache.db` for the telemetry cache.
+Whenever the CLI or MC engine opens the event file, it removes the oldest
+newline-delimited events if the file is at least 10 MiB (10,485,760 bytes),
+keeping the newest events in order and reducing its size to strictly below
+that limit. Events appended during a run may exceed the limit again; the next
+open trims them. A single oversized event is discarded rather than split.
 Existing logs and telemetry data under the old OSConfig paths are not migrated.
 
 # 6. kompli Universal Native Resource Provider (NRP)

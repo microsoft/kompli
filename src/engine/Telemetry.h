@@ -8,6 +8,7 @@
 #include "Result.h"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <string>
@@ -115,6 +116,13 @@ void LogCreatedTelemetryEvent(const TelemetryEvent& event, TelemetryInterface& t
     const std::chrono::system_clock::time_point& createdAt);
 
 #ifdef BUILD_TELEMETRY
+
+constexpr std::size_t kTelemetryLogSizeLimit = 10 * 1024 * 1024;
+
+// Opens an append-only event log, removing oldest whole lines until its size
+// is strictly below the limit. Returns -1 and logs an error on failure.
+// The caller owns the returned descriptor.
+int OpenTelemetryFile(const std::string& path, OsConfigLogHandle log);
 
 class Telemetry : public TelemetryInterface
 {
