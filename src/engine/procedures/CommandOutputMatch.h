@@ -29,10 +29,10 @@ enum class RegexType
 
 struct CommandOutputMatchParams
 {
-    /// Command to be executed
+    /// Exact allowlisted command to execute; apt-config dump reads effective APT configuration without modifying it
     std::string command;
 
-    /// Awk transformation in the middle, optional
+    /// Optional GNU awk transformation, executed in sandbox mode (-S)
     Optional<std::string> awk;
 
     /// Regex to be matched

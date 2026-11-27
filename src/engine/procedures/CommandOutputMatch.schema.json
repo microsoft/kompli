@@ -20,11 +20,11 @@
               "properties": {
                 "command": {
                   "type": "string",
-                  "description": "Command to be executed"
+                  "description": "Exact allowlisted command to execute; apt-config dump reads effective APT configuration without modifying it"
                 },
                 "awk": {
                   "type": "string",
-                  "description": "Awk transformation in the middle, optional"
+                  "description": "Optional GNU awk transformation, executed in sandbox mode (-S)"
                 },
                 "pattern": {
                   "type": "string",
