@@ -366,17 +366,7 @@ int main(int argc, char* argv[])
         else
         {
             auto telemetry_file = telemetry_log_path + std::string(telemetry_log_file);
-            telemetry_fd = open(telemetry_file.c_str(), O_CREAT | O_APPEND | O_NOFOLLOW | O_WRONLY, 0600);
-            if (0 > telemetry_fd)
-            {
-                OsConfigLogError(logHandle.get(), "Failed to open telemetry file  %s: %d", telemetry_file.c_str(), errno);
-            }
-            else if (0 != fchmod(telemetry_fd, 0600))
-            {
-                OsConfigLogError(logHandle.get(), "Failed to set telemetry file permissions %s: %d", telemetry_file.c_str(), errno);
-                close(telemetry_fd);
-                telemetry_fd = -1;
-            }
+            telemetry_fd = Kompli::OpenTelemetryFile(telemetry_file, logHandle.get());
         }
     }
 #endif // BUILD_TELEMETRY

@@ -1,19 +1,24 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+#include "Engine.h"
 #include "JsonWrapper.h"
 #include "MmiResults.h"
+#include "MockContext.h"
 #include "Optional.h"
 #include "Result.h"
 #include "Telemetry.h"
 
 #include <algorithm>
+#include <fcntl.h>
+#include <fstream>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <map>
 #include <memory>
 #include <parson.h>
 #include <string>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -57,6 +62,136 @@ class TelemetryTest : public ::testing::Test
 };
 
 #ifdef BUILD_TELEMETRY
+
+class TelemetryFileTest : public ::testing::Test
+{
+protected:
+    MockContext context;
+
+    std::string ReadContents(const std::string& path)
+    {
+        std::ifstream stream(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+    }
+
+    void OpenAndExpect(const std::string& original, const std::string& expected)
+    {
+        const auto path = context.MakeTempfile(original);
+        const int descriptor = Kompli::OpenTelemetryFile(path, nullptr);
+        ASSERT_GE(descriptor, 0);
+        struct stat metadata = {};
+        const int status = fstat(descriptor, &metadata);
+        const int flags = fcntl(descriptor, F_GETFL);
+        close(descriptor);
+        ASSERT_EQ(0, status);
+        EXPECT_LT(metadata.st_size, static_cast<off_t>(Kompli::kTelemetryLogSizeLimit));
+        EXPECT_EQ(0600, metadata.st_mode & 0777);
+        EXPECT_NE(0, flags & O_APPEND);
+        EXPECT_EQ(expected, ReadContents(path));
+    }
+};
+
+TEST_F(TelemetryFileTest, EmptyAndUnderLimitAreUnchanged)
+{
+    OpenAndExpect("", "");
+    const auto contents = std::string(Kompli::kTelemetryLogSizeLimit - 2, 'a') + "\n";
+    OpenAndExpect(contents, contents);
+}
+
+TEST_F(TelemetryFileTest, ExactLimitRemovesOldestCompleteEvent)
+{
+    const std::string retained = "{\"event\":\"new\"}\n";
+    const auto contents = std::string(Kompli::kTelemetryLogSizeLimit - retained.size() - 1, 'a') + "\n" + retained;
+    ASSERT_EQ(Kompli::kTelemetryLogSizeLimit, contents.size());
+    OpenAndExpect(contents, retained);
+}
+
+TEST_F(TelemetryFileTest, OversizedFilePreservesNewestEventsInOrder)
+{
+    const std::string retained = "{\"event\":\"second\"}\n{\"event\":\"third\"}\n";
+    OpenAndExpect(std::string(Kompli::kTelemetryLogSizeLimit + 17, 'a') + "\n" + retained, retained);
+}
+
+TEST_F(TelemetryFileTest, RemovesMultipleEventsUntilStrictlyBelowLimit)
+{
+    const auto event = std::string(Kompli::kTelemetryLogSizeLimit / 4 - 1, 'a') + "\n";
+    OpenAndExpect(event + event + event + event + event, event + event + event);
+}
+
+TEST_F(TelemetryFileTest, NewlineAtWindowStartRetainsFollowingEvent)
+{
+    const auto retained = std::string(Kompli::kTelemetryLogSizeLimit - 2, 'b') + "\n";
+    OpenAndExpect("old\n" + retained, retained);
+}
+
+TEST_F(TelemetryFileTest, OversizedEventWithoutNewlineIsDiscarded)
+{
+    OpenAndExpect(std::string(Kompli::kTelemetryLogSizeLimit + 1, 'a'), "");
+}
+
+TEST_F(TelemetryFileTest, SymlinksAndNonRegularFilesAreRejected)
+{
+    const auto path = context.MakeTempfile("unchanged\n");
+    const auto link = context.GetTempdirPath() + "/link";
+    ASSERT_EQ(0, symlink(path.c_str(), link.c_str()));
+    EXPECT_EQ(-1, Kompli::OpenTelemetryFile(link, nullptr));
+    EXPECT_EQ("unchanged\n", ReadContents(path));
+    const auto fifo = context.GetTempdirPath() + "/fifo";
+    ASSERT_EQ(0, mkfifo(fifo.c_str(), 0600));
+    EXPECT_EQ(-1, Kompli::OpenTelemetryFile(fifo, nullptr));
+    EXPECT_EQ(-1, Kompli::OpenTelemetryFile(context.GetTempdirPath() + "/missing/events", nullptr));
+}
+
+TEST_F(TelemetryFileTest, CreatesNewFileAndAppendsAfterTrimming)
+{
+    const auto path = context.GetTempdirPath() + "/events";
+    int descriptor = Kompli::OpenTelemetryFile(path, nullptr);
+    ASSERT_GE(descriptor, 0);
+    close(descriptor);
+    EXPECT_EQ("", ReadContents(path));
+    const std::string retained = "{\"event\":\"new\"}\n";
+    {
+        std::ofstream stream(path);
+        stream << std::string(Kompli::kTelemetryLogSizeLimit, 'a') << '\n' << retained;
+    }
+    descriptor = Kompli::OpenTelemetryFile(path, nullptr);
+    ASSERT_GE(descriptor, 0);
+    const std::string appended = "{\"event\":\"appended\"}\n";
+    const auto written = write(descriptor, appended.data(), appended.size());
+    close(descriptor);
+    ASSERT_EQ(static_cast<ssize_t>(appended.size()), written);
+    EXPECT_EQ(retained + appended, ReadContents(path));
+}
+
+TEST_F(TelemetryFileTest, EngineReopeningTelemetryBeforeRepeatedEvaluationTrimsAgain)
+{
+    const auto path = context.MakeTempfile("");
+    std::unique_ptr<Kompli::ContextInterface> engineContext(new MockContext);
+    Kompli::Engine engine(std::move(engineContext));
+    ASSERT_TRUE(engine.MmiSet("procedureSizeTest", R"({"audit":{"AuditSuccess":{}}})"));
+
+    for (int run = 0; run < 2; ++run)
+    {
+        // Simulate growth since the previous open, including a later run.
+        {
+            std::ofstream stream(path, std::ios::app);
+            stream << std::string(Kompli::kTelemetryLogSizeLimit, 'a') << '\n' << "{\"event\":\"retained\"}\n";
+        }
+        const int descriptor = Kompli::OpenTelemetryFile(path, nullptr);
+        ASSERT_GE(descriptor, 0);
+        engine.GetTelemetry().SetFileDescriptor(descriptor);
+        ASSERT_EQ("{\"event\":\"retained\"}\n", ReadContents(path));
+        auto result = engine.MmiGet("auditSizeTest");
+        ASSERT_TRUE(result.HasValue());
+        EXPECT_EQ(Status::Compliant, result.Value().status);
+        struct stat metadata = {};
+        ASSERT_EQ(0, stat(path.c_str(), &metadata));
+        EXPECT_LT(metadata.st_size, static_cast<off_t>(Kompli::kTelemetryLogSizeLimit));
+        const auto contents = ReadContents(path);
+        EXPECT_EQ(0u, contents.find("{\"event\":\"retained\"}\n"));
+        EXPECT_NE(std::string::npos, contents.find("\"name\":\"SizeTest\""));
+    }
+}
 
 // Returns the TelemetryField with the given key, or an empty Optional if not found.
 static Kompli::Optional<Kompli::TelemetryField> FindContextField(const std::vector<Kompli::TelemetryField>& context, const std::string& key)
