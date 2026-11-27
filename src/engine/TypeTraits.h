@@ -14,17 +14,6 @@ constexpr bool NoexceptCopyable() noexcept
     return std::is_nothrow_copy_constructible<T>::value;
 }
 
-template <typename T>
-constexpr bool NoexceptMovable() noexcept
-{
-    return std::is_nothrow_move_constructible<T>::value;
-}
-
-template <typename T>
-constexpr bool NoexceptDestructible() noexcept
-{
-    return std::is_nothrow_destructible<T>::value;
-}
 } // namespace Kompli
 
 #endif // KOMPLI_TYPE_TRAITS_H

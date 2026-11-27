@@ -478,7 +478,7 @@ Result<Status> AuditFileRegexMatch(const FileRegexMatchParams& params, Indicator
     }
     else
     {
-        return Error("Unknown behavior: " + std::to_string(params.behavior), EINVAL);
+        return Error("Unknown behavior: " + std::to_string(behavior), EINVAL);
     }
 }
 } // namespace Kompli

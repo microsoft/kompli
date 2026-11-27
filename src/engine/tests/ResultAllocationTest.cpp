@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+#include "../Optional.h"
 #include "../Result.h"
 
 #include <cstddef>
@@ -13,6 +14,7 @@
 #include <utility>
 
 using Kompli::Error;
+using Kompli::Optional;
 using Kompli::Result;
 
 namespace
@@ -43,10 +45,12 @@ struct AllocationProbe
     }
 };
 
-// Result<std::string> moves must stay nonthrowing, like those of every
-// payload Result accepts.
+// Result<std::string> and Optional<std::string> moves must stay nonthrowing,
+// like those of every payload Result and Optional accept.
 static_assert(std::is_nothrow_move_constructible<Result<std::string>>::value, "Result<std::string> move construction is nonthrowing");
 static_assert(std::is_nothrow_move_assignable<Result<std::string>>::value, "Result<std::string> move assignment is nonthrowing");
+static_assert(std::is_nothrow_move_constructible<Optional<std::string>>::value, "Optional<std::string> move construction is nonthrowing");
+static_assert(std::is_nothrow_move_assignable<Optional<std::string>>::value, "Optional<std::string> move assignment is nonthrowing");
 
 struct FaultOutcome
 {
@@ -245,4 +249,83 @@ TEST(ResultAllocationTest, StringMoveConstructionAndAssignmentNeverAllocate)
     ASSERT_FALSE(errorDestination.HasValue());
     EXPECT_EQ(41, errorDestination.Error().code);
     EXPECT_EQ(std::string(256, char(115)), errorDestination.Error().message);
+}
+
+TEST(ResultAllocationTest, OptionalStringCopyAssignmentKeepsEngagedDestinationWhenCopyFails)
+{
+    // The real regression test for the strong guarantee: before construct-
+    // then-commit copy assignment, a failed copy assignment left the
+    // destination empty.
+    Optional<std::string> destination(std::string(256, char(100)));
+    Optional<std::string> source(std::string(256, char(115)));
+    FaultOutcome outcome = RunUnderFault([&]() { destination = source; });
+    EXPECT_TRUE(outcome.caught);
+    EXPECT_EQ(1u, outcome.attempts);
+    ASSERT_TRUE(destination.HasValue());
+    EXPECT_EQ(std::string(256, char(100)), destination.Value());
+    ASSERT_TRUE(source.HasValue());
+    EXPECT_EQ(std::string(256, char(115)), source.Value());
+}
+
+TEST(ResultAllocationTest, OptionalStringCopyAssignmentKeepsEmptyDestinationWhenCopyFails)
+{
+    // Consistency check only: an empty destination also stayed empty
+    // previously, so this is not the strong-guarantee regression test.
+    Optional<std::string> destination;
+    Optional<std::string> source(std::string(256, char(115)));
+    FaultOutcome outcome = RunUnderFault([&]() { destination = source; });
+    EXPECT_TRUE(outcome.caught);
+    EXPECT_EQ(1u, outcome.attempts);
+    EXPECT_FALSE(destination.HasValue());
+    ASSERT_TRUE(source.HasValue());
+    EXPECT_EQ(std::string(256, char(115)), source.Value());
+}
+
+TEST(ResultAllocationTest, OptionalStringMoveConstructionAndAssignmentNeverAllocate)
+{
+    // Move the freshly constructed object into a persistent variable (via a
+    // second zero-allocation move) so its state can be read back after the
+    // probe disarms -- constructing a comparison string inside the armed
+    // window would itself allocate and be mistaken for the operation's own.
+    Optional<std::string> constructedFromMove;
+    Optional<std::string> moveSource(std::string(256, char(115)));
+    FaultOutcome moveConstruct = RunUnderFault([&]() {
+        Optional<std::string> moved(std::move(moveSource));
+        constructedFromMove = std::move(moved);
+    });
+    EXPECT_FALSE(moveConstruct.caught);
+    EXPECT_EQ(0u, moveConstruct.attempts);
+    ASSERT_TRUE(constructedFromMove.HasValue());
+    EXPECT_EQ(std::string(256, char(115)), constructedFromMove.Value());
+
+    Optional<std::string> assignSource(std::string(256, char(115)));
+    Optional<std::string> assignDestination(std::string(256, char(100)));
+    FaultOutcome moveAssign = RunUnderFault([&]() { assignDestination = std::move(assignSource); });
+    EXPECT_FALSE(moveAssign.caught);
+    EXPECT_EQ(0u, moveAssign.attempts);
+    ASSERT_TRUE(assignDestination.HasValue());
+    EXPECT_EQ(std::string(256, char(115)), assignDestination.Value());
+}
+
+TEST(ResultAllocationTest, SelfCopyAssignmentOfStringResultAndOptionalNeverAllocatesUnderFault)
+{
+    Result<std::string> result(std::string(256, char(115)));
+    FaultOutcome resultOutcome = RunUnderFault([&]() {
+        Result<std::string>& alias = result;
+        result = alias;
+    });
+    EXPECT_FALSE(resultOutcome.caught);
+    EXPECT_EQ(0u, resultOutcome.attempts);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(std::string(256, char(115)), result.Value());
+
+    Optional<std::string> optional(std::string(256, char(115)));
+    FaultOutcome optionalOutcome = RunUnderFault([&]() {
+        Optional<std::string>& alias = optional;
+        optional = alias;
+    });
+    EXPECT_FALSE(optionalOutcome.caught);
+    EXPECT_EQ(0u, optionalOutcome.attempts);
+    ASSERT_TRUE(optional.HasValue());
+    EXPECT_EQ(std::string(256, char(115)), optional.Value());
 }
