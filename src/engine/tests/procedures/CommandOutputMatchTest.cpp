@@ -80,6 +80,59 @@ TEST_F(ExecuteCommandGrepTest, AuditDmsetupTableCommand)
     ASSERT_EQ(result.Value(), Status::Compliant);
 }
 
+TEST_F(ExecuteCommandGrepTest, AuditSudoJournalEntry)
+{
+    EXPECT_CALL(mContext, ExecuteCommand("journalctl -t sudo --no-pager -q --lines=1 | grep -E -- \".+\" || (echo -n 'No match found'; exit 1)"))
+        .WillOnce(Return(Result<std::string>("sudo journal entry")));
+
+    CommandOutputMatchParams params;
+    params.command = "journalctl -t sudo --no-pager -q --lines=1";
+    params.pattern = ".+";
+    params.type = RegexType::Extended;
+
+    auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::Compliant);
+}
+
+TEST_F(ExecuteCommandGrepTest, AuditMissingSudoJournalEntry)
+{
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr("journalctl -t sudo --no-pager -q --lines=1")))
+        .WillOnce(Return(Result<std::string>(Error("No match found", 1))));
+
+    CommandOutputMatchParams params;
+    params.command = "journalctl -t sudo --no-pager -q --lines=1";
+    params.pattern = ".+";
+    params.type = RegexType::Extended;
+
+    auto result = AuditCommandOutputMatch(params, indicators, mContext);
+    ASSERT_TRUE(result.HasValue());
+    EXPECT_EQ(result.Value(), Status::NonCompliant);
+}
+
+TEST_F(ExecuteCommandGrepTest, AuditUnapprovedJournalVariants)
+{
+    const std::vector<std::string> commands = {
+        "journalctl -t other --no-pager -q --lines=1",
+        "journalctl -t sudo --no-pager -q --lines=1 --follow",
+        "journalctl --rotate",
+        "journalctl --vacuum-size=1",
+        "journalctl -t sudo --no-pager -q --lines=1; id",
+        "journalctl -t sudo --no-pager -q --lines=1 | id",
+    };
+    EXPECT_CALL(mContext, ExecuteCommand(::testing::_)).Times(0);
+    for (const auto& command : commands)
+    {
+        SCOPED_TRACE(command);
+        CommandOutputMatchParams params;
+        params.command = command;
+        params.pattern = ".+";
+        auto result = AuditCommandOutputMatch(params, indicators, mContext);
+        ASSERT_FALSE(result.HasValue());
+        EXPECT_EQ(result.Error().message, "Command " + command + " is not allowed");
+    }
+}
+
 TEST_F(ExecuteCommandGrepTest, AuditExtendedRegex)
 {
     EXPECT_CALL(mContext, ExecuteCommand(::testing::HasSubstr("iptables -L -n"))).WillOnce(Return(Result<std::string>("test output")));

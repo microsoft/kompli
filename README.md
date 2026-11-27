@@ -107,6 +107,15 @@ To override automatic OS detection (useful for testing), create `/etc/kompli/sys
 OS="Linux" ARCH="x86_64" DISTRO="ubuntu" VERSION="24.04"
 ```
 
+## Command-output audits
+
+`CommandOutputMatch` permits only exact command strings from its allowlist.
+The read-only query `journalctl -t sudo --no-pager -q --lines=1` is approved to
+check for sudo journal entries without paging or following the journal.
+Additional tags, options, shell operators and journal-maintenance commands are
+not approved implicitly; each new query needs its own implementation review and
+tests.
+
 ## Contributing
 
 See [CONTRIBUTING](CONTRIBUTING.md) and [SECURITY](SECURITY.md).
