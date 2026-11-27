@@ -55,6 +55,7 @@ constexpr std::size_t Max(std::size_t a, std::size_t b)
 
 namespace ResultDetail
 {
+// Raw storage for Result<T>; payload lifetime stays wrapper-specific.
 template <typename T>
 class Storage
 {
@@ -94,15 +95,9 @@ protected:
     }
 
     Storage() = default;
-    ~Storage()
-    {
-        Reset();
-    }
-
-    // Precondition: this storage is empty. Construct first, so mTag
-    // publishes only once the placement-new succeeds. A moved-from other
-    // leaves this storage moved-from too.
-    void CopyFrom(const Storage& other)
+    // Construct first, so mTag publishes only once the placement-new
+    // succeeds. A moved-from other leaves this storage moved-from too.
+    Storage(const Storage& other)
     {
         if (other.mTag == Tag::Value)
         {
@@ -114,6 +109,14 @@ protected:
             ::new (static_cast<void*>(mBuffer)) Kompli::Error(*other.ErrorPtr());
             mTag = Tag::Error;
         }
+    }
+    Storage& operator=(const Storage&) = delete;
+    Storage(Storage&&) = delete;
+    Storage& operator=(Storage&&) = delete;
+
+    ~Storage()
+    {
+        Reset();
     }
 
     // Precondition: this storage is empty. Nonthrowing because Result<T>
@@ -149,45 +152,12 @@ protected:
         mTag = Tag::MovedFrom;
     }
 };
-
-template <typename T, bool Copyable>
-class CopyStorage;
-
-template <typename T>
-class CopyStorage<T, true> : public Storage<T>
-{
-public:
-    CopyStorage() = default;
-    CopyStorage(const CopyStorage& other)
-    {
-        this->CopyFrom(other);
-    }
-    CopyStorage& operator=(const CopyStorage& other)
-    {
-        if (this != &other)
-        {
-            CopyStorage copy(other); // May throw; *this stays untouched until here.
-            this->Reset();
-            this->MoveFrom(copy);
-        }
-        return *this;
-    }
-};
-
-template <typename T>
-class CopyStorage<T, false> : public Storage<T>
-{
-public:
-    CopyStorage() = default;
-    CopyStorage(const CopyStorage&) = delete;
-    CopyStorage& operator=(const CopyStorage&) = delete;
-};
 } // namespace ResultDetail
 
 template <typename T>
-class Result : private ResultDetail::CopyStorage<T, std::is_copy_constructible<T>::value>
+class Result : private TypeTraits::CopyStorage<ResultDetail::Storage<T>, std::is_copy_constructible<T>::value>
 {
-    using Storage = ResultDetail::CopyStorage<T, std::is_copy_constructible<T>::value>;
+    using Storage = TypeTraits::CopyStorage<ResultDetail::Storage<T>, std::is_copy_constructible<T>::value>;
     using Tag = typename ResultDetail::Storage<T>::Tag;
 
     // Existing type guards first so reference/Error-as-value report their

@@ -15,6 +15,7 @@ namespace Kompli
 {
 namespace OptionalDetail
 {
+// Raw storage for Optional<T>; payload lifetime stays wrapper-specific.
 template <typename T>
 class Storage
 {
@@ -23,19 +24,21 @@ protected:
     T* mValue = nullptr;
 
     Storage() = default;
-    ~Storage()
-    {
-        Reset();
-    }
-
-    // Precondition: this storage is empty. Only publishes mValue once the
-    // placement-new succeeds, so a throwing copy leaves this storage empty.
-    void CopyFrom(const Storage& other)
+    // Publish mValue only after the placement-new succeeds.
+    Storage(const Storage& other)
     {
         if (nullptr != other.mValue)
         {
             mValue = ::new (static_cast<void*>(mBuffer)) T(*other.mValue);
         }
+    }
+    Storage& operator=(const Storage&) = delete;
+    Storage(Storage&&) = delete;
+    Storage& operator=(Storage&&) = delete;
+
+    ~Storage()
+    {
+        Reset();
     }
 
     // Precondition: this storage is empty. Nonthrowing because Optional<T>
@@ -58,44 +61,13 @@ protected:
         mValue = nullptr;
     }
 };
-
-template <typename T, bool Copyable>
-class CopyStorage;
-
-template <typename T>
-class CopyStorage<T, true> : public Storage<T>
-{
-public:
-    CopyStorage() = default;
-    CopyStorage(const CopyStorage& other)
-    {
-        this->CopyFrom(other);
-    }
-    CopyStorage& operator=(const CopyStorage& other)
-    {
-        if (this != &other)
-        {
-            CopyStorage copy(other); // May throw; *this stays untouched until here.
-            this->Reset();
-            this->MoveFrom(copy);
-        }
-        return *this;
-    }
-};
-
-template <typename T>
-class CopyStorage<T, false> : public Storage<T>
-{
-public:
-    CopyStorage() = default;
-    CopyStorage(const CopyStorage&) = delete;
-    CopyStorage& operator=(const CopyStorage&) = delete;
-};
 } // namespace OptionalDetail
 
 template <typename T>
-class Optional : private OptionalDetail::CopyStorage<T, std::is_copy_constructible<T>::value>
+class Optional : private TypeTraits::CopyStorage<OptionalDetail::Storage<T>, std::is_copy_constructible<T>::value>
 {
+    using Storage = TypeTraits::CopyStorage<OptionalDetail::Storage<T>, std::is_copy_constructible<T>::value>;
+
     // Existing type guards first so void/reference report their own
     // message; destructor before move so a throwing destructor reports its
     // own message even if a compiler stops at the first failure.
@@ -205,7 +177,7 @@ public:
 
     void Reset() noexcept
     {
-        OptionalDetail::CopyStorage<T, std::is_copy_constructible<T>::value>::Reset();
+        Storage::Reset();
     }
 
 private:
