@@ -16,6 +16,18 @@ set(wrapper_compile_flags
     "-DCMAKE_CXX_EXTENSIONS:BOOL=OFF"
 )
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+set(optional_compile_case_dir "${CMAKE_CURRENT_SOURCE_DIR}/compile")
+set(optional_control_source "${optional_compile_case_dir}/OptionalControl.cpp")
+set(optional_rejects_copy_of_move_only_source "${optional_compile_case_dir}/OptionalRejectsCopyOfMoveOnly.cpp")
+set(optional_rejects_assignment_of_move_only_source "${optional_compile_case_dir}/OptionalRejectsAssignmentOfMoveOnly.cpp")
+set(optional_rejects_const_mutation_source "${optional_compile_case_dir}/OptionalRejectsConstMutation.cpp")
+set(optional_rejects_void_source "${optional_compile_case_dir}/OptionalRejectsVoid.cpp")
+set(optional_rejects_reference_source "${optional_compile_case_dir}/OptionalRejectsReference.cpp")
+set(optional_rejects_throwing_move_source "${optional_compile_case_dir}/OptionalRejectsThrowingMove.cpp")
+set(optional_rejects_throwing_destructor_source "${optional_compile_case_dir}/OptionalRejectsThrowingDestructor.cpp")
+set(optional_rejects_const_rvalue_value_access_source "${optional_compile_case_dir}/OptionalRejectsConstRvalueValueAccess.cpp")
+set(optional_rejects_const_rvalue_arrow_access_source "${optional_compile_case_dir}/OptionalRejectsConstRvalueArrowAccess.cpp")
+
 # Result's cases live one per file under compile/, named for what each one
 # checks, so a missing/renamed case is a path that doesn't exist rather than
 # a silently-skipped preprocessor branch.
@@ -33,6 +45,16 @@ set(result_rejects_const_rvalue_value_access_source "${result_compile_case_dir}/
 set(result_rejects_const_rvalue_error_access_source "${result_compile_case_dir}/ResultRejectsConstRvalueErrorAccess.cpp")
 set(result_rejects_const_rvalue_arrow_access_source "${result_compile_case_dir}/ResultRejectsConstRvalueArrowAccess.cpp")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${optional_control_source}"
+    "${optional_rejects_copy_of_move_only_source}"
+    "${optional_rejects_assignment_of_move_only_source}"
+    "${optional_rejects_const_mutation_source}"
+    "${optional_rejects_void_source}"
+    "${optional_rejects_reference_source}"
+    "${optional_rejects_throwing_move_source}"
+    "${optional_rejects_throwing_destructor_source}"
+    "${optional_rejects_const_rvalue_value_access_source}"
+    "${optional_rejects_const_rvalue_arrow_access_source}"
     "${result_control_source}"
     "${result_rejects_copy_of_move_only_source}"
     "${result_rejects_assignment_of_move_only_source}"
@@ -45,6 +67,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${result_rejects_const_rvalue_value_access_source}"
     "${result_rejects_const_rvalue_error_access_source}"
     "${result_rejects_const_rvalue_arrow_access_source}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../Optional.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/../Result.h"
 )
 
@@ -91,6 +114,17 @@ function(check_wrapper_compile_case subject source case_number case_name diagnos
     require_compile_diagnostic("${subject}" "${case_name}" "${diagnostic}")
     message(STATUS "${subject} C++11 negative compile ${case_name}: rejected as expected")
 endfunction()
+
+check_wrapper_compile_case(Optional "${optional_control_source}" 0 "control" "")
+check_wrapper_compile_case(Optional "${optional_rejects_copy_of_move_only_source}" 1 "move-only copy construction" "call to implicitly-deleted copy constructor of 'Optional<|Kompli::Optional<T>::Optional(const Kompli::Optional<T>&)")
+check_wrapper_compile_case(Optional "${optional_rejects_assignment_of_move_only_source}" 2 "move-only copy assignment" "copy assignment operator of 'Optional<|Kompli::Optional<T>& Kompli::Optional<T>::operator=(const Kompli::Optional<T>&)")
+check_wrapper_compile_case(Optional "${optional_rejects_const_mutation_source}" 3 "const mutation" "cannot assign to return value|assignment of read-only location")
+check_wrapper_compile_case(Optional "${optional_rejects_void_source}" 4 "void" "Optional cannot hold void")
+check_wrapper_compile_case(Optional "${optional_rejects_reference_source}" 5 "reference" "Optional cannot hold references")
+check_wrapper_compile_case(Optional "${optional_rejects_throwing_move_source}" 6 "throwing move" "Optional requires a nonthrowing move constructor")
+check_wrapper_compile_case(Optional "${optional_rejects_throwing_destructor_source}" 7 "throwing destructor" "Optional requires a nonthrowing destructor")
+check_wrapper_compile_case(Optional "${optional_rejects_const_rvalue_value_access_source}" 8 "const rvalue Value access" "call to deleted member function|use of deleted function")
+check_wrapper_compile_case(Optional "${optional_rejects_const_rvalue_arrow_access_source}" 9 "const rvalue arrow access" "call to deleted member function|use of deleted function")
 
 check_wrapper_compile_case(Result "${result_control_source}" 0 "control" "")
 check_wrapper_compile_case(Result "${result_rejects_copy_of_move_only_source}" 1 "move-only copy construction" "call to implicitly-deleted copy constructor of 'Result<|Kompli::Result<T>::Result(const Kompli::Result<T>&)")

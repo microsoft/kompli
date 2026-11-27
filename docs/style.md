@@ -203,6 +203,15 @@ Apart from that there are style rules that can't be expressed in clang-format bu
     and value-producing accessors (`Value()`, `Error()`) throw
     `std::logic_error` instead of reading retired state; destroying or
     reassigning a moved-from wrapper stays safe.
+- `Optional<T>` (`src/engine/Optional.h`) represents an optional value:
+  - its payload type must have a nonthrowing move constructor and destructor,
+    so its own move and reset operations are unconditionally `noexcept`;
+  - copy assignment constructs a replacement before committing it, preserving
+    the destination if payload copying throws;
+  - check `HasValue()` or use contextual boolean conversion before access;
+    `Value()` and `operator->()` throw `std::logic_error` when empty;
+  - after a whole-object move, `Optional<T>` is empty and may be destroyed or
+    reassigned.
 - Always validate function inputs
 - Use early returns for validation and error conditions
 - Log errors with descriptive messages using OsConfigLogError, OsConfigLogWarning, or OsConfigLogInfo
