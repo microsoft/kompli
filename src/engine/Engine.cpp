@@ -72,12 +72,12 @@ Optional<Error> Engine::LoadDistributionInfo()
     if (0 == stat(DistributionInfo::cDefaultOverrideFilePath, &st))
     {
         // Override file exists, use it as distribution info source
-        OsConfigLogDebug(Log(), "ComplianceEngineValidatePayload: Using %s for distribution info", DistributionInfo::cDefaultOverrideFilePath);
+        OsConfigLogDebug(Log(), "Engine::LoadDistributionInfo: Using %s for distribution info", DistributionInfo::cDefaultOverrideFilePath);
         auto overrideInfo = DistributionInfo::ParseOverrideFile(DistributionInfo::cDefaultOverrideFilePath);
         mDistributionInfo = std::move(overrideInfo);
         if (!mDistributionInfo.HasValue())
         {
-            OsConfigLogError(Log(), "ComplianceEngineValidatePayload failed to parse %s: %s", DistributionInfo::cDefaultOverrideFilePath,
+            OsConfigLogError(Log(), "Engine::LoadDistributionInfo failed to parse %s: %s", DistributionInfo::cDefaultOverrideFilePath,
                 mDistributionInfo.Error().message.c_str());
             return mDistributionInfo.Error();
         }
@@ -85,12 +85,12 @@ Optional<Error> Engine::LoadDistributionInfo()
     else if (ENOENT == errno)
     {
         // Override file does not exist, use /etc/os-release
-        OsConfigLogDebug(Log(), "ComplianceEngineValidatePayload: Using %s for distribution info", DistributionInfo::cDefaultEtcOsReleasePath);
+        OsConfigLogDebug(Log(), "Engine::LoadDistributionInfo: Using %s for distribution info", DistributionInfo::cDefaultEtcOsReleasePath);
         auto osReleaseInfo = DistributionInfo::ParseEtcOsRelease(DistributionInfo::cDefaultEtcOsReleasePath);
         mDistributionInfo = std::move(osReleaseInfo);
         if (!mDistributionInfo.HasValue())
         {
-            OsConfigLogError(Log(), "ComplianceEngineValidatePayload failed to parse %s: %s", DistributionInfo::cDefaultEtcOsReleasePath,
+            OsConfigLogError(Log(), "Engine::LoadDistributionInfo failed to parse %s: %s", DistributionInfo::cDefaultEtcOsReleasePath,
                 mDistributionInfo.Error().message.c_str());
             return mDistributionInfo.Error();
         }
@@ -98,7 +98,7 @@ Optional<Error> Engine::LoadDistributionInfo()
     else
     {
         int status = errno;
-        OsConfigLogError(Log(), "ComplianceEngineValidatePayload failed to access %s: %s", DistributionInfo::cDefaultOverrideFilePath, strerror(status));
+        OsConfigLogError(Log(), "Engine::LoadDistributionInfo failed to access %s: %s", DistributionInfo::cDefaultOverrideFilePath, strerror(status));
         mDistributionInfo = Error("Failed to access override file", status);
         return mDistributionInfo.Error();
     }

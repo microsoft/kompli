@@ -7,7 +7,7 @@
 
 #include "DlTools.h"
 
-#include "ComplianceEngineInterface.h"
+#include "MCInterface.h"
 
 #include <cerrno>
 #include <dlfcn.h>
@@ -15,12 +15,12 @@
 namespace Kompli
 {
 
-Result<std::string> GetComplianceEngineDirectory()
+Result<std::string> GetModuleDirectory()
 {
     Dl_info dlInfo = {};
-    if ((0 == dladdr(reinterpret_cast<void*>(ComplianceEngineMmiOpen), &dlInfo)) || (nullptr == dlInfo.dli_fname))
+    if ((0 == dladdr(reinterpret_cast<void*>(KompliMmiOpen), &dlInfo)) || (nullptr == dlInfo.dli_fname))
     {
-        return Result<std::string>(Error("Dladdr can't find ComplianceEngineMmiOpen Not a so ojbect", EINVAL));
+        return Result<std::string>(Error("Dladdr can't find KompliMmiOpen Not a so ojbect", EINVAL));
     }
 
     const std::string modulePath = dlInfo.dli_fname;

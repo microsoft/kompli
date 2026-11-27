@@ -87,7 +87,7 @@ kompli will be able to run as a standalone daemon that can evaluate policy given
 
 ## 3.1. MMI
 
-The kompli library implements MMI resource [OsConfigResource.c](../src/adapters/mc/OsConfigResource.c) using [Baseline.c](../src/adapters/mc/complianceengine/Baseline.c), which is used as entry point for MMI module in this case only [ComplianceEngineModule.c](../src/modules/complianceengine/src/so/ComplianceEngineModule.c)
+The kompli library implements MMI resource [OsConfigResource.c](../src/adapters/mc/OsConfigResource.c) using [Baseline.c](../src/adapters/mc/complianceengine/Baseline.c), which is used as entry point for MMI module in this case only [MmiModule.c](../src/modules/complianceengine/src/so/MmiModule.c)
 
 The MMI transports the json object payloads of settings for the module.
 

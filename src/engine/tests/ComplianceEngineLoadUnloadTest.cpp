@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "ComplianceEngineInterface.h"
+#include "MCInterface.h"
 
 #include <gtest/gtest.h>
 #include <ostream>
@@ -29,15 +29,15 @@ protected:
 
     void SetUp() override
     {
-        ComplianceEngineInitialize(nullptr);
-        mHandle = ComplianceEngineMmiOpen("test", cMaxPayloadSize);
+        KompliInitialize(nullptr);
+        mHandle = KompliMmiOpen("test", cMaxPayloadSize);
         ASSERT_NE(nullptr, mHandle);
     }
 
     void TearDown() override
     {
-        ComplianceEngineMmiClose(mHandle);
-        ComplianceEngineShutdown();
+        KompliMmiClose(mHandle);
+        KompliShutdown();
     }
 };
 
@@ -46,7 +46,7 @@ TEST_P(ComplianceEngineLoadUnloadTest, LoadHandlesArguments)
     const auto& testCase = GetParam();
     auto session = testCase.useValidSession ? mHandle : nullptr;
 
-    EXPECT_NO_THROW(ComplianceEngineLoad(session, testCase.componentName));
+    EXPECT_NO_THROW(KompliLoad(session, testCase.componentName));
 }
 
 TEST_P(ComplianceEngineLoadUnloadTest, UnloadHandlesArguments)
@@ -56,10 +56,10 @@ TEST_P(ComplianceEngineLoadUnloadTest, UnloadHandlesArguments)
 
     if (testCase.useValidSession && (nullptr != testCase.componentName) && (std::string("ComplianceEngine") == testCase.componentName))
     {
-        ComplianceEngineLoad(session, testCase.componentName);
+        KompliLoad(session, testCase.componentName);
     }
 
-    EXPECT_NO_THROW(ComplianceEngineUnload(session, testCase.componentName));
+    EXPECT_NO_THROW(KompliUnload(session, testCase.componentName));
 }
 
 INSTANTIATE_TEST_SUITE_P(AllArgumentCombinations, ComplianceEngineLoadUnloadTest,

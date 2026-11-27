@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include "ComplianceEngineInterface.h"
 #include "Logging.h"
+#include "MCInterface.h"
 
 #include <Mmi.h>
 #include <assert.h>
@@ -17,42 +17,42 @@ void __attribute__((constructor)) InitModule(void)
 {
     gLog = OpenLog(gLogFile, gRolledLogFile);
     assert(NULL != gLog);
-    ComplianceEngineInitialize(gLog);
+    KompliInitialize(gLog);
     OsConfigLogInfo(gLog, "%s initialized", gComplianceEngineModuleName);
 }
 
 void __attribute__((destructor)) DestroyModule(void)
 {
-    ComplianceEngineShutdown();
+    KompliShutdown();
     CloseLog(&gLog);
 }
 
 int MmiGetInfo(const char* clientName, MMI_JSON_STRING* payload, int* payloadSizeBytes)
 {
-    return ComplianceEngineMmiGetInfo(clientName, payload, payloadSizeBytes);
+    return KompliMmiGetInfo(clientName, payload, payloadSizeBytes);
 }
 
 MMI_HANDLE MmiOpen(const char* clientName, const unsigned int maxPayloadSizeBytes)
 {
-    return ComplianceEngineMmiOpen(clientName, maxPayloadSizeBytes);
+    return KompliMmiOpen(clientName, maxPayloadSizeBytes);
 }
 
 void MmiClose(MMI_HANDLE clientSession)
 {
-    return ComplianceEngineMmiClose(clientSession);
+    return KompliMmiClose(clientSession);
 }
 
 int MmiSet(MMI_HANDLE clientSession, const char* componentName, const char* objectName, const MMI_JSON_STRING payload, const int payloadSizeBytes)
 {
-    return ComplianceEngineMmiSet(clientSession, componentName, objectName, payload, payloadSizeBytes);
+    return KompliMmiSet(clientSession, componentName, objectName, payload, payloadSizeBytes);
 }
 
 int MmiGet(MMI_HANDLE clientSession, const char* componentName, const char* objectName, MMI_JSON_STRING* payload, int* payloadSizeBytes)
 {
-    return ComplianceEngineMmiGet(clientSession, componentName, objectName, payload, payloadSizeBytes);
+    return KompliMmiGet(clientSession, componentName, objectName, payload, payloadSizeBytes);
 }
 
 void MmiFree(MMI_JSON_STRING payload)
 {
-    return ComplianceEngineMmiFree(payload);
+    return KompliMmiFree(payload);
 }

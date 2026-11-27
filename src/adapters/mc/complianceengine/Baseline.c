@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 #include "../Common.h"
-#include "ComplianceEngineInterface.h"
+#include "MCInterface.h"
 
 #include <stdbool.h>
 
@@ -21,15 +21,15 @@ int BaselineIsValidResourceIdRuleId(const char* resourceId, const char* ruleId, 
 
 int BaselineIsCorrectDistribution(const char* payloadKey, OsConfigLogHandle log)
 {
-    return ComplianceEngineCheckApplicability(gComplianceEngine, payloadKey, log);
+    return KompliCheckApplicability(gComplianceEngine, payloadKey, log);
 }
 
 // This function is called in library constructor in OsConfigResource.c
 // once per Baseline lifetime
 void BaselineInitialize(OsConfigLogHandle log)
 {
-    ComplianceEngineInitialize(log);
-    gComplianceEngine = ComplianceEngineMmiOpen(gComponentName, -1);
+    KompliInitialize(log);
+    gComplianceEngine = KompliMmiOpen(gComponentName, -1);
 }
 
 // This function is called in library destructor in OsConfigResource.c
@@ -43,8 +43,8 @@ void BaselineShutdown(OsConfigLogHandle log)
         return;
     }
 
-    ComplianceEngineMmiClose(gComplianceEngine);
-    ComplianceEngineShutdown();
+    KompliMmiClose(gComplianceEngine);
+    KompliShutdown();
     gComplianceEngine = NULL;
     gIsMmiLoaded = false;
 }
@@ -65,7 +65,7 @@ void BaselineMmiLoad(OsConfigLogHandle log)
         return;
     }
 
-    ComplianceEngineLoad(gComplianceEngine, gComponentName);
+    KompliLoad(gComplianceEngine, gComponentName);
     gIsMmiLoaded = true;
 }
 // This function is called in after BaselineMmiLoad and before BaselineShutdown
@@ -84,7 +84,7 @@ void BaselineMmiUnload(OsConfigLogHandle log)
         return;
     }
 
-    ComplianceEngineUnload(gComplianceEngine, gComponentName);
+    KompliUnload(gComplianceEngine, gComponentName);
     gIsMmiLoaded = false;
 }
 
@@ -96,7 +96,7 @@ int BaselineMmiGet(const char* componentName, const char* objectName, char** pay
         return EINVAL;
     }
 
-    int result = ComplianceEngineMmiGet(gComplianceEngine, componentName, objectName, payload, payloadSizeBytes);
+    int result = KompliMmiGet(gComplianceEngine, componentName, objectName, payload, payloadSizeBytes);
     if (MMI_OK != result)
     {
         OsConfigLogError(log, "BaselineMmiGet(%s, %s) failed: %d", componentName, objectName, result);
@@ -116,5 +116,5 @@ int BaselineMmiGet(const char* componentName, const char* objectName, char** pay
 int BaselineMmiSet(const char* componentName, const char* objectName, const char* payload, const int payloadSizeBytes, OsConfigLogHandle log)
 {
     UNUSED(log);
-    return ComplianceEngineMmiSet(gComplianceEngine, componentName, objectName, payload, payloadSizeBytes);
+    return KompliMmiSet(gComplianceEngine, componentName, objectName, payload, payloadSizeBytes);
 }

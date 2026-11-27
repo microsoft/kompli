@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-#include <ComplianceEngineInterface.h>
 #include <JsonWrapper.h>
+#include <MCInterface.h>
 #include <Mmi.h>
 #include <cerrno>
 #include <gtest/gtest.h>
@@ -54,32 +54,32 @@ protected:
 
     void SetUp() override
     {
-        ComplianceEngineInitialize(nullptr);
-        mHandle = ComplianceEngineMmiOpen("test", 100);
+        KompliInitialize(nullptr);
+        mHandle = KompliMmiOpen("test", 100);
         ASSERT_NE(mHandle, nullptr);
     }
 
     void TearDown() override
     {
-        ComplianceEngineMmiClose(mHandle);
-        ComplianceEngineShutdown();
+        KompliMmiClose(mHandle);
+        KompliShutdown();
     }
 
     int Set(const char* objectName, const std::string& payload) const
     {
-        return ComplianceEngineMmiSet(mHandle, "ComplianceEngine", objectName, payload.data(), static_cast<int>(payload.size()));
+        return KompliMmiSet(mHandle, "ComplianceEngine", objectName, payload.data(), static_cast<int>(payload.size()));
     }
 
     std::string Get(const char* objectName) const
     {
         char* payload = nullptr;
         int payloadSize = 0;
-        if (MMI_OK != ComplianceEngineMmiGet(mHandle, "ComplianceEngine", objectName, &payload, &payloadSize))
+        if (MMI_OK != KompliMmiGet(mHandle, "ComplianceEngine", objectName, &payload, &payloadSize))
         {
             return {};
         }
         const std::string result(payload, payloadSize);
-        ComplianceEngineMmiFree(payload);
+        KompliMmiFree(payload);
         return result;
     }
 };

@@ -176,7 +176,7 @@ add_library(kompli-engine STATIC
     BenchmarkInfo.cpp
     BindingParsers.cpp
     CommonContext.cpp
-    ComplianceEngineInterface.cpp
+    MCInterface.cpp
     ContextInterface.cpp
     DirTools.cpp
     DistributionInfo.cpp
