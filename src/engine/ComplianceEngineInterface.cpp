@@ -83,20 +83,7 @@ int OpenTelemetryFile()
     }
 
     auto telemetry_file = telemetry_log_path + std::string(telemetry_log_file);
-    auto telemetry_fd = open(telemetry_file.c_str(), O_CREAT | O_APPEND | O_NOFOLLOW | O_WRONLY, 0600);
-    OsConfigLogError(g_log, "Opening Telemetry  file %s", telemetry_file.c_str());
-    if (0 > telemetry_fd)
-    {
-        OsConfigLogError(g_log, "Failed to open telemetry file  %s: %d", telemetry_file.c_str(), errno);
-    }
-    else if (0 != fchmod(telemetry_fd, 0600))
-    {
-        OsConfigLogError(g_log, "Failed to set telemetry file permissions %s: %d", telemetry_file.c_str(), errno);
-        close(telemetry_fd);
-        telemetry_fd = -1;
-    }
-
-    return telemetry_fd;
+    return Kompli::OpenTelemetryFile(telemetry_file, g_log);
 }
 #endif // BUILD_TELEMETRY
 
